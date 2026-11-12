@@ -2,12 +2,16 @@ name: CI
 
 # Merge gate for the DamSafety plugin suite.
 #
-# fast-checks  — no QGIS/GDAL needed, fully deterministic, seconds to run (damsuite drift,
-#                version sanity, py_compile of every source, the built-in engine golden baseline).
+# fast-checks  — no QGIS/GDAL needed, fully deterministic, a few minutes (damsuite drift,
+#                version sanity, py_compile of every source, the built-in engine golden baseline,
+#                and the Runner's stub-Qt suite on numpy 2: its GDAL tests skip).
 # plugin-suites — the fuller per-plugin test suites. These need a real QGIS/GDAL (Hazard, Runner)
-#                and a numpy the vendored scipy supports, so the job provisions QGIS via conda.
+#                and a numpy the vendored scipy supports. Two legs (audit CI matrix 2026-11-07):
+#                plugin-suites provisions the newest QGIS from conda (4.x on Qt6, numpy 2);
+#                plugin-suites-ltr runs the same suites in the official qgis/qgis:release-3_34
+#                image (the LTR line metadata's qgisMinimumVersion=3.28 promises: Qt5, numpy 1.x).
 # model-tests  — the Runner's --models suite on a patched LISFLOOD-FP 8.3 and a conda ANUGA.
-# All three should be required checks on main (see docs/CI.md, which also has the local recipe).
+# All four should be required checks on main (see docs/CI.md, which also has the local recipe).
 
 on:
   pull_request:
@@ -22,14 +26,17 @@ concurrency:
 jobs:
   fast-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install numpy (no QGIS/scipy needed here)
-        run: python -m pip install "numpy<2.3"
+      - name: Install numpy 2 and scipy (no QGIS/GDAL here)
+        # numpy 2 on purpose: the suites ran on numpy<2 everywhere and hid that np.cross on
+        # 2-vectors raises under numpy 2 (hecras_crest / hecras_structures). scipy is for the
+        # Runner fast suite below; the golden baseline needs numpy only.
+        run: python -m pip install "numpy>=2" scipy
       - name: Fetch main (versions only go up, changelog entries of main kept)
         run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
       - name: Fast checks (drift, pin, versions, version book vs main, compile, golden baseline)
@@ -39,10 +46,20 @@ jobs:
         run: python3 tools/ci_checks.py
       - name: ci_checks self-test (version bookkeeping gates)
         run: python3 tools/test_ci_checks.py
+      - name: gui_lint source rule self-test (no message-box checks in run handlers)
+        run: python3 tools/test_gui_lint.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
+      - name: Runner fast suite (stub Qt, numpy 2, no GDAL - its osgeo tests skip)
+        # the same suite plugin-suites runs on a real QGIS; here the GDAL-backed tests raise the
+        # harness's Skip (tests/registry.need_osgeo) and the numerics run on numpy 2
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m nd_breach_runner.tests.run_tests
 
   plugin-suites:
+    # The Qt6 / QGIS 4.x leg: conda-forge's unpinned qgis (4.2.x on Qt6, GDAL 3.13, numpy 2 in
+    # November 2026). numpy is not pinned: conda-forge's scipy resolves with numpy 2.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -50,13 +67,29 @@ jobs:
         shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Provision QGIS + a scipy-compatible numpy
+      - name: Provision QGIS (newest conda-forge, Qt6) + scipy
         id: provision
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: qgis
           create-args: >-
-            python=3.12 qgis numpy<2 scipy gdal pytest
+            python=3.12 qgis numpy scipy gdal pytest
+      - name: Xvfb for the 1080p GUI lint
+        # docs/gui-grammar.md: the "no page scrolls sideways" rule needs a 1920x1080 display;
+        # offscreen Qt is 800x600 and skips it. Best effort: when xvfb or the xcb platform
+        # plugin is not usable here, the lint runs offscreen in the fallback step below.
+        id: xvfb
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libxcb-cursor0 libxkbcommon-x11-0 libegl1 libopengl0
+          # the probe: a Qt application on the virtual 1080p display must see a >= 1280 px screen
+          xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb python -c "from qgis.PyQt.QtWidgets import QApplication; a = QApplication([]); g = a.primaryScreen().availableGeometry(); print('xvfb screen', g.width(), 'x', g.height()); raise SystemExit(0 if g.width() >= 1280 else 1)"
+      - name: Versions in this environment
+        run: |
+          python -c "import sys, numpy, scipy; print(sys.version); print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
+          python -c "from qgis.core import Qgis; from qgis.PyQt.QtCore import QT_VERSION_STR; print('QGIS', Qgis.QGIS_VERSION, 'Qt', QT_VERSION_STR)"
+          python -c "from osgeo import gdal; print('GDAL', gdal.__version__)"
       - name: Screening suite (mock-QGIS)
         env:
           QT_QPA_PLATFORM: offscreen
@@ -88,13 +121,29 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_HazardLite/tests/test_core.py
-      - name: GUI lint (real QGIS, docs/gui-grammar.md)
+      - name: Finder (synthetic terrain, GDAL runs, the three tools in real QGIS)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
+          python -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
+      - name: GUI lint on a 1080p display (xvfb, all rules incl. no sideways scroll)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: xcb
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # the second form in docs/gui-grammar.md; -a picks a free display number
+          xvfb-run -a -s "-screen 0 1920x1080x24" python tools/gui_lint.py
+      - name: GUI lint offscreen (fallback when xvfb is unavailable)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome != 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
           # opens every DamSafety window offscreen and checks it against the grammar
+          echo "::warning::xvfb could not be installed; gui_lint ran offscreen (800x600), the sideways-scroll rule was not checked"
           python tools/gui_lint.py
       - name: Runner dam wizard (real QGIS)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
@@ -128,6 +177,81 @@ jobs:
           # saved StreamStats responses only: no request goes to USGS from CI
           python DamSafety_PMP/tests/run_tests.py
           python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py', 'DamSafety_PMP/tests/test_qgis_transport.py']); sys.stdout.flush(); os._exit(int(rc))"
+
+  plugin-suites-ltr:
+    # The LTR / Qt5 leg (audit CI matrix 2026-11-07): the same suites as plugin-suites on the
+    # official QGIS 3.34 image (Ubuntu 22.04, PyQGIS on the system python3, Qt5, GDAL 3.4,
+    # pip numpy 1.x; xvfb is in the image). Nothing comes from conda here. The image is rebuilt
+    # by the QGIS project from the release-3_34 branch; should Docker Hub retire the tag, switch
+    # `image:` to a `final-3_34_*` point-release tag (same layout) - see docs/CI.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: qgis/qgis:release-3_34
+    env:
+      QT_QPA_PLATFORM: offscreen       # every step but the xvfb GUI lint, which sets xcb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision the test tools (pip + apt, no conda)
+        id: provision
+        run: |
+          # The image's pip numpy is 1.x; "numpy<2" keeps this the numpy-1 leg even if the image
+          # is rebuilt with a newer pip resolution (fast-checks and plugin-suites are the numpy-2
+          # legs). scipy and pytest from pip match that numpy; xvfb is already in the image.
+          python3 -m pip install -q "numpy<2" scipy pytest
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb
+          python3 -c "import sys, numpy, scipy, pytest; print(sys.version); print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'pytest', pytest.__version__)"
+          python3 -c "from qgis.core import Qgis; from qgis.PyQt.QtCore import QT_VERSION_STR; print('QGIS', Qgis.QGIS_VERSION, 'Qt', QT_VERSION_STR)"
+          python3 -c "from osgeo import gdal; print('GDAL', gdal.__version__)"
+      - name: Screening suite (mock-QGIS)
+        run: python3 DamSafety_Screening/tests/run_all.py
+      - name: Runner fast suite
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 -m nd_breach_runner.tests.run_tests
+      - name: Hazard suite (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 DamSafety_Hazard/tests/run_all.py
+      - name: Hazard Lite (GDAL + numpy)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 DamSafety_HazardLite/tests/test_core.py
+      - name: Finder (synthetic terrain, GDAL runs, the three tools in real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
+      - name: Xvfb probe for the 1080p GUI lint
+        # xvfb ships in the image (the apt line above makes sure); the probe checks that Qt5's
+        # xcb plugin sees the 1920x1080 virtual screen, else the lint runs offscreen below
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        id: xvfb
+        continue-on-error: true
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb python3 -c "from qgis.PyQt.QtWidgets import QApplication; a = QApplication([]); g = a.primaryScreen().availableGeometry(); print('xvfb screen', g.width(), 'x', g.height()); raise SystemExit(0 if g.width() >= 1280 else 1)"
+      - name: GUI lint on a 1080p display (xvfb, all rules incl. no sideways scroll)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" python3 tools/gui_lint.py
+      - name: GUI lint offscreen (fallback when xvfb is unavailable)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome != 'success' }}
+        run: |
+          echo "::warning::xvfb / xcb not usable in the LTR image; gui_lint ran offscreen (800x600), the sideways-scroll rule was not checked"
+          python3 tools/gui_lint.py
+      - name: Runner dam wizard (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 DamSafety_Runner/tests/realqt_wizard.py
+      - name: Runner batch chain (real QGIS, stages mocked)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 DamSafety_Runner/tests/realqt_chain.py
+      - name: Suite dam data and Setup (real QGIS, pytest)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: |
+          python3 -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests', 'DamSafety_Data/tests/test_pack_build.py', 'DamSafety_Data/tests/test_packengine_shared.py', 'DamSafety_Data/tests/test_updater_shared.py', 'DamSafety_Data/tests/test_pack_refresh.py', 'DamSafety_Data/tests/test_sources_m21_m23_p1.py', 'DamSafety_Data/tests/test_pack_build_v1_nlcd.py', 'DamSafety_Data/tests/test_imagery.py']); sys.stdout.flush(); os._exit(int(rc))"
+      - name: PMP light tests + StreamStats (offline, real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: |
+          python3 DamSafety_PMP/tests/run_tests.py
+          python3 -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py', 'DamSafety_PMP/tests/test_qgis_transport.py']); sys.stdout.flush(); os._exit(int(rc))"
 
   model-tests:
     # The Runner's --models suite: the fast tests plus every test that runs a real model.

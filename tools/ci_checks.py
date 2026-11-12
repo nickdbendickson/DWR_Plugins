@@ -2,13 +2,16 @@
 """Fast, QGIS-free merge gate. Runs the checks that need no QGIS/GDAL install and are fully
 deterministic, so they can gate every PR cheaply:
 
-  1. damsuite drift   — every vendored copy matches shared/damsuite and its FILES.json; and the
-                        committed shared pin (tools/damsuite_pin.json) still matches the master
-  2. version sanity   — each plugin metadata.txt has a well-formed version=, and the shared
-                        damsuite SUITE_VERSION is identical across every copy that ships it
-     version book      — shared/damsuite/versions.py RELEASE (and every vendored copy) equals
-                        each plugin's metadata.txt version; Hazard's constants.PLUGIN_VERSION and
-                        README.txt version line agree with its metadata.txt
+  1. no vendored copy — DamSafety Core 1.0.0: every plugin's damsuite/ is exactly the two-line
+                        shim onto DamSafety_Core.damsuite (no other file in the folder), every
+                        plugin copy of a shared window file is the three-line shim onto
+                        DamSafety_Core.ui, and the Core's damsuite/FILES.json is current
+                        (tools/damsuite_files.py); every plugin but the Core names
+                        plugin_dependencies=DamSafety Core
+  2. version sanity   — each plugin metadata.txt has a well-formed version=
+     version book      — DamSafety_Core/damsuite/versions.py RELEASE equals each plugin's
+                        metadata.txt version; Hazard's constants.PLUGIN_VERSION and README.txt
+                        version line agree with its metadata.txt
      qt6 metadata      — every plugin metadata.txt declares supportsQt6=True and a
                         qgisMaximumVersion of 4.99 or later (QGIS 4 / Qt6)
      vs main           — against the base branch (CI_BASE_REF, default origin/main; skipped with a
@@ -17,8 +20,8 @@ deterministic, so they can gate every PR cheaply:
                         docs/CHANGELOG.md bullet titles and date sections) is missing
   3. compile          — py_compile every .py in the suite (catches a syntax error from a bad
                         merge across all plugins in seconds, without importing anything)
-  4. shared/ui        — every plugin copy of the shared window files matches shared/ui/, and no
-                        window code writes a #rrggbb colour outside tokens.py (docs/gui-grammar.md)
+  4. window colours   — no window code writes a #rrggbb colour outside tokens.py
+                        (docs/gui-grammar.md)
   5. zone colours     — the ACER TM 11 danger zones use REG_05.2026 Fig. 5.1 / 5.2's colours in
                         every style, chart and copy (DamSafety_Hazard/tests/test_zone_colors_reg05.py)
   6. golden baseline  — the built-in flood engine still reproduces the frozen regulatory numbers
@@ -28,7 +31,7 @@ deterministic, so they can gate every PR cheaply:
                         Runner's scripts/patch_lisflood.py adds
   8. merge markers   — no line matching ^(<<<<<<<|=======$|>>>>>>>) (git's conflict markers,
                         the bare ======= separator included) in any tracked text file, and one
-                        RELEASE = line in each damsuite versions.py (a bad stacked merge)
+                        RELEASE = line in the Core's damsuite versions.py (a bad stacked merge)
   9. metadata format — every plugin metadata.txt reads the way QGIS reads it (configparser
                         with % interpolation: a bare % makes the value unreadable, so the Plugin
                         Manager shows an empty changelog); an indented continuation line only
@@ -49,14 +52,43 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
-           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP", "DamSafety_HazardLite")
+           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP", "DamSafety_HazardLite",
+           "DamSafety_Finder")
+CORE = "DamSafety_Core"                       # the one copy of the shared code (Core 1.0.0)
+CORE_VERSIONS = os.path.join(CORE, "damsuite", "versions.py")
+# plugins whose damsuite/ is the shim onto the Core (Setup's used to be a three-module mini copy)
+DAMSUITE_SHIM_PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
+                         "DamSafety_Data", "DamSafety_Setup")
+# {shared window file: plugins that carry the three-line shim onto DamSafety_Core/ui/<file>}
+_HRS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
+UI_SHIMS = {
+    "tokens.py": _HRS + ("DamSafety_Data", "DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP"),
+    "ui_widgets.py": _HRS + ("DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP"),
+    "ui_fit.py": _HRS + ("DamSafety_Data", "DamSafety_HazardLite", "DamSafety_PMP"),
+    "suite_settings.py": _HRS,
+    "suite_settings_tools.py": _HRS,
+    "suite_styles.py": _HRS,
+    "suite_home.py": _HRS,
+    "tool_dialog.py": _HRS,
+}
+# Setup's plugin-root copies of damsuite modules: the same three-line shim onto the Core's damsuite
+DAMSUITE_ROOT_SHIMS = {"suite_config.py": ("DamSafety_Setup",), "suite_fill.py": ("DamSafety_Setup",),
+                       "pack_convert.py": ("DamSafety_Setup",)}
+UI_SHIM_TEXT = "import sys\nfrom DamSafety_Core.ui import {name} as _m\nsys.modules[__name__] = _m\n"
+DS_SHIM_TEXT = "import sys\nfrom DamSafety_Core.damsuite import {name} as _m\nsys.modules[__name__] = _m\n"
+# the damsuite/__init__.py shim: a docstring, then exactly these two statements and nothing else
+DAMSUITE_SHIM_CODE = ("from DamSafety_Core import alias as _alias", "_alias.install(__name__)")
 
 # plugin-root files copied verbatim into more than one plugin (not shared via damsuite): they must
 # stay byte-identical so the two tools apply the same rule. {filename: (plugins that carry it)}.
 IDENTICAL_ACROSS_PLUGINS = {
     "crest_rule.py": ("DamSafety_Runner", "DamSafety_Screening"),  # one top-of-dam number for both
     # Runner 3.10.43 / Screening 0.17.35: gdal.Warp without the source overviews (-ovr NONE)
-    "core/warp_opts.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    "core/warp_opts.py": ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Finder"),
+    # Finder 0.1.0: the pond engine of Screening tool 16, so a pond is classed the same way by
+    # the tool that finds it and the tool that screens it
+    "core/ponds.py": ("DamSafety_Screening", "DamSafety_Finder"),
+    "core/storage.py": ("DamSafety_Screening", "DamSafety_Finder"),
     # Runner 3.10.89 / Screening 0.17.50: one rule for the elevation unit a DEM records (the
     # Runner's 'Detect from the raster' and what Download DEM tags)
     "core/dem_zunit.py": ("DamSafety_Runner", "DamSafety_Screening"),
@@ -65,7 +97,7 @@ IDENTICAL_ACROSS_PLUGINS = {
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),
     # Data 1.5.0: the Hazard's pack engine, vendored so Data's "Build offline pack…" downloads
     # exactly what the Hazard's build_nd_pack.py does. Suite 1.18.6: build_nd_pack.py and
-    # dwr_files.py are shims over damsuite/packengine.py / dwrfiles.py (edit shared/damsuite/)
+    # dwr_files.py are shims over damsuite/packengine.py / dwrfiles.py (edit DamSafety_Core/damsuite/)
     "build_nd_pack.py": ("DamSafety_Hazard", "DamSafety_Data"),
     "constants.py": ("DamSafety_Hazard", "DamSafety_Data"),
     "osm_parse.py": ("DamSafety_Hazard", "DamSafety_Data"),
@@ -135,19 +167,96 @@ def check_mac_lisflood_patch(problems, root=None):
                 MAC_PATCH, rel, marker, "; ".join(missing) or "marker not added"))
 
 
-def check_damsuite_drift(problems):
-    sys.path.insert(0, os.path.join(ROOT, "tools"))
-    import sync_damsuite
-    for p in sync_damsuite.check(ROOT):
-        _fail(problems, "damsuite drift: " + p)
+def _shim_statements(text):
+    """The code statements of a shim module (docstring left out) as source lines, so a shim is
+    judged by what it does rather than by its exact bytes."""
+    import ast
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    body = list(tree.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None),
+                                                               ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]                                   # the docstring
+    return [ast.unparse(n) for n in body]
 
 
-def check_ui_drift(problems):
-    """Every plugin copy of the shared window files (shared/ui/) matches its canonical file."""
-    sys.path.insert(0, os.path.join(ROOT, "tools"))
-    import sync_ui
-    for p in sync_ui.check(ROOT):
-        _fail(problems, "shared/ui drift: " + p)
+def damsuite_shim_problems(root=None):
+    """Core 1.0.0 'no vendored copy': every plugin's damsuite/ holds exactly __init__.py (plus a
+    __pycache__), and that file does nothing but install the alias onto DamSafety_Core."""
+    root = root or ROOT
+    out = []
+    for plugin in DAMSUITE_SHIM_PLUGINS:
+        folder = os.path.join(root, plugin, "damsuite")
+        if not os.path.isdir(folder):
+            if os.path.isdir(os.path.join(root, plugin)):
+                out.append("{}/damsuite/ missing (the shim onto DamSafety_Core)".format(plugin))
+            continue
+        names = sorted(n for n in os.listdir(folder) if n != "__pycache__")
+        extra = [n for n in names if n != "__init__.py"]
+        if extra:
+            out.append("{}/damsuite/ holds {} - a vendored copy; only the __init__.py shim may be "
+                       "there (the code lives in DamSafety_Core/damsuite/)".format(
+                           plugin, ", ".join(extra[:6]) + (" ..." if len(extra) > 6 else "")))
+        init = os.path.join(folder, "__init__.py")
+        if not os.path.isfile(init):
+            out.append("{}/damsuite/__init__.py missing".format(plugin))
+            continue
+        stmts = _shim_statements(_read(init))
+        if stmts != list(DAMSUITE_SHIM_CODE):
+            out.append("{}/damsuite/__init__.py is not the alias shim (expected exactly: {})".format(
+                plugin, "; ".join(DAMSUITE_SHIM_CODE)))
+    core = os.path.join(root, CORE, "damsuite")
+    if not os.path.isdir(core):
+        out.append("{}/damsuite/ missing (the one copy of the shared package)".format(CORE))
+    return out
+
+
+def ui_shim_problems(root=None):
+    """Every plugin copy of a shared window file (and Setup's root copies of damsuite modules)
+    is the three-line sys.modules shim onto the Core's module."""
+    root = root or ROOT
+    out = []
+    for table, shim, sub in ((UI_SHIMS, UI_SHIM_TEXT, "ui"),
+                             (DAMSUITE_ROOT_SHIMS, DS_SHIM_TEXT, "damsuite")):
+        for name in sorted(table):
+            for plugin in table[name]:
+                if not os.path.isdir(os.path.join(root, plugin)):
+                    continue
+                path = os.path.join(root, plugin, name)
+                if not os.path.isfile(path):
+                    out.append("{}/{} missing (the shim onto DamSafety_Core/{})".format(
+                        plugin, name, sub))
+                elif _read(path) != shim.format(name=name[:-3]):
+                    out.append("{}/{} is not the three-line shim onto the Core's module (edit "
+                               "DamSafety_Core/{}/{} instead)".format(plugin, name, sub, name))
+    return out
+
+
+def check_no_vendored_copy(problems, root=None):
+    """Core 1.0.0: one copy of the shared code. Shims only in the plugins; the Core's
+    FILES.json current; every plugin names the Core as a dependency."""
+    root = root or ROOT
+    for p in damsuite_shim_problems(root):
+        _fail(problems, "vendored copy: " + p)
+    for p in ui_shim_problems(root):
+        _fail(problems, "vendored copy: " + p)
+    core_pkg = os.path.join(root, CORE, "damsuite")
+    if os.path.isdir(core_pkg):
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import damsuite_files
+        for p in damsuite_files.check(core_pkg):
+            _fail(problems, "damsuite FILES.json: " + p)
+    for plugin in PLUGINS:
+        meta = os.path.join(root, plugin, "metadata.txt")
+        if not os.path.isfile(meta):
+            continue
+        m = re.search(r"^plugin_dependencies\s*=\s*(.*)$", _read(meta), re.M)
+        if not m or "DamSafety Core" not in [x.strip() for x in m.group(1).split(",")]:
+            _fail(problems, "{}: metadata.txt needs plugin_dependencies=DamSafety Core (its "
+                            "damsuite is the Core's)".format(plugin))
 
 
 # Window code: the files that build windows. A colour in them comes from tokens.py
@@ -156,14 +265,17 @@ WINDOW_FILES = ("dialog.py", "wizard.py", "popup_logic.py", "settings_dialog.py"
                 "plugin.py", "suite_settings_tab.py", "classify_tab.py", "review_tab.py",
                 "facility_review_tab.py", "data_tab.py", "datafolder_tab.py", "dsswise_tab.py",
                 "extras_tab.py", "extras290_tab.py", "rasimport_tab.py", "suite_tab.py",
-                "ui_check_panel.py", "constants.py", "streamstats_dialog.py")
+                "ui_check_panel.py", "constants.py", "streamstats_dialog.py",
+                # 0.18.19: the Screening window's tab files
+                "settings_tab.py", "results_tab.py", "dialog_consts.py")
 HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-zA-Z])")
 
 
 def check_window_colours(problems):
-    """No #rrggbb in window code outside tokens.py (the shared/ui files are checked at their
-    canonical copy; tokens.py is the one place a window colour is written)."""
-    files = [os.path.join(ROOT, "shared", "ui", f) for f in os.listdir(os.path.join(ROOT, "shared", "ui"))
+    """No #rrggbb in window code outside tokens.py (the shared window files are checked in
+    DamSafety_Core/ui; tokens.py is the one place a window colour is written)."""
+    ui = os.path.join(ROOT, CORE, "ui")
+    files = [os.path.join(ui, f) for f in os.listdir(ui)
              if f.endswith(".py") and f not in ("tokens.py", "suite_styles.py")]
     for plugin in PLUGINS:
         for f in WINDOW_FILES:
@@ -179,13 +291,30 @@ def check_window_colours(problems):
                         os.path.relpath(path, ROOT), n))
 
 
-def check_damsuite_pin(problems):
-    """The committed shared pin (tools/damsuite_pin.json) still matches the master, so the master
-    cannot be edited without regenerating the pin both forks vendor from."""
-    sys.path.insert(0, os.path.join(ROOT, "tools"))
-    import sync_damsuite
-    for p in sync_damsuite.check_pin(ROOT):
-        _fail(problems, "damsuite pin: " + p)
+def check_message_box_checks(problems):
+    """2026-11-08 (docs/gui-grammar.md "Checks: CheckPanel, never a message box"): no
+    QMessageBox.warning / .critical inside a run handler of a window file. The rule and its
+    file list live in tools/gui_lint.py (lifted out with ast: importing gui_lint boots QGIS);
+    tools/test_gui_lint.py tests the rule itself."""
+    import ast
+    import types
+    src = _read(os.path.join(ROOT, "tools", "gui_lint.py"))
+    tree = ast.parse(src)
+    keep = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name == "message_boxes_in_run_handlers")
+            or (isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id in ("RUN_HANDLER_RE", "MESSAGE_BOX_KINDS", "LINT_WINDOW_FILES"))]
+    mod = types.ModuleType("gui_lint_rule")
+    mod.re = re
+    exec(compile(ast.Module(body=keep, type_ignores=[]), "gui_lint.py", "exec"), mod.__dict__)
+    for plugin in PLUGINS:
+        for f in mod.LINT_WINDOW_FILES:
+            path = os.path.join(ROOT, plugin, f)
+            if not os.path.isfile(path):
+                continue
+            for fn, kind, line in mod.message_boxes_in_run_handlers(_read(path), path):
+                _fail(problems, "{}/{}:{}: QMessageBox.{} inside the run handler {}() - a check "
+                                "belongs in the CheckPanel (docs/gui-grammar.md)".format(
+                                    plugin, f, line, kind, fn))
 
 
 def check_versions(problems):
@@ -207,18 +336,6 @@ def check_versions(problems):
             if n > 1:
                 _fail(problems, "{}: metadata.txt has {} '{}=' lines (one only; older "
                       "entries go indented under changelog=)".format(plugin, n, key))
-    # the vendored damsuite SUITE_VERSION must be identical everywhere it ships
-    seen = {}
-    for plugin in PLUGINS:
-        init = os.path.join(ROOT, plugin, "damsuite", "__init__.py")
-        if not os.path.isfile(init):
-            continue
-        with open(init, encoding="utf-8") as f:
-            m = re.search(r'SUITE_VERSION\s*=\s*["\']([^"\']+)["\']', f.read())
-        if m:
-            seen.setdefault(m.group(1), []).append(plugin)
-    if len(seen) > 1:
-        _fail(problems, "damsuite SUITE_VERSION disagrees across copies: " + repr(seen))
 
 
 # ------------------------------------------------------------ version bookkeeping ----------
@@ -293,17 +410,17 @@ def changelog_md_entries(text):
 
 
 def check_version_bookkeeping(problems, root=None):
-    """RELEASE == metadata.txt version for each plugin it names (shared master and every vendored
-    copy); Hazard constants.PLUGIN_VERSION and README.txt line == its metadata.txt."""
+    """RELEASE == metadata.txt version for each plugin it names (the one versions.py, in the
+    Core); Hazard constants.PLUGIN_VERSION and README.txt line == its metadata.txt."""
     root = root or ROOT
-    shared = os.path.join(root, "shared", "damsuite", "versions.py")
+    shared = os.path.join(root, CORE_VERSIONS)
     if not os.path.isfile(shared):
-        _fail(problems, "shared/damsuite/versions.py missing")
+        _fail(problems, CORE_VERSIONS + " missing")
         return
     master = _read(shared)
     rel, folders = release_dict(master), plugin_folders(master)
     if not rel:
-        _fail(problems, "shared/damsuite/versions.py: no RELEASE dict")
+        _fail(problems, CORE_VERSIONS + ": no RELEASE dict")
     for key, ver in sorted(rel.items()):
         folder = folders.get(key)
         meta = os.path.join(root, folder or "", "metadata.txt")
@@ -312,15 +429,8 @@ def check_version_bookkeeping(problems, root=None):
             continue
         mv = metadata_version(_read(meta))
         if mv != ver:
-            _fail(problems, "RELEASE[{!r}] = {} but {}/metadata.txt version={} (bump both; "
-                            "tools/sync_damsuite.py, --write-pin)".format(key, ver, folder, mv))
-    for plugin in sorted(set(folders.values())):
-        vend = os.path.join(root, plugin, "damsuite", "versions.py")
-        if os.path.isfile(vend):
-            vr = release_dict(_read(vend))
-            if vr != rel:
-                _fail(problems, "{}/damsuite/versions.py RELEASE {} != shared {} (run "
-                                "tools/sync_damsuite.py)".format(plugin, vr, rel))
+            _fail(problems, "RELEASE[{!r}] = {} but {}/metadata.txt version={} (bump both)"
+                  .format(key, ver, folder, mv))
     hz = os.path.join(root, "DamSafety_Hazard")
     if os.path.isdir(hz):
         mv = metadata_version(_read(os.path.join(hz, "metadata.txt")))
@@ -393,13 +503,17 @@ def check_against_base(problems, root=None, ref=None):
         if gone:
             _fail(problems, "{}: changelog entries on {} are missing: {}".format(
                 plugin, ref, ", ".join(gone[:8]) + (" ..." if len(gone) > 8 else "")))
-    old = _git_show(root, ref, "shared/damsuite/versions.py")
-    if old is not None:
+    # the base may still carry versions.py at its pre-Core path (shared/damsuite/)
+    old = _git_show(root, ref, CORE_VERSIONS.replace(os.sep, "/"))
+    if old is None:
+        old = _git_show(root, ref, "shared/damsuite/versions.py")
+    new_path = os.path.join(root, CORE_VERSIONS)
+    if old is not None and os.path.isfile(new_path):
         orel = release_dict(old)
-        nrel = release_dict(_read(os.path.join(root, "shared", "damsuite", "versions.py")))
+        nrel = release_dict(_read(new_path))
         for k, v in sorted(orel.items()):
             if k in nrel and _ver_tuple(nrel[k]) < _ver_tuple(v):
-                _fail(problems, "shared/damsuite RELEASE[{!r}] {} is lower than {} on {}".format(
+                _fail(problems, "damsuite RELEASE[{!r}] {} is lower than {} on {}".format(
                     k, nrel[k], v, ref))
     old = _git_show(root, ref, "docs/CHANGELOG.md")
     path = os.path.join(root, "docs", "CHANGELOG.md")
@@ -623,15 +737,12 @@ def check_merge_markers(problems, root=None):
     root = root or ROOT
     for rel, i, line in scan_merge_markers(root):
         _fail(problems, "merge-conflict marker: {}:{}: {}".format(rel, i, line))
-    for plugin in (None,) + PLUGINS:
-        rel = os.path.join(plugin, "damsuite", "versions.py") if plugin else os.path.join(
-            "shared", "damsuite", "versions.py")
-        path = os.path.join(root, rel)
-        if os.path.isfile(path):
-            n = len(re.findall(r"^RELEASE\s*=", _read(path), re.M))
-            if n > 1:
-                _fail(problems, "{}: {} 'RELEASE =' lines (one only; a merge left the "
-                                "others)".format(rel, n))
+    path = os.path.join(root, CORE_VERSIONS)
+    if os.path.isfile(path):
+        n = len(re.findall(r"^RELEASE\s*=", _read(path), re.M))
+        if n > 1:
+            _fail(problems, "{}: {} 'RELEASE =' lines (one only; a merge left the "
+                            "others)".format(CORE_VERSIONS, n))
 
 
 MULTILINE_KEYS = ("changelog", "description", "about")
@@ -700,12 +811,13 @@ def check_metadata_format(problems, root=None):
 
 def main():
     problems = []
-    for name, fn in (("damsuite drift", check_damsuite_drift),
-                     ("damsuite pin", check_damsuite_pin), ("versions", check_versions),
+    for name, fn in (("no vendored copy (DamSafety Core)", check_no_vendored_copy),
+                     ("versions", check_versions),
                      ("version bookkeeping", check_version_bookkeeping),
                      ("versions and changelogs vs main", check_against_base),
                      ("cross-plugin identical", check_cross_plugin_identical),
-                     ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
+                     ("window colours", check_window_colours),
+                     ("message-box checks in run handlers", check_message_box_checks),
                      ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),

@@ -12,7 +12,7 @@ import numpy as np
 from nd_breach_runner.core import hecras_bands as hband
 from nd_breach_runner.core import hecras_breaklines as hbl
 from nd_breach_runner.core import hecras_structures as hstr
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 
 CELL, S = 150.0, 20.0
 PERIM = np.array([(0, 0), (4000, 0), (4000, 3000), (0, 3000), (0, 0)], float)
@@ -151,6 +151,7 @@ def hecras_bands_dense_crossing_streets_pass_the_8_face_check():
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
+    need_osgeo()                      # perimeter_clip clips with osgeo.ogr
     from nd_breach_runner.core.hecras_model import perimeter_clip, point_segment_distance
     for seed in (1, 3, 7):
         pts, perim, lines = _dense_streets(seed)
@@ -203,6 +204,7 @@ def hecras_bands_crossing_and_close_parallel_lines_no_near_duplicates_and_8_face
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
+    need_osgeo()                      # perimeter_clip clips with osgeo.ogr
     from nd_breach_runner.core.hecras_model import perimeter_clip
     assert hband.MIN_FRAC >= 0.7, hband.MIN_FRAC
     assert hband.DEFAULTS["band_rows"] == 3 and hband.DEFAULTS["band_cell_ft"] == S
@@ -254,6 +256,7 @@ def hecras_voronoi_precheck_is_stable_at_state_plane_coordinates():
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
+    need_osgeo()                      # perimeter_clip clips with osgeo.ogr
     from nd_breach_runner.core.hecras_model import perimeter_clip
     pts, perim, lines = _dense_streets(2)
     out, prot, _ = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
@@ -292,6 +295,7 @@ def hecras_centred_voronoi_is_the_diagram_at_the_origin():
         print("  (skipped: no scipy)")
         return
     from scipy.spatial import Voronoi
+    need_osgeo()                      # perimeter_clip clips with osgeo.ogr
     from nd_breach_runner.core.hecras_model import perimeter_clip
     pts, perim, lines = _dense_streets(1)
     out, _, _ = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))

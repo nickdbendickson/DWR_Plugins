@@ -165,8 +165,8 @@ try:
             return f.read()
     check('description="USGS 3DHP flowlines' in _src("DamSafety_Hazard/suiteexport.py"),
           "suite export flowlines say 3DHP")
-    if os.path.isdir(os.path.join(_repo, "shared", "damsuite")):
-        sv = _src("shared/damsuite/servers.py")
+    if os.path.isdir(os.path.join(_repo, "DamSafety_Core", "damsuite")):      # Core 1.0.0
+        sv = _src("DamSafety_Core/damsuite/servers.py")
         check('"name": "3DHP flowlines"' in sv and "3DHP_all/MapServer/50" in sv
               and "nhd/MapServer/6" not in sv, "servers.py flowlines are 3DHP")
         check("normaliser_for_url" in _src("DamSafety_Screening/core/offline.py"),

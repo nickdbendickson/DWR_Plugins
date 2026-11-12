@@ -19,6 +19,7 @@ from . import anuga_detach as detach   # 3.12.2: the worker runs detached from Q
 from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
+from . import model_terrain                 # 3.17.7
 from . import gmsh_mesher as gmshmod     # numpy only; gmsh is imported in build_mesh
 from . import anuga_dtdiag               # 3.10.70: numpy only (the worker's dt diagnostic)
 from . import anuga_crest as crestmod    # 3.10.91: road / rail crests held (numpy only)
@@ -320,14 +321,36 @@ def culvert_regions(culverts, st):
         r = max(3.0 * c["width"], 25.0)
         for e in c["end_points"]:
             polys.append(octagon(e, r))
+    # M14: memoise the pairwise near-test keyed by a per-polygon SERIAL (not id(): del polys[j]
+    # frees an ndarray whose id CPython reuses for the next convex_hull, which would answer for a
+    # different polygon). A merged region gets a fresh serial; cache entries touching a retired
+    # serial are dropped. The same octagons merge, so the returned regions are bit-identical; the
+    # full pairwise scan is no longer redone from scratch after every merge (was O(n^3) in ends).
+    serials = list(range(len(polys)))
+    next_serial = len(polys)
+    near = {}
+
+    def _near(i, j):
+        si, sj = serials[i], serials[j]
+        key = (si, sj) if si < sj else (sj, si)
+        if key not in near:
+            near[key] = convex_polygons_near(polys[i], polys[j], gap)
+        return near[key]
+
     merged = True
     while merged:
         merged = False
         for i in range(len(polys)):
             for j in range(i + 1, len(polys)):
-                if convex_polygons_near(polys[i], polys[j], gap):
+                if _near(i, j):
                     polys[i] = convex_hull(np.vstack([polys[i], polys[j]]))
+                    old_i, old_j = serials[i], serials[j]
+                    serials[i] = next_serial
+                    next_serial += 1
                     del polys[j]
+                    del serials[j]
+                    near = {k: v for k, v in near.items()
+                            if old_i not in k and old_j not in k}
                     merged = True
                     break
             if merged:
@@ -1513,6 +1536,8 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         else:
             minfo["used"] = "gmsh"
             minfo["gmsh"] = mesh.get("stats", {})
+            if model_terrain.enabled(st):        # 3.17.7: the mesh as a GeoPackage for review
+                model_terrain.write_gmsh_mesh(mesh, dem, spec, workdir, log)
             minfo["reused"] = bool(mesh.get("reused"))     # 3.12.6
             mnote = msg
             if log:

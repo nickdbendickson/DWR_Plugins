@@ -46,6 +46,7 @@ import numpy as np
 from . import hecras_breaklines as hb
 from . import hecras_model as hm
 from . import conditioning as cond
+from .geom2d import cross2
 
 ANUGA_JOB = os.path.join("anuga", "anuga_job.npz")
 FIT_MARGIN_FT = 0.05        # a raised weir point / invert sits this far above the cell (0.05:
@@ -209,7 +210,7 @@ def merge_gap(exported, s, line_u, ground, step, units, cell):
         L = float(np.hypot(*(B - A))) or 1.0
         t = (B - A) / L
         sc = float(np.dot(C - A, t))
-        d = abs(float(np.cross(t, C - A)))
+        d = abs(cross2(t, C - A))       # audit R1: np.cross on 2-vectors is gone in numpy 2
         if 0.0 <= sc <= L and d <= cell and (best is None or d < best[0]):
             best = (d, c, sc)
     if best is None:

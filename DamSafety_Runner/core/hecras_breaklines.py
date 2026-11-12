@@ -1108,8 +1108,11 @@ def cell_min_elevations(points, cells, raster, perimeter=None, sub=None):
         X, Y = np.meshgrid(pts[c, 0] + g, pts[c, 1] + g)
         xy = np.column_stack([X.ravel(), Y.ravel()])
         m = tree.query(xy)[1] == c
-        if perimeter is not None:
-            m &= inside(xy[:, 0], xy[:, 1], perimeter)
+        if perimeter is not None and m.any():
+            # M17: point-in-polygon only on the cells already inside the Voronoi cell (same final
+            # mask, but inside() no longer walks the whole sample square's vertices).
+            idx = np.flatnonzero(m)
+            m[idx] = inside(xy[idx, 0], xy[idx, 1], perimeter)
         xy = xy[m] if m.any() else pts[c:c + 1]
         z = bilinear(raster, xy)
         out[c] = float(np.nanmin(z)) if np.isfinite(z).any() else float("nan")

@@ -10,7 +10,7 @@ import numpy as np
 
 from nd_breach_runner.core import hecras_breaklines as hbl
 from nd_breach_runner.core import hecras_model as hm
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 from nd_breach_runner.tests import test_hecras_p0 as p0
 from nd_breach_runner.tests import test_hecras_seeds as ts
 
@@ -363,6 +363,7 @@ def hecras_breaklines_fix_faces_drops_the_neighbour_across_the_shortest_face():
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
+    need_osgeo()                      # perimeter_clip clips with osgeo.ogr
     for seed in (65, 125, 179):
         p, per = _coarse_with_a_fine_patch(seed)
         clip = hm.perimeter_clip(per)

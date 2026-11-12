@@ -1067,13 +1067,18 @@ def read_3dhp(path, word, bbox, keep):
     """GeoJSON features (lon / lat, 2D) of the national file's layer whose name holds `word`
     (flowline / waterbody) that touch bbox; only the fields in keep (lower case names). The
     zip is read in place; a spatial filter in the file's own system keeps it to the area."""
-    from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
+    from osgeo import ogr, osr
+    from .damsuite import gdalsafe as GS
+    # audit R3 (2026-11-07): no gdal.UseExceptions() (process-wide, never restored - the
+    # suite policy in damsuite/gdalsafe.py); opens are checked in both modes
     PF = BP.PF
-    ds = ogr.Open(PF.open_path_3dhp(path))
-    if ds is None:
-        raise PackBuildError("{} could not be opened".format(path))
+    try:
+        ds = GS.open_vector(PF.open_path_3dhp(path))
+    except RuntimeError as e:
+        raise PackBuildError("{} could not be opened ({})".format(path, e)) from None
     lyr = ds.GetLayerByName(PF._layer_name(path, word))
+    if lyr is None:
+        raise PackBuildError("{} has no {} layer".format(path, word))
     dst = osr.SpatialReference()
     dst.ImportFromEPSG(4326)
     dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
@@ -1250,12 +1255,15 @@ def read_vector(path, bbox, state=None):
     """GeoJSON features (lon / lat, every attribute) of the first layer of a vector file,
     those touching bbox (and, with state, those whose state field - if any - is that state:
     a national HIFLD file clipped to North Dakota)."""
-    from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
-    ds = ogr.Open(path)
-    if ds is None:
-        raise PackBuildError("{} could not be opened".format(path))
+    from osgeo import osr
+    from .damsuite import gdalsafe as GS
+    try:                                     # audit R3: no gdal.UseExceptions() (process-wide)
+        ds = GS.open_vector(path)
+    except RuntimeError as e:
+        raise PackBuildError("{} could not be opened ({})".format(path, e)) from None
     lyr = ds.GetLayer(0)
+    if lyr is None:
+        raise PackBuildError("{} has no layer".format(path))
     dst = osr.SpatialReference()
     dst.ImportFromEPSG(4326)
     dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
@@ -1317,15 +1325,29 @@ def dwr_download(qlay, dest, refresh=False, log=None):
     return "/vsizip/{}/{}".format(zp, inner), "{} (qlay={})".format(DWR_URL, qlay)
 
 
-def _rewrite(con, name, fn):
-    """Apply fn(feature) -> feature to every row of data set `name` of the work db."""
+def _rewrite(con, name, fn, chunk=2000):
+    """Apply fn(feature) -> feature to every row of data set `name` of the work db.
+
+    M01: keyset-paginate by fid (INTEGER PRIMARY KEY; the UPDATE touches only feat, so the
+    key order is stable and every row is visited exactly once) and rewrite one chunk at a time,
+    instead of materialising the whole statewide layer and a second list of re-compressed blobs
+    at once (~1 GB inside QGIS on a statewide NHD build). Still one transaction - a single commit
+    at the end - so the rewrite stays all-or-nothing (finish() already marked the layer complete,
+    and a resumed build skips it, so a half-rewritten layer would be permanent). The stored bytes
+    and the per/units counts fn derives are bit-identical to the all-at-once form."""
     import zlib
     tbl = OP._table(name)
-    rows = con.execute("SELECT fid, feat FROM {}".format(tbl)).fetchall()
-    con.executemany("UPDATE {} SET feat=? WHERE fid=?".format(tbl), [
-        (zlib.compress(json.dumps(fn(json.loads(zlib.decompress(b).decode("utf-8"))),
-                                  separators=(",", ":")).encode("utf-8"), 6), fid)
-        for fid, b in rows])
+    last = -1
+    while True:
+        rows = con.execute("SELECT fid, feat FROM {} WHERE fid > ? ORDER BY fid "
+                           "LIMIT ?".format(tbl), (last, chunk)).fetchall()
+        if not rows:
+            break
+        con.executemany("UPDATE {} SET feat=? WHERE fid=?".format(tbl), [
+            (zlib.compress(json.dumps(fn(json.loads(zlib.decompress(b).decode("utf-8"))),
+                                      separators=(",", ":")).encode("utf-8"), 6), fid)
+            for fid, b in rows])
+        last = rows[-1][0]
     con.commit()
 
 
@@ -1530,7 +1552,9 @@ def nlcd_download(bbox, dest, log, cancel):
     """NLCD 2021 for bbox as one GeoTIFF (EPSG:5070, 30 m, NLCD class values): the MRLC WCS
     first, else the Esri Annual NLCD image service (year 2021). Returns (tif, url, source)."""
     from osgeo import gdal
-    gdal.UseExceptions()
+    from .damsuite import gdalsafe as GS
+    # audit R3 (2026-11-07): no gdal.UseExceptions() (process-wide, never restored); the VRT
+    # and the translate are checked in both modes
     os.makedirs(dest, exist_ok=True)
     x0, y0, x1, y1 = nlcd_grid(bbox)
     step = NLCD_TILE * 30.0
@@ -1557,10 +1581,14 @@ def nlcd_download(bbox, dest, log, cancel):
                 continue
             raise PackBuildError("NLCD download failed - " + "; ".join(errors))
         out = os.path.join(dest, "{}_nlcd2021.tif".format(which))
-        vrt = gdal.BuildVRT(out + ".vrt", files)
-        vrt = None
-        gdal.Translate(out, out + ".vrt", projWin=(x0, y1, x1, y0),
-                       noData=0, creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+        try:
+            vrt = GS.checked(gdal.BuildVRT(out + ".vrt", files), "building the NLCD mosaic", gdal)
+            vrt = None
+            GS.checked(gdal.Translate(out, out + ".vrt", projWin=(x0, y1, x1, y0), noData=0,
+                                      creationOptions=["COMPRESS=DEFLATE", "TILED=YES"]),
+                       "writing " + out, gdal)
+        except RuntimeError as e:
+            raise PackBuildError("NLCD mosaic failed - {}".format(e)) from None
         if which == "mrlc":
             return out, NLCD_WCS, "USGS / MRLC National Land Cover Database 2021 (MRLC WCS)"
         return out, NLCD_ESRI.rsplit("/", 1)[0], (

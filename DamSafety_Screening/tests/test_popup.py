@@ -395,14 +395,15 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-# one entry, Plugins > Dam safety > Screen a county... (the suite home and the suite settings
-# are opened from the suite's own windows, not from more menu entries)
-assert [m[0] for m in iface.menu] == ["Dam safety"] and plug.action is iface.menu[0][1]
-assert plug.home_action is None and plug.suite_actions == []
+# two entries under Plugins > Dam safety: Screen a county... and the one "Dam suite home…"
+# (0.18.19, usability plan: the home had no menu entry in any plugin before)
+assert [m[0] for m in iface.menu] == ["Dam safety", "Dam safety"] and plug.action is iface.menu[0][1]
+assert plug.home_action is None and plug.suite_actions == [iface.menu[1][1]]
+assert iface.menu[1][1].text() == "Dam suite home\u2026" and iface.menu[1][1].triggered._slots == [plug.run_home]
 assert plug.action.triggered._slots == [plug.run_plugin]
 assert plug.provider is not None                                       # the toolbox provider is still there
 plug.initGui()                                                          # a second initGui adds no second entry
-assert len(iface.menu) == 1
+assert len(iface.menu) == 2
 plug.action.triggered.emit()
 first = plug.dialog
 assert first is not None and first.isVisible()
@@ -489,9 +490,13 @@ assert set(m["outputs"]) == {"OUT", "CURVES"} and m["outputs"]["CURVES"]["folder
 from nd_dam_screening.damsuite import chain as ch_  # noqa: E402
 assert ch_.digest_of(m) == m["manifest_sha256"]
 assert wf.changed_inputs(WM, "3") == [] and wf.changed_inputs(WM, "1") is None      # 1 has no manifest
-t_old = os.path.getmtime(src)
+t_old_ns = os.stat(src).st_mtime_ns
 open(src, "wb").write(b"version two")                     # same size, new content
-os.utime(src, (t_old, t_old))                              # and the OLD date
+os.utime(src, ns=(t_old_ns, t_old_ns))                     # and exactly the OLD date
+# Within one session the digest cache trusts (path, size, mtime); a later session (empty cache)
+# hashes the file again and must see the new content. Restoring the date through a float
+# (getmtime) used to change it by a few nanoseconds most of the time, so this passed by luck.
+ch_._cache.clear()
 assert wf.changed_inputs(WM, "3") == ["DAMS"]
 touch(WM, "2_terrain", "x.tif")
 rows = wf.statuses(WM, {})
@@ -687,20 +692,31 @@ assert "step 8: no railroads layer - it cannot affect the result" in EVENTS["mes
 assert "step 8: roads = my_roads.gpkg" in EVENTS["messages"][-1][2]    # restored from the project
 assert "Data the steps will use" in EVENTS["messages"][-1][2]
 assert dlg5._run_chain() is True
-assert [c[0] for c in calls] == ["1", "2", "3", "4", "5", "7", "8", "10"] and not dlg5.chain.active
+# 0.18.19 (usability plan): the window starts with the quick screen (6) on, as the guide and the
+# county preset do, so the county chain includes step 6 unless the box is unticked
+assert [c[0] for c in calls] == ["1", "2", "3", "4", "5", "6", "7", "8", "10"] and not dlg5.chain.active
 assert dlg5.chain_btn.isEnabled() and not dlg5.chain_stop_btn.isEnabled() and dlg5.step_button["1"].isEnabled()
 assert dlg5.step_state["10"].text() == STATE_TEXT["done"] and "Nothing required is left" in dlg5.hint_label.text()
 assert any(">>> Step 5 - Breach parameters and hydrograph" in m for m in dlg5.log_edit.lines)
-assert dlg5._run_chain() is False and EVENTS["messages"][-1][2] == "Nothing to run: every required step is done."
+# 0.18.19 (gui-grammar "Checks: CheckPanel, never a message box"): a refusal is the red panel
+# next to the Run button, not a pop-up; Screen this county is blocked until the next check
+EVENTS["messages"].clear()
+assert dlg5._run_chain() is False and not EVENTS["messages"]
+assert dlg5.check_panel.blocked and dlg5.check_panel.n_errors == 1 and not dlg5.run_all_btn.isEnabled()
+assert any("Nothing to run: every required step is done." in m for m in dlg5.log_edit.lines)
 # a chain that fails: the window is usable again and says why
 W4 = new_work("w4k")
 dlg5.work_edit.setText(W4)
 dlg5._start_algorithm = make_start(fail_at="2")
 EVENTS["messages"].clear()
 assert dlg5._run_chain() is True and not dlg5.chain.active and not dlg5.chain.ok
-assert EVENTS["messages"][-1][0] == "warning" and "Step 2 (Cache terrain per dam) did not finish: boom" in EVENTS["messages"][-1][2]
+assert [m[0] for m in EVENTS["messages"]] == ["question"] and dlg5.check_panel.blocked   # the failure is in the red panel, no warning pop-up
+assert any("Step 2 (Cache terrain per dam) did not finish: boom" in m for m in dlg5.log_edit.lines)
 assert dlg5.chain_btn.isEnabled() and dlg5.step_button["2"].isEnabled()
-# the optional steps ticked in the window are saved and used
+# the optional steps ticked in the window are saved and used (6 starts ticked: untick, re-tick)
+assert dlg5.chain_check["6"].isChecked() and wf.DEFAULT_SETTINGS["chain"] == ["6"]
+dlg5.chain_check["6"].setChecked(False)
+assert dlg5.settings()["chain"] == [] and json.loads(QgsProject.instance().readEntry("NDDamScreening", "state", "")[0])["chain"] == []
 dlg5.chain_check["6"].setChecked(True)
 assert dlg5.settings()["chain"] == ["6"] and json.loads(QgsProject.instance().readEntry("NDDamScreening", "state", "")[0])["chain"] == ["6"]
 # the checks of the tool's own required parameters stop a chain before it starts the tool
@@ -711,7 +727,8 @@ dlg5._start_algorithm = make_start()
 del calls[:]
 EVENTS["messages"].clear()
 dlg5._run_chain()
-assert not calls and "Something required is empty" in EVENTS["messages"][-1][2]
+assert not calls and [m[0] for m in EVENTS["messages"]] == ["question"] and dlg5.check_panel.blocked
+assert any("Something required is empty" in m for m in dlg5.log_edit.lines)
 # a stop while a step runs
 W4 = new_work("w4m")
 dlg5.work_edit.setText(W4)
@@ -801,7 +818,7 @@ assert "DamSafety Hazard is not enabled in this QGIS" in EVENTS["messages"][-1][
 # the plugin entry point: one window, re-created when destroyed
 plug_home = pkg.classFactory(Iface())
 plug_home.initGui()
-assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"]
+assert [m[1].objectName() for m in plug_home.iface.menu] == ["NDDamScreeningAction", "NDSuiteHome"]
 h1 = plug_home.run_home()
 assert h1 is plug_home.home_dialog and h1.isVisible() and plug_home.run_home() is h1
 h1.deleteLater()

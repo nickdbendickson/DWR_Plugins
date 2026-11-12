@@ -12,6 +12,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
 
 from ..core import workflow as wf
 from ..compat import FILE_FOLDER
+from ._common import UnitAlgorithm
 
 OPTIONAL_LABELS = ["0 - Build offline data package", "6 - Quick screen (triage)", "9 - Sensitivity",
                    "16 - Find ponds and dugouts (instead of 1-4)",
@@ -52,7 +53,7 @@ def load_settings(text_or_path):
     return s
 
 
-class RunChain(QgsProcessingAlgorithm):
+class RunChain(UnitAlgorithm):
     def name(self): return "runchain"
     def displayName(self): return "15 - Run the steps in order (headless)"
     def group(self): return "Dam screening"

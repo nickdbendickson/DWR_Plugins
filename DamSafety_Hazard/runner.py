@@ -12,6 +12,12 @@ Qt signals.
 Without a task manager (tests, headless scripts) start_task() runs the work
 at once on the calling thread and calls the same callbacks - the dialog
 code does not know the difference.
+
+2.23.15 (audit, 2026-11-07): the HEC-RAS plan import, the DSS-WISE import,
+Check inputs (service probes), the creep watch and the self-test go through
+the same task; until then they ran on the GUI thread behind a modal bar that
+pumped events. Their project work (layers, widgets, message boxes) stays in
+the dialog's done callbacks.
 """
 
 import os
@@ -255,5 +261,30 @@ def release_outputs(output_folder, data_sets=False):
             QgsProject.instance().removeMapLayers(ids)
         except Exception as e:
             log_message("Result layers not released before the run: {}".format(e), MSG_WARNING)
+            return 0
+    return len(ids)
+
+
+def release_folder(folder):
+    """2.23.15 (audit, 2026-11-07): remove from the project the layers reading files inside
+    `folder` - the HEC-RAS / DSS-WISE import folder about to be rewritten by a background
+    import. The imports' own prepare_output_path() cannot release a project layer from the
+    worker thread (helpers.remove_project_layers_for_path is a no-op there), and a loaded
+    layer keeps the GeoTIFF locked on Windows. Main thread only. Returns the number removed."""
+    from qgis.core import QgsProject
+    if not folder:
+        return 0
+    root = os.path.normcase(os.path.realpath(folder)) + os.sep
+    ids = []
+    for lid, lyr in QgsProject.instance().mapLayers().items():
+        p = layer_file_path(lyr)
+        if p and os.path.normcase(os.path.realpath(p)).startswith(root):
+            ids.append(lid)
+    if ids:
+        try:
+            QgsProject.instance().removeMapLayers(ids)
+        except Exception as e:
+            log_message("Import layers not released before the import: {}".format(e),
+                        MSG_WARNING)
             return 0
     return len(ids)

@@ -14,6 +14,7 @@ from . import _common as cm
 from .hazard_classification import CRIT_LABELS
 from .run_breach_sim import ENGINES
 from ..compat import (FILE_FILE, FILE_FOLDER, FT_INT, FT_STRING, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 VARIANTS = [("F2008", 1.0, "base: Froehlich 2008, n x1"),
             ("F1995", 1.0, "Froehlich 1995"),
@@ -26,7 +27,7 @@ VARIANTS = [("F2008", 1.0, "base: Froehlich 2008, n x1"),
             ("TR60", 1.0, "NRCS TR-60 peak, triangular hydrograph")]
 
 
-class Sensitivity(QgsProcessingAlgorithm):
+class Sensitivity(UnitAlgorithm):
     def name(self): return "sensitivity"
     def displayName(self): return "9 - Sensitivity of the class (borderline dams)"
     def group(self): return "Dam screening"
@@ -63,6 +64,8 @@ class Sensitivity(QgsProcessingAlgorithm):
                                               [SRC_LINE], optional=True))
         P(QgsProcessingParameterFeatureSource("DAMLINES", "DWR dam lines", [SRC_LINE],
                                               optional=True))
+        P(QgsProcessingParameterFeatureSource("PROTECT", "More fills to leave uncut (points, lines or polygons; e.g. the Finder's screening_dams)",
+                                              [SRC_POINT, SRC_LINE, SRC_POLYGON], optional=True))
         P(QgsProcessingParameterRasterLayer("NLCD", "NLCD land cover (optional)", optional=True))
         P(QgsProcessingParameterFeatureSource("BLD", "Structures", [SRC_POINT,
                                               SRC_POLYGON], optional=True))
@@ -147,7 +150,7 @@ class Sensitivity(QgsProcessingAlgorithm):
                 "ENGINE": self.parameterAsEnum(params, "ENGINE", context), "EXE": self.parameterAsString(params, "EXE", context), "SCEN": 0,
                 "CURVES": params["CURVES"], "CELL": 10, "SIMH": 12, "SIMMAX": 96, "CORR": True,
                 "CORRW": 600, "RMAX": 12000, "STREAMS": params.get("STREAMS"),
-                "DAMLINES": params.get("DAMLINES"), "CASCADE": 1, "NLCD": params.get("NLCD"),
+                "DAMLINES": params.get("DAMLINES"), "PROTECT": params.get("PROTECT"), "CASCADE": 1, "NLCD": params.get("NLCD"),
                 "NDEF": 0.05, "NMULT": nm, "WORKERS": self.parameterAsInt(params, "WORKERS", context), "TMO": 120,
                 "SKIPTRI": False, "KEEP": False, "OUTDIR": os.path.join(vdir, "sim"),
                 "OUT": "TEMPORARY_OUTPUT"}, context=context, feedback=feedback, is_child_algorithm=True)

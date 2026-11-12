@@ -22,7 +22,7 @@ from nd_breach_runner.core.grid import Grid
 from nd_breach_runner.core.units import ACFT, CFS, FT
 from nd_breach_runner.tests.synthetic import SyntheticTerrain, npy_writer, valley, TOP_M, H_M
 
-from nd_breach_runner.tests.registry import TESTS, MODEL_TESTS, test, model_test  # noqa: E402
+from nd_breach_runner.tests.registry import TESTS, MODEL_TESTS, Skip, test, model_test  # noqa: E402
 from nd_breach_runner.tests.preflight_stub import without_dem_and_smoke_checks  # noqa: E402
 
 
@@ -1608,16 +1608,22 @@ def main():
     _load_extra_test_modules()
     run_models = "--models" in sys.argv
     todo = TESTS + (MODEL_TESTS if run_models else [])
-    failed = 0
+    failed = skipped = 0
     for fn in todo:
         try:
             fn()
             print("ok    ", fn.__name__)
+        except Skip as e:
+            # audit CI matrix 2026-11-07: a GDAL-backed test on a Python without osgeo (the
+            # fast-checks job) is reported, not counted as a failure; see registry.need_osgeo
+            skipped += 1
+            print("skip  ", fn.__name__, "({})".format(e))
         except Exception:
             failed += 1
             print("FAIL  ", fn.__name__)
             traceback.print_exc()
-    print("\n{} tests, {} failed".format(len(todo), failed))
+    print("\n{} tests, {} failed{}".format(len(todo), failed,
+                                           ", {} skipped".format(skipped) if skipped else ""))
     return 1 if failed else 0
 
 

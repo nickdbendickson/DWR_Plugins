@@ -176,7 +176,7 @@ def peak_pair_checks():
 def main():
     peak_pair_checks()
     # the chart table must stay the suite's signed-off table
-    sys.path.insert(0, os.path.join(ROOT, "shared", "damsuite"))
+    sys.path.insert(0, os.path.join(ROOT, "DamSafety_Core", "damsuite"))    # Core 1.0.0
     import tm11_curves
     check("tm11 table = shared damsuite table", tm11.CURVES == tm11_curves.CURVES)
     z = tm11.zones("house", [2.94, 2.93, 5.968, 0.0], [0.0, 0.0, 0.0, 0.0])

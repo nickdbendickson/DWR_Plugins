@@ -146,9 +146,10 @@ def _line_layer(name, crs, fields, rows):
     return lyr
 
 
-def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
+def _v2_checks(rep, rasters, utm, ctx, tmp, structs, post=None):
     """Consequences, sole access, review file, report layout / PDF,
-    Processing provider, DSS-WISE recognition."""
+    Processing provider, DSS-WISE recognition. `post` (2.23.15): a list the
+    main-thread checks are appended to instead of run (deferred self-test)."""
     import numpy as _np
     from . import consequences as CQ, access as AC, review as RV
     from . import dsswise as DW
@@ -200,6 +201,22 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
               DW.detect_role("NA1_FloodDepth_in_Ft-05-03-2017_UTM.tif") == DW.R_DEPTH
               and DW.detect_units("NA1_FloodArrivalTime_in_Hrs-05-03-2017_UTM.tif",
                                   DW.R_ARR)[0] == "h")
+    if post is None:
+        _provider_check(rep)
+    else:
+        post.append(lambda: _provider_check(rep))     # a QObject: made on the main thread
+    if post is None:
+        _report_check(rep, tmp, structs, utm, ctx, rasters["depth"])
+    else:
+        # 2.23.15: the print layout and its PDF export belong to the main thread (QGIS's own
+        # layout-export tools are NoThreading); the deferred run does them in finish_self_test
+        depth_path = rasters["depth"].source().split("|")[0]
+        post.append(lambda: _report_check(rep, tmp, structs, utm, ctx,
+                                          QgsRasterLayer(depth_path, "Depth")))
+    _v21_checks(rep, rasters, utm, structs)
+
+
+def _provider_check(rep):
     try:
         from .processing_provider import Provider
         prov = Provider()
@@ -209,6 +226,10 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
                   len(prov.algorithms()))
     except Exception:
         rep.error("Processing provider", traceback.format_exc())
+
+
+def _report_check(rep, tmp, structs, utm, ctx, depth):
+    """The print layout / PDF report checks (main thread)."""
     try:
         from .report import build_report
         from .extent import make_extent_clip
@@ -220,8 +241,8 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
         res = {"nd": nd_r, "tm11": classify_tm11(structs, []),
                "layers": {"Habitable_Structures": lyr}}
         pdf, _note = build_report(tmp, "SelfTest", res, Scenario("Breach", "", "", ""), [],
-                                  structs, make_extent_clip(rasters["depth"], 25, ctx),
-                                  {"depth": rasters["depth"]}, max_pages=2,
+                                  structs, make_extent_clip(depth, 25, ctx),
+                                  {"depth": depth}, max_pages=2,
                                   add_to_project=False)
         rep.check("Print layout exported to PDF", pdf and os.path.getsize(pdf) > 0, pdf)
         rep.check("Report has the ND 5.2 criteria table (last row = the ND class)",
@@ -229,7 +250,6 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
                   nd_r["cls"].upper(), [c["result"] for c in nd_r.get("criteria", [])])
     except Exception:
         rep.error("Report PDF", traceback.format_exc())
-    _v21_checks(rep, rasters, utm, structs)
 
 
 def _v21_checks(rep, rasters, utm, structs):
@@ -421,9 +441,16 @@ def _classification_checks(rep, rasters, utm, ctx):
     return structs
 
 
-def run_self_test(progress_cb=None):
-    """Returns (all_passed, report_lines)."""
+def run_self_test(progress_cb=None, deferred=False):
+    """Returns (all_passed, report_lines).
+
+    deferred=True (2.23.15, the window's gear menu: the self-test runs in a QgsTask): the
+    checks that need the main thread - the print layout and its PDF export - are left out
+    and returned as a third value, a list of callables; finish_self_test() runs them on the
+    main thread and gives the final (ok, lines). The temporary folder is kept until then.
+    The synchronous call (scripts, the console, tests) is unchanged."""
     rep = _Report()
+    post = [] if deferred else None
 
     def tick(pct, msg):
         if progress_cb:
@@ -435,6 +462,7 @@ def run_self_test(progress_cb=None):
     wgs = QgsCoordinateReferenceSystem("EPSG:4326")
     to_wgs = QgsCoordinateTransform(utm, wgs, ctx)
     rasters = samplers = None
+    cancelled = False
     import numpy as _np
     try:
         # 1. classification known answers ---------------------------------
@@ -598,29 +626,57 @@ def run_self_test(progress_cb=None):
         # 7. v2.0: same-time ACER, consequences, access, review, report ----
         tick(96, "v2 checks")
         try:
-            _v2_checks(rep, rasters, utm, ctx, tmp, structs)
+            _v2_checks(rep, rasters, utm, ctx, tmp, structs, post=post)
         except CancelledByUser:
             raise
         except Exception:
             rep.error("v2 checks", traceback.format_exc())
     except CancelledByUser:
+        cancelled = True
         raise
     except Exception:
         rep.error("Self-test", traceback.format_exc())
     finally:
         close_samplers(samplers)
         samplers = rasters = structs = None
-        try:                                  # layers kept for the report layout
-            from . import report as _rp
-            del _rp._KEEP[:]
-        except Exception:
-            pass
-        import gc
-        gc.collect()                          # release GeoTIFF handles (Windows)
-        shutil.rmtree(tmp, ignore_errors=True)
-        tick(100, "done")
+        if post is None or cancelled:
+            _cleanup(tmp)                     # nothing follows a cancelled deferred run
+            tick(100, "done")
+        else:
+            tick(99, "report layout (main thread)")
+    if post is not None:
+        # the main-thread checks complete the report; the folder is removed there
+        post.append(lambda: _cleanup(tmp))
+        return rep.ok, rep, post
+    return rep.ok, _finished_lines(rep)
+
+
+def _cleanup(tmp):
+    try:                                  # layers kept for the report layout
+        from . import report as _rp
+        del _rp._KEEP[:]
+    except Exception:
+        pass
+    import gc
+    gc.collect()                          # release GeoTIFF handles (Windows)
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _finished_lines(rep):
     rep.lines.insert(0, "Self-test {}: {} checks".format(
         "PASSED" if rep.ok else "FAILED",
         sum(1 for x in rep.lines if x.startswith(("PASS", "FAIL")))))
-    return rep.ok, rep.lines
+    return rep.lines
+
+
+def finish_self_test(deferred_result):
+    """2.23.15: the main-thread part of run_self_test(deferred=True) - the print layout /
+    PDF checks and the clean-up. Takes that call's return value; returns (ok, lines)."""
+    _ok, rep, post = deferred_result
+    try:
+        for fn in post:
+            fn()
+    except Exception:
+        rep.error("Self-test (main thread)", traceback.format_exc())
+    return rep.ok, _finished_lines(rep)
 

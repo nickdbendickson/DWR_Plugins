@@ -9,6 +9,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 from ..core import report as rp, gridutil as gu, solver_io as sio
 from . import _common as cm
 from ..compat import (FILE_FOLDER, SRC_POINT)
+from ._common import UnitAlgorithm
 
 FIELDS = ["dam_id", "name", "hz_class", "hz_reason", "hz_conf", "haz_existing", "hz_vs_existing",
           "n_bldg_wet", "n_bldg_lethal", "n_road_wet", "n_rail_wet", "height_m", "store_af",
@@ -17,7 +18,7 @@ FIELDS = ["dam_id", "name", "hz_class", "hz_reason", "hz_conf", "haz_existing", 
           "sim_status", "tri_result"]
 
 
-class Reports(QgsProcessingAlgorithm):
+class Reports(UnitAlgorithm):
     def name(self): return "reports"
     def displayName(self): return "10 - Reports and statewide summary"
     def group(self): return "Dam screening"

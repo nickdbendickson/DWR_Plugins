@@ -33,6 +33,16 @@ def _pump(n=4):
         _app.processEvents()
 
 
+def _wait_idle(d, timeout_s=90):
+    """2.23.15: Check inputs runs in a QgsTask - pump until its done callback has run."""
+    import time
+    end = time.monotonic() + timeout_s
+    while d._busy and time.monotonic() < end:
+        _app.processEvents()
+        time.sleep(0.01)
+    assert not d._busy, "the background input check did not finish"
+
+
 def _raster(path, arr):
     ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((600000, 10, 0, 5200000, 0, -10))
@@ -98,9 +108,15 @@ def test_shell_no_project():
         assert d.windowTitle() == "DamSafety Hazard {}".format(PLUGIN_VERSION)
         assert _tab_texts(d) == ["Classify", "Results", "Review"]
         assert d.tab_widget.currentIndex() == 0 and d.action_area.isVisible()
+        # 2.23.17 (usability plan change 8): the nine Dam suite tool buttons are a submenu
         assert [a.text() for a in d.gear_menu.actions() if a.text()] == [
-            "Suite settings\u2026", "Documentation (README)\u2026", "Run self-test",
-            "Edit data sources\u2026"]
+            "Suite settings\u2026", "Documentation (README)\u2026", "Dam suite tools",
+            "Run self-test", "Edit data sources\u2026"]
+        assert [a.text() for a in d.suite_tools_menu.actions()] == [
+            "Model gate\u2026", "Class probability\u2026", "Quick creep screen\u2026",
+            "Rules comparison\u2026", "Chart sign-off\u2026", "Review a package\u2026",
+            "Culverts for the Runner\u2026", "Export for Screening\u2026", "Mark reviewed\u2026"]
+        assert not hasattr(d, "suite_gate_btn") and len(d.suite_tool_actions) == 9
         assert d.tab_widget.cornerWidget() is d.gear_btn
         assert any(lbl.text() == DISCLAIMER for lbl in d.findChildren(DLG.QLabel))
         assert not hasattr(d, "advanced_check") and not hasattr(d, "_advanced_groups")
@@ -138,6 +154,7 @@ def test_dam_folder_autofill_and_errors_block_classify():
         assert d.output_folder_edit.text() == os.path.join(folder, "outputs")
         with _NoPopups() as np_:
             d._on_check_inputs()
+            _wait_idle(d)
         assert not np_.calls, np_.calls
         panel = d.check_panel
         assert panel.blocked and panel.isVisible() and not d.classify_btn.isEnabled()

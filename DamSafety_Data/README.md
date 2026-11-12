@@ -1,38 +1,50 @@
-# ND Data Updater (QGIS 3.28 plugin)
+# DamSafety Data (QGIS 3.28+ plugin)
 
-Keeps an offline copy of North Dakota structure and building-footprint data on
-your Mac and downloads a new copy only when a source actually changes.
+Keeps an offline copy of North Dakota structure and building-footprint data on this computer
+and downloads a new copy only when a source actually changes; builds and maintains the suite's
+offline pack (`ND_Dam_Suite_Pack`); downloads NAIP imagery around dams. Part of the DamSafety
+suite (install order Setup, Data, Runner, Hazard; the repository README has the three install
+routes). The update engine and the source list are the shared `damsuite/updatecore.py` and
+`damsuite/updatesources.py` (`core.py` / `sources.py` here are shims), the same code as the ND
+Data Updater of the nd_hazard fork.
 
 ## Install
 
-1. In QGIS: **Plugins > Manage and Install Plugins… > Install from ZIP**.
-2. Choose `nd_data_updater.zip` and click **Install Plugin**.
-3. The plugin appears under **Plugins > ND Data Updater** and as a toolbar button.
+1. In QGIS: **Plugins > Manage and Install Plugins…**, either from the DamSafety plugin
+   repository (`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, added under
+   *Settings*) or **Install from ZIP** with `DamSafety_Data_<version>.zip` from the GitHub
+   Release.
+2. The plugin appears under **Plugins > Dam safety > Data** and as a toolbar button
+   (*Check for updates now*). Its map services are added to the QGIS Browser as
+   `DamSafety: …` connections once (WMS/WMTS, XYZ, ArcGIS REST: USGS 3DEP / 3DHP, NLCD, ND GIS
+   Hub, DWR MapService, NID, NTAD, FEMA NFHL, SARP, NAIP and the ones you add).
 
-## Use
+## Use (Plugins > Dam safety > Data)
 
-- **Check for Data Updates Now** (toolbar button): checks every dataset that is
-  turned on. The first run downloads everything; later runs download only what
-  changed. Progress shows in the task bar at the bottom of the QGIS window and
-  can be cancelled there.
-- **Add North Dakota Layers to Project**: adds the downloaded layers to a
+- **Check for updates now** (also the toolbar button): checks every dataset that is turned on.
+  The first run downloads everything; later runs download only what changed. Progress shows in
+  the task bar at the bottom of the QGIS window and can be cancelled there.
+- **Add North Dakota layers to the project**: adds the downloaded layers to a
   "North Dakota data" group.
-- **Open Data Folder**: opens the folder in Finder.
-- **Settings and Status…**: data folder, schedule, which datasets to keep, and
-  when each was last updated and checked.
+- **Open data folder**: opens the folder in the file manager.
+- **Settings and status…**: data folder, automatic checks (off until you turn them on; then
+  about 20 s after QGIS starts and hourly, never more often than *Check at most every*, default
+  24 h), which datasets to keep, the NSI version, and when each dataset was last updated and
+  checked. The window fits an 800x600 screen (its body scrolls).
+- **Build offline pack…** and **Download imagery for these dams…**: below.
 
 Where the data is stored (first that applies):
 
-1. The folder you choose in **Settings and Status…**.
+1. The folder you choose in **Settings and status…**.
 2. `<suite data folder>/structures/` when the dam suite's data folder is set
-   (`ndsuite/data_folder`). A folder inside the offline pack (`ND_Dam_Suite_Pack`) or
-   one that can't be written is skipped, with a message.
+   (`ndsuite/data_folder`, DamSafety Setup). A folder inside the offline pack (`ND_Dam_Suite_Pack`)
+   or one that can't be written is skipped, with a message.
 3. `~/Documents/ND Structure Data`.
 
-If `~/Documents/ND Structure Data` already holds downloads and the suite's
-`structures/` folder is empty, Data keeps using the old folder and shows a one-line
-notice. To share the data with the suite, close QGIS and move that folder's contents
-into `structures/`. Nothing is moved automatically.
+If `~/Documents/ND Structure Data` already holds downloads and the suite's `structures/` folder
+is empty, Data keeps using the old folder and shows a one-line notice. To share the data with the
+suite, close QGIS and move that folder's contents into `structures/`. Nothing is moved
+automatically.
 
 ## Datasets
 
@@ -40,9 +52,13 @@ into `structures/`. Nothing is moved automatically.
 |---|---|---|---|
 | National Structure Inventory (all 53 counties, NSI 2026 and 2022 merged, from the NSI API) | on | `nsi/` | Re-downloaded every 30 days (adjustable); replaced only if the structures changed |
 | Microsoft building footprints (`NorthDakota.geojson`) | on | `microsoft_footprints/` | Server ETag / Last-Modified. Microsoft no longer updates this legacy release |
-| OpenStreetMap from Geofabrik (GeoPackage; only the buildings layer is added to the project) | on | `osm/` | Geofabrik's published MD5; the download is verified against it |
+| OpenStreetMap from Geofabrik (GeoPackage; only the buildings layer is added to the project) | on | `osm/` | Geofabrik's published MD5 when there is one, else ETag / Last-Modified |
+| OpenStreetMap pack layers (the five `OSM_*` layers of the offline pack: lifelines, culverts and fords, campgrounds, mobile-home parks, towns, built from Geofabrik's `.osm.pbf`, about 200 MB) | on | `osm_layers/` | Geofabrik's MD5 of the extract |
+| ND 911 Site/Structure Address Points (NENA, ND GIS Hub; layer name `address_points`) | on | `address_points/` | The service's last-edit date and feature count |
+| Offline pack (keep up to date): looks after the pack *Build offline pack…* made (both formats), builds missing layers, refreshes layers older than 30 days (adjustable); never fetches over a layer built from your own DWR / HIFLD files | on | the Build offline pack folder | The pack's manifest |
 | USA Structures (FEMA/ORNL) | off | `usa_structures/` | Needs a download link pasted into Settings. ETag / Last-Modified |
-| nsi-generator source code (`USACE-NSI/nsi-generator`, main branch) | off | `nsi_generator_code/` | Latest commit |
+| Overture Maps Buildings (needs `pip install overturemaps`; layer name `overture_buildings`) | off | `overture_buildings/` | Re-downloaded every 30 days (Overture publishes about monthly) |
+| nsi-generator source code (`USACE-NSI/nsi-generator`, pinned commit) | off | `nsi_generator_code/` | The commit's zip (sha256 logged) |
 
 The NSI counties are merged into one GeoPackage, `nsi/nsi_nd.gpkg`, using the
 GDAL bundled with QGIS.
@@ -199,3 +215,4 @@ check for each dataset. It has its own name so it never replaces the suite's
 - A full first download is roughly 0.5-1 GB.
 - The nsi-generator code expects USA Structures as per-county shapefiles; FEMA
   publishes a statewide geodatabase, so convert it before feeding it to that tool.
+- Tests: `DamSafety_Data/tests/` (pytest; most need GDAL or QGIS, see docs/CI.md).

@@ -45,7 +45,8 @@ from .osm_processing import (
 from .download import (
     fetch_nsi, fetch_arcgis_layer, fetch_nd_address_points, fetch_usa_structures, try_download,
     fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings, STALE_USED, PACK_USED,
-    fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks, pack_has,
+    INCOMPLETE_USED, fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks,
+    pack_has,
 )
 from .helpers import CancelledByUser
 from . import facilities as FAC
@@ -67,7 +68,7 @@ from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
 from .scenarios import (
     ROLE_BREACH, order_for_run, restore, mark_structures_incremental, raster_reuse_problems,
-    line_baseline_depth, mark_lines_incremental, incremental_view, CONSEQ_KEYS,
+    line_baseline_depth, mark_lines_incremental, incremental_view, wet_habitable, CONSEQ_KEYS,
     SNAP_KEYS,
 )
 from .consequences import economic_estimate, life_loss_estimate, totals
@@ -681,7 +682,10 @@ def reusable_products(folder, key, sig, expected=None):
     if not paths:
         return None
     for name, p in paths.items():
-        if not p or _stamp(p) is None or _stamp(p) != files.get(p):
+        if not p:
+            return None
+        st = _stamp(p)                            # L02: hash once, not twice (no-cache digest)
+        if st is None or st != files.get(p):
             return None
         if expected is not None and not _same_file(p, expected.get(name)):
             return None
@@ -1813,8 +1817,8 @@ def _classify_and_write(run, cfg, state):
     inputs = state["inputs"]
     # what an earlier stage B left in the results is redone here
     for r in run.results.values():
-        for k in ("layers", "snap", "access", "incremental", "nd", "tm11", "conseq", "views",
-                  "nd_total", "tm11_total", "fac_charged", "fac_base_eval", "margin",
+        for k in ("layers", "snap", "access", "incremental", "nd", "tm11", "conseq", "wet_hab",
+                  "views", "nd_total", "tm11_total", "fac_charged", "fac_base_eval", "margin",
                   "future_geoms", "mapbook", "zone_rasters", "eap_bands", "eap_contours"):
             r.pop(k, None)
     # v2.9: the engineer's decisions on roads, rail, bridges / culverts and lifelines
@@ -1937,8 +1941,14 @@ def _classify_and_write(run, cfg, state):
             nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=nd_judge,
                              one_d=one_d,
                              roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
-                             structs_evaluated=inputs.get("structs_on", True))
+                             structs_evaluated=inputs.get("structs_on", True),
+                             structs_failed=int(res.get("structs_failed") or 0))  # audit R2
             tm11 = classify_tm11(s_view, r_view, judgment_as_probable=judge)
+            if nd.get("structs_failed"):                                   # audit R2
+                run.log(">>> WARNING: {}: ND classification {} is INCOMPLETE - {} structure(s) "
+                        "could not be evaluated and are not counted as dry; re-run or review "
+                        "them before the class is used".format(
+                            sc.name, nd["cls"].upper(), nd["structs_failed"]))
         except Exception as e:
             run.log(">>> ERROR: classification failed for {}: {}: {}".format(
                 sc.name, type(e).__name__, e))
@@ -1971,6 +1981,9 @@ def _classify_and_write(run, cfg, state):
         except Exception as e:                  # noqa - never fails the result
             run.log("300 ft no-building rule check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
+                    # M06: record the flooded-habitable count now, while s_view still holds this
+                    # scenario's outcomes (comparison_rows runs after restore() rewrites them).
+                    "wet_hab": wet_habitable(s_view),
                     "views": (s_view, r_view, l_view)})
         res.pop("nd_total", None)
         res.pop("tm11_total", None)
@@ -1979,7 +1992,8 @@ def _classify_and_write(run, cfg, state):
                                judgment_as_probable=nd_judge,
                                one_d=one_d, roads_evaluated=inputs["roads_on"],
                                rail_evaluated=inputs["rail_on"],
-                               structs_evaluated=inputs.get("structs_on", True))
+                               structs_evaluated=inputs.get("structs_on", True),
+                               structs_failed=int(res.get("structs_failed") or 0))
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
@@ -2104,6 +2118,7 @@ def _classify_and_write(run, cfg, state):
             res["layers"][key] = show
     # v2.6: ACER zone rasters of the governing scenario (map product; the
     # Main Consolidation of 1.x - 2.5 wrote them to outputs/Consolidation)
+    from .hazard import ZONE_FILES              # M07: also used by the skip-path retire below
     zone_paths = {}
     if cfg.get("zone_rasters", True) and layers[gov.name].get("vel") is not None:
         run.tick(88, "ACER zone rasters\u2026")
@@ -2112,7 +2127,6 @@ def _classify_and_write(run, cfg, state):
             zsig = _product_sig([get_layer_path(layers[gov.name]["depth"]),
                                  get_layer_path(layers[gov.name]["vel"])],
                                 extra=repr(sorted(HAZARD_COEFFICIENTS.items())))
-            from .hazard import ZONE_FILES
             znormal = {k: os.path.join(d_class, f) for k, f in ZONE_FILES.items()}
             zone_paths = reusable_products(d_class, "zone_rasters", zsig, znormal)
             if zone_paths:
@@ -2138,6 +2152,15 @@ def _classify_and_write(run, cfg, state):
             run.log(">>> WARNING: ACER zone rasters not written: {}".format(e))
             zone_paths = {}
     governing["zone_rasters"] = zone_paths
+    # M07: a zone raster this run did NOT write (step unticked, no Vmax raster, generate raised,
+    # or a kind not produced this time - e.g. the vehicle curve) must not survive from an earlier
+    # run and be packaged as this classification's product (submittal globs Hazard_*.tif). The
+    # written kinds were retired in place above with keep=d_class; clear every other kind.
+    for _zk, _zf in ZONE_FILES.items():
+        if not zone_paths.get(_zk):
+            _retire_everywhere(out, os.path.splitext(_zf)[0], ("tif", "tif.aux.xml"))
+    if not zone_paths:
+        forget_products(d_class, "zone_rasters")
     if cfg["add_to_project"]:
         run.later(lambda: [_remove_layers_under(os.path.join(out, "ACER_" + sc.slug))
                            for sc in breaches])      # zone layers of the 2.0 - 2.5 methods
@@ -2322,10 +2345,18 @@ def _classify_and_write(run, cfg, state):
                          "again without 'quick' to refresh them")
         for n in notes:
             run.log(">>> WARNING: " + n)
+        # M08: _write_run_settings (the curve-table SHA-256 provenance + settings profile),
+        # _model_chain_step and _write_dam_record append to run.sources AFTER summary_lines
+        # already rendered the DATA SOURCES block, so those lines never reached the written
+        # summary. Mark the position and replay just the new ones into Hazard_Classification_
+        # Summary.txt (add_summary_source swallows every error, so it cannot fail the run).
+        n0 = len(run.sources)
         _write_run_settings(run, cfg, d_qa, written, state)
         if not cfg.get("ensemble_member"):
             _model_chain_step(run, cfg, written)               # v2.10 (item 13)
             _write_dam_record(run, cfg, res)                   # v2.10 (item 2)
+        for _src in run.sources[n0:]:
+            add_summary_source(paths.get("txt"), _src)
         if cfg["add_to_project"]:
             prune_empty_groups(plugin_group(dam_name))
         written.append(RUN_LOG)               # written when the run returns
@@ -2353,6 +2384,7 @@ def _collect_inputs(run, clip):
     tick = run.tick
     del STALE_USED[:]                  # v2.4.1: earlier-day copies used this run
     del PACK_USED[:]                   # v2.6.1: data sets read from the offline pack
+    del INCOMPLETE_USED[:]             # H01: downloads cut short but used this run
     from .download import configure_tile_cache_from_cfg
     configure_tile_cache_from_cfg(cfg)     # v2.8: per-tile download cache (empties TILE_USED)
     _log_offline_mode(run)
@@ -2630,6 +2662,14 @@ def _collect_inputs(run, clip):
                 "({})".format(name, day, fname))
         run.sources.append("{}: service unavailable on this run - earlier download of {} "
                            "used ({})".format(name, day, fname))
+    for name, kept, reason in INCOMPLETE_USED:
+        run.log(">>> WARNING: {}: the download was cut short ({}) - only {} feature(s) kept; "
+                "the inventory may be incomplete, so the hazard class is a minimum and may be "
+                "higher. Re-run from a smaller study area for the full layer.".format(
+                    name, reason, kept))
+        run.sources.append("{}: download INCOMPLETE this run - {} feature(s) kept ({}); the "
+                           "inventory may be short of the study area, so treat the class as a "
+                           "minimum.".format(name, kept, reason))
     used = _used_inputs(cfg, got, loc)
     for line in pack_report_lines():
         run.log(line)
@@ -3051,6 +3091,20 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
                             sample_area=cfg.get("sample_area") or "area",
                             keep_dv=bool(cfg.get("sensitivity")),
                             fast_sampling=bool(cfg.get("fast_sampling")))
+        # audit R2 (2026-11-07): a structure whose evaluation raised used to read as dry
+        # (max_depth None -> OUT_DRY) with only a QGIS-log warning; it is now OUT_FAILED,
+        # named in Notes, and the class is marked incomplete in stage B
+        failed = ST.evaluation_failures(structs)
+        res["structs_failed"] = len(failed)
+        if failed:
+            ids = ", ".join(str(r.get("id")) for r in failed[:8])
+            run.log(">>> WARNING: {}: {} structure(s) could not be evaluated (an error while "
+                    "sampling the flood at them) - they are NOT counted as dry: ND_Outcome "
+                    "'{}', Notes 'EVALUATION FAILED', and the ND classification is marked "
+                    "INCOMPLETE. Structure id(s): {}{}. First error: {}".format(
+                        sc.name, len(failed), ST.OUT_FAILED, ids,
+                        " and {} more".format(len(failed) - 8) if len(failed) > 8 else "",
+                        failed[0].get("eval_failed")))
         res["cell_size"] = (abs(samplers["depth"].gt[1]), abs(samplers["depth"].gt[5])) \
             if samplers["depth"].ok and samplers["depth"].gt else None
         # 2.22.1 (DWR-4031 toe10m): the depth grid's cell in metres, for report labels

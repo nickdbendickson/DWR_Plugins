@@ -314,13 +314,17 @@ def curve_span_m(curve_csv, crest_m=None):
     return top - e[0]
 
 
-def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3):
+def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3, *, below_pool_m=0.0):
     """(surface area at the top of dam in m2 or None, note) for the Runner's AREA_AC.
 
-    None when the curve spans much less than the dam height: the Runner turns the area into
-    its storage-area exponent (area * height / storage), so an area measured over a 4 ft-deep
-    basin of a 27 ft dam gave an exponent at the Runner's cap of 6 and a peak breach flow about
-    a third too high. With no area the Runner assumes storage ~ depth squared and says so."""
+    None when the reservoir the curve describes is far shallower than the dam. A tool-3 curve
+    starts at the LiDAR normal pool, so its own elevation span is the FREEBOARD above the pool,
+    not the bed-to-crest reservoir depth; `below_pool_m` (tool-3's est_maxdep_m) is added so the
+    basin depth (freeboard + below-pool) is tested against 0.5 x the dam height, mirroring
+    storage.is_shallow_basin (M24, 0.19.3). With no below-pool depth the test is the freeboard
+    alone, as before. A curve over a basin far shallower than the dam would give the Runner a
+    storage-area exponent at its cap of 6 and a peak breach flow about a third too high; with no
+    area the Runner assumes storage ~ depth squared and says so."""
     span = curve_span_m(curve_csv, crest_m)
     if span is None:
         return None, ""
@@ -328,10 +332,13 @@ def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3):
         h = float(height_m) if height_m not in (None, "") else None
     except (TypeError, ValueError):
         h = None
-    if h and span < SHALLOW_CURVE * h:
-        return None, ("no surface area sent: the stage-storage curve spans {:.1f} ft of the "
-                      "{:.1f} ft dam height, too little to give the area at the top of dam (the "
-                      "Runner assumes storage varies with depth squared)".format(span / FT, h / FT))
+    below = max(float(below_pool_m or 0.0), 0.0)
+    if h and (span + below) < SHALLOW_CURVE * h:
+        return None, ("no surface area sent: the reservoir is only {:.1f} ft deep (curve freeboard "
+                      "{:.1f} ft + estimated below-pool depth {:.1f} ft) against the {:.1f} ft dam "
+                      "height, too little to give the area at the top of dam (the Runner assumes "
+                      "storage varies with depth squared)".format(
+                          (span + below) / FT, span / FT, below / FT, h / FT))
     return area_at_top_m2(curve_csv, crest_m, dz), ""
 
 
@@ -373,18 +380,54 @@ def has_inventory_area_field(names):
 NO_CURVES = "no stage-storage curve folder (tool 3) was given"
 
 
+def _est_maxdep_m(attrs):
+    """Tool-3's below-pool reservoir depth est_maxdep_m (metres) from the dam attrs, or None.
+    Matched without regard to case, like inventory_max_area_m2."""
+    low = {str(k).lower(): k for k in (attrs or {})}
+    return _num(attrs.get(low["est_maxdep_m"])) if "est_maxdep_m" in low else None
+
+
+def _rescued_by_below_pool(curve_csv, crest_m, height_m, below_m):
+    """True when the curve clears the shallow-curve guard only because of the tool-3 below-pool
+    depth: its own freeboard span is below 0.5 x height, but the freeboard plus the below-pool
+    depth is not (M24). Used to let a DWR-recorded maximum-pool area take precedence."""
+    try:
+        h = float(height_m) if height_m not in (None, "") else None
+    except (TypeError, ValueError):
+        return False
+    span = curve_span_m(curve_csv, crest_m)
+    if not h or span is None:
+        return False
+    return span < SHALLOW_CURVE * h <= (span + max(float(below_m or 0.0), 0.0))
+
+
 def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
     """(area m2 or None, source, note) for the Runner's AREA_AC (0.17.46; 0.17.49: also with no
     curve folder).
 
     1. the tool-3 stage-storage curve near the top of dam (area_for_runner), when a curve folder
-       was given;
+       was given. M24 (0.19.3): the shallow-curve guard adds tool-3's below-pool depth
+       (est_maxdep_m) to the curve freeboard, so a wet dam whose freeboard is small but whose
+       basin is deep now sends the curve area instead of falling to the Runner's depth-squared
+       assumption. A curve kept only by that below-pool depth defers to a DWR-recorded
+       maximum-pool area when one exists (the recorded area is authoritative; a DEM-derived curve
+       estimate does not preempt it);
     2. when the dam's curve cannot give the area (too shallow, missing, unusable, or 0) or no
        curve folder was given at all: the inventory's maximum-pool area (inventory_max_area_m2);
     3. else None (the Runner assumes storage varies with depth squared), with a note."""
+    inv_m2, field = inventory_max_area_m2(attrs)
     if curves_given:
-        area, why = area_for_runner(curve_csv, crest_m, height_m)
+        below = max(_est_maxdep_m(attrs) or 0.0, 0.0)
+        area, why = area_for_runner(curve_csv, crest_m, height_m, below_pool_m=below)
         if area is not None and area > 0:
+            # M24 (c): a curve lifted over the guard only by the below-pool depth defers to a
+            # recorded maximum-pool area.
+            if inv_m2 is not None and _rescued_by_below_pool(curve_csv, crest_m, height_m, below):
+                return inv_m2, AREA_SRC_INVENTORY, (
+                    "surface area {:,.1f} ac from the inventory's maximum-pool area ({}) in "
+                    "preference to the stage-storage curve, whose freeboard is below the "
+                    "shallow-curve guard and was lifted over it only by the tool-3 below-pool "
+                    "depth".format(inv_m2 / ACRE_M2, field))
             return area, AREA_SRC_CURVE, ""
         if not why:
             why = ("no stage-storage curve for this dam" if not curve_csv or not os.path.exists(curve_csv)
@@ -393,7 +436,6 @@ def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
             why = why.replace("no surface area sent: ", "").split(" (the Runner assumes")[0]
     else:
         why = NO_CURVES
-    inv_m2, field = inventory_max_area_m2(attrs)
     if inv_m2 is not None:
         return inv_m2, AREA_SRC_INVENTORY, (
             "surface area {:,.1f} ac from the inventory's maximum-pool area ({}) because {}".format(
@@ -474,6 +516,20 @@ def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, us
     name = attrs.get("name")
     if name not in (None, ""):
         p["DAM_NAME"] = str(name)
+    # M24 (d): a stage-storage curve area that implies a storage-area exponent m = SA*Ht/Vt above
+    # the Runner's cap of 6 is not reliable - the Runner would clamp it to 6 and route a peak
+    # about a third too high (the exact misfire a shallow curve causes). Drop such a curve area so
+    # the Runner falls back to storage ~ depth squared. An exponent below 1 is left to the Runner's
+    # clamp-to-1, which models more storage and so stays on the conservative side. The DWR-recorded
+    # inventory area is authoritative and is not second-guessed.
+    if (area_top_m2 is not None and area_top_m2 > 0 and area_source == AREA_SRC_CURVE and vol > 0):
+        m_implied = area_top_m2 * h_m / vol
+        if m_implied > 6.0:
+            notes.append("stage-storage curve surface area {:,.1f} ac not sent: it implies a "
+                         "storage-area exponent {:.2f} above the Runner's cap of 6 (storage {:,.1f} "
+                         "ac-ft, height {:.1f} ft); the Runner assumes storage varies with depth "
+                         "squared".format(area_top_m2 / ACRE_M2, m_implied, storage_acft, height_ft))
+            area_top_m2 = None
     if area_top_m2 is not None and area_top_m2 > 0:
         p["AREA_AC"] = round(area_top_m2 / ACRE_M2, 3)
         if area_source == AREA_SRC_INVENTORY:

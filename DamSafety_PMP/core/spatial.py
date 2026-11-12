@@ -9,6 +9,7 @@ import os, csv, math
 import numpy as np
 from osgeo import ogr
 from . import gridutil as G
+from . import gdalsafe as GS
 
 DEFAULT_PATTERNS = {
     "LS": ["SPAS_1209_1", "SPAS_1427_1", "SPAS_1699_1"],
@@ -20,7 +21,7 @@ FLATTEN_X = 5.0
 
 
 def storm_centres(gdb):
-    ds = ogr.Open(gdb); lyr = ds.GetLayerByName("Storm_List")
+    ds = GS.open_vector(gdb); lyr = GS.layer(ds, "Storm_List", gdb)     # audit R3
     return {f.GetField("SPAS_ID"): (f.GetField("Lon"), f.GetField("Lat"), f.GetField("Storm_Name"),
                                     f.GetField("State"), f.GetField("PMP_TYPE")) for f in lyr}
 
@@ -29,8 +30,8 @@ def run_spatial(points_gpkg, basin_path, home, out_dir, points_layer=None, centr
                 patterns=None, basin_layer=None, cell_deg=0.025, log=print):
     log = log or (lambda *a: None)
     gdb = os.path.join(home, "Input", "Spatial_Distribution.gdb")
-    pds = ogr.Open(points_gpkg)
-    plyr = pds.GetLayerByName(points_layer) if points_layer else pds.GetLayer(0)
+    pds = GS.open_vector(points_gpkg)
+    plyr = GS.layer(pds, points_layer, points_gpkg)
     pname = plyr.GetName()
     if "_PMP_Points_" not in pname:
         raise ValueError("points layer name must look like <Type>_PMP_Points_<basin>_<area> (from ndpmp:pmp)")
@@ -71,7 +72,7 @@ def run_spatial(points_gpkg, basin_path, home, out_dir, points_layer=None, centr
         gpkg = os.path.join(sub, "%s_PMP_Points_%s_%s_spatial.gpkg" % (stype, out_name, sid))
         if os.path.exists(gpkg):
             os.remove(gpkg)
-        ods = ogr.GetDriverByName("GPKG").CreateDataSource(gpkg)
+        ods = GS.checked(ogr.GetDriverByName("GPKG").CreateDataSource(gpkg), "creating " + gpkg)
         ol = ods.CreateLayer("%s_PMP_Points_%s_%s_spatial" % (stype, out_name, sid), G.WGS84, ogr.wkbPoint)
         ol.CreateField(ogr.FieldDefn("ID", ogr.OFTInteger))
         for k in pmp_fields:

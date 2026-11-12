@@ -16,7 +16,7 @@ import numpy as np
 from nd_breach_runner.core import basemap as BM
 from nd_breach_runner.core import qa_maps as QA
 from nd_breach_runner.core.grid import Grid
-from nd_breach_runner.tests.registry import test as register
+from nd_breach_runner.tests.registry import need_osgeo, test as register
 
 ENVS = ("ND_DAM_OFFLINE", "NDBREACH_BASEMAP_OFFLINE", "ND_DAM_HAZARD_OFFLINE_ONLY",
         "ND_DAM_SUITE", "NDSUITE_HOME", "ND_DAM_HAZARD_OFFLINE_PACK", "NDBREACH_BASEMAP_PACK",
@@ -62,6 +62,7 @@ def _no_sockets(local_ok=False):
 
 
 def _wkt(code=5070):
+    need_osgeo()                      # a skip, not a failure, on a Python without GDAL
     from osgeo import osr
     s = osr.SpatialReference()
     s.ImportFromEPSG(code)
@@ -244,6 +245,7 @@ def _tile_server():
 
 @register
 def qa_basemap_local_tile_server_known_pixel_and_cache():
+    need_osgeo()
     from osgeo import osr
     root = tempfile.mkdtemp(prefix="qa_srv_")
     try:
@@ -315,6 +317,7 @@ def qa_basemap_network_budget_caps_the_time():
 # 4. offline: no request at all, pack imagery else hillshade, said in the credit ------------
 @register
 def qa_basemap_offline_makes_no_request():
+    need_osgeo()
     from osgeo import gdal
     for env in ({"ND_DAM_OFFLINE": "1"}, {"NDBREACH_BASEMAP_OFFLINE": "yes"},
                 {"ND_DAM_SUITE": tempfile.gettempdir()}):

@@ -19,7 +19,10 @@ identical would erase the brands. Its shared LOGIC (version_of / the compat matr
 later, but its data must not.
 
 Because the forks live in separate repos, this runs where BOTH are checked out (a combined CI
-job or locally), not in single-repo CI. The within-fork drift gate is tools/sync_damsuite.py.
+job or locally), not in single-repo CI. Since DamSafety Core 1.0.0 this repo has ONE copy
+(DamSafety_Core/damsuite/); the DamSafety_* plugins' damsuite/ folders are shims onto it, so the
+within-fork comparison below has nothing to compare and is skipped. nd_hazard is archived and
+still vendors its copies; those are compared with the Core's master.
 
     python3 tools/check_fork_parity.py --nd /path/to/nd_hazard      # exit 1 on any drift
 """
@@ -29,7 +32,7 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MASTER = os.path.join(ROOT, "shared", "damsuite")
+MASTER = os.path.join(ROOT, "DamSafety_Core", "damsuite")   # Core 1.0.0: the one copy
 SAFETY_CORE = ("chain.py", "solvegate.py")
 DWR_FULL = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
 ND_PLUGINS = ("ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening", "nd_data_updater")
@@ -65,11 +68,12 @@ def check(nd_root):
     for name in SAFETY_CORE:
         master = _sha(os.path.join(MASTER, name))
         if master is None:
-            problems.append("DamSafety master missing: shared/damsuite/{}".format(name))
+            problems.append("DamSafety master missing: DamSafety_Core/damsuite/{}".format(name))
             continue
-        # DamSafety vendored copies must match the master (also covered by sync_damsuite --check)
+        # Core 1.0.0: the DamSafety plugins hold no copy (their damsuite/ is the alias shim); a
+        # copy that reappeared is drift
         for p, sha in _copies(ROOT, DWR_FULL, name).items():
-            if sha != master:
+            if sha is not None and sha != master:
                 problems.append("DamSafety {}/damsuite/{} != master".format(p, name))
         # nd copies must be internally consistent AND equal to the master
         nd = _copies(nd_root, ND_PLUGINS, name)

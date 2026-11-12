@@ -489,10 +489,13 @@ def _common(dam, wse0_m=None, wse0_rule=None, vw_source=None):
     return c
 
 
-def _embankment_area(dam):
+def _embankment_area(dam, height_ft=None):
+    # M15: height_ft lets a caller measure the cross-section over the breach height (crest to
+    # breach bottom) instead of the full dam height. Defaults to the full dam height, so the
+    # TR-60 callers (held at the full section) are unchanged.
     if dam.crest_width_ft and dam.us_slope_h and dam.ds_slope_h:
-        return embankment_area_ft2(dam.dam_height_ft, dam.crest_width_ft,
-                                   dam.us_slope_h, dam.ds_slope_h)
+        return embankment_area_ft2(dam.dam_height_ft if height_ft is None else height_ft,
+                                   dam.crest_width_ft, dam.us_slope_h, dam.ds_slope_h)
     return None
 
 
@@ -518,9 +521,15 @@ def breach_parameters(method, c, dam, ov):
         b, tf, z = froehlich_1995(c.vw, hb, "overtopping")
         src = "Froehlich (1995), overtopping"
     elif method == METHOD_MLM:
-        a_ft2 = _embankment_area(dam)
+        # M15 (MLM, signed off 2026-11-09): measure the embankment cross-section A over the
+        # BREACH height (crest to breach bottom), not the full dam height. MLM's average width is
+        # eroded volume / A, so a partial (raised-bottom) breach that kept the full-section A
+        # published a width biased LOW. A full breach snaps to the dam height, so those runs stay
+        # bit-identical. (TR-60's A is held at the full section pending ND DWR sign-off.)
+        h_bf = dam.dam_height_ft if hb >= dam.dam_height_ft * FT - 0.03 else hb / FT
+        a_ft2 = _embankment_area(dam, h_bf)
         if a_ft2 is None:
-            a_ft2 = embankment_area_ft2(dam.dam_height_ft, 12.0, 3.0, 3.0)
+            a_ft2 = embankment_area_ft2(h_bf, 12.0, 3.0, 3.0)
             notes.append("MacDonald & Langridge-Monopolis needs the embankment cross-section "
                          "(crest width and slopes); none given, so a 12 ft crest with 3H:1V "
                          "slopes was assumed. Enter the real geometry.")
@@ -528,6 +537,21 @@ def breach_parameters(method, c, dam, ov):
         src = "MacDonald & Langridge-Monopolis (1984), earthfill"
         notes.append("MacDonald & Langridge-Monopolis side slope taken as 1H:1V; override it "
                      "if the embankment differs.")
+        if hb < dam.dam_height_ft * FT - 0.03:
+            notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the MLM "
+                         "embankment cross-section is measured over the breach height, not the "
+                         "full dam section.".format(hb / FT, dam.dam_height_ft))
+        # M15 width sanity: the breach-height cross-section can make the MLM eroded-volume
+        # regression return an average width wider than the embankment itself for a shallow
+        # PARTIAL breach - a sign it is outside its basis. Flag it only for a partial breach (so a
+        # full breach stays bit-identical, note included); the value is still published (do not
+        # silently clamp a regulated number).
+        if (dam.crest_length_ft and not ov.avg_width_ft and hb < dam.dam_height_ft * FT - 0.03
+                and b / FT > dam.crest_length_ft):
+            notes.append("MLM average breach width {:.0f} ft exceeds the {:.0f} ft embankment "
+                         "crest length - the eroded-volume regression is likely outside its "
+                         "basis for this partial breach; verify.".format(
+                             b / FT, dam.crest_length_ft))
     elif method == METHOD_VTG:
         b, tf, z = vtg_1990(c.vw, hw, ov.vtg_erodible)
         src = "Von Thun & Gillette (1990), {}".format("easily erodible" if ov.vtg_erodible
@@ -761,6 +785,23 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
         _, tr, _ = froehlich_2008(c.vw, top_m - bottom_m, "piping")
     tb = 2.0 * c.v_release / qp
     notes = list(c.notes)
+    # M15 (disclosure, corrected 2026-11-10 to NRCS TR-210-60): TR-60 DEFINES A (the Br = Vs*Hw/A
+    # denominator) as "the cross-sectional area of embankment at the assumed location of breach,
+    # usually the template section" - the dam's full design cross-section at the breach, a fixed
+    # geometric property, NOT re-measured over the breach depth. So the full-height A is the
+    # method-correct value, not a low bias (unlike MLM, whose A is the genuinely eroded breach
+    # cross-section); the reduced head Hw already lowers the partial-breach peak. TR-60's regression
+    # is calibrated for a breach to the foundation, so a raised-bottom breach is an application
+    # OUTSIDE its basis - an extrapolation, not an error to correct. A stays the full section.
+    if (top_m - bottom_m) < dam.dam_height_ft * FT - 0.03:
+        notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): TR-60 defines the "
+                     "breach factor Br = Vs*Hw/A with A the dam's template (full-height) cross-"
+                     "section at the breach - held at the full section by the method, not "
+                     "re-measured over the breach depth - while the reduced head Hw lowers the "
+                     "peak. TR-60 is calibrated for a breach to the foundation, so this partial "
+                     "breach is outside its basis; treat the TR-60 peak as an extrapolation and "
+                     "confirm the basis with ND DWR.".format((top_m - bottom_m) / FT,
+                                                             dam.dam_height_ft))
     if tr >= tb:
         tr = 0.25 * tb
         notes.append("Rise time longer than the triangle base allowed by the volume; set to "

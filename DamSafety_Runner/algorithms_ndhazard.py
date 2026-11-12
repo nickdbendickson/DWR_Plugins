@@ -80,12 +80,18 @@ NID_CLASS = {"h": "High", "s": "Significant", "l": "Low", "m": "Medium"}
 _YES = {"y", "yes", "true", "t", "1", "x", "on"}
 _NO = {"n", "no", "false", "f", "0", "off"}
 
-SAMPLING = ("Points: the raster cell under the point; a multipoint takes its deepest point with "
-            "the maximum velocity over its wet points. Polygons: the deepest cell whose centre "
-            "falls inside the footprint (the cell under the centroid when none does), with the "
-            "maximum velocity over the footprint's wet cells, even from another cell (TM 11 "
-            "practice: peak depth with peak velocity; the velocity at the deepest cell is kept "
-            "for information only). Lines: sampled every half cell, the "
+SAMPLING = ("Structures (3.16.9, matching the DamSafety Hazard plugin's sampling footprint): a "
+            "building outline is read over the cells whose centre lies in the outline or within "
+            "its {:g} ft edge ring; a point structure over the cells within {:g} ft ({:g} ft "
+            "assumed footprint radius + the edge ring) of the point; the cell under the centroid "
+            "/ point when no cell centre is that close. The peak depth with the maximum velocity "
+            "over the area's wet cells, even from another cell (TM 11 practice; the velocity at "
+            "the deepest cell is kept for information only). Other points (lifelines, dams): the "
+            "raster cell under the point; a multipoint takes its deepest point with the maximum "
+            "velocity over its wet points. Other polygons: the deepest cell whose centre falls "
+            "inside (the cell under the centroid when none does). Lines: sampled every half cell, "
+            "the ".format(nh.EDGE_RING_FT, nh.POINT_RADIUS_FT + nh.EDGE_RING_FT,
+                          nh.POINT_RADIUS_FT) +
             "deepest sample. Roads (3.10.90, DWR-3034): the water surface over the road "
             "surface along the centreline (1 m); bridge / notch cuts, and bare-earth openings "
             "at a mapped bridge / notch, read on a deck stand-in from the approaches; culverts "
@@ -457,9 +463,15 @@ def _inside_ring(px, py, ring):
 
 class Sampler:
     """Maximum depth (ft) and velocity (ft/s) at points, polygons and lines on the dam
-    folder's grid. Depth and velocity are arrays on `grid`; NaN / no-data count as dry."""
+    folder's grid. Depth and velocity are arrays on `grid`; NaN / no-data count as dry.
 
-    def __init__(self, grid, depth, velocity=None, wet_ft=0.1):
+    3.16.9 (audit P1): `unit_m` is the metres per grid unit (1.0 for a metre CRS, 0.3048 for
+    State Plane feet: gdal_io.linear_unit_m of the rasters' CRS), so the Hazard's footprint
+    feet (nd_hazard.EDGE_RING_FT / POINT_RADIUS_FT) are measured in the grid's own units. The
+    ring and disc apply to structures only (polygon(..., structure=True) / points(...,
+    structure=True)); lifelines, dams, roads and railroads are read as before."""
+
+    def __init__(self, grid, depth, velocity=None, wet_ft=0.1, unit_m=1.0):
         self.g = grid
         d = np.asarray(depth, dtype=float)
         bad = ~np.isfinite(d) | (d == grid.nodata) | (d < 0)
@@ -471,6 +483,11 @@ class Sampler:
             # no-data velocity stays unknown (NaN): nd_hazard counts it potentially lethal
             self.v = np.where(~np.isfinite(v) | (v == grid.nodata) | (v < 0), np.nan, v)
         self.wet = float(wet_ft)
+        self.unit_m = float(unit_m or 1.0)
+
+    def ft(self, feet):
+        """Feet in grid units."""
+        return float(feet) * nh.M_PER_FT / self.unit_m
 
     def _rc(self, x, y):
         c = np.floor((np.asarray(x, dtype=float) - self.g.x0) / self.g.dx).astype(int)
@@ -478,10 +495,16 @@ class Sampler:
         ok = (r >= 0) & (r < self.g.ny) & (c >= 0) & (c < self.g.nx)
         return r, c, ok
 
-    def points(self, pts):
+    def points(self, pts, structure=False):
         """{depth_ft, vel_fts, vel_at_max_fts, x, y, cells, how} of the deepest of the
-        points, or None when none is on the grid."""
+        points, or None when none is on the grid. structure (3.16.9): a point STRUCTURE is
+        read as the Hazard reads it - the cells within POINT_RADIUS_FT + EDGE_RING_FT of the
+        point (its assumed footprint plus the edge ring), the deepest cell's depth with the
+        peak velocity over the area's wet cells; the cell under the point when no centre is
+        that close. A multipoint structure takes the deepest of its points' discs."""
         pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+        if structure:
+            return self._point_discs(pts)
         r, c, ok = self._rc(pts[:, 0], pts[:, 1])
         if not ok.any():
             return None
@@ -497,18 +520,38 @@ class Sampler:
         return {"depth_ft": float(d[k]), "vel_fts": v, "vel_at_max_fts": vk,
                 "x": float(pts[k, 0]), "y": float(pts[k, 1]), "cells": 1, "how": "point"}
 
-    def polygon(self, rings, centroid):
-        """Deepest cell whose centre is inside any of the outer rings; velocity is the
-        maximum over the footprint's wet cells, even from another cell (TM 11 practice,
-        Nick 2026-11-01). vel_at_max_fts, the deepest cell's velocity, is information only."""
+    def _point_discs(self, pts):
+        """points(structure=True): the deepest of the points' discs (nd_hazard.sample_disc)."""
+        g = self.g
+        radius = self.ft(nh.POINT_RADIUS_FT + nh.EDGE_RING_FT)
+        best = None
+        for x, y in pts:
+            d, v, how = nh.sample_disc(self.d, self.v, g.x0, g.y0, g.dx, float(x), float(y),
+                                       radius, self.wet, 1.0 / self.ft(1.0))
+            if d is None:
+                continue
+            _r, _c, ok = self._rc(x, y)
+            vk = None
+            if ok:
+                vv = self.v[int(_r), int(_c)]
+                vk = float(vv) if np.isfinite(vv) else None
+            if best is None or d > best["depth_ft"]:
+                best = {"depth_ft": float(d), "vel_fts": v, "vel_at_max_fts": vk,
+                        "x": float(x), "y": float(y), "cells": 1,
+                        "how": "point structure: " + how}
+        return best
+
+    def _cells_of(self, rings, edge=0.0):
+        """Sorted (row, col) of the cells whose centre is inside any outer ring or within
+        `edge` grid units of its wall (3.16.9: the Hazard's edge ring)."""
         g = self.g
         rr, cc = [], []
         for ring in rings:
             ring = np.asarray(ring, dtype=float)
             if len(ring) < 3:
                 continue
-            x0, y0 = ring.min(axis=0)
-            x1, y1 = ring.max(axis=0)
+            x0, y0 = ring.min(axis=0) - edge
+            x1, y1 = ring.max(axis=0) + edge
             c0 = max(0, int(math.floor((x0 - g.x0) / g.dx - 0.5)))
             c1 = min(g.nx - 1, int(math.ceil((x1 - g.x0) / g.dx - 0.5)))
             r0 = max(0, int(math.floor((g.y0 - y1) / g.dx - 0.5)))
@@ -520,10 +563,23 @@ class Sampler:
             px = g.x0 + (C + 0.5) * g.dx
             py = g.y0 - (R + 0.5) * g.dx
             m = _inside_ring(px, py, ring)
+            if edge > 0:
+                m |= nh._edge_mask(px, py, [tuple(p) for p in ring], edge)
             rr.append(R[m])
             cc.append(C[m])
-        cells = sorted(set(zip(np.concatenate(rr).tolist(), np.concatenate(cc).tolist()))) \
+        return sorted(set(zip(np.concatenate(rr).tolist(), np.concatenate(cc).tolist()))) \
             if rr else []
+
+    def polygon(self, rings, centroid, structure=False):
+        """Deepest cell whose centre is inside any of the outer rings; velocity is the
+        maximum over the footprint's wet cells, even from another cell (TM 11 practice,
+        Nick 2026-11-01). vel_at_max_fts, the deepest cell's velocity, is information only.
+        structure (3.16.9, audit P1): a building outline also reads the cells within
+        EDGE_RING_FT of its wall - the Hazard's outline + edge ring, so both plugins read the
+        same cells; more cells can only raise the zone."""
+        g = self.g
+        edge = self.ft(nh.EDGE_RING_FT) if structure else 0.0
+        cells = self._cells_of(rings, edge)
         if not cells:
             s = self.points([centroid])
             if s is not None:
@@ -543,7 +599,9 @@ class Sampler:
             x, y = float(centroid[0]), float(centroid[1])
         return {"depth_ft": float(d[k]), "vel_fts": vmax,
                 "vel_at_max_fts": vk, "x": float(x), "y": float(y),
-                "cells": len(cells), "how": "polygon: deepest of {} cell(s)".format(len(cells))}
+                "cells": len(cells), "how": "polygon: deepest of {} cell(s){}".format(
+                    len(cells), " in the footprint + {:g} ft edge ring".format(nh.EDGE_RING_FT)
+                    if structure else "")}
 
     def is_wet(self, x, y):
         """Overtopped / inundated at (x, y): depth at least the wet depth (off the grid: no)."""
@@ -757,6 +815,15 @@ class NDHazardAlgorithm(_ToolBase):
                   "least {:g}: a dry cell reads 0; the starting value {:g} is the engineer's "
                   "allowance for model noise, a screening value you choose)".format(
                       nh.MIN_WET_FT, d.wet_ft), d.wet_ft, minimum=nh.MIN_WET_FT)
+        # 3.16.9 (audit P1): the Hazard plugin's borderline option, same defaults
+        self._num("NEAR_FT", "Borderline: a structure this far (ft of depth) below the next "
+                  "zone boundary is noted as near it (0 = off; the starting value {:g} ft is "
+                  "the Hazard plugin's, a screening value you choose)".format(d.near_ft),
+                  d.near_ft, minimum=0.0, advanced=True)
+        self.addParameter(set_advanced(QgsProcessingParameterBoolean(
+            "BORDERLINE_HIGHER", "Borderline: move a near-boundary structure into the higher "
+                                 "zone (ND 5.3(f); off, as in the Hazard plugin)",
+            defaultValue=d.borderline_higher)))
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "UNKNOWN_AADT", "Class of an overtopped road with no AADT (a data gap)",
             list(nh.CLASSES), defaultValue=nh.CLASSES.index(d.unknown_aadt))))
@@ -790,7 +857,9 @@ class NDHazardAlgorithm(_ToolBase):
                 wet_ft=self.parameterAsDouble(parameters, "WET_FT", context),
                 unknown_aadt=nh.CLASSES[e("UNKNOWN_AADT")],
                 unknown_trains=nh.CLASSES[e("UNKNOWN_TRAINS")],
-                judgment_zone_high=self.parameterAsBool(parameters, "JUDGMENT_HIGH", context)
+                judgment_zone_high=self.parameterAsBool(parameters, "JUDGMENT_HIGH", context),
+                near_ft=self.parameterAsDouble(parameters, "NEAR_FT", context),
+                borderline_higher=self.parameterAsBool(parameters, "BORDERLINE_HIGHER", context)
             ).validate()
         except (ValueError, IndexError) as ex:
             raise QgsProcessingException(str(ex))
@@ -834,17 +903,19 @@ class NDHazardAlgorithm(_ToolBase):
                 _layer_name(src, parameters, key))
 
     @staticmethod
-    def _sample(sampler, g, to_r):
+    def _sample(sampler, g, to_r, structure=False):
+        """structure (3.16.9): a habitable-structure feature, read over the Hazard's sampling
+        footprint (outline + edge ring; point disc + ring); other receptors as before."""
         if g is None or g.isEmpty():
             return None
         kind, parts, centroid = _parts(g, to_r)
         if not parts:
             return None
         if kind == "polygon":
-            return sampler.polygon(parts, centroid)
+            return sampler.polygon(parts, centroid, structure=structure)
         if kind == "line":
             return sampler.lines(parts)
-        return sampler.points(parts)
+        return sampler.points(parts, structure=structure)
 
     def _read_all(self, parameters, context, grid, crs, sampler, feedback, own_id):
         rec = {"structures": [], "roads": [], "railroads": [], "lifelines": [], "dams": []}
@@ -859,7 +930,7 @@ class NDHazardAlgorithm(_ToolBase):
                 parameters, "UNINHABITED_WORDS", context) or UNINHABITED_DEFAULT) if w.strip())
             how_n, out_n = {}, 0
             for f in feats:
-                s = self._sample(sampler, f.geometry(), to_r)
+                s = self._sample(sampler, f.geometry(), to_r, structure=True)
                 if s is None:
                     out_n += 1
                     continue
@@ -1019,7 +1090,7 @@ class NDHazardAlgorithm(_ToolBase):
                     words = tuple(w.strip() for w in re.split(r"[,;\n]+", self._str(
                         parameters, "UNINHABITED_WORDS", context) or UNINHABITED_DEFAULT) if w.strip())
                     for f in feats:
-                        s = self._sample(sampler, f.geometry(), to_r)
+                        s = self._sample(sampler, f.geometry(), to_r, structure=True)
                         if s is None:
                             out_n += 1
                             continue
@@ -1452,7 +1523,14 @@ class NDHazardAlgorithm(_ToolBase):
                                  fatalError=False)
         dam_id = _dam_id(folder)
         crs = self._raster_crs(grid.crs_wkt)
-        sampler = Sampler(grid, with_f["depth"], vel, st.wet_ft)
+        # 3.16.9: the Hazard's footprint feet in the grid's own units (metres or State Plane
+        # feet; M13 idiom: linear_unit_m or 1.0)
+        try:
+            from .core import gdal_io
+            unit_m = gdal_io.linear_unit_m(grid.crs_wkt) or 1.0
+        except Exception:
+            unit_m = 1.0
+        sampler = Sampler(grid, with_f["depth"], vel, st.wet_ft, unit_m=unit_m)
         self._road_parts = {}
         self._is_wet = sampler.is_wet
         rec, extra, dam_xy, inputs, fields = self._read_all(
