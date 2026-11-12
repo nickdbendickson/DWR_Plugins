@@ -1255,7 +1255,7 @@ def cmd_ocr(a):
     for i, p in todo:
         dst = os.path.join(outdir, os.path.splitext(os.path.basename(p))[0] + ".ocr.pdf")
         say("OCR: %s" % os.path.basename(p))
-        r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, dst])
+        r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, dst])  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- fixed argv list, no shell; paths from the local library DB
         if r.returncode not in (0, 6):          # 6 = already has text
             say("  ocrmypdf failed (exit %d); left as is" % r.returncode)
             continue
