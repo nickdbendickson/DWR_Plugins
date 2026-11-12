@@ -218,7 +218,6 @@ def download(extent, cell_m, out_dir, stem, feedback=None, scope=0):
                           scope)
         if note:
             getattr(feedback, "pushWarning", feedback.pushInfo)(note)
-    n = max(len(tiles), 1)
 
     def log(msg):
         if feedback is not None:

@@ -78,6 +78,20 @@ class Embankments(unittest.TestCase):
         got = em.find(dem, GT, [LINE], road_mask=road)
         self.assertEqual([e.kind for e in got], [em.K_ROAD_POND])
 
+    def test_long_fill_off_the_road_layer_is_not_a_dam(self):
+        # a highway / canal bank 2.5 m above the ground the whole way across (1.2 km), no road
+        # layer: a long fill, not a dam; a farm fill (ends on the valley sides) stays short
+        dem, y = valley()
+        dem = np.where(np.abs(y - 250) <= 4, dem + 2.5, dem)
+        dem = add_fill(dem, y, 150, 3.0)
+        got = sorted(em.find(dem, GT, [LINE]), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in got], [em.K_DRY, em.K_LONG])
+        self.assertLess(got[0].ridge_len_m, 300.0)
+        self.assertGreaterEqual(got[1].ridge_len_m, 600.0)
+        self.assertIn("road layers miss", " ".join(got[1].notes))
+        p = em.FinderParams(long_fill_m=5000.0)          # the threshold is yours
+        self.assertNotIn(em.K_LONG, [e.kind for e in em.find(dem, GT, [LINE], params=p)])
+
     def test_line_direction_does_not_matter(self):
         dem, road = scene()
         a = em.find(dem, GT, [LINE], road_mask=road)
@@ -88,6 +102,23 @@ class Embankments(unittest.TestCase):
         dem, _y = valley()
         wander = [(XS, N * CELL - 1.0), (XS, 700.0), (XS + 60.0, 650.0), (XS, 600.0), (XS, 1.0)]
         self.assertEqual(em.find(dem, GT, [wander]), [])
+
+    def test_toe_reaches_the_foot_past_a_bench(self):
+        # a downstream face with a bench part-way down: the toe is the ground at the foot, not the
+        # top of the bench (Absaraka read 17 ft instead of ~28 ft when it stopped on a bench)
+        crest = [110.0, 108.0, 106.0]                      # steep face
+        bench = [105.8, 105.7, 105.6]                      # a short flat shelf
+        more = [104.0, 102.0, 100.0]                       # the face carries on
+        floor = [99.8, 99.7, 99.6, 99.5]                   # the valley floor (gentle)
+        z = np.array(crest + bench + more + floor)
+        kd, still = em.face_toe(z, 0, len(z), CELL, 8.0)
+        self.assertLessEqual(z[kd], 100.2)                 # the foot, well past the 105.6 bench top
+        self.assertFalse(still)
+        # a face that flattens straight onto a gentle floor stops there, not on down the valley
+        z2 = np.array([110.0, 107.0, 104.0, 101.0, 100.8, 100.6, 100.4, 100.2, 100.0])
+        kd2, _ = em.face_toe(z2, 0, len(z2), CELL, 8.0)
+        self.assertLessEqual(z2[kd2], 101.0)
+        self.assertGreaterEqual(z2[kd2], 100.0)
 
     def test_low_fill_left_out_and_threshold_is_yours(self):
         dem, y = valley()
@@ -233,6 +264,24 @@ class Ridges(unittest.TestCase):
         road[:, 96:106] = True
         self.assertEqual(rd.find_ridges(z, gt, road_mask=road), [])
 
+    def test_near_mask_and_water_only(self):
+        # a dike beside a channel (holds water) and one out in a field (dry): near a channel and
+        # water-holding keeps only the first, which is what the default dike pass looks for
+        z, gt = self.flat()
+        z[40:160, 98:104] = 102.0                          # dike A, by the channel, holds water
+        z[40:160, 150:156] = 102.0                         # dike B, dry, out in the field
+        depth = np.zeros(z.shape)
+        depth[40:160, 80:98] = 1.0                         # a pool on dike A's west side
+        channel = np.zeros(z.shape, bool)
+        channel[:, 72:74] = True                           # a stream down the west side
+        from scipy import ndimage as ndi
+        near = ndi.binary_dilation(channel, iterations=28)  # its buffer reaches dike A, not dike B
+        got = rd.find_ridges(z, gt, depth=depth, near_mask=near, water_only=True)
+        self.assertEqual([d["kind"] for d in got], [rd.K_LEVEE])
+        self.assertAlmostEqual(got[0]["x"], 101.0, delta=4.0)
+        self.assertEqual(rd.find_ridges(z, gt, depth=depth, water_only=True)[0]["kind"], rd.K_LEVEE)
+        self.assertEqual(len(rd.find_ridges(z, gt, depth=depth)), 2)   # both, without the filters
+
     def test_round_hump_and_bend_are_not_ridges(self):
         z, gt = self.flat()
         r, c = np.mgrid[0:200, 0:200]
@@ -291,6 +340,18 @@ class Score(unittest.TestCase):
         self.assertEqual(int(y.sum()), 20)
         self.assertGreater(sc.ranked_auc(sc.score(m, self.rows(seed=2)), y), 0.9)
         self.assertGreater(sc.score(m, [rows[0]])[0], sc.score(m, [rows[1]])[0])
+
+    def test_an_older_model_still_scores(self):
+        rows = self.rows()
+        m = sc.train(rows)
+        k = m["features"].index("log_ridge_len")
+        for key in ("features", "mean", "std"):
+            m[key] = m[key][:k] + m[key][k + 1:]
+        m["weights"] = m["weights"][:k + 1] + m["weights"][k + 2:]
+        self.assertEqual(len(sc.score(m, rows)), len(rows))
+        m["features"][0] = "no_such_feature"
+        with self.assertRaises(ValueError):
+            sc.score(m, rows)
 
     def test_needs_examples(self):
         rows = self.rows()[:4]
@@ -360,6 +421,29 @@ class Water(unittest.TestCase):
         _l, n = wt.water_patches(idx, 0.6, 1, 50, 0.0, None)
         self.assertEqual(n, 0)                     # the threshold is yours
 
+    def test_shadow_is_not_water(self):
+        # a cast shadow (dark in every band) has a positive NDWI and is dark in NIR, so the old
+        # filters passed it; the green-brightness test drops it, the pond stays
+        g, nir, pond = image()
+        g[200:230, 200:230], nir[200:230, 200:230] = 15.0, 5.0   # a 30 m shadow
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark)
+        self.assertEqual(n, 2)                     # pond + shadow, with only the old filters
+        bright = wt.bright_in_green(g, idx, 0.35)
+        lab, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, bright=bright)
+        self.assertEqual(n, 1)                     # the shadow is gone
+        self.assertGreater((lab > 0)[pond].mean(), 0.97)
+
+    def test_reject_mask_drops_patches(self):
+        g, nir, pond = image()
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        built = np.zeros(g.shape, bool)
+        built[108:192, 108:192] = True             # a built-up block over the whole pond
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, reject=built)
+        self.assertEqual(n, 0)                     # the pond is on the built-up mask, dropped
+
     def test_persistence_keeps_the_pond_drops_a_wet_year(self):
         g, nir, pond = image()
         g2, nir2 = g.copy(), nir.copy()
@@ -383,6 +467,121 @@ class Water(unittest.TestCase):
         self.assertAlmostEqual(mean[1], 0.5, places=6)
         self.assertAlmostEqual(share[1], 0.5, delta=0.05)
         self.assertEqual(cells[1], (lab == 1).sum())
+
+
+def write_las(path, x, y, cls, scale=0.01, offset=(0.0, 0.0, 0.0), fmt=0, rec_len=20,
+              version=(1, 2)):
+    """Write a minimal uncompressed LAS (point format 0 by default) for the reader tests."""
+    import struct
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    cls = np.asarray(cls, np.uint8)
+    n = len(x)
+    header_size = 227 if version == (1, 2) else 375
+    hdr = bytearray(header_size)
+    hdr[0:4] = b"LASF"
+    hdr[24], hdr[25] = version
+    struct.pack_into("<H", hdr, 94, header_size)
+    struct.pack_into("<I", hdr, 96, header_size)          # point data right after the header
+    struct.pack_into("<I", hdr, 100, 0)                   # no VLRs
+    hdr[104] = fmt
+    struct.pack_into("<H", hdr, 105, rec_len)
+    struct.pack_into("<I", hdr, 107, n)                   # legacy point count
+    struct.pack_into("<3d", hdr, 131, scale, scale, scale)
+    struct.pack_into("<3d", hdr, 155, *offset)
+    struct.pack_into("<6d", hdr, 179, float(x.max()), float(x.min()),
+                     float(y.max()), float(y.min()), 0.0, 0.0)
+    if version[1] >= 4:
+        struct.pack_into("<Q", hdr, 247, n)
+    body = bytearray()
+    class_off = 15 if fmt < 6 else 17
+    for i in range(n):
+        rec = bytearray(rec_len)
+        struct.pack_into("<i", rec, 0, int(round((x[i] - offset[0]) / scale)))
+        struct.pack_into("<i", rec, 4, int(round((y[i] - offset[1]) / scale)))
+        rec[class_off] = int(cls[i])
+        body += rec
+    with open(path, "wb") as fh:
+        fh.write(hdr)
+        fh.write(body)
+
+
+class Lidar(unittest.TestCase):
+    def _cloud(self):
+        # water (class 9) in a 20 x 20 m block at (50,50); ground (class 2) scattered elsewhere
+        from .. core import lidar as li  # noqa
+        wx, wy = np.meshgrid(np.arange(50, 70, 1.0), np.arange(50, 70, 1.0))
+        wx, wy = wx.ravel(), wy.ravel()
+        gx = np.linspace(0, 100, 60)
+        gy = np.full(60, 10.0)
+        x = np.concatenate([wx, gx])
+        y = np.concatenate([wy, gy])
+        cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(60, 2, np.uint8)])
+        return x, y, cls
+
+    def test_reads_points_and_classes(self):
+        from ..core import lidar as li
+        import tempfile, os
+        x, y, cls = self._cloud()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.las")
+            write_las(p, x, y, cls)
+            ax, ay, acls, hdr = li.read_points(p)
+            self.assertEqual(len(ax), len(x))
+            self.assertTrue(np.allclose(sorted(ax), sorted(x), atol=0.02))
+            self.assertEqual(int((acls == 9).sum()), 400)
+            # a class filter reads only the water points
+            wx, wy, wcls, _h = li.read_points(p, {9})
+            self.assertEqual(len(wx), 400)
+            self.assertTrue(np.all(wcls == 9))
+
+    def test_extended_class_byte_format6(self):
+        from ..core import lidar as li
+        import tempfile, os
+        x, y, cls = self._cloud()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t6.las")
+            write_las(p, x, y, cls, fmt=6, rec_len=30, version=(1, 4))
+            _ax, _ay, acls, _h = li.read_points(p, {9})
+            self.assertEqual(int((acls == 9).sum()), 400)   # full byte, no 5-bit mask
+
+    def test_point_grid_marks_only_water(self):
+        from ..core import lidar as li
+        x, y, cls = self._cloud()
+        gt = (0.0, 1.0, 0.0, 100.0, 0.0, -1.0)             # 100 x 100 m, 1 m cells, top-left origin
+        grid = li.point_grid(x, y, cls, (9,), gt, (100, 100), min_pts=1)
+        # the water block is wet
+        self.assertEqual(grid[40, 55], 1.0)                 # row = 100 - 60 (y=60) -> 40; col 55
+        self.assertEqual(grid[45, 60], 1.0)
+        # a ground-only cell is dry (0.0), not NaN
+        self.assertEqual(grid[90, 50], 0.0)
+        # a cell with no points at all is no-data
+        self.assertTrue(np.isnan(grid[5, 5]))
+        self.assertEqual(int((grid == 1.0).sum()), 400)
+
+    def test_min_pts_threshold(self):
+        from ..core import lidar as li
+        x = np.array([10.0, 10.0, 20.0])
+        y = np.array([10.0, 10.0, 20.0])
+        cls = np.array([9, 9, 9], np.uint8)
+        gt = (0.0, 1.0, 0.0, 100.0, 0.0, -1.0)
+        g2 = li.point_grid(x, y, cls, (9,), gt, (100, 100), min_pts=2)
+        self.assertEqual(g2[90, 10], 1.0)                  # the two-point cell survives
+        self.assertEqual(g2[80, 20], 0.0)                  # the one-point cell does not
+
+    def test_laz_is_refused_by_the_pure_reader(self):
+        from ..core import lidar as li
+        import tempfile, os, struct
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.laz")
+            write_las(p, [0.0], [0.0], [9])
+            with open(p, "rb") as fh:
+                buf = bytearray(fh.read())
+            buf[104] |= 0x80                               # mark the format compressed
+            with open(p, "wb") as fh:
+                fh.write(buf)
+            with self.assertRaises(li.LasCompressedError):
+                li.read_points(p)
 
 
 if __name__ == "__main__":

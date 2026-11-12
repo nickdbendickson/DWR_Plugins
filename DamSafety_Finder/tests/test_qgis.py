@@ -96,6 +96,21 @@ class Tools(tf.Runs):
         f = ds.GetLayerByName("water").GetNextFeature()
         self.assertEqual(f.GetField("mapped"), "yes")
 
+    def test_water_from_a_count_raster_tool(self):
+        import numpy as np
+        from osgeo import gdal, ogr
+        path = os.path.join(self.tmp, "wcount.tif")
+        counts = np.zeros((300, 300), np.float32)
+        counts[120:160, 120:160] = 2.0
+        ds = gdal.GetDriverByName("GTiff").Create(path, 300, 300, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((tf.X0, 1.0, 0.0, tf.Y0 + 300, 0.0, -1.0))
+        ds.SetProjection(tf.srs(5070).ExportToWkt())
+        b = ds.GetRasterBand(1); b.WriteArray(counts); b.SetNoDataValue(0.0); ds = None
+        self.run_alg("water", {"WATER_RASTER": path, "WATER_BAND": 1, "WATER_COUNT_MIN": 1.0,
+                               "CELL": 1.0, "MIN_AC": 0.02, "MIN_WIDTH": 3.0, "OUT": self.out})
+        d = ogr.Open(self.out)
+        self.assertEqual(d.GetLayerByName("water").GetFeatureCount(), 1)
+
     def test_water_service_needs_an_extent(self):
         from qgis.core import QgsProcessingException
         with self.assertRaises(QgsProcessingException):

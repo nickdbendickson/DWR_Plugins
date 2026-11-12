@@ -28,7 +28,10 @@ FEATURES = (
     ("on_road", lambda r: 1.0 if r.get("on_road") == "yes" else 0.0),
     ("open_pool", lambda r: 1.0 if r.get("open_pool") == "yes" else 0.0),
     ("spill_beside", lambda r: 1.0 if str(r.get("spillway") or "").startswith("beside") else 0.0),
+    # length of the raised fill (Finder 0.3): farm dams are short, highways / canal banks run on
+    ("log_ridge_len", lambda r: math.log1p(max(0.0, _f(r, "ridge_len_ft")))),
 )
+_FN = dict(FEATURES)
 
 
 def _f(r, k):
@@ -39,8 +42,9 @@ def _f(r, k):
     return v if math.isfinite(v) else 0.0
 
 
-def matrix(rows):
-    return np.array([[fn(r) for _n, fn in FEATURES] for r in rows], float).reshape(len(rows), len(FEATURES))
+def matrix(rows, names=None):
+    names = names or [n for n, _f in FEATURES]
+    return np.array([[_FN[n](r) for n in names] for r in rows], float).reshape(len(rows), len(names))
 
 
 def labels(rows, positive_words=("dam",)):
@@ -85,9 +89,10 @@ def score(model, rows):
     """0-1 scores of rows (embankment rows) under a model."""
     if not rows:
         return np.zeros(0)
-    if model.get("features") != [n for n, _f in FEATURES]:
+    names = model.get("features") or []
+    if not names or any(n not in _FN for n in names):      # an older model still scores
         raise ValueError("the score model was made for other features: learn it again")
-    x = matrix(rows)
+    x = matrix(rows, names)
     xs = np.hstack([np.ones((len(rows), 1)), (x - np.array(model["mean"])) / np.array(model["std"])])
     return 1.0 / (1.0 + np.exp(-np.clip(xs @ np.array(model["weights"]), -30, 30)))
 

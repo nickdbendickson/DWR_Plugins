@@ -39,8 +39,7 @@ _app = QgsApplication([], True)
 _app.setPrefixPath(os.environ.get("QGIS_PREFIX_PATH", sys.prefix), True)
 _app.initQgis()
 
-from qgis.PyQt.QtWidgets import (QAbstractButton, QDialog, QTabBar, QWidget,  # noqa: E402
-                                 QWizard)
+from qgis.PyQt.QtWidgets import QAbstractButton, QTabBar, QWidget  # noqa: E402
 
 from DamSafety_Hazard.tokens import TOKENS  # noqa: E402
 
@@ -184,7 +183,6 @@ def rule_no_sideways(label, win):
 
 
 def _table_fits(label, win, t):
-    from qgis.PyQt.QtWidgets import QTableWidget
     for t in [t]:
         if not t.isVisibleTo(win) or t.rowCount() == 0:
             continue
