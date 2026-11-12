@@ -47,7 +47,7 @@ def test_sample_point_10m_and_20m_score_dry():
         pv = nh.sample_point(d, v, x0, yt, cell, x, y, cell_m=cell)
         assert pv.sampling == NDS.SAMPLING_CENTRE_NODATA_DRY
         assert pv.flag == NDS.FLAG_DRY_REVIEW
-        assert pv[0] == 0.0
+        assert pv[0] is None          # historical: NoData depth is None (dry)
 
 
 def test_sample_point_30m_uses_neighbourhood_option_c():
@@ -71,7 +71,7 @@ def test_no_wet_neighbour_unflagged():
         d, v, x0, yt, cell, x, y = _hole(cell=cell, all_nodata=True)
         pv = nh.sample_point(d, v, x0, yt, cell, x, y, cell_m=cell)
         assert pv.flag is None
-        assert pv[0] == 0.0
+        assert pv[0] is None          # historical: NoData depth is None (dry)
 
 
 def test_sample_disc_and_footprint_follow_the_rule():

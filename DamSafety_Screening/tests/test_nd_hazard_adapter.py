@@ -39,7 +39,7 @@ if runner_core and os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
         b = open(os.path.join(runner_core, fn), "rb").read()
         assert a == b, fn + " differs from the ND Dam Breach Runner copy - re-copy it, never edit it"
     print("OK (copies identical to", runner_core + ")")
-assert hz.nh is nh and nh.MODULE_VERSION == "1.4.0"
+assert hz.nh is nh and nh.MODULE_VERSION == "1.4.1"
 
 
 # ---- invented TEST charts (not the ACER TM 11 figures)

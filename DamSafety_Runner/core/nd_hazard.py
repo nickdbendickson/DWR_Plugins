@@ -703,9 +703,10 @@ def sample_point(depth, vel, x0, y_top, cell, x, y, cell_m=None):
     if decided["flag"] == NDS.FLAG_NEIGHBOURHOOD:
         return SamplePV(decided["depth"], decided["velocity"], decided["sampling"],
                         decided["flag"])
-    # scored dry (centre_nodata_dry, or NoData with no wet neighbour)
-    return SamplePV(0.0 if decided["flag"] or decided["depth"] == 0.0 else 0.0,
-                    None, decided["sampling"], decided["flag"])
+    # scored dry (centre_nodata_dry, or NoData with no wet neighbour).
+    # Historical contract: a NoData centre is depth None, velocity from the cell
+    # (a finite 0 stays 0). Grid.sample still records a dry-review flag.
+    return SamplePV(None, v, decided["sampling"], decided["flag"])
 
 
 def _inside_mask(xs, ys, ring):

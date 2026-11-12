@@ -310,6 +310,10 @@ class Grid:
                 d, v, how = nh.sample_disc(self.depth, self.vel, self.x0, self.y_top, self.cell,
                                            x, y, radius, wet_ft, 1.0 / M_PER_FT)
                 if d is None:
+                    if "centre_nodata_dry" in (how or "") and best is None:
+                        best = {"depth_m": 0.0, "vel_ms": v, "x": x, "y": y,
+                                "how": "point structure: " + how}
+                        self._stamp_how(best, how)
                     continue
                 if d / M_PER_FT >= wet_ft:
                     wet_any = True
@@ -329,6 +333,11 @@ class Grid:
                 pv = self.point(x, y)
                 d, v = pv
                 if d is None:
+                    if (getattr(pv, "flag", None) == "nodata_dry_review"
+                            and best is None):
+                        best = {"depth_m": 0.0, "vel_ms": v, "x": x, "y": y,
+                                "how": "centre_nodata_dry"}
+                        self._stamp_how(best, "centre_nodata_dry", pv)
                     continue
                 if d / M_PER_FT >= wet_ft:
                     wet_any = True
