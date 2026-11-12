@@ -751,7 +751,7 @@ def research_passthrough(argv):
         sys.exit("damresearch is not installed. Run: zsh setup-dam-research.zsh (from the dam-research folder)")
     if not os.path.exists(py):
         py = sys.executable
-    os.execv(py, [py, tool] + argv)
+    os.execv(py, [py, tool] + argv)  # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args -- local CLI re-exec of the user's own tool; paths from env with safe defaults
 
 
 def audit_passthrough(argv):
