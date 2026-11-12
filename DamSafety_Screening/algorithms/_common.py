@@ -259,11 +259,24 @@ def is_road_fill(kind):
     return "road" in str(kind or "").lower() or "rail" in str(kind or "").lower()
 
 
+def is_dam_kind(kind):
+    """True for a Finder kind Screening should protect from road-crossing cuts: a dam, or a
+    channel-side dike / levee that holds water. A dry embankment, road fill or long fill is not."""
+    k = str(kind or "").strip().lower()
+    if k == "dam" or k.startswith("dam "):
+        return True
+    if "dike" in k or "levee" in k:
+        return "holds water" in k or k in ("dike", "levee")
+    return False
+
+
 def protect_near(source, xy, radius, half=PROTECT_HALF_M):
-    """0.19.4: fills to leave uncut, from any layer - lines as they are, polygon outlines, and a
+    """0.19.6: fills to leave uncut, from any layer - lines as they are, polygon outlines, and a
     point as a cross `half` m each way (the Finder's screening_dams / embankments points stand on
-    the fill where the stream crosses it). A feature whose finder_kind / kind names a road or rail
-    fill is skipped. EPSG:5070 numpy arrays within radius of xy."""
+    the fill where the stream crosses it). When the layer has finder_kind / kind, only dam-kind
+    candidates (a dam, or a dike / levee that holds water) are protected; a road fill, dry
+    embankment or long fill is not. A layer with no kind field (DWR dam lines) is unchanged.
+    EPSG:5070 numpy arrays within radius of xy."""
     if not source:          # None, or False from an unset optional input
         return []
     ta, fa = to_albers(source), from_albers(source)
@@ -273,8 +286,8 @@ def protect_near(source, xy, radius, half=PROTECT_HALF_M):
     names = source.fields().names()
     kf = next((n for n in names if str(n).lower() in KIND_FIELDS), None)
     for f in source.getFeatures(QgsFeatureRequest().setFilterRect(box)):
-        if kf is not None and is_road_fill(f[kf]):
-            continue                    # a road fill is cut on purpose (the culvert), never kept
+        if kf is not None and not is_dam_kind(f[kf]):
+            continue                    # only dam-kind candidates protect; a road fill is cut
         g = f.geometry()
         if g is None or g.isEmpty():
             continue
@@ -301,7 +314,7 @@ def mosaic_key(tiles):
     that is reused only while the local DEM folder holds exactly these files (Grok audit
     2026-11-07 finding 3.2; as the ND copy's _common.mosaic_key)."""
     import hashlib
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     for t in sorted(tiles):
         try:
             st = os.stat(t)

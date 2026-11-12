@@ -40,7 +40,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -180,31 +180,118 @@ METRE_UNITS = ("m", "metre", "meter", "metres", "meters")
 ND_GROUND_M = (229.0, 1070.0)          # lowest (Red River at the border) / highest (White Butte) ground in ND
 
 
+def _unit_kind(name):
+    """True if name is a feet unit, False if metres, else None."""
+    name = (name or "").strip().lower()
+    if not name:
+        return None
+    if name in FEET_UNITS or "foot" in name or "feet" in name:
+        return True
+    if name in METRE_UNITS or "metre" in name or "meter" in name:
+        return False
+    return None
+
+
+def _horizontal_unit(s):
+    """Feet/metres of a projected CRS's linear unit; None for a geographic CRS (degrees)."""
+    if s is None or s.IsGeographic():
+        return None, ""
+    if s.IsCompound():
+        try:
+            proj = s.CloneGeogCS() and s.GetAttrValue("PROJCS")
+        except Exception:
+            proj = None
+        # Horizontal unit of a compound CRS: PROJCS|UNIT, else the first length unit that is not vertical.
+        name = (s.GetAttrValue("PROJCS|UNIT") or s.GetAttrValue("PROJCRS|LENGTHUNIT") or "").lower()
+        kind = _unit_kind(name)
+        if kind is not None:
+            return kind, name
+    name = ""
+    try:
+        name = (s.GetLinearUnitsName() or "").lower()
+    except Exception:
+        name = ""
+    kind = _unit_kind(name)
+    return (kind, name) if kind is not None else (None, name)
+
+
+def _value_unit_hint(ds):
+    """('feet' or 'metres' or None, median raw value) from a sample of cell values.
+
+    A median in 1,500-15,000 is treated as feet (CONUS plains / plateau in feet; almost no
+    ground is that high in metres). A median in 50-900 is treated as metres. Values in
+    between, or outside both, are left unknown - they must be chosen in 'DEM elevation unit'.
+    """
+    try:
+        b = ds.GetRasterBand(1)
+        w = max(1, min(ds.RasterXSize, 512))
+        h = max(1, min(ds.RasterYSize, 512))
+        a = b.ReadAsArray(buf_xsize=w, buf_ysize=h).astype("float64")
+        nod = b.GetNoDataValue()
+        if nod is not None:
+            a[a == nod] = np.nan
+        a[(a < -1000) | (a > 30000)] = np.nan
+        med = float(np.nanmedian(a))
+    except Exception:
+        return None, None
+    if not np.isfinite(med):
+        return None, None
+    as_m = 50 <= med <= 900
+    as_ft = 1500 <= med <= 15000
+    if as_ft and not as_m:
+        return "feet", med
+    if as_m and not as_ft:
+        return "metres", med
+    return None, med
+
+
 def dem_unit(dem):
     """(in_feet, how) of a DEM's elevations: the band's unit type, else a compound CRS's vertical
-    unit, else a USGS 3DEP file (every file of it named USGS_*: 3DEP is metres in every product).
-    A DEM that records none of these is refused (RuntimeError) - choose Metres or Feet: values
-    in feet read as metres make every fill 3.28 times too high and find fills that are not there."""
+    unit, else a USGS 3DEP file (every file of it named USGS_*: 3DEP is metres in every product),
+    else the horizontal CRS linear unit (a State Plane feet DEM with no Z tag), else a value
+    heuristic (a typical ground in 1,200-15,000 is feet). A DEM that records none of these is
+    refused (RuntimeError) - choose Metres or Feet: values in feet read as metres make every fill
+    3.28 times too high and find fills that are not there."""
     ds = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
     unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
-    if unit in FEET_UNITS:
-        return True, "the band unit '{}'".format(unit)
-    if unit in METRE_UNITS:
-        return False, "the band unit '{}'".format(unit)
+    kind = _unit_kind(unit)
+    if kind is not None:
+        return kind, "the band unit '{}'".format(unit)
     s = osr.SpatialReference()
-    if ds.GetProjection() and s.ImportFromWkt(ds.GetProjection()) == 0 and s.IsCompound():
-        name = (s.GetAttrValue("VERT_CS|UNIT") or s.GetAttrValue("VERTCRS|LENGTHUNIT") or "").lower()
-        if name in FEET_UNITS or "foot" in name or "feet" in name:
-            return True, "the vertical CRS unit '{}'".format(name)
-        if name in METRE_UNITS or "metre" in name or "meter" in name:
-            return False, "the vertical CRS unit '{}'".format(name)
+    if ds.GetProjection() and s.ImportFromWkt(ds.GetProjection()) == 0:
+        if s.IsCompound():
+            name = (s.GetAttrValue("VERT_CS|UNIT") or s.GetAttrValue("VERTCRS|LENGTHUNIT") or "").lower()
+            kind = _unit_kind(name)
+            if kind is not None:
+                return kind, "the vertical CRS unit '{}'".format(name)
+        horiz, hname = _horizontal_unit(s)
+    else:
+        horiz, hname = None, ""
     files = [f for f in (ds.GetFileList() or []) if not f.lower().endswith((".vrt", ".aux.xml", ".ovr", ".xml"))]
     if files and all(os.path.basename(f).upper().startswith("USGS_") for f in files):
         return False, "USGS 3DEP files (metres)"
+    hint, med = _value_unit_hint(ds)
+    if horiz is not None:
+        how = ("the horizontal CRS unit '{}' (no elevation unit was tagged; confirm with "
+               "'DEM elevation unit')".format(hname))
+        if hint is not None and ((hint == "feet") != horiz):
+            raise RuntimeError(
+                "The DEM {} has no elevation unit, and the horizontal CRS unit '{}' disagrees "
+                "with the typical stored value ({:.0f} looks like {}). Choose Metres or Feet in "
+                "'DEM elevation unit'.".format(os.path.basename(str(dem)), hname, med, hint))
+        return horiz, how
+    if hint is not None:
+        return hint == "feet", (
+            "typical ground {:.0f} looks like {} (no elevation unit or CRS unit was tagged; "
+            "confirm with 'DEM elevation unit')".format(med, hint))
+    extra = ""
+    if med is not None:
+        extra = " Typical stored value is {:.0f}.".format(med)
     raise RuntimeError(
-        "The DEM {} records no elevation unit (no band unit, no vertical CRS, not USGS 3DEP files). "
-        "Choose Metres or Feet in 'DEM elevation unit': feet read as metres make every fill 3.28 times "
-        "too high. (Or tag it: gdal_edit -units m / -units ft)".format(os.path.basename(str(dem))))
+        "The DEM {} records no elevation unit (no band unit, no vertical CRS, not USGS 3DEP files, "
+        "no usable horizontal CRS unit).{} Choose Metres or Feet in 'DEM elevation unit': feet "
+        "read as metres make every fill 3.28 times too high. (Or tag it: gdal_edit -units m / "
+        "-units ft)".format(os.path.basename(str(dem)), extra))
 
 
 def dem_in_feet(dem):
@@ -311,6 +398,19 @@ def _lonlat(x, y, ct):
 
 
 # ---------------------------------------------------------------------------------- writing --
+
+def is_new_value(row):
+    """'yes' when the candidate is new to the lists given, else 'no' (from finder_status or status)."""
+    st = row.get("finder_status") if row.get("finder_status") not in (None, "") else row.get("status")
+    return "yes" if st == ls.NEW else "no"
+
+
+def _row_value(row, name):
+    if name == "is_new" and row.get("is_new") in (None, ""):
+        return is_new_value(row)
+    return row.get(name)
+
+
 def write_points(path, layer, fields, rows, epsg=WORK_EPSG, overwrite=True):
     """A point layer of rows (dicts with 'x', 'y' in epsg) in a GeoPackage; fields [(name, type)]
     with type 'str' / 'float' / 'int'."""
@@ -330,7 +430,7 @@ def write_points(path, layer, fields, rows, epsg=WORK_EPSG, overwrite=True):
     for r in rows:
         f = ogr.Feature(lyr.GetLayerDefn())
         for name, t in fields:
-            v = r.get(name)
+            v = _row_value(r, name)
             if v is None or (isinstance(v, float) and not math.isfinite(v)):
                 continue
             f.SetField(name, {"str": str, "float": float, "int": int}[t](v))
@@ -347,14 +447,14 @@ def write_csv(path, fields, rows):
         w = csv.writer(fh)
         w.writerow([n for n, _ in fields])
         for r in rows:
-            w.writerow(["" if r.get(n) is None else r.get(n) for n, _ in fields])
+            w.writerow(["" if _row_value(r, n) is None else _row_value(r, n) for n, _ in fields])
 
 
 # Screening hand-off: the DWR export field names DamSafety Screening tool 1 reads
 # (structure_id, dam_name, max_dam_height ft, max_pool_vol ac-ft, max_pool_area ac, status).
 SCREEN_FIELDS = [("structure_id", "str"), ("dam_name", "str"), ("max_dam_height", "float"),
                  ("max_pool_vol", "float"), ("max_pool_area", "float"), ("status", "str"),
-                 ("finder_kind", "str"), ("finder_status", "str"), ("known_id", "str"),
+                 ("finder_kind", "str"), ("finder_status", "str"), ("is_new", "str"), ("known_id", "str"),
                  ("latitude", "float"), ("longitude", "float")]
 
 
@@ -387,6 +487,41 @@ def _setting_text(v):
     return repr(v)
 
 
+
+def _file_of_source(value):
+    """The path of a GDAL / OGR source string ('file.gpkg|layername=x'), or None."""
+    if isinstance(value, (list, tuple)) and value:
+        return _file_of_source(value[0])
+    s = str(value or "").strip()
+    if not s or s.startswith(("http://", "https://")):
+        return None
+    path = s.split("|", 1)[0]
+    return path if os.path.isfile(path) else None
+
+
+def _input_checksums(settings):
+    """sha256_<setting> rows for each input that is a file on disk."""
+    import hashlib
+    out = []
+    seen = set()
+    for k, v in settings.items():
+        if k in RUN_SKIP:
+            continue
+        path = _file_of_source(v)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+        except OSError:
+            continue
+        out.append(("sha256_{}".format(k), "{} {}".format(h.hexdigest(), os.path.basename(path))))
+    return out
+
+
 def write_run_info(out_gpkg, tool, settings, result=None):
     """Table 'run_info' (key, value) in the output GeoPackage: the tool, the Finder version, GDAL,
     the time, every setting and input it ran with, and whether it was cancelled - so a result
@@ -412,6 +547,7 @@ def write_run_info(out_gpkg, tool, settings, result=None):
         if k in settings and settings[k] is None:
             settings = dict(settings, **{k: make()})
     rows += [(k, _setting_text(v)) for k, v in settings.items() if k not in RUN_SKIP]
+    rows += _input_checksums(settings)
     if isinstance(result, dict):
         rows.append(("cancelled", str(bool(result.get("cancelled")))))
     for k, v in rows:
@@ -460,7 +596,7 @@ def _summary(rows, what):
 
 
 # ------------------------------------------------------------------------------ embankments --
-EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new", "str"), ("known_id", "str"),
               ("known_layer", "str"), ("known_ft", "float"), ("height_ft", "float"),
               ("crest_height_ft", "float"), ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
               ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"), ("ridge_len_ft", "float"),
@@ -470,11 +606,11 @@ EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id
               ("confidence", "str"), ("notes", "str"), ("lat", "float"), ("lon", "float")]
 SPILL_FIELDS = [("find_id", "str"), ("kind", "str"), ("spill_ft", "float"), ("width_ft", "float"),
                 ("dist_ft", "float"), ("lat", "float"), ("lon", "float")]
-RIDGE_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+RIDGE_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new", "str"), ("known_id", "str"),
                 ("known_layer", "str"), ("known_ft", "float"), ("height_ft", "float"),
                 ("length_ft", "float"), ("width_ft", "float"), ("head_ft", "float"),
                 ("lat", "float"), ("lon", "float")]
-DUG_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+DUG_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new", "str"), ("known_id", "str"),
               ("known_layer", "str"), ("known_ft", "float"), ("depth_ft", "float"),
               ("area_ac", "float"), ("length_ft", "float"), ("width_ft", "float"),
               ("rectangularity", "float"), ("spoil_ft", "float"), ("volume_af", "float"),
@@ -651,8 +787,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         write_points(out_gpkg, "dugouts", DUG_FIELDS, dugs)
         write_csv(os.path.splitext(out_gpkg)[0] + "_dugouts.csv", DUG_FIELDS, dugs)
         log(_summary(dugs, "dug pit(s) in the LiDAR"))
-    # never a road fill (even one ponding water): Screening cuts those on purpose to open the culvert
-    dams = screening_rows([r for r in rows if r["kind"] in (em.K_DAM, em.K_DRY)]
+    # only dam-kind candidates (and channel-side dikes that hold water): a dry embankment or
+    # road fill is never handed to Screening as a dam to protect (Screening cuts a road fill
+    # on purpose to open the culvert)
+    dams = screening_rows([r for r in rows if r["kind"] == em.K_DAM]
                           + [r for r in extra if r["kind"] == rd.K_LEVEE],
                           lambda r: "{} ({})".format(r["kind"], r["find_id"]))
     write_points(out_gpkg, "screening_dams", SCREEN_FIELDS, dams, epsg=WORK_EPSG)
@@ -722,7 +860,7 @@ def _meets(line, box):
 
 
 # ------------------------------------------------------------------------------------ ponds --
-POND_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+POND_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new", "str"), ("known_id", "str"),
                ("known_layer", "str"), ("known_ft", "float"), ("wb_id", "str"), ("wb_type", "str"),
                ("height_ft", "float"), ("head_ft", "float"), ("freeboard_ft", "float"),
                ("arc_deg", "float"), ("storage_af", "float"), ("above_grade_af", "float"),
@@ -884,7 +1022,7 @@ def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_fee
 
 
 # -------------------------------------------------------------------------------- crossings --
-CROSS_FIELDS = [("find_id", "str"), ("status", "str"), ("known_id", "str"), ("known_layer", "str"),
+CROSS_FIELDS = [("find_id", "str"), ("status", "str"), ("is_new", "str"), ("known_id", "str"), ("known_layer", "str"),
                 ("known_ft", "float"), ("angle_deg", "float"), ("fill_kind", "str"),
                 ("fill_height_ft", "float"), ("drainage_ac", "float"), ("flow_len_ft", "float"),
                 ("slope_pct", "float"), ("tc_min", "float"), ("q_cfs", "float"), ("pipe_in", "float"),
@@ -959,7 +1097,7 @@ def run_crossings(roads, streams, out_gpkg, known=None, rails=None, bbox=None, f
     sl = read_lines(streams, bbox)
     rl = read_lines(roads, bbox) + (read_lines(rails, bbox) if rails else [])
     kn = read_known(known)
-    hits = cx.find(rl, sl)
+    hits = cx.find(rl, sl, cancelled=cancelled)
     fk = None
     if fills:
         ds, lyr = open_layer(fills)
