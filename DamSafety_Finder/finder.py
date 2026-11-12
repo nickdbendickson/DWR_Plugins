@@ -40,7 +40,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -784,7 +784,8 @@ def _rasterize(polys, gt, shape):
 def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_feet=None, params=None,
               id_field=None, type_field=None, dug_words=("excavat", "dugout", "pit"),
               min_ac=0.1, max_ac=50.0, keep_depressions=False, match_ft=300.0, unsure_factor=2.0,
-              dug_rect=0.85, dug_max_ac=2.0, log=print, progress=None, cancelled=None):
+              dug_rect=0.85, dug_max_ac=2.0, water_elev=None, water_elev_band=1,
+              log=print, progress=None, cancelled=None):
     """Every water-body polygon classed by core/ponds.py (embankment pond / dugout / natural
     depression) and checked against the known structures. A water body is taken for dug (the
     engine's excavated hint) when its type says so (dug_words, or an NWI code ending in x). A
@@ -838,7 +839,17 @@ def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_fee
             water = _rasterize(polys, gt, z.shape)
             mods = nwi_modifiers(wb_type)
             hint = ("x" in mods or any(w in wb_type.lower() for w in dug_words)) if wb_type else False
-            res = pd.analyze_pond(z, water, cell, params=p, excavated_hint=hint)
+            pool_over = None
+            if water_elev is not None:
+                try:
+                    wb, _wgt = read_bands(water_elev, box, cell, (water_elev_band,))
+                    we = wb[water_elev_band]
+                    wet = water & np.isfinite(we) & (we > -999998.0)
+                    if wet.sum() >= 4:
+                        pool_over = float(np.median(we[wet]))
+                except Exception as e:
+                    log("water body {}: could not read the water-elevation mosaic ({})".format(wb_id, e))
+            res = pd.analyze_pond(z, water, cell, params=p, excavated_hint=hint, pool_override=pool_over)
         except (RuntimeError, ValueError) as e:
             failed += 1
             log("water body {}: {}".format(wb_id, e))
