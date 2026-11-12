@@ -81,8 +81,20 @@ probability. DamSafety Finder ships `models/nd_fill_score_2026-11.json` (the def
 cross-validated AUC it reports says how well it ranks dams it has not seen.
 
 Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
-bounded memory. The elevation unit comes from the raster (feet are scaled); the warp reads the
+bounded memory. The elevation unit is what the raster records (its band unit or a vertical CRS;
+USGS 3DEP files, `USGS_*`, are metres); a DEM that records none is refused until you choose Metres
+or Feet (feet read as metres made every fill 3.28 times too high). The log says which unit was
+used and warns when the ground it reads is outside North Dakota's 229-1070 m. The warp reads the
 full-resolution cells and keeps the values as stored (`core/warp_opts.py`, as Screening).
+
+**What the output is.** A list to review, not a set of dams. In the review of 2026-11-11 none of
+5 "new dam" candidates checked on aerial photos was a dam (farm and road-ditch fills, a rail
+curve), and dikes beside a channel (lagoon and pond dikes) are not fills across it: turn on the
+raised-ridge search for those. Sort by the score and check each candidate on imagery.
+
+**Cancel** stops within the tile and the tool fails with "Cancelled" (the GeoPackage holds only
+the part done). Every output GeoPackage has a `run_info` table: the tool, the Finder version,
+GDAL, the time and every setting and input.
 
 What it cannot find: a fill the DEM has been hydro-enforced through (a culvert cut through it), a
 breached dam (correctly: it no longer blocks the valley), a pond with no polygon (draw it from imagery with the fourth tool).
@@ -132,7 +144,8 @@ One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and
 * `embankments` / `ponds` / `crossings`: every candidate, new first, with `status`, `known_id`,
   `known_layer`, `known_ft`, heights in feet, storage in acre-feet, areas in acres, `confidence`
   and `notes`.
-* `screening_dams` / `screening_ponds`: the not-listed candidates that could release water, as
+* `screening_dams` / `screening_ponds`: the not-listed candidates that could release water
+  (dams, dry embankments, levees; never a road fill, which Screening cuts to open its culvert), as
   DWR-export dam records (`structure_id` = FIND-… / POND-…, `dam_name`, `max_dam_height`,
   `max_pool_vol`, `max_pool_area`, `status` = Candidate). DamSafety Screening tool 1 reads them
   (set its status filter to Candidate; their IDs become DWR-FIND-… / DWR-POND-…).

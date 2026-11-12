@@ -65,6 +65,19 @@ class Tools(tf.Runs):
         kinds = sorted(f.GetField("kind") for f in ds.GetLayerByName("embankments"))
         self.assertEqual(kinds, ["dam", "dry embankment", "road fill"])
 
+    def test_a_cancelled_run_fails(self):
+        import processing
+        from qgis.core import QgsProcessingException, QgsProcessingFeedback
+        fb = QgsProcessingFeedback()
+        fb.cancel()
+        for name, params in (("embankments", {"DEM": self.dem, "STREAMS": self.streams, "OUT": self.out,
+                                              "HILLSHADE": False}),
+                             ("crossings", {"ROADS": self.roads, "STREAMS": self.streams, "DEM": self.dem,
+                                            "OUT": self.out})):
+            with self.assertRaises(QgsProcessingException) as cm:
+                processing.run("{}:{}".format(self.pid, name), params, feedback=fb)
+            self.assertIn("Cancelled", str(cm.exception))
+
     def test_crossings_tool(self):
         from osgeo import ogr
         self.run_alg("crossings", {"ROADS": self.roads, "STREAMS": self.streams, "KNOWN": [self.culverts],

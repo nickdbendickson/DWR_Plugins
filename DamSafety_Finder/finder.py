@@ -39,7 +39,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -173,17 +173,76 @@ def read_known(layers):
     return ls.Known(pts)
 
 
-def dem_in_feet(dem):
-    """True when the DEM's band records feet as its unit ('ft', 'foot', 'US survey foot')."""
+FEET_UNITS = ("ft", "foot", "feet", "us survey foot", "us_survey_foot", "ftus", "us-ft", "us foot",
+              "international foot")
+METRE_UNITS = ("m", "metre", "meter", "metres", "meters")
+ND_GROUND_M = (229.0, 1070.0)          # lowest (Red River at the border) / highest (White Butte) ground in ND
+
+
+def dem_unit(dem):
+    """(in_feet, how) of a DEM's elevations: the band's unit type, else a compound CRS's vertical
+    unit, else a USGS 3DEP file (every file of it named USGS_*: 3DEP is metres in every product).
+    A DEM that records none of these is refused (RuntimeError) - choose Metres or Feet: values
+    in feet read as metres make every fill 3.28 times too high and find fills that are not there."""
     ds = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
     unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
-    return unit in ("ft", "foot", "feet", "us survey foot", "us_survey_foot", "ftus", "us-ft")
+    if unit in FEET_UNITS:
+        return True, "the band unit '{}'".format(unit)
+    if unit in METRE_UNITS:
+        return False, "the band unit '{}'".format(unit)
+    s = osr.SpatialReference()
+    if ds.GetProjection() and s.ImportFromWkt(ds.GetProjection()) == 0 and s.IsCompound():
+        name = (s.GetAttrValue("VERT_CS|UNIT") or s.GetAttrValue("VERTCRS|LENGTHUNIT") or "").lower()
+        if name in FEET_UNITS or "foot" in name or "feet" in name:
+            return True, "the vertical CRS unit '{}'".format(name)
+        if name in METRE_UNITS or "metre" in name or "meter" in name:
+            return False, "the vertical CRS unit '{}'".format(name)
+    files = [f for f in (ds.GetFileList() or []) if not f.lower().endswith((".vrt", ".aux.xml", ".ovr", ".xml"))]
+    if files and all(os.path.basename(f).upper().startswith("USGS_") for f in files):
+        return False, "USGS 3DEP files (metres)"
+    raise RuntimeError(
+        "The DEM {} records no elevation unit (no band unit, no vertical CRS, not USGS 3DEP files). "
+        "Choose Metres or Feet in 'DEM elevation unit': feet read as metres make every fill 3.28 times "
+        "too high. (Or tag it: gdal_edit -units m / -units ft)".format(os.path.basename(str(dem))))
+
+
+def dem_in_feet(dem):
+    """True when the DEM's elevations are in feet (dem_unit; refuses a DEM that records none)."""
+    return dem_unit(dem)[0]
+
+
+def check_dem_unit(dem, z_feet, log=print):
+    """The unit to read the DEM in (z_feet None = what it records, see dem_unit), logged, with a
+    warning when a sample of the values in metres lies outside ND's ground (a wrong choice)."""
+    if z_feet is None:
+        z_feet, how = dem_unit(dem)
+        log("DEM elevations read in {} ({})".format("feet" if z_feet else "metres", how))
+    else:
+        log("DEM elevations read in {} (your choice)".format("feet" if z_feet else "metres"))
+    try:
+        ds = gdal.Open(str(dem))
+        b = ds.GetRasterBand(1)
+        w = max(1, min(ds.RasterXSize, 512))
+        h = max(1, min(ds.RasterYSize, 512))
+        a = b.ReadAsArray(buf_xsize=w, buf_ysize=h).astype("float64")
+        nod = b.GetNoDataValue()
+        if nod is not None:
+            a[a == nod] = np.nan
+        a[(a < -1000) | (a > 30000)] = np.nan
+        med = float(np.nanmedian(a)) * (FT if z_feet else 1.0)
+    except Exception:                                                   # noqa - a check only
+        return z_feet
+    if np.isfinite(med) and not (ND_GROUND_M[0] - 50 <= med <= ND_GROUND_M[1] + 50):
+        log("WARNING: read in {} the DEM's typical ground is {:.0f} m ({:.0f} ft), outside North Dakota's "
+            "{:.0f}-{:.0f} m: check 'DEM elevation unit' (outside ND this check does not apply)".format(
+                "feet" if z_feet else "metres", med, med / FT, *ND_GROUND_M))
+    return z_feet
 
 
 def warp_dem(dem, ext, cell, z_feet=None):
     """(array m, NaN = no data; geotransform) of the DEM over ext (EPSG:5070) at cell metres,
     averaged from the full-resolution cells (no overviews), values as stored (no vertical shift).
-    z_feet None = from the band's unit (metres when it records none)."""
+    z_feet None = what the DEM records (dem_unit; refused when it records nothing)."""
     if z_feet is None:
         z_feet = dem_in_feet(dem)
     n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
@@ -313,6 +372,77 @@ def screening_rows(rows, name_of):
     return out
 
 
+# ------------------------------------------------------------------------------- run record --
+RUN_SKIP = ("log", "progress", "cancelled", "opener")
+
+
+def _setting_text(v):
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return str(v)
+    if hasattr(v, "__dict__"):
+        return "; ".join("{}={}".format(k, x) for k, x in sorted(vars(v).items()))
+    if isinstance(v, (list, tuple)):
+        return " ;; ".join(_setting_text(x) for x in v)
+    return repr(v)
+
+
+def write_run_info(out_gpkg, tool, settings, result=None):
+    """Table 'run_info' (key, value) in the output GeoPackage: the tool, the Finder version, GDAL,
+    the time, every setting and input it ran with, and whether it was cancelled - so a result
+    says how it was made."""
+    import datetime
+    if not out_gpkg or not os.path.exists(out_gpkg):
+        return
+    ds = ogr.Open(out_gpkg, 1)
+    if ds is None:
+        return
+    for i in range(ds.GetLayerCount()):
+        if ds.GetLayer(i).GetName() == "run_info":
+            ds.DeleteLayer(i)
+            break
+    lyr = ds.CreateLayer("run_info", None, ogr.wkbNone)
+    lyr.CreateField(ogr.FieldDefn("key", ogr.OFTString))
+    lyr.CreateField(ogr.FieldDefn("value", ogr.OFTString))
+    rows = [("tool", tool), ("finder_version", VERSION), ("gdal", gdal.__version__),
+            ("run_at", datetime.datetime.now().astimezone().isoformat(timespec="seconds"))]
+    defaults = {"embankments": {"params": em.FinderParams, "ridge_params": rd.RidgeParams},
+                "ponds": {"params": pd.PondParams}}.get(tool, {})
+    for k, make in defaults.items():                    # None = the defaults: record what they are
+        if k in settings and settings[k] is None:
+            settings = dict(settings, **{k: make()})
+    rows += [(k, _setting_text(v)) for k, v in settings.items() if k not in RUN_SKIP]
+    if isinstance(result, dict):
+        rows.append(("cancelled", str(bool(result.get("cancelled")))))
+    for k, v in rows:
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetField("key", k)
+        f.SetField("value", v)
+        lyr.CreateFeature(f)
+    ds = None
+
+
+def _records_run(tool, out_arg="out_gpkg"):
+    """Decorator: after the run, write_run_info with the call's own arguments."""
+    import functools
+    import inspect
+
+    def wrap(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def run(*a, **kw):
+            bound = sig.bind(*a, **kw)
+            bound.apply_defaults()
+            res = fn(*a, **kw)
+            try:
+                write_run_info(bound.arguments.get(out_arg), tool, dict(bound.arguments), res)
+            except Exception as e:                                      # noqa - a record only
+                (bound.arguments.get("log") or print)("run_info not written: {}".format(e))
+            return res
+        return run
+    return wrap
+
+
 def find_id(prefix, x, y):
     """Stable id from the point rounded to 1 m (the same structure keeps its id between runs)."""
     return "{}-{:08X}".format(prefix, zlib.crc32("{:.0f},{:.0f}".format(x, y).encode("ascii")) & 0xFFFFFFFF)
@@ -351,6 +481,7 @@ DUG_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id
 LINE_STREAM, LINE_DEM = "stream line", "DEM drainage"
 
 
+@_records_run("embankments")
 def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, bbox=None, cell=3.0,
                     z_feet=None, params=None, match_ft=500.0, unsure_factor=2.0, tile_m=5000.0,
                     road_buffer_m=6.0, hillshade=True, drainage_ac=0.0, drain_cell=10.0,
@@ -367,6 +498,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     rp = ridge_params or rd.RidgeParams()
     progress = progress or _noop
     cancelled = cancelled or _noop
+    z_feet = check_dem_unit(dem, z_feet, log)
     lines = read_lines(streams, bbox) if streams else []
     dem_only = bool(drainage_ac or ridges or dugouts)
     if not lines and not dem_only:
@@ -429,13 +561,13 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 cc = np.clip(((gt[0] + (np.arange(z.shape[1]) + 0.5) * gt[1]) - gt10[0]) / gt10[1],
                              0, z10.shape[1] - 1).astype(int)
                 deep = d10[np.ix_(rr, cc)]
-        got = em.find(z, gt, tl + dl, road_mask=rmask, params=p, keep=keep)
+        got = em.find(z, gt, tl + dl, road_mask=rmask, params=p, keep=keep, cancelled=cancelled)
         for e in got:
             e.line_src = LINE_STREAM if e.line < len(tl) else LINE_DEM
         found.extend(got)
         msg = "tile {}/{}: {} line(s){}, {} fill(s)".format(
             ti + 1, len(tiles), len(tl), " + {} DEM draw(s)".format(len(dl)) if drainage_ac else "", len(got))
-        if ridges:
+        if ridges and not cancelled():
             wide = None
             if rmask is not None:              # a road embankment's base, not just its centreline
                 wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
@@ -443,7 +575,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                                 exclude=[(e.x, e.y) for e in got])
             ridge_rows.extend(rg)
             msg += ", {} ridge(s)".format(len(rg))
-        if dugouts:
+        if dugouts and not cancelled():
             dg = rd.find_dugouts(z, gt, params=rp, keep=keep)
             dug_rows.extend(dg)
             msg += ", {} dug pit(s)".format(len(dg))
@@ -501,7 +633,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         write_points(out_gpkg, "dugouts", DUG_FIELDS, dugs)
         write_csv(os.path.splitext(out_gpkg)[0] + "_dugouts.csv", DUG_FIELDS, dugs)
         log(_summary(dugs, "dug pit(s) in the LiDAR"))
-    dams = screening_rows([r for r in rows if r["kind"] in (em.K_DAM, em.K_DRY, em.K_ROAD_POND)]
+    # never a road fill (even one ponding water): Screening cuts those on purpose to open the culvert
+    dams = screening_rows([r for r in rows if r["kind"] in (em.K_DAM, em.K_DRY)]
                           + [r for r in extra if r["kind"] == rd.K_LEVEE],
                           lambda r: "{} ({})".format(r["kind"], r["find_id"]))
     write_points(out_gpkg, "screening_dams", SCREEN_FIELDS, dams, epsg=WORK_EPSG)
@@ -629,6 +762,7 @@ def _rasterize(polys, gt, shape):
     return out
 
 
+@_records_run("ponds")
 def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_feet=None, params=None,
               id_field=None, type_field=None, dug_words=("excavat", "dugout", "pit"),
               min_ac=0.1, max_ac=50.0, keep_depressions=False, match_ft=300.0, unsure_factor=2.0,
@@ -642,6 +776,7 @@ def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_fee
     p = params or pd.PondParams()
     progress = progress or _noop
     cancelled = cancelled or _noop
+    z_feet = check_dem_unit(dem, z_feet, log)
     kn = read_known(known)
     ds, lyr = open_layer(waterbodies)
     if not type_field:                    # an NWI layer: its wetland code carries the modifiers
@@ -738,7 +873,7 @@ CROSS_FIELDS = [("find_id", "str"), ("status", "str"), ("known_id", "str"), ("kn
                 ("pipe_size", "str"), ("size_note", "str"), ("lat", "float"), ("lon", "float")]
 
 
-def _size_crossings(rows, dem, z_feet, c_runoff, intensity, v_fps, drain_cell, tile_m, log):
+def _size_crossings(rows, dem, z_feet, c_runoff, intensity, v_fps, drain_cell, tile_m, log, cancelled=None):
     """Drainage area, Kirpich tc, rational Q and the round pipe for Q at each crossing (in place)."""
     if not rows:
         return
@@ -750,7 +885,10 @@ def _size_crossings(rows, dem, z_feet, c_runoff, intensity, v_fps, drain_cell, t
     for r in rows:
         groups.setdefault((int((r["x"] - x0) // tile_m), int((r["y"] - y0) // tile_m)), []).append(r)
     snap = max(1, int(round(30.0 / drain_cell)))
+    cancelled = cancelled or _noop
     for (i, j), rs in groups.items():
+        if cancelled():
+            return
         box = (x0 + i * tile_m - pad, y0 + j * tile_m - pad, x0 + (i + 1) * tile_m + pad,
                y0 + (j + 1) * tile_m + pad)
         z, gt = warp_dem(dem, box, drain_cell, z_feet)
@@ -788,16 +926,18 @@ def _size_crossings(rows, dem, z_feet, c_runoff, intensity, v_fps, drain_cell, t
         log("pipe sizes: {} crossing(s) near ({:.0f}, {:.0f})".format(len(rs), box[0], box[1]))
 
 
+@_records_run("crossings")
 def run_crossings(roads, streams, out_gpkg, known=None, rails=None, bbox=None, fills=None,
                   match_ft=250.0, unsure_factor=2.0, fill_ft=200.0, dem=None, z_feet=None,
                   c_runoff=0.35, intensity_in_hr=2.0, v_fps=8.0, drain_cell=10.0, tile_m=8000.0,
-                  log=print):
+                  log=print, cancelled=None):
     """Every road / rail x stream crossing, checked against the known bridges / culverts /
     crossings. `fills`: an embankments layer from run_embankments; the nearest fill within fill_ft
     is copied (a 'road fill (ponding)' there = the culvert is missing in the DEM, small or
     blocked). With `dem`: the drainage area above each crossing and the round pipe the rational
     method asks for (c_runoff and intensity_in_hr are YOUR values; core/crossings.py).
     Returns {'rows', 'counts', ...}."""
+    cancelled = cancelled or _noop
     sl = read_lines(streams, bbox)
     rl = read_lines(roads, bbox) + (read_lines(rails, bbox) if rails else [])
     kn = read_known(known)
@@ -832,15 +972,17 @@ def run_crossings(roads, streams, out_gpkg, known=None, rails=None, bbox=None, f
                 except ValueError:
                     pass
         rows.append(row)
-    if dem:
-        _size_crossings(rows, dem, z_feet, c_runoff, intensity_in_hr, v_fps, drain_cell, tile_m, log)
+    if dem and not cancelled():
+        z_feet = check_dem_unit(dem, z_feet, log)
+        _size_crossings(rows, dem, z_feet, c_runoff, intensity_in_hr, v_fps, drain_cell, tile_m, log, cancelled)
     rows.sort(key=lambda r: {"new": 0, "unsure": 1, "listed": 2}[r["status"]])
     out_csv = os.path.splitext(out_gpkg)[0] + "_crossings.csv"
     write_points(out_gpkg, "crossings", CROSS_FIELDS, rows)
     write_csv(out_csv, CROSS_FIELDS, rows)
     log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(len(sl), len(rl), len(kn)))
     log(_summary(rows, "road / rail x stream crossing(s)"))
-    return {"rows": rows, "counts": {"status": ls.status_counts(rows)}, "gpkg": out_gpkg, "csv": out_csv}
+    return {"rows": rows, "counts": {"status": ls.status_counts(rows)}, "gpkg": out_gpkg, "csv": out_csv,
+            "cancelled": bool(cancelled())}
 
 
 # ------------------------------------------------------------------------------------ water --
@@ -964,6 +1106,7 @@ def _mapped_polys(src, box):
     return out
 
 
+@_records_run("water")
 def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, threshold=0.15,
               open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, mapped=None, tile_m=4000.0,
               persist=0.5, log=print, progress=None, cancelled=None, opener=None):
@@ -1120,6 +1263,7 @@ def osm_kind(tags):
     return None
 
 
+@_records_run("osm")
 def osm_structures(src, out_gpkg, bbox=None, log=print):
     """Dams, weirs, dikes, embankments, culverts and fords of an OpenStreetMap file (.osm.pbf /
     .osm, the Geofabrik extract) as a point layer 'osm_structures' (EPSG:5070; a line or an area
@@ -1203,6 +1347,7 @@ def read_rows(src):
     return out
 
 
+@_records_run("score")
 def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out=None, folds=5,
               log=print):
     """Learn a fill score from the fills already on a dam list (core/score.py) and score every

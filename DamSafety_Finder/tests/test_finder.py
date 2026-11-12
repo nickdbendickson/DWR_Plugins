@@ -30,7 +30,7 @@ def srs(epsg):
     return s
 
 
-def write_dem(path, dem, feet=False):
+def write_dem(path, dem, feet=False, tag=True):
     drv = gdal.GetDriverByName("GTiff")
     ds = drv.Create(path, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + dem.shape[0] * tc.CELL, 0.0, -tc.CELL))
@@ -38,8 +38,8 @@ def write_dem(path, dem, feet=False):
     b = ds.GetRasterBand(1)
     b.SetNoDataValue(-9999.0)
     b.WriteArray(np.where(np.isfinite(dem), dem / (0.3048 if feet else 1.0), -9999.0))
-    if feet:
-        b.SetUnitType("ft")
+    if tag:
+        b.SetUnitType("ft" if feet else "m")
     ds = None
 
 
@@ -121,13 +121,19 @@ class Runs(unittest.TestCase):
         self.assertTrue(os.path.exists(res["csv"]))
         ds = ogr.Open(self.out)
         self.assertEqual(ds.GetLayerByName("embankments").GetFeatureCount(), 3)
-        # Screening hand-off: the dam (new); the road fill holds no water; the listed one is left out
+        # Screening hand-off: the dam (new); never a road fill; the listed one is left out
         sd = ds.GetLayerByName("screening_dams")
         self.assertEqual(sd.GetFeatureCount(), 1)
         f = sd.GetNextFeature()
         self.assertEqual(f.GetField("status"), "Candidate")
         self.assertTrue(f.GetField("structure_id").startswith("FIND-"))
         self.assertGreater(f.GetField("max_pool_vol"), 50.0)
+        info = {f.GetField("key"): f.GetField("value") for f in ds.GetLayerByName("run_info")}
+        self.assertEqual(info["tool"], "embankments")
+        self.assertEqual(info["finder_version"], self.f.VERSION)
+        self.assertEqual(info["match_ft"], "200.0")
+        self.assertEqual(info["cancelled"], "False")
+        self.assertIn("min_height_m=", info["params"])
         hs = gdal.Open(res["hillshade"])
         self.assertEqual(hs.GetRasterBand(1).DataType, gdal.GDT_Byte)
         self.assertGreater(hs.GetRasterBand(1).ComputeRasterMinMax(False)[1], 0)
@@ -142,6 +148,44 @@ class Runs(unittest.TestCase):
         write_dem(self.dem, dem, feet=True)
         by = {r["kind"]: r for r in self.emb()["rows"]}
         self.assertAlmostEqual(by["dam"]["height_ft"], 4.0 / 0.3048, delta=1.0)
+
+    def test_a_dem_with_no_unit_is_refused(self):
+        dem, _road = tc.scene()
+        bare = os.path.join(self.tmp, "bare.tif")
+        write_dem(bare, dem, tag=False)
+        with self.assertRaises(RuntimeError) as cm:
+            self.f.run_embankments(bare, self.streams, self.out, log=lambda *_: None)
+        self.assertIn("DEM elevation unit", str(cm.exception))
+        # the same values with the unit chosen: run, and the choice is logged
+        logs = []
+        self.f.run_embankments(bare, self.streams, self.out, z_feet=False, hillshade=False, log=logs.append)
+        self.assertTrue(any("metres (your choice)" in str(m) for m in logs))
+        # a USGS 3DEP file records no unit either but is metres
+        usgs = os.path.join(self.tmp, "USGS_1M_14_x99y999_TEST.tif")
+        write_dem(usgs, dem, tag=False)
+        self.assertEqual(self.f.dem_unit(usgs), (False, "USGS 3DEP files (metres)"))
+        # a wrong choice: ND ground (300 m) read as feet is 91 m, below any ND ground -> a warning
+        nd = os.path.join(self.tmp, "nd.tif")
+        write_dem(nd, np.full((20, 20), 300.0), tag=False)
+        logs = []
+        self.f.check_dem_unit(nd, True, logs.append)
+        self.assertTrue(any("WARNING" in str(m) for m in logs), logs)
+        logs = []
+        self.f.check_dem_unit(nd, False, logs.append)
+        self.assertFalse(any("WARNING" in str(m) for m in logs), logs)
+
+    def test_cancel_stops_and_says_so(self):
+        calls = []
+
+        def cancelled():
+            calls.append(1)
+            return len(calls) > 1                   # after the run has started
+        res = self.emb(cancelled=cancelled, tile_m=100.0, hillshade=False)
+        self.assertTrue(res["cancelled"])
+        res = self.f.run_crossings(self.roads, self.streams, os.path.join(self.tmp, "x.gpkg"), dem=self.dem,
+                                   log=lambda *_: None, cancelled=lambda: True)
+        self.assertTrue(res["cancelled"])
+        self.assertTrue(all(r.get("pipe_in") is None for r in res["rows"]))
 
     def test_ponds(self):
         pool = tc.bed(200) + 3.0

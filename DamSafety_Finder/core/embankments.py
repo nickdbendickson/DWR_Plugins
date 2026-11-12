@@ -1,8 +1,7 @@
 """Embankments across streams found in a LiDAR DEM (Finder 0.1).
 
 Pure numpy / scipy, no QGIS or GDAL, so it is unit-tested outside QGIS. Metres, cubic metres,
-an equal-area grid (EPSG:5070 in the plugins). The same file is used by DamSafety Finder and
-DamIT Finder.
+an equal-area grid (EPSG:5070 in the plugins). The same file is in both Finder plugins.
 
 WHAT IT LOOKS FOR
   A bare-earth DEM shows every fill that crosses a valley: a dam, a dry (detention) dam, a road or
@@ -326,7 +325,7 @@ def upstream_slope(z, ku, n, cell):
     return max(0.0, float(z[a] - z[ku]) / ((ku - a) * cell))
 
 
-def find(dem, gt, lines, road_mask=None, params=None, keep=None):
+def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None):
     """Embankments across the stream `lines` (lists of (x, y) in the grid CRS) of `dem` (2-D, m,
     NaN or <= -9998 = no data) with geotransform `gt` (square cells, north up).
     `road_mask`: bool grid, True on roads / railroads (dilated by the caller).
@@ -342,6 +341,8 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None):
     half = max(4, int(round(p.window_m / cell)))
     found = []
     for li, xy in enumerate(lines):
+        if cancelled is not None and li % 50 == 0 and cancelled():
+            break
         if len(xy) < 2:
             continue
         cells = line_cells(xy, gt, dem.shape)

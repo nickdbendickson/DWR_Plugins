@@ -27,7 +27,7 @@ from .core import ponds as pd
 
 FT = 0.3048
 WORK = "EPSG:5070"
-Z_UNITS = ["From the raster (metres when it records none)", "Metres", "Feet"]
+Z_UNITS = ["From the raster (refused when it records no unit; USGS 3DEP = metres)", "Metres", "Feet"]
 
 
 def _first(*getters):
@@ -58,7 +58,7 @@ SRC_POINT = _first(lambda: Qgis.ProcessingSourceType.VectorPoint,
                    lambda: QgsProcessing.TypeVectorPoint)
 SRC_ANY = _first(lambda: Qgis.ProcessingSourceType.VectorAnyGeometry,
                  lambda: QgsProcessing.SourceType.TypeVectorAnyGeometry,
-                 lambda: SRC_ANY)
+                 lambda: QgsProcessing.TypeVectorAnyGeometry)
 
 KNOWN_HELP = ("Known structures (optional; any point, line or polygon layers): every candidate is "
               "checked against them - listed, unsure or new. Give all the lists you have: {}.")
@@ -138,6 +138,14 @@ class _Base(QgsProcessingAlgorithm):
             context.addLayerToLoadOnCompletion(
                 "{}|layername={}".format(path, layer), context.LayerDetails(name, context.project(), layer))
 
+    @staticmethod
+    def _stop_if_cancelled(feedback, out):
+        """A cancelled run fails (it used to report success on the tiles done so far)."""
+        if feedback.isCanceled():
+            raise QgsProcessingException(
+                "Cancelled: {} holds only the part done before the cancel - run again for the whole "
+                "area".format(out))
+
     def _report(self, feedback, res, what):
         c = res["counts"]["status"]
         feedback.pushInfo("{}: {} new, {} unsure, {} already listed".format(
@@ -186,17 +194,16 @@ class FindEmbankments(_Base):
         self.addParameter(QgsProcessingParameterBoolean(
             "DUGOUTS", "Also look for dug pits (dugouts) anywhere in the DEM", True))
         self.addParameter(QgsProcessingParameterBoolean(
-            "RIDGES", "Also look for raised ridges (levees, dikes, off-channel embankments) anywhere "
-            "in the DEM - a review list: farm pads, spoil banks and natural ridges pass too", False))
+            "RIDGES", "Also list raised ridges anywhere (levees, dikes; a review list)", False))
         import os
         dm = getattr(brand, "DEFAULT_MODEL", None)
         dm = os.path.join(os.path.dirname(__file__), dm) if dm else None
         self.addParameter(QgsProcessingParameterFile(
-            "MODEL", "Score model (optional; from 'Score fills by how much they look like the listed "
-            "dams'{})".format("; the one shipped was learned on southwest ND" if dm else ""),
+            "MODEL", "Score model (optional; .json from the score tool{})".format(
+                "; the shipped one" if dm else ""),
             extension="json", defaultValue=dm if dm and os.path.exists(dm) else None, optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
-            "HILLSHADE", "Also write a multi-direction hillshade for the review (<output>_hillshade.tif)", True))
+            "HILLSHADE", "Also write a review hillshade (<output>_hillshade.tif)", True))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -226,6 +233,7 @@ class FindEmbankments(_Base):
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         self._report(feedback, res, "Fills across streams")
         if res.get("hillshade") and context.project() is not None:
             context.addLayerToLoadOnCompletion(
@@ -301,6 +309,7 @@ class FindPonds(_Base):
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         self._report(feedback, res, "Ponds and dugouts")
         self._load(context, out, "ponds", "Ponds and dugouts")
         self._load(context, out, "screening_ponds", "Ponds for screening (not listed)")
@@ -353,9 +362,11 @@ class FindCrossings(_Base):
                 dem=_src(self, params, "DEM", context, False) or None, z_feet=_z(self, params, context),
                 c_runoff=self.parameterAsDouble(params, "C", context),
                 intensity_in_hr=self.parameterAsDouble(params, "INTENSITY", context),
-                v_fps=self.parameterAsDouble(params, "V_FPS", context), log=self._log(feedback))
+                v_fps=self.parameterAsDouble(params, "V_FPS", context), log=self._log(feedback),
+                cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         self._report(feedback, res, "Road / rail x stream crossings")
         self._load(context, out, "crossings", "Road and rail crossings")
         return {"OUT": out}
@@ -441,6 +452,7 @@ class FindWater(_Base):
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         feedback.pushInfo("Open water: {} patch(es), {} not on the mapped water bodies".format(
             res["counts"]["water"], res["counts"]["unmapped"]))
         self._load(context, out, "water", "Open water (aerial imagery)")
@@ -477,6 +489,7 @@ class OsmStructures(_Base):
                                   bbox=_bbox(self, params, context), log=self._log(feedback))
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         self._load(context, out, "osm_structures", "OpenStreetMap dams, dikes, culverts")
         return {"OUT": out}
 
@@ -522,6 +535,7 @@ class ScoreFills(_Base):
                                    log=self._log(feedback))
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
         self._load(context, out, "scored_fills", "Fills, scored")
         return {"OUT": out, "MODEL": res.get("model_path")}
 
