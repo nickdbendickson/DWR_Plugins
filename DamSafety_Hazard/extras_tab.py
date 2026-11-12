@@ -377,7 +377,7 @@ class ExtrasTabMixin(object):
                 text = self.sens_factors_edit.text()
                 errs, warns = factor_problems(text)
                 problems.extend("Sensitivity: " + e for e in errs)
-                for w in warns:                         # Lumo v1.8: warn, do not block
+                for w in warns:                         # Pierre v1.8: warn, do not block
                     log_message("Sensitivity factors: " + w)
                     if hasattr(self, "_log"):
                         self._log("WARNING: sensitivity factors: " + w)

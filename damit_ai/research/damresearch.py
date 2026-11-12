@@ -4,7 +4,7 @@
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
 # the cited page of the source document before it is used for any dam-safety decision.
-# It is kept apart from `lumo` (the code-triage model): own Ollama model (dam-research),
+# It is kept apart from `pierre` (the code-triage model): own Ollama model (dam-research),
 # own embedding model, own database (~/DamResearch/research.db).
 #
 #   damresearch ingest [PATH ...]      add PDFs / .md / .txt (default: ~/DamResearch/library,
@@ -101,7 +101,7 @@ def _post(path, payload, timeout=3600):
         body = e.read().decode("utf-8", "replace")[:400]
         raise RuntimeError("Ollama %s -> HTTP %d: %s" % (path, e.code, body)) from None
     except urllib.error.URLError as e:
-        raise RuntimeError("cannot reach Ollama at %s (%s). Start it: lumo-start (or open Ollama.app)"
+        raise RuntimeError("cannot reach Ollama at %s (%s). Start it: pierre-start (or open Ollama.app)"
                            % (BASE, e.reason)) from None
 
 
@@ -1255,7 +1255,7 @@ def cmd_ocr(a):
     for i, p in todo:
         dst = os.path.join(outdir, os.path.splitext(os.path.basename(p))[0] + ".ocr.pdf")
         say("OCR: %s" % os.path.basename(p))
-        r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, dst])
+        r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, dst])  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- local OCR on user-provided PDF paths, fixed argv
         if r.returncode not in (0, 6):          # 6 = already has text
             say("  ocrmypdf failed (exit %d); left as is" % r.returncode)
             continue
@@ -1283,7 +1283,7 @@ def cmd_doctor(a):
             r = chat([{"role": "user", "content": "Reply with the single word: ready"}], num_predict=20)
             say("  chat model replies: %r" % r[:40])
     except Exception as e:
-        say("  Ollama: NOT reachable (%s). Start it with lumo-start in its own tab." % e)
+        say("  Ollama: NOT reachable (%s). Start it with pierre-start in its own tab." % e)
         ok = False
     db = connect()
     nd = db.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
