@@ -40,7 +40,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -1437,6 +1437,102 @@ def _run_water_raster(src, band, count_min, out_gpkg, bbox, cell, open_px, min_a
         "water-body layer{}".format(len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
     return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
             "csv": out_csv, "image": src}
+
+
+# ------------------------------------------------------------------ build the water mosaic --
+
+def _snap_box(box, cell, margin=0):
+    """Grow a tile's extent out to the global `cell` grid anchored at the CRS origin, so every
+    tile's pixels fall on the same lines and the per-tile GeoTIFFs mosaic into one VRT with no
+    seams. `margin` adds that many nodata cells of border on every side (so a water patch never
+    sits on the raster's own edge, where the reader's per-tile dedup would drop it). Each edge
+    stays a whole multiple of `cell`, so the margin keeps the global grid alignment."""
+    x0 = (math.floor(box[0] / cell) - margin) * cell
+    y0 = (math.floor(box[1] / cell) - margin) * cell
+    # +1 cell so a point exactly on the max edge (col/row == n) still lands inside the grid
+    x1 = (math.floor(box[2] / cell) + 1 + margin) * cell
+    y1 = (math.floor(box[3] / cell) + 1 + margin) * cell
+    return x0, y0, x1, y1
+
+
+def _write_grid(path, arr, gt, epsg, gdal_type, nodata):
+    """One-band GeoTIFF, compressed, with the given geotransform, CRS and nodata."""
+    drv = _checked(gdal.GetDriverByName("GTiff"), "the GeoTIFF driver")
+    ny, nx = arr.shape
+    opts = ["COMPRESS=DEFLATE", "ZLEVEL=9", "PREDICTOR=2", "TILED=YES", "SPARSE_OK=TRUE"]
+    out = _checked(drv.Create(path, nx, ny, 1, gdal_type, options=opts),
+                   "creating {}".format(path))
+    out.SetGeoTransform(gt)
+    out.SetProjection(_srs(epsg).ExportToWkt())
+    b = out.GetRasterBand(1)
+    b.SetNoDataValue(nodata)
+    b.WriteArray(arr)
+    b.FlushCache()
+    out = None
+
+
+def build_water_mosaic(sources, out_dir, cell=1.0, classes=(li.WATER_CLASS,), mosaic_epsg=WORK_EPSG,
+                       src_epsg=None, prefix="water", log=print, progress=lambda p: None,
+                       cancelled=lambda: False):
+    """Turn a folder of classified LiDAR tiles (ASPRS class 9) into the prebuilt water mosaic the
+    open-water tool reads with its WATER_RASTER input: a per-tile **water-count** GeoTIFF (how many
+    class-9 points fall in each `cell`-metre cell) and a **mean-elevation** GeoTIFF (the mean z of
+    those points, the pond water surface), then a `water_count.vrt` / `water_elev.vrt` over them.
+
+    This is the scalable path: the reader cannot hold a statewide raw LiDAR point cloud live (it is
+    terabytes), but it can read this once-built mosaic a spatial tile at a time. The builder is the
+    one place the suite rasterises the LAS water class; it reuses core/lidar (no outside process, so
+    DamIT-safe). Every tile snaps to one global grid so the VRT has no seams. `mosaic_epsg` is the
+    output CRS (the regional metric grid: ND UTM for DamSafety, CONUS Albers for the U.S.-wide
+    DamIT build). `count` 0 is stored as the count raster's nodata and the mean-elevation nodata is
+    -999999, so dry land and the gaps between tiles both read back as no water.
+
+    Returns {"count_vrt", "elev_vrt", "tiles": [per-tile dicts], "n_tiles", "n_wet_tiles"}.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    srcs = [sources] if isinstance(sources, str) else list(sources)
+    count_tifs, elev_tifs, tiles = [], [], []
+    for si, path in enumerate(srcs):
+        if cancelled():
+            break
+        name = os.path.splitext(os.path.basename(str(path)))[0]
+        try:
+            x, y, z, cls = li.tile_points(path, mosaic_epsg, tuple(classes), src_epsg)
+        except Exception as e:
+            log("skipping {}: {}".format(os.path.basename(str(path)), e))
+            continue
+        if x.size == 0:
+            log("{}: no class-{} points".format(name, ",".join(str(c) for c in classes)))
+            continue
+        box = _snap_box((float(np.min(x)), float(np.min(y)), float(np.max(x)), float(np.max(y))),
+                        cell, margin=2)
+        nx, ny, gt = li._grid_for(box, cell)
+        count, meanz = li.rasterize_counts(x, y, z, cls, tuple(classes), gt, (ny, nx))
+        wet = int((count > 0).sum())
+        if wet == 0:
+            log("{}: no water cells".format(name))
+            continue
+        c_tif = os.path.join(out_dir, "{}_count_{}.tif".format(prefix, name))
+        e_tif = os.path.join(out_dir, "{}_elev_{}.tif".format(prefix, name))
+        _write_grid(c_tif, count, gt, mosaic_epsg, gdal.GDT_Int32, 0)
+        elev = np.where(np.isfinite(meanz), meanz, -999999.0).astype(np.float32)
+        _write_grid(e_tif, elev, gt, mosaic_epsg, gdal.GDT_Float32, -999999.0)
+        count_tifs.append(c_tif)
+        elev_tifs.append(e_tif)
+        tiles.append({"tile": name, "wet_cells": wet, "count": c_tif, "elev": e_tif})
+        log("{}: {} water cell(s)".format(name, wet))
+        progress(100.0 * (si + 1) / max(1, len(srcs)))
+    if not count_tifs:
+        raise RuntimeError("no water tiles were built (no readable tiles with class-{} points)".format(
+            ",".join(str(c) for c in classes)))
+    count_vrt = os.path.join(out_dir, "water_count.vrt")
+    elev_vrt = os.path.join(out_dir, "water_elev.vrt")
+    _checked(gdal.BuildVRT(count_vrt, count_tifs), "mosaicking the water-count tiles")
+    _checked(gdal.BuildVRT(elev_vrt, elev_tifs), "mosaicking the water-elevation tiles")
+    log("water mosaic: {} tile(s) with water of {} read; {} -> {} and {}".format(
+        len(count_tifs), len(srcs), out_dir, os.path.basename(count_vrt), os.path.basename(elev_vrt)))
+    return {"count_vrt": count_vrt, "elev_vrt": elev_vrt, "tiles": tiles,
+            "n_tiles": len(srcs), "n_wet_tiles": len(count_tifs)}
 
 
 # ----------------------------------------------------------------------------- OpenStreetMap --
