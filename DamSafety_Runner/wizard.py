@@ -30,6 +30,10 @@ import tempfile
 import traceback
 
 from . import wizard_logic as wl
+try:                     # Core 1.1.0: the suite's display units (US or SI)
+    from .damsuite import display_units as _DU
+except Exception:                                                 # noqa - Core older than 1.1.0
+    _DU = None
 from .tool_dialog import exec_tool_dialog
 from .core import breach as brmod
 from .core import nd_data
@@ -246,6 +250,19 @@ def _classes():
             problems.append("'{}' is not a number for: {}.".format(t, what))
         return x
 
+    def mark_unit(edit, label, text):
+        """Core 1.1.0: under the suite's SI units this field is shown and typed in metric and
+        read back in its stored unit (unit_widgets.watch_window converts it). No-op otherwise."""
+        u = _DU.unit_in_label(text) if _DU is not None else None
+        if not u:
+            return
+        try:
+            edit.setProperty("storedUnit", u)
+            if label is not None:
+                label.setProperty("unitLabel", True)
+        except Exception:                                         # noqa - test doubles
+            pass
+
     from .tokens import TOKENS
     from .ui_widgets import Collapsible, DamCard
 
@@ -368,7 +385,9 @@ def _classes():
                     self.field_combo[key], self.value_edit[param] = combo, edit
                     self.mark[param] = mark
                     grid.addWidget(mark, row, 0)
-                    grid.addWidget(W.QLabel(label), row, 1)
+                    lab = W.QLabel(label)
+                    mark_unit(edit, lab, label)
+                    grid.addWidget(lab, row, 1)
                     grid.addWidget(combo, row, 2)
                     grid.addWidget(edit, row, 3)
                     combo.currentIndexChanged.connect(self.values_from_feature)
@@ -694,9 +713,11 @@ def _classes():
             if getattr(self, "_county_value", ""):
                 parts.append(self._county_value)
             if dam.get("HEIGHT_FT") is not None:
-                parts.append("{:g} ft".format(dam["HEIGHT_FT"]))
+                parts.append(_DU.fmt(dam["HEIGHT_FT"], "ft", places=1) if _DU is not None
+                             else "{:g} ft".format(dam["HEIGHT_FT"]))
             if dam.get("STORAGE_ACFT") is not None:
-                parts.append("{:,.0f} ac-ft".format(dam["STORAGE_ACFT"]))
+                parts.append(_DU.fmt(dam["STORAGE_ACFT"], "ac-ft", places=0) if _DU is not None
+                             else "{:,.0f} ac-ft".format(dam["STORAGE_ACFT"]))
             title = " · ".join(p for p in parts if p) if parts[0] else ""
             sub = []
             r = self.row()
@@ -1112,12 +1133,16 @@ def _classes():
             self.pool, self.trigger_value = W.QLineEdit(), W.QLineEdit()
             self.trigger = W.QComboBox()
             for t in wl.TRIGGER_IDS:
-                self.trigger.addItem(wl.TRIGGER_LABELS[t], t)
+                self.trigger.addItem(_DU.relabel(wl.TRIGGER_LABELS[t]) if _DU is not None
+                                     else wl.TRIGGER_LABELS[t], t)
             f2.addRow("PMF inflow CSV (hr, cfs)", box1)
             f2.addRow("Spillway rating CSV (ft, cfs; optional)", box2)
             f2.addRow("Normal pool elevation (ft)", self.pool)
+            mark_unit(self.pool, None, "Normal pool elevation (ft)")
             f2.addRow("The dam fails", self.trigger)
-            f2.addRow("Failure time (hr) or elevation (ft)", self.trigger_value)
+            # the value is hours or an elevation by the choice above: never converted as one
+            # unit; under SI an elevation is typed in m and converted here (trigger_si)
+            f2.addRow(_trigger_label(), self.trigger_value)
             outer.addWidget(self.flood)
             self.problems = red_label()
             outer.addWidget(self.problems)
@@ -1136,6 +1161,8 @@ def _classes():
             self.spillway.setText(a.get("spillway_csv", ""))
             for edit, key in ((self.pool, "normal_pool_ft"), (self.trigger_value, "trigger_value")):
                 v = a.get(key)
+                if key == "trigger_value" and v is not None and _trigger_is_wse(a.get("trigger")):
+                    v = _DU.to_display(v, "ft")          # SI: the elevation shown in m
                 edit.setText("" if v is None else "{:g}".format(v))
             self.trigger.setCurrentIndex(max(self.trigger.findData(a.get("trigger")), 0))
             self.toggle()
@@ -1151,6 +1178,8 @@ def _classes():
             a["trigger"] = self.trigger.currentData()
             a["trigger_value"] = number_or_none(self.trigger_value, "failure time or elevation",
                                                 problems)
+            if a["trigger_value"] is not None and _trigger_is_wse(a["trigger"]):
+                a["trigger_value"] = _DU.from_display(a["trigger_value"], "ft")   # SI: m -> ft
             if problems:
                 self.show_problems(problems)
                 return False
@@ -1278,6 +1307,11 @@ def _classes():
     class Wizard(W.QWizard):
         def __init__(self, parent=None):
             W.QWizard.__init__(self, parent)
+            try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+                from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+                _watch_units(self)
+            except Exception:                                         # noqa - Core older than 1.1.0
+                pass
             self.setWindowTitle("{} \u2014 Model one dam".format(TITLE))
             self.answers = wl.default_answers()
             self.found = {}              # the suite data folder's layers, when Setup scanned it
@@ -1328,6 +1362,18 @@ def open_tool(answers):
     import processing
     params = wl.build_rundam_params(answers)
     return processing.execAlgorithmDialog(wl.ALGORITHM_ID, params)
+
+
+def _trigger_is_wse(trigger):
+    """True when the failure trigger's value is a pool elevation and the windows show SI."""
+    return (_DU is not None and _DU.system() == _DU.SI
+            and trigger == wl.floodmod.TRIGGER_WSE)
+
+
+def _trigger_label():
+    if _DU is not None and _DU.system() == _DU.SI:
+        return "Failure time (hr) or elevation (m)"
+    return "Failure time (hr) or elevation (ft)"
 
 
 def run_wizard(iface=None, found=None, data_folder=""):

@@ -95,6 +95,7 @@ $PY DamSafety_Screening/tests/run_all.py
 $PY -m nd_breach_runner.tests.run_tests      # nd_breach_runner/ is a shim beside DamSafety_Runner
 $PY DamSafety_Hazard/tests/run_all.py
 $PY DamSafety_HazardLite/tests/test_core.py
+$PY -m unittest DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
 $PY tools/gui_lint.py                        # offscreen: all rules but "no sideways scroll"
 xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb $PY tools/gui_lint.py   # as CI
 $PY DamSafety_Runner/tests/realqt_wizard.py

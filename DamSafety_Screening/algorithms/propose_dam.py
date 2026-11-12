@@ -34,6 +34,7 @@ from .terrain_cache import local_mosaic
 from .breach_direction import PT_FIELDS
 from .estimate_storage import NEW_FIELDS as STORAGE_FIELDS
 from .prepare_dams import OUT_FIELDS as INVENTORY_FIELDS
+from ._common import UnitAlgorithm
 
 MAX_CELLS = 8_000_000
 FT = pr.FT
@@ -67,7 +68,7 @@ def _save_tif(path, arr, gt):
     cm.write_tif(path, a, gt, nodata=-9999.0)
 
 
-class ProposeDam(QgsProcessingAlgorithm):
+class ProposeDam(UnitAlgorithm):
     def name(self):
         return "proposedam"
 

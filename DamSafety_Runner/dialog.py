@@ -140,6 +140,11 @@ class NDBreachRunnerDialog(QDialog):
 
     def __init__(self, parent=None, iface=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.iface = iface
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())

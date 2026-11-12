@@ -120,6 +120,8 @@ LAYER_SLOTS = (
     ("dam_lines", "DWR dam lines", "dam_lines"),
     ("nlcd", "NLCD land cover (raster, optional)", None),
     ("culverts", "Culverts / bridges (lines; step 7b, the Runner's ANUGA)", None),
+    # 0.19.4: unlisted dams the Finder plugin found - left uncut by steps 6, 7 and 9
+    ("finder_dams", "Finder candidate dams (left uncut; e.g. screening_dams)", None),
 )
 PKG_LAYER = {k: p for k, _l, p in LAYER_SLOTS if p}
 # tool 0's own inputs for the same slots
@@ -581,6 +583,7 @@ def defaults(step, work, settings):
         put("BLD_MORE", more("structures"))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("ONLY_IDS", S.get("only_ids"))
     elif step == "7":
         put("DAMS", o("6") or o("5"))
@@ -597,6 +600,7 @@ def defaults(step, work, settings):
         put("SIMMAX", float(S.get("simmax") if S.get("simmax") is not None else 12.0))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("NLCD", src("nlcd"))
         if int(S.get("workers") or 0) > 0:
             put("WORKERS", int(S["workers"]))
@@ -681,6 +685,7 @@ def defaults(step, work, settings):
             put("WORKERS", int(S["workers"]))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("NLCD", src("nlcd"))
         put("BLD", src("structures"))
         put("ROADS", src("roads"))

@@ -2099,7 +2099,8 @@ def fine_options(basis, like_grid, tinfo, reader, folder=None, environ=None, ras
 
 
 def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
-            units=None, wet_m=0.003, terrain=None, info=None, depth_basis=None, fine=None):
+            units=None, wet_m=0.003, terrain=None, info=None, depth_basis=None, fine=None,
+            units_fallback=None):
     """The HEC-RAS maxima on the Runner grid as the workflow's final arrays, SI:
     {'depth' m, 'velocity' m/s, 'wse' m, 'arrival' h after breach initiation}, NaN where
     dry or outside the mesh. to_grid_xy(xy (n,2)) -> (n,2) maps the HEC-RAS model CRS to the
@@ -2138,7 +2139,7 @@ def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_g
                                     like_grid.nx, like_grid.ny, t_ft, area=area,
                                     units=units, arrival_depth_ft=arrival_m / FT,
                                     t0_hr=t0_hr, wet_ft=wet_m / FT, to_grid_xy=to_grid_xy,
-                                    basis=basis, fine=fine)
+                                    basis=basis, fine=fine, units_fallback=units_fallback)
     d_cmin = minfo.pop("depth_cell_min")
     d_terr = minfo.pop("depth_terrain")
     if fell:
@@ -2273,12 +2274,13 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
     # 3.10.92: terrain_max / fine at the fine terrain's resolution; the fine rasters of
     # 'fine' go into _hecras/ (NDBREACH_HECRAS_FINE_RASTER=0 skips them)
     fine = fine_options(basis_req, like, tinfo, reader, folder=keep, environ=env)
+    hu = hecras.project_units(r["info"].get("model_wkt"))
     t_fine = time.time()
     try:
         try:
             arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
                           to_grid_xy=tr, terrain=t_ft, info=rinfo, depth_basis=want_basis,
-                          fine=fine)
+                          fine=fine, units_fallback=hu)
         except hecras.DatumMismatch:
             raise
         except hecras.HecRasError as e:
@@ -2291,7 +2293,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
             rinfo = {}
             arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
                           to_grid_xy=tr, terrain=t_ft, info=rinfo,
-                          depth_basis=hecras.DEPTH_BASIS_TERRAIN)
+                          depth_basis=hecras.DEPTH_BASIS_TERRAIN, units_fallback=hu)
             rinfo["depth_basis_requested"] = basis_req
     except hecras.DatumMismatch as e:
         # the model has run (maybe for hours): keep its results on the cell minimum and say
@@ -2301,7 +2303,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
         rinfo = {}
         arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
                       to_grid_xy=tr, terrain=t_ft, info=rinfo,
-                      depth_basis=hecras.DEPTH_BASIS_CELL_MIN)
+                      depth_basis=hecras.DEPTH_BASIS_CELL_MIN, units_fallback=hu)
         rinfo["depth_basis_requested"] = hecras.depth_basis(want_basis)
     other_m = rinfo.pop("other_depth_m", None)
     compare = None
@@ -2551,7 +2553,8 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     try:          # 3.10.92: a terrain on another datum / unit stops the terrain basis here
         arr = results(hdf, grid, arrival_m=float(arrival_depth_ft) * 0.3048,
                       t0_hr=float(t0_hr), to_grid_xy=tr, terrain=t_ft, info=info,
-                      depth_basis=basis, fine=fine)
+                      depth_basis=basis, fine=fine,
+                      units_fallback=hecras.project_units(model_wkt))
     except hecras.HecRasError as e:     # DatumMismatch, the fine basis's limit / scipy
         raise HecRasEngineError(str(e))
     for w in info.get("datum_warnings") or []:

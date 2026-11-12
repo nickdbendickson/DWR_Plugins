@@ -12,6 +12,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 from ..core import invdiff as idf, inventory as inv
 from . import _common as cm
 from ..compat import (FILE_FOLDER, FT_INT, FT_STRING, NUM_DOUBLE, SRC_POINT, WKB_POINT)
+from ._common import UnitAlgorithm
 
 OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING), ("change", FT_STRING),
               ("n_changes", FT_INT), ("fields", FT_STRING), ("detail", FT_STRING),
@@ -47,7 +48,7 @@ def read_inventory(src, metric=False, tag="DWR"):
     return out, standardized
 
 
-class InventoryDiff(QgsProcessingAlgorithm):
+class InventoryDiff(UnitAlgorithm):
     def name(self): return "inventorydiff"
     def displayName(self): return "13 - Inventory diff (what changed since the last run)"
     def group(self): return "Dam screening"

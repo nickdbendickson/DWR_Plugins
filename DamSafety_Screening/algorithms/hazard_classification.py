@@ -22,6 +22,7 @@ from ..core.more_layers import pick, layer_name
 from . import _common as cm
 from ..damsuite import structure_flags as SF
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_POINT)
+from ._common import UnitAlgorithm
 
 NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
        ("hz_reason", FT_STRING), ("n_bldg_wet", FT_INT),
@@ -36,7 +37,7 @@ NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
 CRIT_LABELS = [hz.METHOD_LABELS[m] for m in hz.METHODS]
 
 
-class HazardClassification(QgsProcessingAlgorithm):
+class HazardClassification(UnitAlgorithm):
     def name(self): return "hazardclassification"
     def displayName(self): return "8 - Hazard classification"
     def group(self): return "Dam screening"

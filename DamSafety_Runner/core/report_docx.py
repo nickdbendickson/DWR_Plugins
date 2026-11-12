@@ -332,6 +332,51 @@ class _Toc(object):
 PAGES = {"letter": (12240, 15840), "a4": (11906, 16838)}     # twips
 
 
+def _si_units():
+    """damsuite.display_units when the suite's display units are SI (Core 1.1.0), else None.
+    The Word report's text and tables are then converted as they are added; run_report.json,
+    dam.json and every data file keep US units."""
+    try:
+        from ..damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older / stand-alone
+        return None
+    return DU if DU.system() == DU.SI else None
+
+
+def _si_text(content):
+    du = _si_units()
+    return du.convert_text(content) if du is not None and isinstance(content, str) else content
+
+
+def _si_rows(rows, header):
+    """Table rows in SI: with a header row, columns whose header names a unit are converted
+    cell by cell; every other text cell has its quantities converted."""
+    du = _si_units()
+    if du is None or not rows:
+        return rows
+
+    def txt(c):
+        return c.get("runs", c.get("text")) if isinstance(c, dict) else c
+
+    def put(c, new):
+        if isinstance(c, dict):
+            c = dict(c)
+            c["runs" if "runs" in c else "text"] = new
+            return c
+        return new
+    head = [txt(c) for c in rows[0]] if header else []
+    units = [du.header_unit(h) if isinstance(h, str) else None for h in head]
+    out = []
+    for i, r in enumerate(rows):
+        texts = [txt(c) for c in r]
+        if header and i == 0:
+            new = [du.convert_header(t) if isinstance(t, str) else t for t in texts]
+        else:
+            new = du.convert_row(texts, units)
+        out.append([put(c, n) if isinstance(t, str) else c for c, t, n in zip(r, texts, new)])
+    return out
+
+
 class Docx(object):
     """Collects paragraphs, tables and images, then writes the package.
 
@@ -402,7 +447,7 @@ class Docx(object):
     def heading(self, text, level=1, page_break_before=False):
         """Heading 1-3; returns the text as written (with its number when numbering)."""
         level = max(1, min(3, int(level)))
-        text = clean_text(text)
+        text = clean_text(_si_text(text))
         if self.number_headings:
             self._hcount[level - 1] += 1
             for k in range(level, 3):
@@ -422,6 +467,7 @@ class Docx(object):
                   space_before=None, space_after=None, shade=None, border_left=None,
                   border_bottom=None, page_break_before=False):
         """`content`: str, or a list of runs. markup=True reads **bold**, *italic*, `code`."""
+        content = _si_text(content)
         if markup and isinstance(content, str):
             content = parse_inline(content)
         fmt = {}
@@ -473,6 +519,7 @@ class Docx(object):
             children = None
             if isinstance(it, tuple):
                 it, children = it
+            it = _si_text(it)
             content = parse_inline(it) if (markup and isinstance(it, str)) else it
             self.body.append(para_xml(
                 runs_xml(content), style="ListParagraph", num=(num_id, min(level, 8)),
@@ -481,6 +528,7 @@ class Docx(object):
                 self._list(children, num_id, level + 1, markup, shade)
 
     def list_item(self, content, level=0, num_id=1, markup=False, shade=None):
+        content = _si_text(content)
         if markup and isinstance(content, str):
             content = parse_inline(content)
         self.body.append(para_xml(runs_xml(content), style="ListParagraph",
@@ -496,7 +544,7 @@ class Docx(object):
         n = self._caption_n.get(kind, 0) + 1
         self._caption_n[kind] = n
         content = (run_xml(kind + " ") + _field_xml("SEQ {} \\* ARABIC".format(kind), str(n))
-                   + run_xml(". " + clean_text(text)))
+                   + run_xml(". " + clean_text(_si_text(text))))
         self.body.append(para_xml(content, style="Caption", keep_next=above,
                                   align="left" if above else "center"))
         return n
@@ -529,6 +577,7 @@ class Docx(object):
         `align`: per column 'left'|'center'|'right'."""
         if not rows:
             return
+        rows = _si_rows(rows, header)
         cells = [[self._norm_cell(c, markup) for c in r] for r in rows]
         ncols = max(len(r) for r in cells)
         for r in cells:

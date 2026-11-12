@@ -14,6 +14,7 @@ from ..core import dugouts as dg
 from ..compat import (FIELD_ANY, FIELD_NUMERIC, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, WKB_POINT)
 from . import _common as cm
 from ..damsuite import structure_flags as SF
+from ._common import UnitAlgorithm
 
 OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
               ("source", FT_STRING), ("nid_id", FT_STRING),
@@ -52,7 +53,7 @@ FIELD_KEYS = [("ID", "ID field", FIELD_ANY),
               ("ME", "max pool elevation", FIELD_NUMERIC)]
 
 
-class PrepareDams(QgsProcessingAlgorithm):
+class PrepareDams(UnitAlgorithm):
     DWR, NID, OUT, DIST, KEEP, MINH, MINV = ("DWR", "NID", "OUT", "DIST", "KEEP", "MINH", "MINV")
     UNITS = ["Feet / acre-feet / acres", "Metres / m3 / m2"]
 
