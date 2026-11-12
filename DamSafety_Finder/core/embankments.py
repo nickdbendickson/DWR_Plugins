@@ -39,6 +39,17 @@ WHAT IT LOOKS FOR
     road fill (ponding)    a road / rail fill with head: the culvert is missing in the DEM, small,
                            or the road is also a dam
     road fill              a road / rail fill with no head (a culvert or bridge is expected)
+    long fill (road, rail, canal or levee)
+                           no road / rail in the layers, but the raised fill runs on for
+                           LONG_FILL_M or more (a highway, rail grade, canal bank or levee the
+                           layers miss; a farm dam is a short fill ending on the valley sides)
+
+  6. LENGTH OF THE RAISED FILL (ridge_len): the ground minus its grey opening (a running
+     min-then-max over ridge_width_m) is how far each cell stands above its surroundings; the
+     cells standing more than max(0.5 m, 30 % of the crest height) above them that touch the crest
+     make the fill, and its length is their extent along its long axis (within ridge_half_m of
+     the crest). In Wells County (2026-11-12, 88 fills marked from the aerial) every dam a
+     reviewer confirmed was under 400 m; 41 of the 76 rejected fills were 600 m or more.
 
 Every threshold is a FinderParams value the engineer chooses; the defaults are starting values,
 not standards. The result is a list of candidates for review against an aerial image, not a
@@ -62,7 +73,8 @@ K_DAM = "dam"
 K_DRY = "dry embankment"
 K_ROAD_POND = "road fill (ponding)"
 K_ROAD = "road fill"
-KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD)
+K_LONG = "long fill (road, rail, canal or levee)"
+KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD, K_LONG)
 
 
 @dataclass
@@ -80,6 +92,9 @@ class FinderParams:
     min_storage_m3: float = 0.0         # smaller storage is not reported (0 = all)
     dedupe_m: float = 60.0              # candidates closer than this are one embankment
     level_tol_m: float = 0.02           # bisection tolerance of the spill level
+    long_fill_m: float = 600.0          # a raised fill this long is a road / rail / canal / levee
+    ridge_width_m: float = 75.0         # wider than a fill: the opening that takes it away
+    ridge_half_m: float = 600.0         # half-width of the window the fill length is measured in
 
 
 @dataclass
@@ -110,6 +125,7 @@ class Embankment:
     spill_width_m: float = 0.0
     spill_dist_m: float = 0.0           # from the crest point on the line
     line_src: str = ""                  # set by the caller (stream line / DEM drainage)
+    ridge_len_m: float = 0.0            # length of the raised fill along its own axis (step 6)
 
 
 def _need_scipy():
@@ -298,6 +314,37 @@ def spill_point(win, u, d, spill, tol=0.02, limit=400):
     return (int(rr[k]) + r0, int(cc[k]) + c0), int(sill.sum())
 
 
+def ridge_length(dem, r, c, cell, crest_height, width_m=75.0, half_m=600.0):
+    """Length (m) of the raised fill through cell (r, c): the cells standing more than
+    max(0.5 m, 0.3 x crest_height) above the grey opening of the ground (size width_m) that
+    connect to the crest, measured along their long axis, within half_m of the crest.
+    0 when the crest does not stand out (a fill wider than width_m)."""
+    half = max(4, int(round(half_m / cell)))
+    r0, r1, c0, c1 = _window(dem, r, c, half)
+    win = dem[r0:r1, c0:c1]
+    ok = np.isfinite(win)
+    if not ok.any():
+        return 0.0
+    zz = np.where(ok, win, np.nanmax(win))
+    k = max(3, int(round(width_m / cell)) | 1)
+    rel = zz - ndi.grey_opening(zz, size=(k, k))
+    m = (rel > max(0.5, 0.3 * crest_height)) & ok
+    lab, _n = ndi.label(m)
+    rr, cc = r - r0, c - c0
+    sub = lab[max(0, rr - 3):rr + 4, max(0, cc - 3):cc + 4]
+    ids = sub[sub > 0]
+    if not len(ids):
+        return 0.0
+    ys, xs = np.nonzero(lab == np.bincount(ids).argmax())
+    if len(xs) < 3:
+        return float(len(xs) * cell)
+    pts = np.c_[xs, ys].astype(float) * cell
+    pts -= pts.mean(axis=0)
+    _w, v = np.linalg.eigh(np.cov(pts.T))
+    pr = pts @ v[:, -1]
+    return float(pr.max() - pr.min() + cell)
+
+
 def flat_pool_area(win, u, up_level, flat_tol, cell):
     """(area m2, share of its rim that is lower) of the ground within flat_tol of up_level
     connected to u. A water surface in a hydro-flattened DEM is flat and every cell round it is
@@ -388,8 +435,11 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
                 on_road = any(road_mask[r, c] for r, c in cells[s:e])
             # head the fill makes: what the valley's own fall from U to D does not explain
             holds = pool or (head - valley) >= p.min_head_m
+            ridge = ridge_length(dem, rc[0], rc[1], cell, crest - toe, p.ridge_width_m, p.ridge_half_m)
             if on_road:
                 kind = K_ROAD_POND if holds else K_ROAD
+            elif ridge >= p.long_fill_m:
+                kind = K_LONG
             else:
                 kind = K_DAM if holds else K_DRY
             notes, low = [], False
@@ -403,7 +453,10 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
                              "end of the fill)".format((crest - spill) / FT))
             if pool:
                 notes.append("flat water surface behind it ({:.2f} ac)".format(flat / AC_M2))
-            if not holds and not on_road:
+            if kind == K_LONG:
+                notes.append("the raised fill runs on for {:.0f} ft: a highway, rail grade, canal "
+                             "bank or levee the road layers miss, not a farm dam".format(ridge / FT))
+            elif not holds and not on_road:
                 notes.append("no water held above the downstream ground: a dry / detention dam, a "
                              "levee, or a road / farm crossing not in the road layer")
             if face_open:
@@ -426,7 +479,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
                 pool_area_m2=parea, pool=pool, open_pool=open_pool,
                 confidence="low" if low else "medium",
                 line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku]),
-                spill_xy=spill_xy, spill_width_m=sw, spill_dist_m=sdist))
+                spill_xy=spill_xy, spill_width_m=sw, spill_dist_m=sdist, ridge_len_m=ridge))
     return dedupe(found, p.dedupe_m)
 
 

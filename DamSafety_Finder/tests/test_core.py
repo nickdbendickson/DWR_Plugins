@@ -78,6 +78,20 @@ class Embankments(unittest.TestCase):
         got = em.find(dem, GT, [LINE], road_mask=road)
         self.assertEqual([e.kind for e in got], [em.K_ROAD_POND])
 
+    def test_long_fill_off_the_road_layer_is_not_a_dam(self):
+        # a highway / canal bank 2.5 m above the ground the whole way across (1.2 km), no road
+        # layer: a long fill, not a dam; a farm fill (ends on the valley sides) stays short
+        dem, y = valley()
+        dem = np.where(np.abs(y - 250) <= 4, dem + 2.5, dem)
+        dem = add_fill(dem, y, 150, 3.0)
+        got = sorted(em.find(dem, GT, [LINE]), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in got], [em.K_DRY, em.K_LONG])
+        self.assertLess(got[0].ridge_len_m, 300.0)
+        self.assertGreaterEqual(got[1].ridge_len_m, 600.0)
+        self.assertIn("road layers miss", " ".join(got[1].notes))
+        p = em.FinderParams(long_fill_m=5000.0)          # the threshold is yours
+        self.assertNotIn(em.K_LONG, [e.kind for e in em.find(dem, GT, [LINE], params=p)])
+
     def test_line_direction_does_not_matter(self):
         dem, road = scene()
         a = em.find(dem, GT, [LINE], road_mask=road)
@@ -291,6 +305,18 @@ class Score(unittest.TestCase):
         self.assertEqual(int(y.sum()), 20)
         self.assertGreater(sc.ranked_auc(sc.score(m, self.rows(seed=2)), y), 0.9)
         self.assertGreater(sc.score(m, [rows[0]])[0], sc.score(m, [rows[1]])[0])
+
+    def test_an_older_model_still_scores(self):
+        rows = self.rows()
+        m = sc.train(rows)
+        k = m["features"].index("log_ridge_len")
+        for key in ("features", "mean", "std"):
+            m[key] = m[key][:k] + m[key][k + 1:]
+        m["weights"] = m["weights"][:k + 1] + m["weights"][k + 2:]
+        self.assertEqual(len(sc.score(m, rows)), len(rows))
+        m["features"][0] = "no_such_feature"
+        with self.assertRaises(ValueError):
+            sc.score(m, rows)
 
     def test_needs_examples(self):
         rows = self.rows()[:4]
