@@ -1,4 +1,4 @@
-import { rankReceptor } from "./acer.ts";
+import { AXES, rankReceptor } from "./acer.ts";
 import { type AoiExtent, aoiExtent, downstreamDirection, fmtAc, fmtKm, hasAoi, readAoi } from "./aoi.ts";
 import { isGenericSeed } from "./samples.ts";
 import { vertconShiftFt } from "./vertcon_nd.ts";
@@ -24,7 +24,7 @@ const TIE_BAND = 100;
  * schematic valley (stations, half-width, depth), the receptor depth/velocity/arrival, the datum rules or the ACER
  * ranking. A wording-only change does not move it. Date of the last numeric change, yyyy.mm.dd.
  */
-export const ENGINE_VERSION = "crest-desk-engine 2026.11.07";
+export const ENGINE_VERSION = "crest-desk-engine 2026.11.12";
 
 export const STEPS = [
   { id: "setup", label: "Guided setup" },
@@ -595,7 +595,9 @@ export function analyze(dam: DamRecord): Analysis {
     const flooded = depth >= 0.1;
     const widthFt = halfAt(xM) * 2 * 3.28084;
     const qHere = peakCfs * Math.exp((-decay.k * xM) / baseM);
-    const velocity = flooded && depth > 0.05 ? clamp(qHere / (widthFt * depth), 0.1, 14) : 0;
+    // Cap above both chart axes (house 25 ft/s, mobile 16). A velocity past an axis is high danger;
+    // a cap of 14 hid that and screened a fast shallow flood as Low.
+    const velocity = flooded && depth > 0.05 ? clamp(qHere / (widthFt * depth), 0.1, AXES.house[0] + 1) : 0;
     const arrival = flooded ? timeHr * 0.85 + xM / Math.max(velocity * FT, 0.3) / 3600 : null;
     const depthFt = flooded ? depth : 0;
     const velocityFps = flooded ? velocity : 0;

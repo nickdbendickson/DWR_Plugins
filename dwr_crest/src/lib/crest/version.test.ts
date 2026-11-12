@@ -26,7 +26,7 @@ describe("CREST_VERSION", () => {
 
   it("ENGINE_VERSION is the engine's dated method version, separate from the build", () => {
     assert.match(ENGINE_VERSION, /^crest-desk-engine \d{4}\.\d{2}\.\d{2}$/);
-    assert.equal(ENGINE_VERSION, "crest-desk-engine 2026.11.07");
+    assert.equal(ENGINE_VERSION, "crest-desk-engine 2026.11.12");
   });
 });
 
@@ -61,5 +61,30 @@ describe("the exports carry both versions", () => {
     const lines = batchCsv([], { now: new Date("2026-11-07T12:00:00Z") }).split("\n");
     assert.equal(lines[1], `# Crest ${CREST_VERSION}; ${ENGINE_VERSION}. Written 2026-11-07.`);
     assert.match(lines[2], /^id,kind,/);
+  });
+});
+
+describe("schematic velocity is not capped below the chart axes", () => {
+  it("a shallow mobile home at the breach is High (past 16 ft/s), not held at 14", () => {
+    const src = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const bare = analyze({ ...src, receptors: [] });
+    const r = analyze({
+      ...src,
+      receptors: [
+        {
+          id: "fast-mobile",
+          name: "Mobile at the toe",
+          kind: "mobile",
+          station: 0,
+          distanceKm: 0,
+          lateral: 0,
+          padFt: bare.flood.maxDepthFt - 0.5,
+        },
+      ],
+    }).flood.receptors[0];
+    assert.equal(r.unresolved, false, r.rankReason);
+    assert.ok(r.depthFt > 0.1 && r.depthFt < 1, `depth ${r.depthFt}`);
+    assert.ok(r.velocityFps > 16, `velocity ${r.velocityFps} ft/s was capped below the mobile-home axis`);
+    assert.equal(r.ndClass, "High");
   });
 });

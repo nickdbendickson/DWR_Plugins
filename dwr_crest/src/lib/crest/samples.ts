@@ -206,6 +206,7 @@ export const SAMPLE_DAMS: DamRecord[] = [
         id: "pr-drive",
         name: "Field approach",
         kind: "road",
+        roadClass: "private",
         station: 0.3,
         lateral: 0.1,
         padFt: 2,

@@ -134,12 +134,18 @@ describe("ND ranking (damsuite classify_nd)", () => {
     assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, aadt: 3423 }).class, "High");
     assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, aadt: 800 }).class, "Medium");
     assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, aadt: 100 }).class, "Low");
+    assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, aadt: 0 }).class, "Medium");
+    assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, aadt: -1 }).class, "Medium");
     assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, roadClass: "interstate" }).class, "High");
     assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, roadClass: "us_state" }).class, "Medium");
+    assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, roadClass: "private" }).class, "Low");
+    assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, roadClass: "private", aadt: 0 }).class, "Low");
+    assert.equal(rankReceptor({ kind: "road", depthFt: 0.5, velocityFps: 1, roadClass: "private", aadt: 800 }).class, "Medium");
     const unknown = rankReceptor({ kind: "road", depthFt: 2, velocityFps: 1 });
-    assert.equal(unknown.class, null);
+    assert.equal(unknown.class, "Medium");
     assert.equal(unknown.judgment, true);
-    assert.equal(rankReceptor({ kind: "road", depthFt: 0.05, velocityFps: 1, aadt: 5000 }).class, null);
+    assert.equal(rankReceptor({ kind: "mobile", depthFt: 0.5, velocityFps: 20 }).class, "High");
+    assert.equal(rankReceptor({ kind: "house", depthFt: 0.5, velocityFps: 26 }).class, "High");
   });
 
   it("DWR-2801 benchmark structures (ANUGA depths, harness run_crest_2801.mjs) screen Medium", () => {

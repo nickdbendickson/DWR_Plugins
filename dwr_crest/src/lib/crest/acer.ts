@@ -110,20 +110,32 @@ export function rankReceptor(input: RankInput): Ranked {
   const wet = depthFt >= WET_FT;
   if (kind === "road") {
     if (!wet) return { zone: null, class: null, reason: "road not inundated", judgment: false };
+    // A zero or negative AADT is not a count (nd_hazard.aadt_value). A private road with no
+    // count is Low. A public road with no count is Medium, the suite's unknown-AADT assumption.
+    const aadt = input.aadt != null && Number.isFinite(input.aadt) && input.aadt > 0 ? input.aadt : null;
     if (input.roadClass === "interstate")
       return { zone: null, class: "High", reason: "Interstate inundated (5.2.1.2(a))", judgment: false };
-    if (input.aadt != null && Number.isFinite(input.aadt)) {
-      if (input.aadt > 2000)
-        return { zone: null, class: "High", reason: `road AADT ${input.aadt} > 2,000 (5.2.1.2(a))`, judgment: false };
-      if (input.aadt >= 500)
-        return { zone: null, class: "Medium", reason: `road AADT ${input.aadt}, 500–2,000 (5.2.1.2(b))`, judgment: false };
-      if (input.roadClass === "us_state")
-        return { zone: null, class: "Medium", reason: "US or State highway inundated (5.2.1.2(b), at least Medium)", judgment: false };
-      return { zone: null, class: "Low", reason: `road AADT ${input.aadt} < 500`, judgment: false };
-    }
+    if (aadt != null && aadt > 2000)
+      return { zone: null, class: "High", reason: `road AADT ${aadt} > 2,000 (5.2.1.2(a))`, judgment: false };
     if (input.roadClass === "us_state")
       return { zone: null, class: "Medium", reason: "US or State highway inundated (5.2.1.2(b), at least Medium)", judgment: false };
-    return { zone: null, class: null, reason: "road inundated, no AADT: needs judgment", judgment: true };
+    if (aadt != null && aadt >= 500)
+      return { zone: null, class: "Medium", reason: `road AADT ${aadt}, 500–2,000 (5.2.1.2(b))`, judgment: false };
+    if (input.roadClass === "private")
+      return {
+        zone: null,
+        class: "Low",
+        reason: "private road inundated (AADT under 500 assumed when none is given)",
+        judgment: false,
+      };
+    if (aadt != null)
+      return { zone: null, class: "Low", reason: `road AADT ${aadt} < 500`, judgment: false };
+    return {
+      zone: null,
+      class: "Medium",
+      reason: "public road inundated, no AADT: assumed Medium (verify traffic)",
+      judgment: true,
+    };
   }
   if (kind === "rail") {
     if (!wet) return { zone: null, class: null, reason: "rail not inundated", judgment: false };

@@ -10,7 +10,7 @@ export type ReceptorKind = "house" | "mobile" | "barn" | "road";
 export type StepId = "setup" | "record" | "breach" | "flood" | "results" | "dashboard" | "screen" | "report";
 /** ND Dam Safety hazard classes (REG_05.2026 5.2), plus Review when the desk cannot screen. */
 export type ScreenLevel = "High" | "Medium" | "Low" | "Review";
-export type RoadClass = "interstate" | "us_state" | "other";
+export type RoadClass = "interstate" | "us_state" | "other" | "private";
 
 export type ReceptorSeed = {
   id: string;
