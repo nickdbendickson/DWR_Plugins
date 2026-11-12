@@ -1,6 +1,6 @@
-"""Lumo vReal.12 ES.1 / ES.4 / SE.2 (Hazard 2.18.23).
+"""Pierre vReal.12 ES.1 / ES.4 / SE.2 (Hazard 2.18.23).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real12.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real12.py
 """
 import os
 import sys

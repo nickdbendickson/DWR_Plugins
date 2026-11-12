@@ -1,6 +1,6 @@
-"""Lumo vReal.18b SB.1 / SB.5 / WK.3 / SH.1 (Hazard 2.18.30).
+"""Pierre vReal.18b SB.1 / SB.5 / WK.3 / SH.1 (Hazard 2.18.30).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real18b.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real18b.py
 """
 import json
 import os

@@ -1,6 +1,6 @@
-"""Lumo vReal.13 PF.1 / PF.2 / RP.1 / RP.3 (Hazard 2.18.24).
+"""Pierre vReal.13 PF.1 / PF.2 / RP.1 / RP.3 (Hazard 2.18.24).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real13.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real13.py
 """
 import csv
 import json

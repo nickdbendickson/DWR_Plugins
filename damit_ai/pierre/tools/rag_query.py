@@ -9,12 +9,12 @@
 #   - qwen3 "thinking" is streamed separately and kept out of the answer.
 import os, sys, json, sqlite3, urllib.request, urllib.error, math, argparse
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 BASE = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 EMBED_MODEL = "nomic-embed-text"
 QUERY_PREFIX = "search_query: "
-CHAT_MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+CHAT_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 TOP_K = 10
 try:
     import numpy as np

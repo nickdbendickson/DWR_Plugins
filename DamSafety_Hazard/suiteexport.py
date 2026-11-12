@@ -301,7 +301,7 @@ def _num(v):
 def projected(features, dropped=None):
     """[(feature, geometry in EPSG:5070)] - features whose geometry cannot be read are
     left out; `dropped` (a list) gets one entry per feature left out, so the caller can
-    say how many (Lumo: a silent drop hid bad source data)."""
+    say how many (Pierre: a silent drop hid bad source data)."""
     out = []
     for f in features or ():
         try:
