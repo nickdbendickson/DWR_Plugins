@@ -425,6 +425,12 @@ class FindWater(_Base):
             "LAS_EPSG", "LiDAR tile EPSG (only if the file carries no CRS; e.g. 26914)", "",
             optional=True))
         self._num("LAS_MIN_PTS", "LiDAR: points a cell needs to count as water", 1.0, 1.0)
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "WATER_RASTER", "Prebuilt class-9 water-count raster / VRT (e.g. the statewide LiDAR "
+            "water mosaic; instead of imagery or LAS)", optional=True))
+        self.addParameter(QgsProcessingParameterNumber(
+            "WATER_BAND", "Band of the water-count raster", INTEGER, 1, minValue=1))
+        self._num("WATER_COUNT_MIN", "Water-count raster: count a cell needs to be water", 1.0, 0.0)
         self._num("CELL", "Analysis cell size (m)", 1.0, 0.1)
         self._num("THRESHOLD", "Water when NDWI is at least (YOUR value; check it on a known pond)", 0.15, -1.0)
         self._num("NIR_FRAC", "and the near-infrared is at most this share of the land's (0 = no test)", 0.25, 0.0)
@@ -459,6 +465,26 @@ class FindWater(_Base):
         self._feedback = feedback
         bbox = _bbox(self, params, context)
         out = self.parameterAsFileOutput(params, "OUT", context)
+        wr = _src(self, params, "WATER_RASTER", context, False)
+        if wr:
+            try:
+                res = finder.run_water(
+                    None, out, bbox=bbox, cell=self.parameterAsDouble(params, "CELL", context),
+                    min_ac=self.parameterAsDouble(params, "MIN_AC", context),
+                    max_ac=self.parameterAsDouble(params, "MAX_AC", context),
+                    min_width_m=self.parameterAsDouble(params, "MIN_WIDTH", context),
+                    water_raster=wr, water_raster_band=self.parameterAsInt(params, "WATER_BAND", context),
+                    water_count_min=self.parameterAsDouble(params, "WATER_COUNT_MIN", context),
+                    mapped=_src(self, params, "MAPPED", context, False) or None,
+                    log=self._log(feedback), progress=feedback.setProgress,
+                    cancelled=feedback.isCanceled)
+            except RuntimeError as e:
+                raise QgsProcessingException(str(e))
+            self._stop_if_cancelled(feedback, out)
+            feedback.pushInfo("Open water from the water-count raster: {} patch(es), {} not on the "
+                              "mapped water bodies".format(res["counts"]["water"], res["counts"]["unmapped"]))
+            self._load(context, out, "water", "Open water (LiDAR water mosaic)")
+            return {"OUT": out}
         las = self._las_sources(params, context)
         if las:
             classes = tuple(int(c) for c in
