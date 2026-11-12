@@ -65,7 +65,7 @@ export function PaperReport(props: Props) {
       window.print();
     } catch (e) {
       setStatus(
-        `Printing is not available here (${(e as Error)?.message ?? String(e)}). Use Save as PDF… above instead.`,
+        `Printing is not available here (${(e as Error)?.message ?? String(e)}). Use Print report as PDF… instead.`,
       );
     }
   };
@@ -79,7 +79,7 @@ export function PaperReport(props: Props) {
           ⬇ CSV (structure impacts)
         </button>
         <button type="button" onClick={print} title="Opens the print dialog: choose Save as PDF as the destination">
-          📄 Save as PDF…
+          📄 Print report as PDF…
         </button>
         <span className="paper-toolbar-note">This page prints exactly as shown.</span>
       </div>
