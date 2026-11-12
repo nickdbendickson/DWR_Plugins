@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Finds dams, dry dams, road fills, ponds, dugouts and road / rail stream crossings in LiDAR, hydrography and aerial imagery that are not on the DWR, NID or bridge / culvert lists.
 about=Seven Processing tools (Processing Toolbox > DamSafety Finder > Find structures). Fills across streams and draws: walks the 3DHP / NHD flowlines and every draw traced from the DEM itself over a bare-earth DEM and reports every fill that blocks the valley (spill level, height, head, storage, pool), as a dam, dry embankment or road fill. Ponds and dugouts: the Screening tool 16 pond engine over a water-body layer. Crossings: every road / rail x stream crossing, the places a culvert or bridge must be. Open water: pond outlines from 4-band or colour-infrared aerial imagery (NDWI; several years keep the persistent water) or straight from a classified LiDAR point cloud (ASPRS class 9), marked when no water-body layer has them. Build the water mosaic: turn a folder of classified LiDAR tiles into the statewide class-9 water-count / mean-elevation rasters the open-water tool reads. Also: where each pool spills, dug pits and raised ridges (levees, dikes) anywhere in the DEM, the drainage area and expected pipe size at each crossing, dams / dikes / culverts from OpenStreetMap, and a score learned from the fills already on a dam list. Every candidate is checked against the known-structure layers you give (DWR dams, dugouts, Unknown Structures, NID, NBI, NDDOT, USGS / SARP crossings): listed, unsure or new. The not-listed dams and ponds are also written as DWR-style dam records (status Candidate) that DamSafety Screening tool 1 reads. Screening aid: check every candidate against an aerial image; the Department makes the determination.
-version=0.4.3
+version=0.4.4
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 author=N.D. Bendickson
@@ -17,6 +17,9 @@ tags=dam,dam safety,lidar,culvert,pond,processing
 experimental=True
 hasProcessingProvider=yes
 changelog=
+    0.4.4 - 2026-11-12 (pond pool from the LiDAR water surface; honest dam label, Nick)
+      * Find ponds and dugouts can take the class-9 water-surface mosaic (water_elev.vrt from 'Build a class-9 water mosaic') and read each pond's pool elevation straight from the LiDAR water surface, instead of inferring it from the DEM (flat surface or shoreline). New optional inputs WATER_ELEV and its band; the output's pool_method says 'measured LiDAR water surface' when it is used.
+      * The open-water / fill classifier no longer calls a fill a 'dam' on the strength of a flat water surface alone: a dam holds water above the downstream ground (the upstream level clears the toe by more than the valley's own fall). An excavated dugout or a gravel pit has standing water with no fill holding it up and is now 'dry embankment', not 'dam'. (A Wells County blind review of 89 unlisted candidates showed geometry alone cannot separate small stock dams from dugouts and approaches - they share the same head, pool and height - so no size / storage threshold was added; the fill-score ranking stays the tool for prioritising.)
     0.4.3 - 2026-11-12 (Nick)
       * Cancel is also checked inside the crossings intersection loop (not only before pipe sizing).
       * Outputs carry an is_new field (yes when the candidate is new to the lists given) and sha256 checksums of input files in the run_info table.

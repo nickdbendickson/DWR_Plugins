@@ -227,6 +227,28 @@ class Runs(unittest.TestCase):
         self.assertEqual(r["status"], "new")
         self.assertTrue(r["find_id"].startswith("POND-"))
 
+    def test_ponds_pool_from_the_water_elev_mosaic(self):
+        pool = tc.bed(200) + 3.0
+        dem, _r = tc.scene()
+        cols = np.where(np.abs(dem[150] - pool) < 1e-6)[0]
+        x0, x1 = gx(cols.min() * tc.CELL), gx((cols.max() + 1) * tc.CELL)
+        y0, y1 = row_y(196) - 1.5, row_y(150)
+        wkt = "POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(a=x0, b=x1, c=y0, d=y1)
+        wb = write_layer(self.vec, "waterbodies", [(wkt, {"ftype": "LakePond"})], fields=("ftype",))
+        # a class-9 water-surface mosaic over the whole scene at a known elevation
+        we = os.path.join(self.tmp, "water_elev.tif")
+        from osgeo import gdal
+        g = gdal.Open(self.dem)
+        arr = np.full((g.RasterYSize, g.RasterXSize), pool + 0.4, np.float32)   # 0.4 m above the DEM pool
+        drv = gdal.GetDriverByName("GTiff")
+        ods = drv.Create(we, g.RasterXSize, g.RasterYSize, 1, gdal.GDT_Float32)
+        ods.SetGeoTransform(g.GetGeoTransform()); ods.SetProjection(g.GetProjection())
+        ob = ods.GetRasterBand(1); ob.WriteArray(arr); ob.SetNoDataValue(-999999.0); ods = None
+        res = self.f.run_ponds(wb, self.dem, self.out, cell=3.0, max_ac=0, type_field="ftype",
+                               water_elev=we, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1, res)
+        self.assertIn("measured LiDAR water surface", res["rows"][0]["pool_method"])
+
     def test_crossings_with_fills(self):
         self.emb()
         res = self.f.run_crossings(self.roads, self.streams, self.out, known=[self.culverts],

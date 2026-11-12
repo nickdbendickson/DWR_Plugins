@@ -444,8 +444,14 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
             on_road = False
             if road_mask is not None:
                 on_road = any(road_mask[r, c] for r, c in cells[s:e])
-            # head the fill makes: what the valley's own fall from U to D does not explain
-            holds = pool or (head - valley) >= p.min_head_m
+            # Holds water = the fill impounds water ABOVE the downstream ground: the upstream level
+            # clears the toe by more than the valley's own fall from U to D (head - valley), by at
+            # least min_head_m. A flat water surface alone (`pool`) is NOT that - an excavated
+            # dugout or a gravel pit has standing water with no fill holding it above the ground
+            # below, and used to be labelled a dam on the strength of that surface. The pool is
+            # still reported (a note and the pool / pool_area fields), but it no longer, on its own,
+            # makes the fill a dam.
+            holds = (head - valley) >= p.min_head_m
             ridge = ridge_length(dem, rc[0], rc[1], cell, crest - toe, p.ridge_width_m, p.ridge_half_m)
             if on_road:
                 kind = K_ROAD_POND if holds else K_ROAD
