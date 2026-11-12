@@ -5,6 +5,20 @@ with **LISFLOOD-FP** and, optionally, **ANUGA**, following the North Dakota Dam 
 Standards Policy (REG_05.2026). It writes the rasters the ND hazard classification plugin
 reads:
 
+## Breach volume and the HEC-RAS breach (3.16.2, 3.16.4)
+
+- **Sunny-day breach:** the breach equations use **Vw = the dam's maximum storage** (DWR
+  MAX_STORAGE, or the storage you give), not the storage at the starting pool. The
+  elevation-volume curve still sets the routed reservoir; when the pool starts below the crest
+  (PMF maximum level lower than the top of dam) the report notes both volumes.
+- **PMF / flood-inflow breach (3.16.4):** as the ND Dam Safety Standards state it, Vw is the
+  storage at the pool when the breach starts (the elevation-volume curve). Report hydrograph
+  `vw_source` says which one a run used.
+- The HEC-RAS plan always uses Froehlich (2008) piping for the bottom width, side slopes and
+  formation time, even over the run's MLM or Froehlich (1995) values, with the run's Vw.
+  HEC-RAS option `breach_f2008 = 'fill_missing'` (opt-in, and the default with
+  `hec_breach_mode = 'match_plugin'`) only fills what the run lacks.
+
 ## New in 3.8.0 (ND dam suite release set: ND Dam Hazard 2.16.0, ND Dam Breach Screening 0.15.0)
 
 The near-dam FV1 refine is on by default, at 10 m, when a structure, road or railroad
@@ -234,10 +248,10 @@ face tables come from the terrain, so the crest is held there already.
 Read-only check: `python tools/check_dwr2801_anuga_crest.py BREACH_MODEL_FOLDER DEM_1M --out DIR`
 (mesh only, no solve).
 
-## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
-With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
+## HEC-RAS 2D compute: no wall-clock limit by default for a single run; 12 h unattended (3.10.48; audit R6, 3.16.7)
+With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute of a single run (*Run breach model for one dam*, the CLI `run`) runs until it finishes unless you set a limit. An unattended run - *Run breach models for many dams*, the CLI `batch`, the *Batch chain* (its Runner stage and its Windows HEC-RAS launcher) - gets a 12 h limit per compute and per preprocess step when the variable gives none (audit R6, 3.16.7: one dam that never finished held a queue for ever); `none` removes it, a positive number replaces it.
 
-- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere**, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each). 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
+- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere** in a single run, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each); in an unattended run unset / empty / `0` means the 12 h default and only `none` / `off` / `no` / `unlimited` means no limit. 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
 - A positive number of seconds: the compute AND each Wine preprocess step stop after that many seconds of wall-clock time (a paused VM counts), with SIGTERM to the process group, `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then SIGKILL, exactly as before.
 - Anything else (text, a negative number) is ignored, with a note in the log, and there is no limit.
 - Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.
@@ -687,14 +701,23 @@ by unit tests on synthetic grids and by runs of the workflow with the LISFLOOD-F
 
 ### 1. The plugin
 
-Zip the `nd_breach_runner` folder (or use the zip you were given) and install it with
-*Plugins > Manage and Install Plugins > Install from ZIP*.
+From the DamSafety plugin repository (`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`,
+*Plugins > Manage and Install Plugins > Settings > Add…*, experimental plugins shown), or
+*Install from ZIP* with `DamSafety_Runner_<version>.zip` from the GitHub Release
+(https://github.com/nickdbendickson/dAmIt_Plugins/releases). The repository README has the
+install order of the whole suite.
 
 ### 2. LISFLOOD-FP (required)
 
 The plugin needs a LISFLOOD-FP 8.x build with a small patch that adds the
 `inittm_depth` keyword (arrival time at a depth threshold) and removes the Linux-only NUMA
-requirement so it builds on macOS.
+requirement so it builds on macOS (and, since 3.16.11, builds with MinGW-w64 for Windows).
+
+**Bundled (3.16.11).** The Runner zip of a GitHub Release carries that build of LISFLOOD-FP 8.3
+for Linux x64, Windows x64 and macOS Apple Silicon under `bin/<platform>/`
+(`core/lisflood.bundled_exe`); the Runner finds it on its own when no other LISFLOOD-FP is
+installed or set, so on those computers nothing below is needed. The GPL corresponding source is
+the release asset `lisflood-8.3-ndbreach-source.zip`. A zip built from a checkout has no `bin/`.
 
 1. Download the LISFLOOD-FP source from the official release (University of Bristol;
    v8.2 is on Zenodo).
@@ -702,17 +725,19 @@ requirement so it builds on macOS.
 3. Run:
 
    ```bash
-   cd nd_breach_runner/scripts
-   ./build_lisflood_macos.sh ~/Downloads/LISFLOOD-FP-8.2 ~/lisflood-fp
+   cd DamSafety_Runner/scripts
+   ./build_lisflood_macos.sh ~/Downloads/LISFLOOD-FP-8.3/source ~/lisflood-fp
    ```
 
    This installs `cmake` and `libomp` with Homebrew, applies the patch with
    `patch_lisflood.py` (safe to run twice), builds without NetCDF and copies the
    executable to `~/lisflood-fp/lisflood`.
 
-On Linux, run `python3 scripts/patch_lisflood.py <source>` and build with CMake as the
-LISFLOOD-FP instructions describe; on Windows, apply the same patch and build with Visual
-Studio.
+On Linux, `scripts/build_lisflood_linux.sh <source> <install folder>` (cmake, g++, python3;
+`LISFLOOD_STATIC=1` for a binary that runs on other distributions), or the *Build LISFLOOD-FP…*
+button of DamSafety Setup's Suite status dock. On Windows, cross-compile on Linux with
+`scripts/build_lisflood_windows_cross.sh` (MinGW-w64), or apply `scripts/patch_lisflood.py` and
+build with CMake and Visual Studio.
 
 ### 3. ANUGA (only for the ANUGA tier)
 
@@ -726,10 +751,11 @@ ANUGA runs in its own conda environment, not inside QGIS.
 
 The plugin looks for both in the usual places (`~/lisflood-fp*/build/lisflood`,
 `~/miniforge3/envs/anuga/bin/python`, and so on) and fills the provider settings on first
-load. *Plugins > ND Dam Breach Runner > Check the model installation* reports what it found,
+load. *Check the model installation* (the Runner window's Tools tab, or Processing Toolbox >
+DamSafety Runner) reports what it found,
 runs LISFLOOD-FP on a tiny channel, confirms the patch is active and imports ANUGA. Set the
-paths by hand in *Processing > Options > Providers > ND Dam Breach Runner* if it finds
-nothing.
+paths by hand in *Processing > Options > Providers > DamSafety Runner* (or DamSafety Setup's
+*Suite setup / status…*, whose value wins) if it finds nothing.
 
 ## Using it
 

@@ -133,6 +133,13 @@ OUT_PROBABLE = "Probable loss of life"
 OUT_JUDGMENT = "Judgment zone"
 OUT_ECONOMIC = "Inundated (economic loss)"
 OUT_DRY = "Not inundated"
+# audit R2 (2026-11-07): a structure whose evaluation raised (a bad geometry, a sampler error)
+# used to keep max_depth None and so read as OUT_DRY - out of the ND / TM 11 counts, no line in
+# the report, only a QGIS-log warning. It is now its own outcome: never counted as dry, named
+# in Notes ("EVALUATION FAILED - verify"), counted by evaluation_failures() and the class is
+# marked incomplete (classification.classify_nd) until the engineer re-runs or reviews it.
+OUT_FAILED = "Evaluation failed - verify"
+NOTE_EVAL_FAILED = "EVALUATION FAILED - verify: {}"
 # Shallower than this: still wet on the grid, not a consequence (= the Runner's arrival depth,
 # ARRIVAL_FT 0.1 ft since Runner 3.10.53).
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
@@ -2457,9 +2464,15 @@ def peak_pair(d, v, vel_ok):
     return dpk, np.array([float(pick.max()) if pick.size else 0.0])
 
 
-def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
+def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls, zone=None):
     """Where the governing values of a structure were read (analysis CRS):
-    {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}."""
+    {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}.
+    L03: `zone` is the record's own classified zone (min(zpk, per-cell min)); the QA point's
+    value is taken from it, not re-derived from the per-cell array (which was LOW for a
+    no-velocity run, and could differ from the cross-cell peak pair when a velocity raster was
+    present), while the position stays the deepest cell of the worst per-cell zone. apply_type
+    keeps this value in step with the published ACER_Zone through the ND 5.3(f) near-threshold
+    raise too, so the QA point matches the published zone in every mode."""
     loc = {}
     i = int(np.argmax(d))
     loc["depth"] = (float(xs[i]), float(ys[i]), float(d[i]))
@@ -2476,7 +2489,10 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
         worst = zone_cls.min()
         cand = np.nonzero(zone_cls == worst)[0]
         n = int(cand[np.argmax(d[cand])])              # deepest cell of the worst zone
-        loc["zone"] = (float(xs[n]), float(ys[n]), float(worst))
+        # L03: value from the record's classified zone (agrees with the published ACER_Zone);
+        # position still the deepest cell of the worst per-cell zone.
+        loc["zone"] = (float(xs[n]), float(ys[n]),
+                       float(zone if zone is not None else worst))
     return loc
 
 
@@ -2716,6 +2732,12 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
                 "ND 5.3(f))".format(zone_label(rec["zone"]), rec["margin_high"]
                                     if rec["near"] == "High" else rec["margin_judg"])
             rec["zone"] = CLASS_HIGH if rec["near"] == "High" else CLASS_JUDGMENT
+            # L03: keep the 'Controlling ACER zone' QA point in step with the published zone
+            # through the 5.3(f) raise too (same position). Copy loc first - it is t["loc"], the
+            # shared per-type dict apply_type re-reads on every call, so it must not be mutated.
+            if rec.get("loc") and rec["loc"].get("zone"):
+                _x, _y, _ = rec["loc"]["zone"]
+                rec["loc"] = dict(rec["loc"], zone=(_x, _y, float(rec["zone"])))
     rec["outcome"] = structure_outcome(rec, one_d)
 
 
@@ -2724,7 +2746,12 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           "dv_max": None, "margin_high": None, "margin_judg": None, "near": "",
           "zone_note": "", "loc": None, "near_raised": False, "region": None,
           "reach_ft": None, "region_kind": "", "n_cells": 0, "sampling": "",
-          "cells_xy": None, "_types": None, "arrival_below": False, "snap_flip": None}
+          # M12: vel_unknown must reset per structure (it is set only inside the wet-cell loop,
+          # so a structure dry in this scenario kept an earlier scenario's True) and ride the
+          # snapshot (EVAL_KEYS) so the last breach's flags do not leak into every report
+          "cells_xy": None, "_types": None, "vel_unknown": False,
+          "arrival_below": False, "snap_flip": None,
+          "eval_failed": None}                     # audit R2: the error text, else None
 
 
 # v2.7.1: which cells around a structure are read for its maximum depth / velocity
@@ -2824,6 +2851,14 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         if progress_cb:
             progress_cb(p, m)
 
+    def failed(rec, what, e):
+        """audit R2: a structure whose evaluation raised is marked, not left dry. Only the
+        first error is kept (a later stage may raise again on the same record)."""
+        problems.log("structure {}{}: {}".format(rec["id"], what, e))
+        if rec.get("eval_failed") is None:
+            rec["eval_failed"] = "{}: {}".format(type(e).__name__, e) if str(e) \
+                else type(e).__name__
+
     # ---- 1. reset, evaluation areas of the structures near the flood --------
     tick(0, "Finding structures near the flood\u2026")
     # (the provider reader has no fast whole-raster pass: every structure is
@@ -2884,7 +2919,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["region"] = region
             regions[rec["id"]] = region
         except Exception as e:
-            problems.log("structure {}: {}".format(rec["id"], e))
+            failed(rec, "", e)
     by_id = {rec["id"]: rec for rec in structs}
 
     # ---- 1b. v2.9 fast sampling: the cells of the fast structures -------------
@@ -2907,7 +2942,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                         fulls[sid] = full
                     rec["region"] = regions[sid] = region
                 except Exception as e:
-                    problems.log("structure {}: {}".format(sid, e))
+                    failed(rec, "", e)
             fast = {}
         else:
             fast_cells, fast_fb, _whole = got
@@ -2927,7 +2962,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                     regions[sid] = region
                     rec["sampling"] = "GEOS region (fast path had no cell)"
                 except Exception as e:
-                    problems.log("structure {}: {}".format(sid, e))
+                    failed(rec, "", e)
 
     # ---- 2. depth cells of every area: one pass, else per structure ----------
     cells = None
@@ -2946,7 +2981,13 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         for i, (sid, region) in enumerate(regions.items()):
             if i % PROGRESS_INTERVAL == 0:
                 tick(5 + 45.0 * i / n, "Evaluating structures: {} of {}".format(i, n))
-            xs, ys, d = dep.cells_in_geometry(region)
+            try:                        # audit R2: one bad read marks one structure
+                xs, ys, d = dep.cells_in_geometry(region)
+            except CancelledByUser:
+                raise
+            except Exception as e:
+                failed(by_id[sid], " depth cells", e)
+                continue
             if d.size:
                 cells[sid] = (xs, ys, d)
     cells.update(fast_cells)
@@ -2955,12 +2996,19 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
     for sid in [s_ for s_ in fulls if s_ not in cells]:
         by_id[sid]["region"] = regions[sid] = fulls[sid]
         by_id[sid]["region_kind"] += " (no cell centre in it - whole area used)"
-        xs, ys, d = dep.cells_in_geometry(regions[sid])
+        try:
+            xs, ys, d = dep.cells_in_geometry(regions[sid])
+        except CancelledByUser:
+            raise
+        except Exception as e:          # audit R2
+            failed(by_id[sid], " depth cells", e)
+            continue
         if d.size:
             cells[sid] = (xs, ys, d)
     # areas without a cell centre inside (grid coarser than the building):
-    # the cell under the area's centre
-    coarse_ids = [sid for sid in regions if sid not in cells]
+    # the cell under the area's centre. audit R2: not one whose read raised
+    coarse_ids = [sid for sid in regions if sid not in cells
+                  and by_id[sid].get("eval_failed") is None]
     if coarse_ids:
         cx = np.array([regions[s].centroid().asPoint().x() for s in coarse_ids])
         cy = np.array([regions[s].centroid().asPoint().y() for s in coarse_ids])
@@ -3069,7 +3117,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                 t = {"zone": min(zpk, int(zcls.min())), "has_vel": vel_ok, "margin_high": None,
                      "margin_judg": None, "loc": None}
                 try:
-                    t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls)
+                    t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls, zone=t["zone"])
                 except Exception as e:                       # never fails the structure
                     problems.log("structure {} sample locations: {}".format(rec["id"], e))
                 if vel_ok:
@@ -3080,9 +3128,20 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                 types[TYPE_MOBILE]["zone"]
             rec["_types"] = types
         except Exception as e:
-            problems.log("structure {}: {}".format(rec["id"], e))
+            # audit R2: a wet structure that raised half-way keeps no partial result (a
+            # max_depth without zones would classify as economic loss only)
+            for k in ("max_depth", "max_vel", "arrival", "dv_max", "zone_found", "zone_mobile",
+                      "_types", "_dv", "cells_xy"):
+                rec[k] = None
+            failed(rec, "", e)
     for rec in structs:
         apply_type(rec, one_d, near_ft, borderline_higher)
+    n_failed = len(evaluation_failures(structs))
+    if n_failed:
+        log_message("Structure evaluation: {} structure(s) could not be evaluated - they are "
+                    "NOT counted as dry (ND outcome '{}', Notes 'EVALUATION FAILED'); the "
+                    "classification is marked incomplete".format(n_failed, OUT_FAILED),
+                    MSG_WARNING)
     try:
         _check_snap_flips(structs, dep, analysis_crs, lat)
     except Exception as e:                           # never fails the evaluation
@@ -3137,8 +3196,16 @@ def _check_snap_flips(structs, dep, analysis_crs, lat):
                                      "point_depth_ft": float(v)})
 
 
+def evaluation_failures(structs):
+    """audit R2: the structures whose evaluation raised (rec["eval_failed"] set by
+    evaluate_structures). The pipeline counts them, warns and marks the class incomplete."""
+    return [r for r in structs if r.get("eval_failed")]
+
+
 def structure_outcome(rec, one_d=False):
     """ND 5.2.1.1 outcome for one structure."""
+    if rec.get("max_depth") is None and rec.get("eval_failed"):
+        return OUT_FAILED                 # audit R2: not evaluated is not dry
     if rec.get("max_depth") is None or rec["max_depth"] <= 0:
         return OUT_DRY
     if one_d:
@@ -3391,6 +3458,8 @@ NOTE_SITE_NEAR = ("911 point of parcel {parcel} moved {moved_ft:.1f} ft onto str
 
 def structure_notes(rec):
     notes = []
+    if rec.get("eval_failed"):                    # audit R2: first, so it is never missed
+        notes.append(NOTE_EVAL_FAILED.format(str(rec["eval_failed"])[:200]))
     if rec.get("type_conflict"):
         notes.append("sources disagree on structure type - verify")
     if rec.get("mobile_rule") == "shape":
@@ -3489,7 +3558,8 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
             "First_Arrival_hr": _nz(rec.get("arrival")),
             "Zone_Found": _nz(rec.get("zone_found")), "Zone_Mobile": _nz(rec.get("zone_mobile")),
             "ACER_Zone": _nz(rec.get("zone")),
-            "ACER_Zone_Label": ZONE_LABELS.get(rec.get("zone"), "DRY"),
+            "ACER_Zone_Label": ZONE_LABELS.get(rec.get("zone"), "FAILED" if rec.get("eval_failed")
+                                               else "DRY"),            # audit R2
             "Danger_Zone": danger_zone(rec), "Danger_Chart": danger_chart(rec),
             "ND_Outcome": rec.get("outcome", OUT_DRY),
             "DV_Max_ft2s": _nz(rec.get("dv_max")), "Margin_High_ft": _nz(rec.get("margin_high")),

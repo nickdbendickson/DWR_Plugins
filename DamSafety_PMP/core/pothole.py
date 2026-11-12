@@ -22,7 +22,10 @@ import csv
 import numpy as np
 from osgeo import gdal, ogr, osr
 
-gdal.UseExceptions(); ogr.UseExceptions()
+from . import gdalsafe as GS
+
+# audit R3 (2026-11-07): no UseExceptions() at import (process-wide; see core/gdalsafe.py). The
+# clip (gdal.Warp) and the polygonise run inside GS.gdal_exceptions(), which restores the mode.
 
 M3_PER_ACFT = 1233.48183754752
 M2_PER_MI2 = 2589988.110336
@@ -61,14 +64,15 @@ def wbt(exe, tool, log=None, **kw):
 
 
 def _read(path):
-    ds = gdal.Open(path); b = ds.GetRasterBand(1)
+    ds = GS.open_raster(path); b = ds.GetRasterBand(1)
     a = b.ReadAsArray().astype(np.float64); nd = b.GetNoDataValue()
     m = np.isnan(a) if nd is None else (a == nd) | np.isnan(a)
     return a, m, ds.GetGeoTransform(), ds.GetProjection()
 
 
 def _write(path, arr, gt, wkt, nodata, dtype=gdal.GDT_Float32):
-    ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, dtype, ["COMPRESS=DEFLATE"])
+    ds = GS.checked(gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, dtype,
+                                                         ["COMPRESS=DEFLATE"]), "creating " + path)
     ds.SetGeoTransform(gt); ds.SetProjection(wkt)
     b = ds.GetRasterBand(1); b.SetNoDataValue(nodata); b.WriteArray(arr); ds = None
 
@@ -80,14 +84,17 @@ def run_pothole(dem_path, basin_path, out_dir, z_factor_to_m=1.0, min_depth_m=0.
     os.makedirs(out_dir, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="ndpmp_pothole_")
     # 1. clip (keep DEM CRS; must be projected with metre/ft units)
-    src = gdal.Open(dem_path)
+    src = GS.open_raster(dem_path)
     srs = osr.SpatialReference(wkt=src.GetProjection())
     if not srs.IsProjected():
         raise ValueError("DEM must be in a projected CRS (equal-area or UTM) so cell areas are meaningful")
     lin = srs.GetLinearUnits()   # metres per CRS unit
     clip = os.path.join(tmp, "dem_clip.tif")
-    gdal.Warp(clip, src, cutlineDSName=basin_path, cutlineLayer=basin_layer, cropToCutline=True,
-              dstNodata=-32768.0, outputType=gdal.GDT_Float32, warpOptions=["CUTLINE_ALL_TOUCHED=FALSE"])
+    with GS.gdal_exceptions():               # a bad cutline is reported, not a silent empty clip
+        GS.checked(gdal.Warp(clip, src, cutlineDSName=basin_path, cutlineLayer=basin_layer,
+                             cropToCutline=True, dstNodata=-32768.0, outputType=gdal.GDT_Float32,
+                             warpOptions=["CUTLINE_ALL_TOUCHED=FALSE"]),
+                   "clipping the DEM to the basin")
     dem, ndm, gt, wkt = _read(clip)
     cell_m2 = abs(gt[1] * gt[5]) * lin * lin
     # 2-3. fill and depressions
@@ -129,13 +136,14 @@ def run_pothole(dem_path, basin_path, out_dir, z_factor_to_m=1.0, min_depth_m=0.
     s = osr.SpatialReference(wkt=wkt)
     mds = (ogr.GetDriverByName("MEM") or ogr.GetDriverByName("Memory")).CreateDataSource("m")  # "Memory" before GDAL 3.11
     ml = mds.CreateLayer("p", s, ogr.wkbPolygon); ml.CreateField(ogr.FieldDefn("pothole_id", ogr.OFTInteger))
-    rds = gdal.Open(idr); band = rds.GetRasterBand(1)
-    gdal.Polygonize(band, band, ml, 0, [], callback=None)
+    rds = GS.open_raster(idr); band = rds.GetRasterBand(1)
+    with GS.gdal_exceptions():
+        gdal.Polygonize(band, band, ml, 0, [], callback=None)
     geoms = {}
     for f in ml:
         g = f.GetGeometryRef().Clone()
         geoms.setdefault(f.GetField("pothole_id"), ogr.Geometry(ogr.wkbMultiPolygon)).AddGeometry(g)
-    ods = ogr.GetDriverByName("GPKG").CreateDataSource(gpkg)
+    ods = GS.checked(ogr.GetDriverByName("GPKG").CreateDataSource(gpkg), "creating " + gpkg)
     lyr = ods.CreateLayer("potholes", s, ogr.wkbMultiPolygon)
     cols = [("pothole_id", ogr.OFTInteger), ("area_m2", ogr.OFTReal), ("area_ac", ogr.OFTReal),
             ("max_depth_m", ogr.OFTReal), ("mean_depth_m", ogr.OFTReal), ("volume_m3", ogr.OFTReal),

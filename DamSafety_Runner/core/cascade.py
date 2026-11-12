@@ -209,43 +209,60 @@ def _combine(out, st, writer):
             and r.final_si is not None]
     if len(runs) < 2:
         return
+    # M21 follow-up: all sub-runs share one LISFLOOD binary, so velocity is all-or-none. When no
+    # run produced a maximum-velocity raster (final_si velocity all-NaN), the combined velocity is
+    # all zeros; omit the combined velocity product so a Hazard classification of the cascade
+    # output refuses rather than reading velocity 0 off the v=0 ACER TM-11 curves.
+    no_velocity = not any(np.isfinite(r.final_si["velocity"]).any() for _cd, r, _off in runs)
     g0 = runs[0][1].grid
-    # the union of every run's extent (same cell size), so water downstream of the first
-    # dam's domain is kept
+    # H07 (cascade georef): the combined rasters span the union of every run's extent, each run
+    # drawn on its TRUE ground. A dam that auto-refines to a finer cell than another run must not
+    # be placed as if every run shared the first run's cell size (otherwise it is half-scale or
+    # stretched 2x and the union is truncated). The base cell is the finest run cell, so no run
+    # loses resolution; each base cell takes the run cell that contains its centre, which for runs
+    # that share a cell size (and so are grid-aligned here) is the former whole-cell placement.
+    dx = min(r.grid.dx for _c, r, _o in runs)
     x0 = min(r.grid.x0 for _c, r, _o in runs)
     y0 = max(r.grid.y0 for _c, r, _o in runs)
-    x1 = max(r.grid.x0 + r.grid.nx * g0.dx for _c, r, _o in runs)
-    y1 = min(r.grid.y0 - r.grid.ny * g0.dx for _c, r, _o in runs)
-    base = type(g0)(np.full((int(round((y0 - y1) / g0.dx)), int(round((x1 - x0) / g0.dx))),
-                            np.nan), x0, y0, g0.dx, g0.nodata, g0.crs_wkt)
+    x1 = max(r.grid.x0 + r.grid.nx * r.grid.dx for _c, r, _o in runs)
+    y1 = min(r.grid.y0 - r.grid.ny * r.grid.dx for _c, r, _o in runs)
+    nx, ny = int(round((x1 - x0) / dx)), int(round((y0 - y1) / dx))
+    base = type(g0)(np.full((ny, nx), np.nan), x0, y0, dx, g0.nodata, g0.crs_wkt)
     depth = np.zeros(base.data.shape)
     vel = np.zeros(base.data.shape)
     wse = np.full(base.data.shape, -np.inf)
     arr = np.full(base.data.shape, np.inf)
+    bx = x0 + (np.arange(nx) + 0.5) * dx          # base cell-centre coordinates (world)
+    by = y0 - (np.arange(ny) + 0.5) * dx
     for cd, r, off in runs:
         g = r.grid
-        # place each run's arrays on the first run's grid (same cell size; other extents)
-        c0 = int(round((g.x0 - base.x0) / base.dx))
-        r0 = int(round((base.y0 - g.y0) / base.dx))
-        r1, c1 = r0 + g.ny, c0 + g.nx
-        rs, cs = max(r0, 0), max(c0, 0)
-        re, ce = min(r1, base.ny), min(c1, base.nx)
-        if re <= rs or ce <= cs:
+        # the run cell that contains each base cell's centre
+        src_c = np.floor((bx - g.x0) / g.dx).astype(int)
+        src_r = np.floor((g.y0 - by) / g.dx).astype(int)
+        jj = np.where((src_c >= 0) & (src_c < g.nx))[0]
+        ii = np.where((src_r >= 0) & (src_r < g.ny))[0]
+        if ii.size == 0 or jj.size == 0:
             continue
-        sl_b = (slice(rs, re), slice(cs, ce))
-        sl_g = (slice(rs - r0, re - r0), slice(cs - c0, ce - c0))
-        d = np.nan_to_num(r.final_si["depth"][sl_g])
+        sl_b = np.ix_(ii, jj)
+        gr, gc = src_r[ii][:, None], src_c[jj][None, :]
+        d = np.nan_to_num(r.final_si["depth"][gr, gc])
         depth[sl_b] = np.maximum(depth[sl_b], d)
-        vel[sl_b] = np.maximum(vel[sl_b], np.nan_to_num(r.final_si["velocity"][sl_g]))
-        w = r.final_si["wse"][sl_g]
+        vel[sl_b] = np.maximum(vel[sl_b], np.nan_to_num(r.final_si["velocity"][gr, gc]))
+        w = r.final_si["wse"][gr, gc]
         wse[sl_b] = np.where(np.isfinite(w), np.maximum(wse[sl_b], w), wse[sl_b])
-        a = r.final_si["arrival"][sl_g] + off
+        a = r.final_si["arrival"][gr, gc] + off
         arr[sl_b] = np.where(np.isfinite(a), np.minimum(arr[sl_b], a), arr[sl_b])
     wet = depth > 1e-4
     items = {"Cascade Depth (Max).tif": np.where(wet, depth / FT, np.nan),
              "Cascade Velocity (Max).tif": np.where(wet, vel / FT, np.nan),
              "Cascade WSE (Max).tif": np.where(wet & np.isfinite(wse), wse / FT, np.nan),
              "Cascade Arrival Time.tif": np.where(np.isfinite(arr), arr, np.nan)}
+    if no_velocity:                 # M21 follow-up: no run wrote velocity -> omit the zeros product
+        del items["Cascade Velocity (Max).tif"]
+        try:
+            os.remove(os.path.join(out.folder, "Cascade Velocity (Max).tif"))
+        except OSError:
+            pass
     for name, a in items.items():
         p = os.path.join(out.folder, name)
         writer(base.like(a, np.nan), p)

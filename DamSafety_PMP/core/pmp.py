@@ -16,10 +16,26 @@ from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
-from osgeo import gdal, ogr, osr
 
-gdal.UseExceptions()
-ogr.UseExceptions()
+from . import gdalsafe as GS
+
+# audit P3-PMP (0.4.3): GDAL is imported lazily so the pure parts (dad_lookup, py2round,
+# py2round_array, storm_step, factor_arrays) and the light tests run without osgeo; anything
+# that opens data calls _require_gdal() first and stops with a plain message.
+# audit R3 (2026-11-07): no gdal.UseExceptions() / ogr.UseExceptions() at import - the call is
+# process-wide and this module loads with the plugin, so it switched GDAL's mode for QGIS and
+# every other plugin. The opens below go through core/gdalsafe.py, which raises the same
+# RuntimeError in both modes when GDAL returns None.
+try:
+    from osgeo import gdal, ogr, osr
+except ImportError:                                  # pragma: no cover - no GDAL here
+    gdal = ogr = osr = None
+
+
+def _require_gdal():
+    if gdal is None:
+        raise ImportError("DamSafety PMP needs GDAL's Python bindings (osgeo) to read the PMP "
+                          "geodatabases; run it inside QGIS's Python.")
 
 STORM_TYPES = ("Local", "General", "CoolSeason")
 DEFAULT_DURATIONS = {
@@ -38,6 +54,39 @@ def py2round(x, n=0):
         raise TypeError("round(None)")
     q = Decimal(1).scaleb(-n)
     return float(Decimal(x).quantize(q, rounding=ROUND_HALF_UP))
+
+
+def py2round_array(x, n=0):
+    """py2round over a numpy array, bit-exact with the scalar (audit P3-PMP, 2026-11-07).
+
+    The scalar quantizes the EXACT binary value of each float through Decimal, which is what
+    ArcGIS / Python 2.7 did; a plain np.round rounds the already-rounded product x * 10**n half
+    to even, so it can differ at and near ties. Here s = x * 10**n is formed in float (one
+    correctly rounded operation, within 1 ulp of the exact value), the nearest integer of s is
+    taken where s is farther than 2 ulp from every half-integer (there the exact value lies on
+    the same side of the half-integer, so nearest-integer is the same answer whatever the tie
+    rule), and the few elements at or near a tie go through the scalar py2round. c / 10**n is
+    one correctly rounded division of two exact integers, the same double float(Decimal) gives.
+    None (a null) raises TypeError as the scalar does; NaN stays NaN."""
+    raw = np.asarray(x)
+    if raw.dtype == object and any(v is None for v in raw.reshape(-1)):
+        raise TypeError("round(None)")
+    a = np.asarray(raw, dtype=np.float64)
+    scale = 10.0 ** n
+    s = a * scale
+    c = np.rint(s)
+    frac = np.abs(s - np.floor(s) - 0.5)                # distance from the nearest half-integer
+    near = frac <= 2.0 * np.spacing(np.abs(s))
+    out = c / scale
+    if near.any():
+        flat = out.reshape(-1)
+        idx = np.nonzero(near.reshape(-1))[0]
+        src = a.reshape(-1)
+        for i in idx:
+            v = float(src[i])
+            flat[i] = v if not np.isfinite(v) else py2round(v, n)
+        out = flat.reshape(a.shape)
+    return out
 
 
 def _log(cb, msg):
@@ -64,22 +113,46 @@ class PMPConfig:
 
 # --------------------------------------------------------------------------- data access
 def _gdb(home, name):
+    _require_gdal()
     p = os.path.join(home, "Input", name)
     if not os.path.isdir(p):
         raise FileNotFoundError("Missing geodatabase: %s" % p)
     return p
 
 
-def list_storms(home, storm_type):
+class _Sources:
+    """The three FileGDBs of a run, each opened ONCE (audit P3-PMP, 2026-11-07: read_dad and
+    read_storm_factors re-opened Storm_Adj_Factors.gdb / DAD_Tables.gdb for every storm - about
+    a hundred opens per run, each of which parses the FileGDB catalog)."""
+
+    def __init__(self, home):
+        self.home = home
+        self._ds = {}
+
+    def open(self, name):
+        ds = self._ds.get(name)
+        if ds is None:
+            ds = gdal.OpenEx(_gdb(self.home, name), gdal.OF_VECTOR)
+            self._ds[name] = ds
+        return ds
+
+    def close(self):
+        self._ds = {}
+
+
+def list_storms(home, storm_type, src=None):
     """Equivalent of arcpy.ListFeatureClasses('', 'Point', stormType) in Storm_Adj_Factors.gdb."""
-    ds = gdal.OpenEx(_gdb(home, "Storm_Adj_Factors.gdb"), gdal.OF_VECTOR)
-    grp = ds.GetRootGroup().OpenGroup(storm_type)
+    gdb = _gdb(home, "Storm_Adj_Factors.gdb")
+    ds = src.open("Storm_Adj_Factors.gdb") if src is not None else \
+        GS.checked(gdal.OpenEx(gdb, gdal.OF_VECTOR), "opening " + gdb)
+    grp = GS.checked(ds.GetRootGroup(), "reading the groups of " + gdb).OpenGroup(storm_type)
+    grp = GS.checked(grp, "opening the group {} in {}".format(storm_type, gdb))
     return list(grp.GetVectorLayerNames())
 
 
-def read_dad(home, storm):
+def read_dad(home, storm, src=None):
     """Return list of rows (dicts) in table order (OBJECTID order, as the arcpy SearchCursor would)."""
-    ds = ogr.Open(_gdb(home, "DAD_Tables.gdb"))
+    ds = src.open("DAD_Tables.gdb") if src is not None else GS.open_vector(_gdb(home, "DAD_Tables.gdb"))
     lyr = ds.GetLayerByName(storm)
     if lyr is None:
         return None
@@ -118,14 +191,16 @@ def dad_lookup(rows, duration, area, log=None):
 
 # --------------------------------------------------------------------------- geometry
 def _srs4326():
+    _require_gdal()
     s = osr.SpatialReference(); s.ImportFromEPSG(4326)
     s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     return s
 
 
 def _open_basin(cfg):
-    ds = ogr.Open(cfg.basin_path)
-    lyr = ds.GetLayerByName(cfg.basin_layer) if cfg.basin_layer else ds.GetLayer(0)
+    _require_gdal()
+    ds = GS.open_vector(cfg.basin_path)
+    lyr = GS.layer(ds, cfg.basin_layer, cfg.basin_path)
     if ogr.GT_Flatten(lyr.GetGeomType()) not in (ogr.wkbPolygon, ogr.wkbMultiPolygon):
         raise ValueError("Input basin must be a polygon layer")
     return ds, lyr
@@ -180,12 +255,13 @@ class Grid:
     """Vector_Grid cells + Grid_Points, held in memory (68,277 cells)."""
 
     def __init__(self, home):
-        ds = ogr.Open(_gdb(home, "Non_Storm_Data.gdb"))
+        gdb = _gdb(home, "Non_Storm_Data.gdb")
+        ds = GS.open_vector(gdb)
         self._ds = ds
-        self.vg = ds.GetLayerByName("Vector_Grid")
+        self.vg = GS.layer(ds, "Vector_Grid", gdb)
         self.vg_srs = self.vg.GetSpatialRef().Clone()
         self.vg_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        gp = ds.GetLayerByName("Grid_Points")
+        gp = GS.layer(ds, "Grid_Points", gdb)
         self.points = {}   # Id -> (x, y, fid order)
         order = []
         for f in gp:
@@ -225,11 +301,45 @@ class Grid:
                     sel.append(pid)
         return sel
 
+    def selection(self, geom4326):
+        """(cells, point ids) for a basin geometry, cached on the geometry's WKB (audit P3-PMP,
+        2026-11-07): basin_average / weighted_weights re-ran cells_intersecting and
+        points_in_cells - a spatial filter over the 68,277-cell grid and a union of the selected
+        cells - for every duration and every subbasin; the geometry is the same each time."""
+        cache = self.__dict__.setdefault("_sel_cache", {})
+        key = bytes(geom4326.ExportToWkb())
+        hit = cache.get(key)
+        if hit is None:
+            cells = self.cells_intersecting(geom4326)
+            hit = (cells, self.points_in_cells(cells))
+            if len(cache) >= 64:
+                cache.clear()
+            cache[key] = hit
+        return hit
 
-def read_storm_factors(home, storm, ids, bbox=None):
+    def weights(self, geom4326):
+        """{cell id: area of the cell clipped to the basin} (the weighted basinAve weights),
+        cached beside the selection."""
+        cache = self.__dict__.setdefault("_w_cache", {})
+        key = bytes(geom4326.ExportToWkb())
+        hit = cache.get(key)
+        if hit is None:
+            cells, _ids = self.selection(geom4326)
+            hit = {}
+            for cid, (g, _z) in cells.items():
+                inter = g.Intersection(geom4326)
+                hit[cid] = inter.GetArea() if inter is not None else 0.0
+            if len(cache) >= 64:
+                cache.clear()
+            cache[key] = hit
+        return hit
+
+
+def read_storm_factors(home, storm, ids, bbox=None, src=None):
     """Return {Id: (TAF, TRANS)} for the selected point ids from Storm_Adj_Factors.gdb/<storm>."""
-    ds = ogr.Open(_gdb(home, "Storm_Adj_Factors.gdb"))
-    lyr = ds.GetLayerByName(storm)
+    gdb = _gdb(home, "Storm_Adj_Factors.gdb")
+    ds = src.open("Storm_Adj_Factors.gdb") if src is not None else GS.open_vector(gdb)
+    lyr = GS.layer(ds, storm, gdb)
     if bbox:
         lyr.SetSpatialFilterRect(*bbox)
     want = set(ids)
@@ -238,20 +348,45 @@ def read_storm_factors(home, storm, ids, bbox=None):
         i = int(f.GetField("ID"))
         if i in want:
             out[i] = (f.GetField("TAF"), f.GetField("TRANS"))
+    lyr.SetSpatialFilter(None)
     return out
+
+
+def factor_arrays(fac, ids):
+    """(TAF, TRANS) of one storm as float arrays in `ids` order (audit P3-PMP): the per-point
+    Python loop of the storm step becomes one vector operation. A null TAF / TRANS stays NaN /
+    0, which is what the original's `None == 1` (False) and None * y (TypeError, never reached
+    because TRANS was null too) amount to for a point outside the storm's transposition zone."""
+    taf = np.array([(fac[p][0] if fac[p][0] is not None else np.nan) for p in ids], dtype=float)
+    tr = np.array([(fac[p][1] if fac[p][1] is not None else 0) for p in ids], dtype=float)
+    return taf, tr
+
+
+def storm_step(vals, drivers, storm, y, taf, trans):
+    """One storm of the duration loop, vectorised (audit P3-PMP). In place on `vals` (float
+    array) and `drivers` (object array): where TRANS == 1, adjRain = py2round(y * TAF, 1) and a
+    strictly larger value replaces the point's PMP and its driving storm (the strict '>' keeps
+    the first storm at a tie, as the original). Returns the number of points with TRANS == 1."""
+    on = trans == 1
+    n = int(on.sum())
+    if n:
+        adj = np.where(on, py2round_array(np.where(on, y * taf, 0.0), 1), 0.0)
+        better = on & (adj > vals)
+        vals[better] = adj[better]
+        drivers[better] = storm
+    return n
 
 
 # --------------------------------------------------------------------------- averages
 def weighted_weights(grid, ids, basin4326):
     """Port of basinAve(weighted): WEIGHT = Shape_Area of Vector_Grid cell clipped to basin, in the grid's CRS
-    (decimal degrees^2, as ArcGIS Clip output in the scratch GDB inherits the Vector_Grid CRS)."""
-    cells = grid.cells_intersecting(basin4326)
-    w = {}
-    for cid, (g, _z) in cells.items():
-        inter = g.Intersection(basin4326)
-        w[cid] = inter.GetArea() if inter is not None else 0.0
+    (decimal degrees^2, as ArcGIS Clip output in the scratch GDB inherits the Vector_Grid CRS).
+    The cells, their clipped areas and the selected points come from the Grid's per-geometry
+    cache (audit P3-PMP), so the second duration and every later one cost a dict lookup."""
+    w = grid.weights(basin4326)
+    _cells, sel_ids = grid.selection(basin4326)
     # points selected = points intersecting the (re)selected cells
-    sel = set(grid.points_in_cells(cells))
+    sel = set(sel_ids)
     return [(pid, w.get(pid)) for pid in ids if pid in sel]
 
 
@@ -262,8 +397,8 @@ def basin_average(values_by_id, ids, grid, basin4326, weighted, subbasin_mode):
         wt = np.array([x for _, x in pw], float)
         return py2round(float(np.average(v, weights=wt)), 2)
     if subbasin_mode:
-        cells = grid.cells_intersecting(basin4326)
-        sel = set(grid.points_in_cells(cells))
+        _cells, sel_ids = grid.selection(basin4326)
+        sel = set(sel_ids)
         v = np.array([values_by_id[p] for p in ids if p in sel], float)
         return py2round(float(np.average(v)), 2)
     v = np.array([values_by_id[p] for p in ids], float)
@@ -273,7 +408,8 @@ def basin_average(values_by_id, ids, grid, basin4326, weighted, subbasin_mode):
 # --------------------------------------------------------------------------- outputs
 def _write_points(path, layer_name, grid, ids, durs, pmp, drv):
     drv_ = ogr.GetDriverByName("GPKG")
-    ds = ogr.Open(path, 1) if os.path.exists(path) else drv_.CreateDataSource(path)
+    ds = GS.open_vector(path, update=True) if os.path.exists(path) \
+        else GS.checked(drv_.CreateDataSource(path), "creating " + path)
     if ds.GetLayerByName(layer_name) is not None:
         ds.DeleteLayer(layer_name)
     lyr = ds.CreateLayer(layer_name, _srs4326(), ogr.wkbPoint)
@@ -304,7 +440,8 @@ def _write_raster(path, grid, ids, values):
     arr = np.full((ny, nx), -9999.0, np.float32)
     for x, y, v in zip(xs, ys, values):
         arr[int(round((y1 - CELL / 2 - y) / CELL)), int(round((x - x0 - CELL / 2) / CELL))] = v
-    ds = gdal.GetDriverByName("GTiff").Create(path, nx, ny, 1, gdal.GDT_Float32, ["COMPRESS=DEFLATE"])
+    ds = GS.checked(gdal.GetDriverByName("GTiff").Create(path, nx, ny, 1, gdal.GDT_Float32,
+                                                         ["COMPRESS=DEFLATE"]), "creating " + path)
     ds.SetGeoTransform((x0, CELL, 0, y1, 0, -CELL))
     ds.SetProjection(_srs4326().ExportToWkt())
     b = ds.GetRasterBand(1); b.SetNoDataValue(-9999.0); b.WriteArray(arr)
@@ -343,11 +480,11 @@ def run_pmp(cfg: PMPConfig, log=print, is_canceled=lambda: False):
     _log(log, "***Area used for PMP analysis: %s sqmi***" % area)
     results["area_sqmi_raw"] = raw_area; results["area_sqmi"] = area
 
-    cells = grid.cells_intersecting(basin4326)
-    ids = grid.points_in_cells(cells)
+    cells, ids = grid.selection(basin4326)
     if not ids:
         raise RuntimeError("No data present within basin/AOI area.")
     _log(log, "(%d grid points will be analyzed)" % len(ids))
+    src = _Sources(home)         # audit P3-PMP: each FileGDB opened once for the whole run
 
     summary = []
     for stype in STORM_TYPES:
@@ -356,20 +493,23 @@ def run_pmp(cfg: PMPConfig, log=print, is_canceled=lambda: False):
             continue
         if area > 100 and stype == "Local":
             _log(log, "***Warning - Local storm PMP depths only valid for basins 100 square miles or smaller***")
-        storms = list_storms(home, stype)
-        dad = {s: read_dad(home, s) for s in storms}
+        storms = list_storms(home, stype, src)
+        dad = {s: read_dad(home, s, src) for s in storms}
         xs = [grid.points[i][0] for i in ids]; ys = [grid.points[i][1] for i in ids]
         bbox = (min(xs) - 0.001, min(ys) - 0.001, max(xs) + 0.001, max(ys) + 0.001)
-        fac = {s: read_storm_factors(home, s, ids, bbox) for s in storms}
+        fac = {s: read_storm_factors(home, s, ids, bbox, src) for s in storms}
         missing = [s for s in storms if len(fac[s]) != len(ids)]
         if missing:
             raise RuntimeError("Storm factor layers missing grid points: %s" % missing)
+        # audit P3-PMP: TAF / TRANS as arrays in `ids` order, once per storm, not per duration
+        arrays = {s: factor_arrays(fac[s], ids) for s in storms}
         pmp, drv, dadv = {}, {}, {}
         for d in durs:
             if is_canceled():
                 raise RuntimeError("Canceled")
             _log(log, "Evaluating %s %s-hour duration..." % (stype, d))
-            vals = [0.0] * len(ids); drivers = ["STORM"] * len(ids)
+            vals = np.zeros(len(ids), dtype=float)
+            drivers = np.array(["STORM"] * len(ids), dtype=object)
             for s in list(storms):
                 y = dad_lookup(dad[s], d, area, log)
                 if y is None:
@@ -377,17 +517,10 @@ def run_pmp(cfg: PMPConfig, log=print, is_canceled=lambda: False):
                     continue
                 y = py2round(y, 3)
                 dadv.setdefault(d, {})[s] = y
-                trans = 0
-                for k, pid in enumerate(ids):
-                    taf, tr = fac[s][pid]
-                    if tr == 1:
-                        trans += 1
-                        adj = py2round(y * taf, 1)
-                        if adj > vals[k]:
-                            vals[k] = adj; drivers[k] = s
-                if trans == 0:
+                taf, tr = arrays[s]
+                if storm_step(vals, drivers, s, y, taf, tr) == 0:
                     storms.remove(s)   # same as original: storm dropped for later durations
-            pmp[d] = vals; drv[d] = drivers
+            pmp[d] = [float(v) for v in vals]; drv[d] = [str(x) for x in drivers]
 
         out_type_dir = os.path.join(cfg.out_dir, stype)
         os.makedirs(out_type_dir, exist_ok=True)
@@ -442,6 +575,7 @@ def run_pmp(cfg: PMPConfig, log=print, is_canceled=lambda: False):
                                    "dad_values": dadv, "patterns": pats, "temporal_notes": notes, "hyetographs": hyeto, "n_points": len(ids), "point_ids": ids, "pmp": pmp}
         _log(log, "%s basin average: %s" % (stype, bas))
     from . import temporal as T
+    src.close()
     os.makedirs(cfg.out_dir, exist_ok=True)
     results["summary_csv"] = T.write_summary(cfg.out_dir, summary)
     return results

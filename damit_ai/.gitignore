@@ -1,0 +1,2 @@
+# bundled installers and packages ship as a separate download, never in git
+offline/

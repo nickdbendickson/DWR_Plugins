@@ -120,6 +120,8 @@ LAYER_SLOTS = (
     ("dam_lines", "DWR dam lines", "dam_lines"),
     ("nlcd", "NLCD land cover (raster, optional)", None),
     ("culverts", "Culverts / bridges (lines; step 7b, the Runner's ANUGA)", None),
+    # 0.19.4: unlisted dams the Finder plugin found - left uncut by steps 6, 7 and 9
+    ("finder_dams", "Finder candidate dams (left uncut; e.g. screening_dams)", None),
 )
 PKG_LAYER = {k: p for k, _l, p in LAYER_SLOTS if p}
 # tool 0's own inputs for the same slots
@@ -169,7 +171,11 @@ DEFAULT_SETTINGS = {
     "settings_file": "",
     "screen_what": 0,         # 0 DWR dam inventory (1-4), 1 ponds and dugouts (16), 2 both
     "storage_choice": 0,      # 0 max, 1 normal, 2 larger of the two
-    "chain": [],              # optional steps the chain includes (CHAIN_OPTIONAL keys)
+    # optional steps the chain includes (CHAIN_OPTIONAL keys). 0.18.19 (usability plan, 2026-11-08):
+    # the quick screen (6) is on, as in the guide and five of the six presets - the window used to
+    # start with it off, so "Screen this county" gave every dam a full 2D flood. Untick "also the
+    # quick screen (6)" (or store chain = "" in the settings file) to simulate every dam.
+    "chain": ["6"],
     "reviewer": "",
 }
 # the window's choices that go to the settings file (not paths of this project / computer)
@@ -577,6 +583,7 @@ def defaults(step, work, settings):
         put("BLD_MORE", more("structures"))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("ONLY_IDS", S.get("only_ids"))
     elif step == "7":
         put("DAMS", o("6") or o("5"))
@@ -593,6 +600,7 @@ def defaults(step, work, settings):
         put("SIMMAX", float(S.get("simmax") if S.get("simmax") is not None else 12.0))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("NLCD", src("nlcd"))
         if int(S.get("workers") or 0) > 0:
             put("WORKERS", int(S["workers"]))
@@ -677,6 +685,7 @@ def defaults(step, work, settings):
             put("WORKERS", int(S["workers"]))
         put("STREAMS", src("streams"))
         put("DAMLINES", damlines())
+        put("PROTECT", src("finder_dams"))
         put("NLCD", src("nlcd"))
         put("BLD", src("structures"))
         put("ROADS", src("roads"))
@@ -999,18 +1008,22 @@ def dam_record_text(folder):
     return text
 
 
-def continue_target(work, dam_id):
+def continue_target(work, settings, dam_id):
     """(plugin, label, why) for Continue, from dam.json.
 
     plugin is "runner", "hazard", or "" (the button stays grey). A file whose
     name contains "depth" is not used: a baseline or an interim raster matches
     that test too. The next step is dam_record.next_action.
+
+    L10: resolve the dam-record path through dams_folder(work, settings) like every
+    other reader, so a chosen (non-default) "Dams folder" is honoured - the hardcoded
+    <work>/Dams left Continue grey with "no dam record yet" for a configured folder.
     """
     dam_id = str(dam_id or "").strip()
     if not work or not dam_id:
         return "", "Continue", ("Select a dam, or run one dam. Continue then opens "
                                 "the plugin that dam needs next.")
-    folder = os.path.join(work, "Dams", dam_id)
+    folder = os.path.join(dams_folder(work, settings or {}), dam_id)
     try:
         from ..damsuite import dam_record as DR
         rec = DR.load(folder) if os.path.isdir(folder) else None

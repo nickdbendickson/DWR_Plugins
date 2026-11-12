@@ -220,7 +220,14 @@ def _report_traceback(feedback):
         pass
 
 
-class _Base(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class _Base(_UnitParams, QgsProcessingAlgorithm):
     def group(self):
         return "Dam hazard classification"
 
@@ -1005,7 +1012,9 @@ class BatchAlgorithm(_Base):
                 "found; falls back to one dam after another when it is missing, and says "
                 "so in MODE). TIMEOUT_MIN ends a worker that takes longer (that dam is "
                 "listed as failed). WORKERS = 1 (default) runs the dams one after another "
-                "in this session. BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
+                "in this session; each dam's downloaded data stays in this session's memory "
+                "until QGIS closes, so use WORKERS > 1 for a long batch (each dam's memory is "
+                "released when its process ends). BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
                 "2D flow area polygon (model_boundary_2d_area.gpkg, written by 'Import HEC-RAS "
                 "plan results'); a dam without the file gets the automatic check.")
 
@@ -1099,7 +1108,9 @@ class WatchAlgorithm(_Base):
                 "qgis_process child process (QGIS stays usable; needs qgis_process - set "
                 "ND_QGIS_PROCESS to its full path if it is not found; falls back to one dam "
                 "after another when it is missing). WORKERS = 1 (default) runs the dams one "
-                "after another in this session. Batch_Hazard_Classification.csv (the class "
+                "after another in this session; each dam's downloaded data stays in this "
+                "session's memory until QGIS closes, so use WORKERS > 1 for a long run. "
+                "Batch_Hazard_Classification.csv (the class "
                 "of every dam) is written as well.")
 
     def flags(self):
@@ -1608,9 +1619,21 @@ class Provider(QgsProcessingProvider):
                     MarkReviewedAlgorithm]
         return classes
 
+    # 2.23.17 (usability plan change 3): the window-state hand-off the batch chain runs
+    # (savedamstate) is not a tool to pick from the toolbox - FlagHideFromToolbox; it stays
+    # runnable from the chain, models and qgis_process.
+    HIDDEN_FROM_TOOLBOX = frozenset(("savedamstate",))
+
     @classmethod
     def algorithm_classes(cls):
         """v2.13: every tool takes its parameter defaults from the suite settings file
         (suite_settings_tools.settings_aware); the grid groups them by the tool's own group."""
         from . import suite_settings_tools as ST
-        return [ST.settings_aware(c, SUITE_KEY, settings_group) for c in cls.original_classes()]
+        out = []
+        for c in cls.original_classes():
+            try:
+                hidden = c().name() in cls.HIDDEN_FROM_TOOLBOX
+            except Exception:                                    # noqa - a tool that needs more than this QGIS
+                hidden = False
+            out.append(ST.settings_aware(c, SUITE_KEY, settings_group, hidden=hidden))
+        return out

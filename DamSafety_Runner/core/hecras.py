@@ -36,8 +36,10 @@ and matching names case-insensitively, see `discover`). Paths are examples only:
 The result datasets can have fewer cells than the geometry (RAS adds ghost cells beyond the
 real ones): the first N cells are used, N being the length of Maximum Water Surface.
 Units come from the 'Units' attribute on the dataset, its groups or the file root ('Units
-System'); the default, when none is found, is US customary. Everything returned is US ft,
-ft/s and hours.
+System'). Nothing recorded is an error, not US customary: an SI water surface read as feet
+is about 3.28 times too shallow. A caller that knows the model CRS may pass units_fallback
+('us' or 'si'); an explicit units= still wins. 'cms' is SI and 'cfs' is US. Everything
+returned is US ft, ft/s and hours.
 """
 import csv
 import math
@@ -184,7 +186,7 @@ def datum_check(ground_ft, cmin_ft, mask=None, environ=None):
     dz = g[ok] - c[ok]
     med, p05 = float(np.median(dz)), float(np.percentile(dz, 5))
     mc = float(np.median(c[ok]))
-    ratio = float(np.median(g[ok]) / mc) if abs(mc) >= 100.0 else None
+    ratio = float(np.median(g[ok]) / mc) if abs(mc) >= 1.0 else None
     rec.update(median_ft=round(med, 3), p05_ft=round(p05, 3),
                ratio=None if ratio is None else round(ratio, 4))
     head = ("TERRAIN DATUM/UNIT MISMATCH: the terrain is {:+.2f} ft (median) from the HEC-RAS "
@@ -366,6 +368,46 @@ def _num(v):
     return str(v)
 
 
+PIPING_COEF = 0.5                     # HEC-RAS piping coefficient default
+F08_AUTO = "Froehlich (2008) piping, auto"
+F08_OVERWRITE, F08_FILL = "overwrite", "fill_missing"
+F08_POLICIES = (F08_OVERWRITE, F08_FILL)
+VW_CURVE_TOL = 0.05                   # curve vs maximum storage: warn above 5 %
+
+
+def _run_vw_acft(dam, params):
+    """Vw of the run (3.16.4): the run report's vw_acft when it has one (sunny day: the
+    maximum storage; PMF / flood inflow: the storage at the pool when the breach started),
+    else for a flood-inflow run its storage at failure, else the dam's maximum storage."""
+    p = params or {}
+    if p.get("vw_acft"):
+        return float(p["vw_acft"])
+    if str(p.get("scenario") or "").startswith("flood inflow") and \
+            p.get("storage_at_failure_acft"):
+        return float(p["storage_at_failure_acft"])
+    return float(dam.storage_top_acft)
+
+
+def froehlich_2008_piping_ft(dam, params, bottom_ft):
+    """Froehlich (2008) piping breach (K0 1.0, z 0.7). Vw is the run's Vw (3.16.4,
+    _run_vw_acft): for a sunny-day run the dam's maximum storage as given (DWR's max storage:
+    DamData.storage_top_acft), for a PMF / flood-inflow run the storage at the pool when the
+    breach started (ND standards); hb = top - bottom, from the run's dam (NAVD88: the DWR value
+    plus the run's VERTCON shift, core/vdatum_run.apply). Returns {'avg_width_ft', 'tf_hr',
+    'z', 'vw_acft', 'curve_warning'} ('curve_warning' is always '' since 3.16.4: the curve is
+    anchored at the maximum storage, so a difference only means the pool started below the
+    crest; breach.py notes that) or None when it cannot be computed."""
+    from . import breach
+    hb_ft = dam.top_of_dam_ft - bottom_ft
+    try:
+        vw_acft = _run_vw_acft(dam, params)
+        b_m, tf_s, z = breach.froehlich_2008(float(vw_acft) * ACFT, hb_ft * FT, "piping")
+    except (TypeError, ValueError):
+        return None
+    return {"avg_width_ft": b_m / FT, "tf_hr": tf_s / 3600.0, "z": z,
+            "vw_acft": round(float(vw_acft), 2), "curve_warning": ""}
+
+
 def breach_parameter_rows(dam, params, peak_cfs=None):
     """Rows (dicts item, value, units, basis, note) of the HEC-RAS breach editor.
 
@@ -395,7 +437,35 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     if b_bottom is None and avg is not None and z is not None:
         b_bottom = max(0.0, float(avg) - float(z) * hb)
     tf = p.get("formation_time_hr")
-    mode = str(p.get("failure_mode") or "").lower()
+    # 3.16.1 (Nick, 2026-11-06): the HEC-RAS breach defaults to piping, Froehlich (2008)
+    mode_given = bool(p.get("failure_mode"))
+    mode = str(p.get("failure_mode") or "piping").lower()
+    f08 = None
+    # 3.17.10: breach_f2008 defaults to 'fill_missing' (keep a finished MLM / Von Thun /
+    # Froehlich 1995 opening). 'overwrite' still replaces width / side slopes / formation
+    # time with Froehlich (2008) piping.
+    policy = str(p.get("breach_f2008") or F08_FILL).strip().lower()
+    if policy not in F08_POLICIES:
+        raise HecRasError("breach_f2008 must be one of {} (got {!r})".format(
+            ", ".join(F08_POLICIES), policy))
+    overwrite = policy == F08_OVERWRITE
+    if mode == "piping" and (overwrite or b_bottom is None or z is None or tf is None):
+        f08 = froehlich_2008_piping_ft(dam, p, bottom)
+        if f08 is not None:
+            if overwrite:
+                z, avg, tf = f08["z"], f08["avg_width_ft"], f08["tf_hr"]
+                b_bottom = max(0.0, avg - z * hb)
+                src = F08_AUTO
+            else:
+                if z is None:
+                    z = f08["z"]
+                if avg is None:
+                    avg = f08["avg_width_ft"]
+                if b_bottom is None:
+                    b_bottom = max(0.0, avg - z * hb)
+                if tf is None:
+                    tf = f08["tf_hr"]
+                src = (src + "; " if src else "") + F08_AUTO
 
     add("Breach center station", None, "station", BASIS_BLANK,
         "Where the breach sits along the embankment; depends on your HEC-RAS geometry.")
@@ -429,24 +499,31 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     add("Breach progression", "Linear", "", BASIS_ASSUME,
         "The plugin lowers the crest and widens the bottom linearly over the formation time; "
         "HEC-RAS's sine-wave option gives a different hydrograph shape.")
-    if mode:
-        add("Breach mode", mode.capitalize(), "", BASIS_EST,
-            "Froehlich parameters for a {} failure. The plugin routes the opening as a weir "
-            "either way (except with the pipe phase).".format(mode))
+    add("Breach mode", mode.capitalize(), "", BASIS_EST if mode_given else BASIS_ASSUME,
+        ("Froehlich parameters for a {} failure. The plugin routes the opening as a weir "
+         "either way (except with the pipe phase).".format(mode)) if mode_given else
+        "The run gives no failure mode; HEC-RAS piping is the default (Froehlich 2008).")
+    if f08 is not None:
+        add("Froehlich (2008) piping", "auto", "", BASIS_ASSUME,
+            "{}: Vw {} ac-ft, hb {:.2f} ft, K0 1.0, side slope 0.7, average width {} ft, "
+            "formation time {} h; {}.".format(
+                F08_AUTO, _num(f08["vw_acft"]), hb, _num(f08["avg_width_ft"]),
+                _num(f08["tf_hr"]), "replaces the run's values" if overwrite else
+                "filled where the run's method gives none") + (" " + f08["curve_warning"] if f08["curve_warning"]
+                                       else ""))
     if mode == "piping":
+        cd = p.get("pipe_cd")
+        add("Piping coefficient", float(cd) if cd is not None else PIPING_COEF, "",
+            BASIS_ASSUME, "Orifice coefficient used for the pipe phase." if cd is not None
+            else "HEC-RAS piping coefficient (its default, 0.5).")
         if p.get("pipe_initial_dia_ft") is not None:
-            cd = p.get("pipe_cd")
-            add("Piping coefficient", cd, "", BASIS_ASSUME,
-                "Orifice coefficient used for the pipe phase.")
             add("Initial piping elevation", bottom + float(p["pipe_initial_dia_ft"]) / 2.0,
                 "ft", BASIS_ASSUME,
                 "Centre of the starting pipe ({} ft across) resting on the breach bottom."
                 .format(_num(p["pipe_initial_dia_ft"])))
         else:
-            add("Piping coefficient", None, "", BASIS_BLANK,
-                "Only needed in HEC-RAS piping mode (its default is 0.5).")
-            add("Initial piping elevation", None, "ft", BASIS_BLANK,
-                "Only needed in HEC-RAS piping mode.")
+            add("Initial piping elevation", round(bottom + 0.5 * hb, 2), "ft", BASIS_ASSUME,
+                "Half way up the breach (breach bottom + 0.5 x breach height).")
     trig = p.get("breach_trigger")
     if trig == "time":
         add("Breach initiation trigger", "Set time", "", BASIS_USER,
@@ -535,6 +612,8 @@ def load_run(dam_folder, model_folder=MODEL_FOLDER):
     except breach.BreachInputError as e:
         raise HecRasError(str(e))
     params = dict(report["hydrograph"])
+    if report.get("vertical_datum") is not None:
+        params.setdefault("vertical_datum", report["vertical_datum"])  # NAVD88 record
     hy.method = params.get("method", hy.method)
     hy.params = params
     hy.t_ref_s = float(params.get("breach_initiation_hr") or 0.0) * 3600.0
@@ -677,9 +756,10 @@ class Catalog:
 def parse_units(text):
     """'us' for ft / US Customary, 'si' for m / SI Metric, else None."""
     toks = set(re.findall(r"[a-z]+", str(text).lower()))
-    if toks & {"si", "metric", "m", "meter", "meters", "metre", "metres", "ms"}:
+    if toks & {"si", "metric", "m", "meter", "meters", "metre", "metres", "ms", "cms"}:
         return "si"
-    if toks & {"us", "ft", "feet", "foot", "customary", "english", "imperial", "fps", "usft"}:
+    if toks & {"us", "ft", "feet", "foot", "customary", "english", "imperial", "fps", "usft",
+               "cfs"}:
         return "us"
     return None
 
@@ -912,12 +992,36 @@ def _unit_factor(u):
     return 1.0 / FT if u == "si" else 1.0
 
 
+def project_units(wkt):
+    """'us' or 'si' from a projected CRS linear unit, or None when it is not feet or metres.
+
+    Used as units_fallback when a plan HDF records no Units attribute. The CRS the model
+    was built in is the unit HEC-RAS stored, so a State Plane feet plan is not read as
+    metres and a UTM plan is not read as feet."""
+    if not wkt:
+        return None
+    try:
+        from . import gdal_io
+        lin = gdal_io.linear_unit_m(wkt)
+    except Exception:                                    # noqa - no GDAL: the caller must pass units
+        return None
+    if lin is None:
+        return None
+    if abs(lin - 1.0) < 1e-6:
+        return "si"
+    if abs(lin - FT) < 1e-4 or abs(lin - (1200.0 / 3937.0)) < 1e-6:
+        return "us"
+    return None
+
+
 def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01,
-              want_arrival=True):
+              want_arrival=True, units_fallback=None):
     """The maximum results of a 2D flow area as a Mesh (fields depth, wse, velocity,
     arrival in ft, ft, ft/s, hours; time_of_max in hours when the file has it).
 
-    units: None to read them from the file (default US when absent), 'us' or 'si'.
+    units: None to read them from the file, 'us' or 'si' to force one. units_fallback
+    ('us' or 'si') is used only when the file records no units attribute (the model CRS).
+    With neither, a missing attribute raises HecRasError instead of assuming US customary.
     Cells drier than `wet_ft` are NaN in every field. Arrival is the first time the depth
     reaches `arrival_depth_ft` (interpolated between output steps) minus `t0_hr`, from the
     Water Surface time series; without it there is no arrival.
@@ -928,12 +1032,13 @@ def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_
     each grid cell; this per-cell depth stays for cell diagnostics and as its fallback."""
     f, close = _open_hdf(hdf)
     try:
-        return _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival)
+        return _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival,
+                          units_fallback)
     finally:
         close()
 
 
-def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
+def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival, units_fallback=None):
     cat = Catalog(f)
     lay = discover(cat, area)
     notes = list(lay["notes"])
@@ -943,10 +1048,15 @@ def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
         if units in ("us", "si"):
             return units
         u = cat.units_of(item[0])
+        if u is None and units_fallback in ("us", "si"):
+            notes.append("No units attribute found for {}; using the model coordinate system "
+                         "({}).".format(what, "SI" if units_fallback == "si" else "US customary"))
+            return units_fallback
         if u is None:
-            notes.append("No units attribute found for {}; taken as US customary. Pass "
-                         "units='si' if the model was in metric.".format(what))
-            return "us"
+            raise HecRasError("No units attribute found for {} (the dataset, its groups, or "
+                              "the file root). Refusing to assume US customary: an SI model "
+                              "would be published about 3.28 times too shallow. Pass units='us' "
+                              "or units='si'.".format(what))
         return u
 
     wse_raw, t_max_raw = _values(_read(lay["max_wse"][1]))
@@ -1323,7 +1433,7 @@ FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 # 3.10.92: the terrain basis is the default again, with a datum/unit check
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
                   arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
-                  want_arrival=True, reach=0.75, basis=None, fine=None):
+                  want_arrival=True, reach=0.75, basis=None, fine=None, units_fallback=None):
     """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
 
     `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the run's fine terrain
@@ -1375,7 +1485,7 @@ def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
         raise HecRasError("the '{}' depth basis needs the fine terrain".format(basis))
     f, close = _open_hdf(hdf)
     try:
-        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False)
+        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False, units_fallback)
         if to_grid_xy is not None:
             xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
             mesh.x, mesh.y = xy[:, 0], xy[:, 1]

@@ -31,6 +31,7 @@
 
 The GIS parts (reading the DEM, writing GeoTIFFs) come in through the
 `terrain` and `writer` objects so this module runs without QGIS."""
+import copy
 import datetime
 import hashlib
 import json
@@ -40,6 +41,7 @@ import time
 
 import numpy as np
 
+from . import model_terrain                 # 3.17.7
 from . import breach as brmod
 from . import conditioning as cond
 from . import flood as floodmod
@@ -92,7 +94,14 @@ INCREMENT_NAMES = {"depth": "Incremental Depth (Max).tif", "wse": "Incremental W
 QA_NAMES = {"depth": "hmax_ft.tif", "velocity": "vmax_fps.tif", "arrival": "arr_hr.tif",
             "wse": "wsemax_ft.tif"}
 WET_M = 0.003          # a cell counts as flooded above 0.01 ft
+OUTFLOW_WARN_PCT = 5.0     # H08: warn when at least this share of the breach volume leaves the model
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
+# Grok audit 3.1 (3.16.8, signed off by Nick 2026-11-07; the ND Runner's 3.26.5 rule): the
+# domain grows on the H08 outflow too - once RunSettings.outflow_extend_pct (default
+# OUTFLOW_WARN_PCT) of the breach volume has left, an edge carrying at least
+# OUTFLOW_EDGE_SHARE of the leaving water (terrain.edge_flux_shares) moves out, even under
+# the edge tolerance
+OUTFLOW_EDGE_SHARE = 0.10
 STATE_FILE = "state.json"
 # 3.15.0 (ND Runner 3.27.7 / 3.28.0): a coarse model cell over a wide, shallow flood over-spreads
 # on flat terrain, because averaging fine terrain onto a big cell lowers road embankments and
@@ -139,6 +148,10 @@ class RunSettings:
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
+        # Grok audit 3.1 (3.16.8): once this % of the breach volume has left the model, the
+        # edges it leaves through also move out, however shallow (0 = off, the depth rule
+        # alone as before)
+        self.outflow_extend_pct = OUTFLOW_WARN_PCT
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
         self.expand_step_mi = 3.0
@@ -299,12 +312,33 @@ class RunSettings:
         # v3.4.0: LISFLOOD-FP floodplain solver keyword ("acceleration" everywhere by default;
         # "fv1" is what the near-dam refine uses for its fine run)
         self.lisflood_solver = lfmod.SOLVER_ACC
+        # 3.16.0: the main run's solver is a choice - ACC (default), FV2 or MWDG2. The
+        # NDBREACH_LISFLOOD_SOLVER environment variable sets the default for every run; the
+        # tools' Solver parameter and the CLI's model.lisflood_solver win over it. FV2 / MWDG2
+        # run with LISFLOOD-FP's slope limiter (limitslopes) unless lisflood_limit_slopes is off.
+        try:
+            self.lisflood_solver = lfmod.solver_from_env(lfmod.SOLVER_ACC)
+        except lfmod.ModelError as e:
+            self.lisflood_solver = lfmod.SOLVER_ACC   # run_dam refuses (lisflood_solver_error)
+            self.lisflood_solver_error = str(e)
+        self.lisflood_limit_slopes = True
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
         # never changed.
         self.lisflood_stability_retry = os.environ.get(
             "NDBREACH_STABILITY_RETRY", "1").strip() not in ("0", "false", "no", "off")
+        # Audit P2 (2026-11-07): wall-clock limits. max_wall_s is the longest one LISFLOOD-FP
+        # run may take (0 = automatic: lfmod.WALL_ESTIMATE_FACTOR x the run-time estimate when
+        # lisflood_rate - this computer's calibrate() speed - is known, else 24 h); on expiry the
+        # child is killed and the run stops with ModelError. max_total_wall_s is the budget of
+        # all the LISFLOOD-FP passes of the domain-growth loop together (0 = automatic:
+        # max_iterations x the per-run limit): when the next pass would start past it, the
+        # loop stops with a plain message instead of growing the domain again. Neither changes a
+        # run that finishes, so both stay out of the run key.
+        self.max_wall_s = _env_number("LISFLOOD_MAX_WALL_S", 0.0) or 0.0
+        self.max_total_wall_s = _env_number("LISFLOOD_MAX_TOTAL_WALL_S", 0.0) or 0.0
+        self.lisflood_rate = None
         # v3.4.0: near-dam refine (refine.py): when a receptor lies within refine_dist_mi of
         # the breach and the final rasters come from the ACC run, re-run that stretch on a
         # fine FV1 grid (refine_cell_m; 0 = half the main cell) and merge it in. Off by
@@ -425,13 +459,66 @@ class RunSettings:
                 if v in (None, ""):
                     continue             # v3.10.27: not set - the report stays as before
                 d[k] = v if isinstance(v, str) else "polygons ({})".format(len(v))
+            elif k in _WALL_KEYS and not v:
+                continue                 # audit P2: automatic - the report stays as before
             else:
                 d[k] = v
         return d
 
 
+# audit P2: the wall-clock limits and the measured speed never change a run that finishes
+_WALL_KEYS = ("max_wall_s", "max_total_wall_s", "lisflood_rate")
+
+
 _CLASS_STOP_KEYS = ("class_stop", "class_stop_threshold_ft", "class_stop_confirm",
                     "class_stop_station_mi", "class_stop_search_ft")
+
+
+_SOLVER_CHECKED = {}
+
+
+def _check_solver(st, model_dir, log=None):
+    """3.16.0: the main run's solver must be one that writes the maximum velocity and honours
+    the arrival-depth patch (inittm_depth): ACC, FV2 or MWDG2 (Nick, 2026-11-06). A bad name in
+    NDBREACH_LISFLOOD_SOLVER, a solver other than ACC on the built-in engine, or a LISFLOOD-FP
+    build that does not give FV2 / MWDG2 a velocity and a patched arrival time stops the run
+    here - it never falls back to another solver. FV2 / MWDG2 are tried once per executable on
+    the 20-minute synthetic channel (lfmod.check_lisflood) before the first real run."""
+    err = getattr(st, "lisflood_solver_error", "")
+    if err:
+        raise brmod.BreachInputError(err)
+    solver = getattr(st, "lisflood_solver", lfmod.SOLVER_ACC)
+    if solver == lfmod.SOLVER_FV1 and getattr(st, "near_dam_fv1", False):
+        return              # the near-dam refine's own fine run (refine.fine_settings): it
+        # keeps the ACC velocities and arrival times, so FV1's missing ones are not needed
+    if solver not in lfmod.MAIN_SOLVERS:
+        raise brmod.BreachInputError(
+            "LISFLOOD-FP solver '{}' cannot be used for the main run - choose ACC, FV2 or "
+            "MWDG2".format(solver))
+    if solver == lfmod.SOLVER_ACC:
+        return
+    name = lfmod.SOLVER_SHORT.get(solver, solver)
+    if lfmod.is_builtin(st.lisflood_exe):
+        raise brmod.BreachInputError(
+            "The built-in engine runs only ACC; {} needs LISFLOOD-FP. Choose ACC or set the "
+            "LISFLOOD-FP executable.".format(name))
+    key = (os.path.abspath(str(st.lisflood_exe or "")), solver)
+    chk = _SOLVER_CHECKED.get(key)
+    if chk is None:
+        if log:
+            log("Checking that this LISFLOOD-FP runs {} with velocity and the arrival-depth "
+                "patch...".format(name))
+        chk = lfmod.check_lisflood(st.lisflood_exe,
+                                   os.path.join(model_dir, "solver_check_" + solver), solver)
+        if chk.get("ok") and chk.get("patched") and chk.get("velocity"):
+            _SOLVER_CHECKED[key] = chk
+    if not (chk.get("ok") and chk.get("patched") and chk.get("velocity")):
+        why = ("it did not run: " + chk.get("message", "")) if not chk.get("ok") else \
+            "it wrote no maximum velocity" if not chk.get("velocity") else \
+            "the arrival-depth patch (inittm_depth) is not active in this build"
+        raise brmod.BreachInputError(
+            "LISFLOOD-FP {} cannot be used: {}. Choose ACC, or use a LISFLOOD-FP build with the "
+            "arrival-depth patch (scripts/build_lisflood_macos.sh).".format(name, why))
 
 
 def key_settings(st):
@@ -445,6 +532,7 @@ def key_settings(st):
                                                             "hecras_depth_basis",
                                                             "water_mask",
                                                             "anuga_dt_diag")}
+    d.pop("near_dam_fv1", None)
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -452,8 +540,13 @@ def key_settings(st):
     if not getattr(st, "refine_near", False):
         for k in _REFINE_KEYS:
             d.pop(k, None)
+    d.pop("lisflood_solver_error", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
+    # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
+    if getattr(st, "lisflood_limit_slopes", True) or \
+            getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) not in lfmod.LIMIT_SLOPES_SOLVERS:
+        d.pop("lisflood_limit_slopes", None)
     # 3.15.1: the stability re-run never changes a run that balances, so it stays out of the key
     # while on (a 3.15.0 checkpoint resumes)
     if getattr(st, "lisflood_stability_retry", True):
@@ -462,7 +555,7 @@ def key_settings(st):
     # function and the data folder only say where the same 1 m ground comes from. The grid
     # refine settings never change one run (the refined runs carry their own cell size).
     for k in ("crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
-              "grid_refine", "grid_refine_cell_m", "grid_check_cell_m"):
+              "grid_refine", "grid_refine_cell_m", "grid_check_cell_m", *_WALL_KEYS):
         d.pop(k, None)
     if not getattr(st, "crest_burn", False):
         for k in ("crest_burn", "crest_burn_dem", "crest_burn_lines"):
@@ -722,6 +815,8 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         return np.asarray(getattr(obj, "data", obj), float)
 
     depth, vel, arr = grid(env.depth), grid(getattr(env, "velocity", None)), grid(getattr(env, "arrival", None))
+    if not (getattr(env, "stats", {}) or {}).get("velocity_written", True):
+        vel = None          # M21: the build wrote no .maxVc - emit no zeros-velocity pass product
     names = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif", "arrival": "Arrival Time.tif"}
     show = {}
     if depth is not None:
@@ -898,6 +993,30 @@ def max_extent_warning(max_extent_mi, over):
             "leaving through {}; results (extent, depths, consequences) are cut off there and the "
             "hazard may be understated. Raise 'Largest domain side (mi)' (the default was 60 mi "
             "before 2026-10) and re-run.".format(float(max_extent_mi or 0), ", ".join(over)))
+
+
+# The domain-growth loop stops for one of two caps while the flood is still leaving the model.
+# These name the two cap conditions so the loop and the tests read them the same way (a shallow
+# sheet on flat terrain - common on the ND plains - never self-terminates, so the cap, not the
+# flood, bounds the extent; the run report then carries cut_off + extent_is_minimum below).
+def hit_run_cap(it, max_iterations, over):
+    """The loop has used its last allowed domain run (max_iterations) and the flood is still
+    leaving (`over` is non-empty). A clock/duration extension is not counted as a run."""
+    return bool(over) and it == int(max_iterations)
+
+
+def hit_extent_cap(next_w_m, next_h_m, max_extent_m, over):
+    """The next domain would exceed the largest-domain cap (max_extent, in metres) and the flood
+    is still leaving."""
+    return bool(over) and (next_w_m > max_extent_m or next_h_m > max_extent_m)
+
+
+def extent_is_minimum(outflow_pct):
+    """True when OUTFLOW_WARN_PCT% or more of the breach volume is still leaving the model when
+    the run stops: the modelled flood area and the downstream consequences are then MINIMUMS, not
+    the full flood. Reported as report['extent_is_minimum'] beside report['cut_off'] so a reader
+    (or Grok Bot's re-baseline) keys off one field instead of parsing warnings."""
+    return outflow_pct is not None and outflow_pct >= OUTFLOW_WARN_PCT
 
 
 MIDCREST_FROM = "DEM at mid-crest (highest point across the dam line's midpoint, +-25 m)"
@@ -1163,10 +1282,10 @@ def _write_refine_entry(res, entry):
         return
     rep["grid_refine"] = entry
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
-    except OSError:
-        pass
+        _write_json(res.report_json, rep)
+    except Exception as e:                       # noqa: BLE001 - L06: visible, not swallowed
+        res.warnings = list(res.warnings or []) + [
+            "grid-refine entry not written to {}: {}".format(res.report_json, e)]
 
 
 def _amend_report(res, entry, texts):
@@ -1186,14 +1305,25 @@ def _amend_report(res, entry, texts):
     rep["warnings"] = list(rep.get("warnings") or []) + texts
     if res.summary is not None:
         rep["summary"] = res.summary
+    # L06: the JSON is the machine-readable record and does not depend on render_report, so write
+    # it first and on its own - a render_report failure must never block it (the pre-L06 code
+    # wrote the JSON, then rendered the markdown). Write atomically; surface a named warning
+    # instead of swallowing so a lost on-disk record does not pass as a clean run.
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
-        if getattr(res, "report_md", ""):
-            with open(res.report_md, "w", encoding="utf-8") as f:
-                f.write(render_report(rep))
-    except Exception:                                              # noqa - extras only
-        pass
+        _write_json(res.report_json, rep)
+    except Exception as e:                                         # noqa: BLE001 - extras only
+        res.warnings = list(res.warnings or []) + [
+            "run report json not updated ({}): {}".format(res.report_json, e)]
+    # The markdown is rendered BEFORE its file is opened (so a render_report KeyError - it indexes
+    # rep["summary"]/["hydrograph"] directly - cannot truncate run_report.md to zero length) and
+    # written atomically; a render failure leaves the previous markdown intact and is reported.
+    if getattr(res, "report_md", ""):
+        try:
+            md = render_report(rep)
+            _write_text(res.report_md, md)
+        except Exception as e:                                     # noqa: BLE001 - extras only
+            res.warnings = list(res.warnings or []) + [
+                "run report markdown not updated ({}): {}".format(res.report_md, e)]
 
 
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
@@ -1215,6 +1345,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     model_dir = os.path.join(out_folder, MODEL_FOLDER)
     os.makedirs(model_dir, exist_ok=True)
     warnings = []
+    _check_solver(st, model_dir, log)                                  # 3.16.0
     flood_mode = st.scenario == SCENARIO_FLOOD
     report = {"tool": "ND Dam Breach Runner " + VERSION,
               "run_started": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -1769,6 +1900,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             return {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
         return {}
 
+    # audit P2: the wall-clock record of every LISFLOOD-FP pass (report["lisflood_wall"]) and the
+    # one warning when a pass's time step collapsed (the run itself goes on)
+    wall = report.setdefault("lisflood_wall", {"runs": [], "budget_s": None})
+    wall_t0 = time.time()
+
+    def _note_wall(lst, what):
+        ent = {"run": what, "limit_s": getattr(lst, "wall_limit_used", None)}
+        dc = getattr(lst, "dt_collapsed", None)
+        if dc:
+            ent["dt_collapsed_at_hr"] = round(dc[0] / 3600.0, 3)
+            ent["dt_collapsed_s"] = dc[1]
+            msg = ("LISFLOOD-FP's time step collapsed to {:.3g} s at {:.2f} h of {} (a sign the "
+                   "solver went unstable); check the volume error and the depth pattern near "
+                   "the deepest water.".format(dc[1], dc[0] / 3600.0, what))
+            if msg not in warnings:
+                warnings.append(msg)
+        wall["runs"].append(ent)
+
+    def wall_budget_s():
+        """The budget (s) of all LISFLOOD-FP passes of the growth loop together: the setting,
+        else max_iterations x the per-run limit the first pass ran under (the estimate-scaled
+        limit when this computer's speed is known, else 24 h)."""
+        v = float(getattr(st, "max_total_wall_s", 0.0) or 0.0)
+        if v > 0:
+            return v
+        first = (wall["runs"][0].get("limit_s") if wall["runs"] else None) or \
+            lfmod.wall_limit_s(getattr(st, "max_wall_s", 0.0))
+        return float(st.max_iterations) * float(first)
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
@@ -1783,7 +1943,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 extra_sources=extra_sources(sim_s),
                 solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
                 closed_edges=closed_edges(),
-                allow_unpatched=getattr(st, "allow_unpatched", False), **stable_kw())
+                allow_unpatched=getattr(st, "allow_unpatched", False),
+                limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                max_wall_s=getattr(st, "max_wall_s", 0.0) or 0.0,          # audit P2
+                rate=getattr(st, "lisflood_rate", None) or lfmod.known_rate(st.lisflood_exe),
+                **stable_kw())
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
@@ -1808,7 +1972,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if not stability["on"] and os.path.exists(marker):
             os.remove(marker)
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
+        if model_terrain.enabled(st):            # 3.17.7: the grid this pass runs on
+            model_terrain.write_lisflood_terrain(dem, wd, log)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
+        _note_wall(lst, "lisflood" + tag)
         if getattr(lst, "unpatched_used", False):
             if lfmod.PATCH_MISSING_WARNING not in warnings:
                 warnings.append(lfmod.PATCH_MISSING_WARNING)
@@ -1825,6 +1992,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             lst = settings()
             par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
             runtime += lfmod.run(wd, par, lst, prog, cancel, log)
+            _note_wall(lst, "lisflood" + tag + " (stable re-run)")
             env = lfmod.read_results(wd, dem, lst, hyd)
             err2 = env.stats.get("max_volume_error_pct")
             ev = {"run": "lisflood" + tag, "error_pct": err, "stable_error_pct": err2,
@@ -1848,7 +2016,16 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                      "theta": lfmod.STABLE_THETA,
                                                      "cfl": lfmod.STABLE_CFL,
                                                      "events": stability["events"]})
+        # 3.16.0: a main-run solver other than ACC must write the maximum velocity (checked
+        # before the run by _check_solver; this catches a build that stops doing so)
+        if lst.solver != lfmod.SOLVER_ACC and not getattr(st, "near_dam_fv1", False) and \
+                not env.stats.get("velocity_written", True):
+            raise lfmod.ModelError(
+                "LISFLOOD-FP's {} run wrote no maximum velocity (.maxVc), which the hazard "
+                "classification needs. Use ACC.".format(
+                    lfmod.SOLVER_SHORT.get(lst.solver, lst.solver)))
         return env, dem, init, runtime, wd, lst
+
 
     def load_lisflood(tag, hyd, bnds, sim_s):
         """Results of a finished run (resume)."""
@@ -1861,9 +2038,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      initial_depth=init, gauges=gl,
                                      extra_sources=extra_sources(sim_s),
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
-                                     closed_edges=closed_edges(), **stable_kw())
-        return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
-            dem, init
+                                     closed_edges=closed_edges(),
+                                     limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                                     **stable_kw())
+        env = lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd)
+
+        return env, dem, init
 
     # M5: a run on the built-in engine is a SCREENING approximation, not LISFLOOD-FP. Say so
     # prominently before anything runs, so the numbers are never mistaken for LISFLOOD-FP's.
@@ -1882,7 +2062,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     lf_env, dem, init_grid = None, None, None
     lst, wd = None, None
     lf_span = (5.0, 60.0 if not has_base else 45.0)
-    start_it = len(iterations) + 1
+    start_it = state.get("next_it")        # H09: the domain-run number to resume at; the pass
+    if start_it is None:                    # count no longer tracks it (clock/refill passes append
+        start_it = len(iterations) + 1      # an entry without advancing `it`). Old checkpoints: fall back.
     saved_warn = state.get("warnings")
     if state.resumed and saved_warn:
         warnings += [w for w in saved_warn if w not in warnings]
@@ -1926,6 +2108,24 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             depth_eff = np.clip(depth_eff - np.nan_to_num(init_grid.data), 0.0, None)
         edges = terrain.edge_depths(depth_eff, dem.valid())
         over = [e for e in terrain.EDGES if edges[e] > tol_m]
+        # Grok audit 3.1 (3.16.8; ND 3.26.5): the depth rule alone let a wide sheet under the
+        # tolerance carry 36-40% of the breach volume out of the model at Absaraka (DWR-2801)
+        # with the domain never growing there. When outflow_extend_pct or more of the volume
+        # has left, every edge that carries a real share of it (and is wet past the arrival
+        # depth) moves out too.
+        leak = []
+        out_now = lf_env.stats.get("boundary_outflow_pct")
+        ext_pct = getattr(st, "outflow_extend_pct", 0.0) or 0.0
+        if plan is None and ext_pct > 0 and out_now is not None and out_now >= ext_pct:
+            shares = terrain.edge_flux_shares(depth_eff, dem.valid())
+            leak = [e for e in terrain.EDGES if e not in over and edges[e] > arrival_m
+                    and shares[e] >= OUTFLOW_EDGE_SHARE]
+            if leak:
+                log("{:.0f}% of the breach volume left the model; the water leaves through {} "
+                    "under {:g} ft, so {} moves out too.".format(
+                        out_now, ", ".join(leak), st.edge_tolerance_ft,
+                        "that edge" if len(leak) == 1 else "those edges"))
+                over = over + leak
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
         still_moving = arr_max > 0.9 * sim_time / 3600.0
@@ -1939,7 +2139,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                "cells": int(dem.data.size), "dem_coverage": round(cover, 4),
                "sim_time_hr": round(sim_time / 3600.0, 2), "runtime_min": round(runtime / 60, 1),
                "edge_max_depth_ft": {k: round(v / FT, 2) for k, v in edges.items()},
-               "edges_over_tolerance": over, "latest_arrival_hr": round(arr_max, 2),
+               "edges_over_tolerance": over, "edges_over_outflow": leak,
+               "latest_arrival_hr": round(arr_max, 2),
                "stats": lf_env.stats}
         iterations.append(rec)
         warnings += [n for n in lf_env.notes if n not in warnings]
@@ -1985,7 +2186,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         if msg not in warnings:
                             warnings.append(msg)
                         state.save(iterations=iterations, next_bounds=list(bounds),
-                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False)
+                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False,
+                                   next_it=it)
                         continue
                     except Exception as ex:
                         hole_held = True
@@ -2071,7 +2273,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if still_moving and st.sim_time_hr and not over:
             # lengthen up to the cap instead of stopping on the first clock
             pass
-        if it == st.max_iterations and over:
+        if hit_run_cap(it, st.max_iterations, over):
             stop_reason = "domain-run limit"
             warnings.append(
                 "Stopped after {} domain runs with the flood leaving through {} deeper than "
@@ -2080,9 +2282,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             break
         new_bounds = terrain.expand_bounds(bounds, over, step)
         w, h = terrain.bounds_size(new_bounds)
-        if over and (w > max_extent or h > max_extent):
+        if hit_extent_cap(w, h, max_extent, over):
             stop_reason = "maximum extent ({:.0f} mi)".format(st.max_extent_mi)
             warnings.append(max_extent_warning(st.max_extent_mi, over))
+            break
+        # audit P2: the cumulative wall-clock budget of the growth loop. Every pass so far ran
+        # under its own limit; when their wall time together has used the budget, the next
+        # (larger or longer) pass is not started: this pass's results stand, labelled. Checked
+        # before the domain or the clock is changed, so the checkpoint names the domain run.
+        spent = time.time() - wall_t0
+        budget = wall_budget_s()
+        wall["budget_s"] = budget
+        wall["spent_s"] = round(spent, 1)
+        if spent >= budget:
+            stop_reason = "wall-clock budget"
+            warnings.append(
+                "Stopped after {} LISFLOOD-FP pass(es) and {:.1f} h of wall time, the budget "
+                "for the domain-growth loop ({:.1f} h = {}), with the flood {}. The results are "
+                "this pass's; the domain and clock were not extended again. Raise "
+                "'LISFLOOD-FP: wall-clock budget for all runs' (LISFLOOD_MAX_TOTAL_WALL_S; 0 = "
+                "automatic, Most LISFLOOD-FP runs x the per-run limit) to let it go on.".format(
+                    len(iterations), spent / 3600.0, budget / 3600.0,
+                    "the setting" if getattr(st, "max_total_wall_s", 0.0) else
+                    "{} runs x the per-run limit".format(st.max_iterations),
+                    "leaving through {} deeper than {:.1f} ft".format(
+                        ", ".join(over), st.edge_tolerance_ft) if over
+                    else "still moving inside the domain"))
+            log(warnings[-1])
             break
         if over:
             log("Flood leaves through {} deeper than {:.1f} ft; extending.".format(
@@ -2109,12 +2335,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             log("Flood still moving inside the domain; extending the clock to {:.1f} h "
                 "without using a domain run.".format(sim_time / 3600.0))
             state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                       warnings=warnings, lisflood_done=False)
+                       warnings=warnings, lisflood_done=False, next_it=it)
             continue
         it += 1
         state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                   warnings=warnings, lisflood_done=False)
+                   warnings=warnings, lisflood_done=False, next_it=it)
         continue
+    if lf_env is None:
+        # H09: the while body never ran, so no result was produced - a desynced checkpoint
+        # (iterations recorded beyond max_iterations, next_it absent on an old resume). Fail
+        # loudly instead of writing lisflood_done=True with a never-simulated clock (which a
+        # later resume would load at the wrong footprint) and then hitting lf_env.gauges.
+        raise lfmod.ModelError(
+            "the checkpoint in {} is out of step with the run plan; delete {} "
+            "and run again".format(model_dir, STATE_FILE))
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
@@ -2123,6 +2357,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             "reason": stop_reason,
             "detail": next((w for w in warnings if "still" in w.lower() or "cap" in w.lower() or "limit" in w.lower() or "hole" in w.lower()), stop_reason)
         }
+    # H08: a wide shallow sheet can carry a large share of the breach volume off the model
+    # through its edges while every edge stays under the depth tolerance, so the modelled flood
+    # area and the downstream consequences are minimums. Surface the boundary outflow (Qout) and
+    # warn. (Grok audit 3.1, 3.16.8: the domain-extension rule that grows the model to catch it
+    # is in the loop above - outflow_extend_pct; this names what still left at the end.)
+    out_pct = lf_env.stats.get("boundary_outflow_pct")
+    out_acft = lf_env.stats.get("boundary_outflow_acft")
+    if out_pct is not None:
+        report["boundary_outflow_pct"] = out_pct
+        report["boundary_outflow_acft"] = out_acft
+        # First-class flag: the extent is a minimum when a significant share is still leaving at
+        # the stop. Tie it to the cut-off (if the loop halted at a run/extent/wall-clock cap) so
+        # a cap-truncated flood on flat terrain can't be read as the final answer.
+        report["extent_is_minimum"] = extent_is_minimum(out_pct)
+        if extent_is_minimum(out_pct) and report.get("cut_off"):
+            report["cut_off"]["outflow_pct_at_stop"] = out_pct
+        if out_pct >= OUTFLOW_WARN_PCT:
+            msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
+                   "edges when the run stopped{}, so the flood area and the downstream "
+                   "consequences are minimums. Extend the model downstream (more runs, a "
+                   "larger step or a larger first domain), or confirm nothing that would "
+                   "change the classification lies beyond it."
+                   .format(out_pct, out_acft or 0.0,
+                           " ({})".format(report["cut_off"]["reason"])
+                           if report.get("cut_off") else ""))
+            if msg not in warnings:
+                warnings.append(msg)
     snap_npz = os.path.join(model_dir, "depth_snapshots.npz")
     if frames > 0 and lst is not None and lst.snapshot_s:
         try:
@@ -2149,9 +2410,21 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     def write_qa(tag, env, model, init):
         fa = _final_arrays(env, arrival_m, t_ref_hr, init)
+        # M21: a build that wrote no .maxVc must not leave a zeros velocity QA raster in the model
+        # folder either - the Hazard plugin autodetects _breach_model/*_vmax_fps.tif as the velocity
+        # raster, which would satisfy its pre-flight and defeat the defence. Skip (and drop any
+        # stale copy of) the velocity QA raster for such an env; depth / arrival / wse are kept.
+        env_no_vel = not (getattr(env, "stats", {}) or {}).get("velocity_written", True)
         res.qa.setdefault(model, {})
         for kind, arr in fa.items():
             p = os.path.join(model_dir, "{}{}_{}".format(model, tag, QA_NAMES[kind]))
+            if kind == "velocity" and env_no_vel:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                res.qa[model].pop("baseline_velocity" if tag else "velocity", None)
+                continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.qa[model]["baseline_" + kind if tag else kind] = p
         return fa
@@ -2302,6 +2575,23 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     "never changed"}
     # --- v3.4.0: near-dam refine on a fine FV1 grid -----------------------------------------
     fin = final_arrays
+    # M21 (product-write defence, signed off 2026-11-10): a LISFLOOD-FP build that wrote no
+    # maximum-velocity raster (.maxVc) leaves env.velocity an all-zeros grid (read_results), which
+    # would be published as velocity 0 and class velocity-driven shallow-fast cells LOW off the
+    # v=0 ACER TM-11 curves. Instead omit the velocity product and report the maximum velocity as
+    # unavailable (None), so the downstream Hazard pre-flight refuses (a loud stop beats a silent
+    # under-classification). No shipped engine triggers it: the built-in engine always writes
+    # .maxVc and ANUGA always has velocity, and the flag defaults True; only a non-conforming
+    # user-supplied LISFLOOD-FP binary does. The mid-run hard-stop is deliberately NOT added.
+    no_velocity = not getattr(final_env, "stats", {}).get("velocity_written", True)
+    if no_velocity:
+        vmsg = ("The flood model produced no maximum-velocity raster (.maxVc), so the velocity "
+                "product is omitted and the maximum velocity is reported as unavailable; the "
+                "hazard classification will require a velocity raster or the depth-only (1D) "
+                "criterion.")
+        if vmsg not in warnings:
+            warnings.append(vmsg)
+            log(vmsg)
     if getattr(st, "refine_near", False):
         from . import refine as refmod
         decision = refmod.decide(st, final_model, st.receptors, st.structures, dam_xy)
@@ -2360,6 +2650,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     pass
         for kind, arr in fin.items():
             p = os.path.join(out_folder, FINAL_NAMES[kind])
+            if kind == "velocity" and no_velocity:   # M21: omit the velocity product (and drop
+                for stale in (p, os.path.join(out_folder, "Velocity Polygons.geojson")):
+                    try:                              # any stale pass / prior copy) so the Hazard
+                        os.remove(stale)              # pre-flight refuses a zeros velocity grid
+                    except OSError:
+                        pass
+                res.final.pop("velocity", None)
+                continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
     incr = None
@@ -2403,13 +2701,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         except Exception as e:
             warnings.append("Could not render the animation: {}: {}".format(type(e).__name__, e))
     if st.keep_arrays:
-        res.final_si = fin
+        # M21: when the build wrote no .maxVc, store velocity as all-NaN (not the zeros grid) so the
+        # keep_arrays consumers (sensitivity preview, cascade, probabilistic, nested) treat it as
+        # absent - the ND 5.2 preview then passes velocity None into nd_hazard and fails closed
+        # rather than classifying off the v=0 ACER TM-11 curves.
+        res.final_si = ({**fin, "velocity": np.full_like(fin["velocity"], np.nan)}
+                        if no_velocity else fin)
     d = fin["depth"]
     cell_ac = dem.dx ** 2 / 4046.8564224
 
     # --- receptors -----------------------------------------------------------------------
     if st.receptors is not None and len(st.receptors):
-        rsum, rrows = impmod.summarize(st.receptors, dem, fin, arrival_m)
+        rsum, rrows = impmod.summarize(st.receptors, dem,
+                                       ({**fin, "velocity": None} if no_velocity else fin),
+                                       arrival_m)
         report["receptors"] = rsum
         res.receptor_csv = os.path.join(model_dir, "receptors_flooded.csv")
         impmod.write_rows(res.receptor_csv, rrows)
@@ -2425,13 +2730,16 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     summary = {
         "dam_id": dam.dam_id, "final_model": final_model,
+        "lisflood_solver": lfmod.SOLVER_SHORT.get(getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                                  getattr(st, "lisflood_solver", "")),
         "peak_breach_cfs": round(hy.peak_cfs, 0), "breach_method": hy.method,
         "storage_at_failure_acft": hy.params.get("storage_at_failure_acft"),
         "flooded_acres": round(float(np.isfinite(d).sum()) * cell_ac, 1),
         "flooded_acres_over_arrival_depth": round(float((d >= arrival_m).sum()) * cell_ac, 1),
         "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
-        "max_velocity_fps": (round(float(np.nanmax(fin["velocity"])) / FT, 2)
-                             if np.isfinite(fin["velocity"]).any() else 0),
+        "max_velocity_fps": (None if no_velocity else
+                             (round(float(np.nanmax(fin["velocity"])) / FT, 2)
+                              if np.isfinite(fin["velocity"]).any() else 0)),
         "latest_arrival_hr": (round(float(np.nanmax(fin["arrival"])), 2)
                               if np.isfinite(fin["arrival"]).any() else None),
         "lisflood_runs": len(iterations),
@@ -2442,7 +2750,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
-    water_mask = _report_metrics(summary, report, st, dem, fin, cell_ac, arrival_m, out_folder,
+    water_mask = _report_metrics(summary, report, st, dem,
+                                 ({**fin, "velocity": None} if no_velocity else fin),
+                                 cell_ac, arrival_m, out_folder,
                                  getattr(writer, "work_srs", None), warnings, log)
     if report.get("anuga_mesh"):
         summary["anuga_mesher"] = report["anuga_mesh"]["used"]
@@ -2543,8 +2853,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     with open(res.report_md, "w", encoding="utf-8") as f:
         f.write(render_report(report))
@@ -2568,6 +2877,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                  man)
     except Exception as e:      # the manifest is an extra; never lose the run for it
         warnings.append("Could not write the run manifest: {}: {}".format(type(e).__name__, e))
+    if model_terrain.enabled(st):                # 3.17.7: next to the results, for review
+        model_terrain.publish(model_dir, out_folder, log)
     if not st.keep_model_files:
         _clean(model_dir)
     progress(100, "done")
@@ -2598,7 +2909,7 @@ def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None, grid=Non
             "flooded_acres_over_arrival_depth": round(float((d >= arrival_m).sum()) * cell_ac, 1),
             "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
             "max_velocity_fps": (round(float(np.nanmax(v)) / FT, 2) if np.isfinite(v).any()
-                                 else 0),
+                                 else None),   # M21: absent velocity -> None, not a false 0
             "latest_arrival_hr": (round(float(np.nanmax(a)), 2) if np.isfinite(a).any()
                                   else None)})
     if grid is not None:
@@ -2765,8 +3076,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     vec.update(res_ns.vectors)
     report.setdefault("outputs", {})["final"] = dict(paths)
     report["outputs"]["vectors"] = vec
-    with open(rp, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(rp, report)
     with open(os.path.join(model_dir, "run_report.md"), "w", encoding="utf-8") as f:
         f.write(render_report(report))
     try:
@@ -2803,6 +3113,10 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     """What a run would model, without running any flood model: the breach
     hydrograph, the first domain and simulation time. Used for the run-time
     estimate."""
+    # H05: preview is a read-only estimate (run time / plan). Work on a copy so a crest it has to
+    # estimate for the hydrograph is never written back onto the caller's dam - otherwise the real
+    # run skips its own crest estimator and records the pre-flight guess as a surveyed crest.
+    dam = copy.copy(dam)
     warnings = []
     cs = st.cell_size_m
     if out_folder:
@@ -2821,7 +3135,10 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     if getattr(st, "proposed", None) and dam.top_of_dam_ft is None:
         dam.top_of_dam_ft = float(st.proposed["crest_m"]) / FT
     elif dam.top_of_dam_ft is None:
-        dam.top_of_dam_ft = float(np.nanmax(z[sel])) / FT
+        # H05: the suite crest rule (98th percentile of the DEM within 30 m), never the single
+        # highest cell (nanmax) - a nearby hill, road crown or spike reads the crest several feet
+        # high, which can let the dam route the PMF without overtopping and be dropped silently.
+        dam.top_of_dam_ft = float(np.nanpercentile(z[sel & np.isfinite(z)], 98)) / FT
     flood_mode = st.scenario == SCENARIO_FLOOD
     hy_nb = None
     if flood_mode:
@@ -2936,8 +3253,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
     with open(res.report_md, "w", encoding="utf-8") as f:
@@ -3158,14 +3474,15 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     if toe_line is None:
         toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
-    pool_grid = pool = direction = None
+    pool_grid = pool = pmask = direction = None
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
         # v3.12.10: with the shallow (hydro-flattened) pool against the dam line
-        pool = pool_grid.like(terrain.pool_mask(
-            pool_grid, h_m, dam_xy, top_m, getattr(dam, "crest_line_xy", None)).astype(float),
-            nodata=-1.0)
+        # L05: keep the raw mask so downstream_direction can reuse it (one priority_flood, not two)
+        pmask = terrain.pool_mask(pool_grid, h_m, dam_xy, top_m,
+                                  getattr(dam, "crest_line_xy", None))
+        pool = pool_grid.like(pmask.astype(float), nodata=-1.0)
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
@@ -3177,7 +3494,7 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy, top_m=top_m)
+            crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
@@ -3436,6 +3753,9 @@ def render_report(r):
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
+    if r.get("boundary_outflow_pct") is not None:      # Grok audit 3.1 (3.16.8)
+        lines.append("| Breach volume that left the model | {:.0f}% ({:,.0f} ac-ft) |".format(
+            r["boundary_outflow_pct"], r.get("boundary_outflow_acft") or 0.0))
     from . import report_metrics as _rm
     lines += _rm.report_lines(s)        # v3.10.27 (#91); nothing for an older report
     if s.get("receptors_flooded"):
@@ -3537,11 +3857,16 @@ def render_report(r):
         r["inflow_point"]["xy"][0], r["inflow_point"]["xy"][1], r["inflow_point"]["how"]), "",
         "## Downstream extent (ND 5.1.1(f))", "",
         "Each run checks the deepest water on every domain edge. An edge deeper than {} ft "
-        "moves out by {} mi and the model runs again{}.".format(
+        "moves out by {} mi and the model runs again{}.{}".format(
             r["settings"]["edge_tolerance_ft"], r["settings"]["expand_step_mi"],
             "; with receptor layers an edge is left alone when no structure, road or rail lies "
             "in the flood's path within {} mi".format(r["settings"]["impact_look_ahead_mi"])
-            if r["settings"].get("receptors") else ""), "",
+            if r["settings"].get("receptors") else "",
+            # Grok audit 3.1 (3.16.8): the shallow-outflow rule, named in the report
+            " Once {}% of the breach volume has left the model, an edge the water leaves "
+            "through moves out too, however shallow (Grok audit 3.1 rule).".format(
+                r["settings"]["outflow_extend_pct"])
+            if r["settings"].get("outflow_extend_pct") else ""), "",
         "| Pass | Domain run | Size (mi) | Cells | Hours | Edge depth N/S/E/W (ft) | Over "
         "| Minutes |",
         "|---|---|---|---|---|---|---|---|"]
@@ -3690,6 +4015,23 @@ def render_report(r):
     lines += ["", "Units: {}.".format(s["units"]),
               "These rasters are the input for the ND hazard classification; this tool does "
               "not classify the dam.", ""]
+    return _display_units_md("\n".join(lines))
+
+
+def _display_units_md(md):
+    """Core 1.1.0: under the suite's SI display units the report text is converted (pipe tables
+    column by column, quantities in the text) and says so; run_report.json, the rasters and the
+    CSVs keep US units. Under US, or with an older Core, `md` comes back unchanged."""
+    try:
+        from ..damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older than 1.1.0
+        return md
+    if DU.system() != DU.SI:
+        return md
+    out = DU.convert_markdown(md)
+    lines = out.split("\n")
+    lines = [ln for ln in lines if not ln.startswith("Units: ")]
+    lines.insert(min(2, len(lines)), DU.report_note() + "\n")
     return "\n".join(lines)
 
 
@@ -3698,16 +4040,33 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
-def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
+def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
+                     cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
     HEC-RAS 2D), shared by 'Run breach model for one dam', the batch and the ndbreach CLI
     (both used to skip it): runs hecras_engine.run_stage, puts its final rasters in `res.final`, adds its warnings and
     re-makes the run report from the final engine (workflow.adopt_final_engine). Raises
-    HecRasStageError with a message that says the LISFLOOD-FP results are kept."""
+    HecRasStageError with a message that says the LISFLOOD-FP results are kept.
+
+    audit R6 (3.16.7) `unattended`: True from the batch tool, the CLI batch and so the chain
+    (which runs ndbreach:batch): the HEC-RAS wall clock then defaults to
+    hecras_engine.BATCH_TIMEOUT_S (12 h) per compute and per preprocess step when
+    NDBREACH_HECRAS_TIMEOUT_S gives none, so one stuck dam cannot hold the queue for ever. A
+    single interactive run keeps no limit unless the variable is set.
+
+    audit M18 (3.17.7) `cancel` (keyword-only; `engine` stays the 7th positional): a callable
+    (fb.cancel in QGIS, the Ctrl-C flag in the CLI) handed to hecras_engine.run_stage, which
+    polls it during the Wine preprocess and RasUnsteady; a cancel stops the process group and
+    raises lfmod.Cancelled (not a HecRasStageError) for the caller's existing cancel path.
+    No default wall-clock limit is added (the 3.10.48 decision stands)."""
     if engine is None:
         from . import hecras_engine as engine
+    kw = {"cancel": cancel} if cancel is not None else {}
     try:
-        hr = engine.run_stage(folder, res.final, writer, st, log)
+        if unattended:
+            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
+        else:
+            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
@@ -3722,6 +4081,80 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
             "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
             "pass.".format(type(e).__name__, e))
     return hr
+
+
+# the run report of a finished run (REPORT_REL in damjson); written only after every pass is
+# done, so its presence tells a finished run from a cancelled one that left pass rasters
+RUN_REPORT_REL = os.path.join(MODEL_FOLDER, "run_report.json")
+
+
+def _write_json(path, obj):
+    """Replace `path` only after the whole document is on disk.
+
+    A plain open/write leaves a truncated file if the process is killed mid-dump.
+    run_finished() does not treat a truncated run_report.json as a finished run, so
+    a kill during the write must not replace a good report with a half file (and
+    must not leave a half file that an older skip test counted as done)."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, default=_json_default)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:                                   # L06: do not leave a half .tmp behind
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_text(path, text):
+    """Replace `path` with `text` only after the whole document is on disk (as _write_json),
+    so a kill or I/O error mid-write never leaves a truncated or zero-length file in place."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def run_finished(folder):
+    """True only when the dam folder holds a FINISHED run, not merely a pass.
+
+    Every finished LISFLOOD-FP pass writes Depth/Velocity/Arrival (Max).tif under the final
+    names so a cancel does not lose work, but only a run that reaches the end writes the run
+    report. The queue's skip test and the window's results-ready test used to look at the depth
+    raster alone, so a dam cancelled in its second pass was reported "already run" and skipped,
+    with its first-pass rasters left as the result. Requiring the run report fixes that."""
+    if not folder:
+        return False
+    for k in ("depth", "velocity", "arrival"):
+        if not os.path.isfile(os.path.join(folder, FINAL_NAMES[k])):
+            return False
+    rep = os.path.join(folder, RUN_REPORT_REL)
+    if not os.path.isfile(rep):
+        return False
+    try:                                   # a report without run_finished is an interrupted run
+        with open(rep, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("run_finished"))
+    except Exception:                      # truncated or damaged: not finished, re-run
+        return False
 
 
 def hecras_done(folder):

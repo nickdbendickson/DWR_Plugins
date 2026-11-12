@@ -82,6 +82,7 @@ def _load_classification():
     structures.OUT_ECONOMIC = "Economic loss"
     structures.OUT_DRY = "Dry"
     structures.OUT_TRACE = "Trace"
+    structures.OUT_FAILED = "Evaluation failed - verify"     # audit R2
     structures.TYPE_MOBILE = "Mobile home"
     sys.modules["DamSafety_Hazard.structures"] = structures
 

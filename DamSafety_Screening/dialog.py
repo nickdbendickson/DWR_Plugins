@@ -10,6 +10,12 @@ dialog with the parameters filled in.
 The logic (file layout, step state, parameters, preflight, review) is core/workflow.py,
 core/preflight.py and core/review.py; this file only holds the widgets. The window's choices are
 saved with the QGIS project; the shareable ones also go to the settings file.
+
+0.18.19 (usability plan): the window is split by tab, as DamSafety Hazard's is - this file holds
+the shell, the Run tab (Simple, All steps, Inputs), state and the run-in-order chain; the
+Settings window is settings_tab.py, the Review tab review_tab.py, the Results tab
+results_tab.py, and the constants they share dialog_consts.py (re-exported here). The methods
+were moved, not changed.
 """
 import json
 import os
@@ -19,8 +25,8 @@ from qgis.PyQt.QtGui import QDesktopServices
 from .ui_fit import fit_window, wrap_tabs
 from qgis.PyQt.QtWidgets import (
     QDialog, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
-    QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QGroupBox, QFileDialog, QMessageBox,
-    QCheckBox, QRadioButton, QTableWidget, QTableWidgetItem, QInputDialog, QListWidget, QListWidgetItem,
+    QPushButton, QComboBox, QTextEdit, QGroupBox, QFileDialog, QMessageBox,
+    QCheckBox, QRadioButton, QInputDialog, QListWidget, QListWidgetItem,
     QMenu, QToolButton,
 )
 
@@ -28,26 +34,18 @@ from .core import workflow as wf
 from .core import handoff as ho
 from .core import settings_groups as SG
 from .core import preflight as pf
-from .core import review as rv
 from .damsuite import settings as DS
 from .tokens import TOKENS
 from .tool_dialog import exec_tool_dialog
-from .ui_widgets import Collapsible, InfoBanner, StageStrip
+from .ui_widgets import CheckPanel, Collapsible, InfoBanner, StageStrip
 
-TITLE = "DamSafety Screening"
-SCOPE = "NDDamScreening"          # QgsProject entry scope
-ENTRY = "state"
-STATE_TEXT = {"done": "✓ done", "stale": "↻ out of date", "ready": "● ready",
-              "waiting": "… waiting", "optional": "○ optional"}
-DISCLAIMER = ("Screening-level results for prioritising reviews. Every threshold is a screening "
-              "value you choose; the official hazard classification is the North Dakota "
-              "Department of Water Resources'. Nothing here has been checked against the State's "
-              "forms.")
-SCREEN_WHAT = ("DWR dam inventory (steps 1-4)", "Ponds and dugouts from a water layer (step 16)",
-               "Both (steps 1-4 and 16, merged)")
-HELP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "help", "how_it_decides.html")
-PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
-REVIEW_COLUMNS = ("Dam", "Name", "Why", "From", "Decision")
+from .dialog_consts import (  # noqa: F401 - re-exported: tests and the plugin read them here
+    TITLE, SCOPE, ENTRY, STATE_TEXT, DISCLAIMER, SCREEN_WHAT, HELP_FILE, PRESETS_DIR,
+    REVIEW_COLUMNS, HINT_STYLE,
+)
+from .settings_tab import SettingsTabMixin
+from .review_tab import ReviewTabMixin
+from .results_tab import ResultsTabMixin
 
 
 def plugin_version():
@@ -71,7 +69,6 @@ PIPELINE = (("data", "Data", "1", "run"), ("dem", "DEM", "2", "run"),
 PIPE_STAGE = {"done": StageStrip.YES, "ready": StageStrip.ACTIVE, "running": StageStrip.PART,
               "stale": StageStrip.PART, "problem": StageStrip.ERR, "waiting": StageStrip.NO}
 STEP_STATE_W, STEP_BTN_W = 110, 270
-HINT_STYLE = "color: {};".format(TOKENS["error"])
 # docs/gui-grammar.md: the primary button keeps Qt's look; bold says it is the main action
 PRIMARY_STYLE = "QPushButton { font-weight: bold; padding: 6px 12px; }"
 
@@ -130,11 +127,16 @@ class QgisEnv(pf.Env):
         return [tuple(f[x] if x in names else None for x in fields) for f in lyr.getFeatures()]
 
 
-class NDDamScreeningDialog(QDialog):
+class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTabMixin):
     """The popup window. `iface` is optional (used to open the ND Dam Hazard window and the map)."""
 
     def __init__(self, parent=None, iface=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.iface = iface
         self._loading = True
         self.setWindowTitle(window_title())
@@ -185,7 +187,6 @@ class NDDamScreeningDialog(QDialog):
             self.inventory_county.addItem(name, name)
         self.inventory_county.setToolTip("Only this county is screened. All counties keeps every county.")
         self.inventory_county.currentIndexChanged.connect(self._changed)
-        self.inventory_county.currentIndexChanged.connect(lambda _i: self._sync_dem_county())
         grid.addWidget(self.inventory_county, 3, 1)
         grid.setColumnStretch(1, 1)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -198,18 +199,6 @@ class NDDamScreeningDialog(QDialog):
         box.setLayout(grid)
         return box
 
-
-    def _sync_dem_county(self):
-        box = getattr(self, "dem_county", None)
-        src = getattr(self, "inventory_county", None)
-        if box is None or src is None:
-            return
-        name = src.currentData() or ""
-        if not name:
-            return
-        idx = box.findText(name)
-        if idx >= 0:
-            box.setCurrentIndex(idx)
 
     def _build(self):
         """0.17.23 shell: header + banner, Workspace row, pipeline strip, Run / Review / Results
@@ -314,12 +303,22 @@ class NDDamScreeningDialog(QDialog):
         """The primary action at the bottom right, beside its siblings (docs/gui-grammar.md);
         shown on the Run tab, where its inputs are."""
         self.action_area = QWidget()
-        bar = QHBoxLayout(self.action_area)
-        bar.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self.action_area)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        # 0.18.19 (docs/gui-grammar.md "Checks: CheckPanel, never a message box"): the check
+        # list and the "Not ready" / "nothing to run" refusals of Screen this county are the
+        # shared panel above the action bar; a red result blocks the primary button
+        self.check_panel = CheckPanel(self.preflight_btn, self.run_all_btn, action="screening")
+        self.check_panel.errors_fixed.connect(lambda _ok: self.refresh())
+        outer.addWidget(self.check_panel)
+        bar = QHBoxLayout()
         bar.addWidget(self.next_hint, 1)
+        bar.addWidget(self.preflight_btn)
         bar.addWidget(self.one_dam_btn)
         bar.addWidget(self.stop_btn)
         bar.addWidget(self.run_all_btn)
+        outer.addLayout(bar)
         return self.action_area
 
     def _on_tab_changed(self, index):
@@ -387,6 +386,12 @@ class NDDamScreeningDialog(QDialog):
         overrides on the right."""
         w = QWidget()
         row = QHBoxLayout()
+        # GUI lint 2026-11-08 (1080p xvfb): the two columns' minimum widths plus the default
+        # layout gutters came to 950 px in a 940 px scroll viewport, so the Run page scrolled
+        # sideways and hid the right-hand step buttons. Tighten the outer margins and the gap
+        # between the columns - the columns keep their own internal padding - so the page fits.
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(6)
         row.addWidget(self._build_simple_tab(), 1)
         right = QGroupBox("Steps")
         v = QVBoxLayout()
@@ -544,8 +549,9 @@ class NDDamScreeningDialog(QDialog):
         box.addWidget(self.apply_preset_btn)
         more.addLayout(box, mr, 1, 1, 2)
         self._more_grid = more
-        self._sync_dem_county()
-        self.preflight_btn = QPushButton("Check before running")
+        self.preflight_btn = QPushButton("Check inputs")      # in the action bar (0.18.19)
+        self.preflight_btn.setToolTip("Runs the check list for the steps a county screen would "
+                                      "run; a FAIL blocks Screen this county until it is fixed.")
         self.preflight_btn.clicked.connect(lambda _c=False: self._preflight())
         self.continue_btn = QPushButton("Continue")
         self.continue_btn.setEnabled(False)
@@ -601,7 +607,7 @@ class NDDamScreeningDialog(QDialog):
         inner.addLayout(store)
         inner.addLayout(self._more_grid)
         extra = QHBoxLayout()
-        for b in (self.preflight_btn, self.selected_dams_btn, self.to_runner_btn,
+        for b in (self.selected_dams_btn, self.to_runner_btn,
                   self.handoff_runner_btn, self.handoff_hazard_btn):
             extra.addWidget(b)
         inner.addLayout(extra)
@@ -748,586 +754,6 @@ class NDDamScreeningDialog(QDialog):
         self.suite_note = QLabel("")
         self.suite_note.setWordWrap(True)
         lay.addWidget(self.suite_note)
-        lay.addStretch(1)
-        w.setLayout(lay)
-        return w
-
-    # -- Settings: run options + the grid
-    def _build_run_options(self):
-        from .algorithms.run_breach_sim import TERRAIN, SCENARIOS
-        w = QWidget()
-        lay = QVBoxLayout()
-        info = QLabel("Choices of this window that the tools' dialogs are filled with (files of this computer, "
-                      "engine options). Every one can still be changed in the dialog. The parameters of the "
-                      "tools themselves are on the other tabs.")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-        grid = QGridLayout()
-        self.local_dem = QLineEdit()
-        self.larger_clips = self._combo(TERRAIN)
-        self.exe = QLineEdit()
-        self.scenario = self._combo(SCENARIOS)
-        self.workers = QSpinBox()
-        self.workers.setRange(0, 64)
-        self.dem_cell = QDoubleSpinBox()
-        self.dem_cell.setRange(0.5, 100.0)
-        self.dem_cell.setDecimals(1)
-        self.dem_cell.setSingleStep(1.0)
-        self.dem_cell.setToolTip("Step 2: the cell size of the cached DEM. 10 m is the starting value. "
-                                 "The flood does not have to use this size.")
-        self.grid_m = QDoubleSpinBox()
-        self.grid_m.setRange(0.0, 500.0)
-        self.grid_m.setDecimals(1)
-        self.grid_m.setSingleStep(1.0)
-        self.grid_m.setToolTip("Step 7: the flood grid. 0 = chosen from the reservoir size. "
-                               "It can be coarser than the DEM. The starting value is 20 m.")
-        self.simh = QDoubleSpinBox()
-        self.simh.setRange(0.0, 240.0)
-        self.simh.setDecimals(1)
-        self.simh.setToolTip("Step 7: how many hours of flood to simulate. 0 = the tool estimates it. "
-                             "The starting value is 4.")
-        self.simmax = QDoubleSpinBox()
-        self.simmax.setRange(1.0, 240.0)
-        self.simmax.setDecimals(1)
-        self.simmax.setToolTip("Step 7: the clock is lengthened, up to this many hours, while the flood is "
-                               "still spreading. The starting value is 12.")
-        self.chart_file = QLineEdit()
-        self.runner_dem = QLineEdit()
-        self.dams_folder = QLineEdit()
-        for e in (self.local_dem, self.exe, self.chart_file, self.runner_dem, self.dams_folder):
-            e.editingFinished.connect(self._changed)
-        self.workers.valueChanged.connect(self._changed)
-        self.workers.setToolTip("0 = leave the tool's own default (CPU cores - 1).")
-        self.chart_file.setToolTip("The digitized ACER TM 11 chart file (.json). Empty = the tools' "
-                                   "own default. ND Dam Hazard's 'Chart sign-off' writes one.")
-        self.dams_folder.setToolTip("The folder of dam folders (one per dam) that tool 7b writes and "
-                                    "ND Dam Breach Runner reads; tool 8 adds a 'screened' status to "
-                                    "dam.json there. Empty = <work folder>/Dams.")
-        # step 7b: the Runner's models / solver (defaults = the Runner's own)
-        self.runner_tier = self._combo(list(ho.ENGINE_LABELS))
-        self.runner_tier.setToolTip("Step 7b: the Runner's engine (one choice; 'then ANUGA' is the old "
-                                    "'force ANUGA'). Only ANUGA models the culvert / bridge layer "
-                                    "(Inputs: Culverts / bridges). The default sends nothing extra.")
-        self.runner_refine = QCheckBox("Step 7b: near-dam refine (finer FV1 grid near the dam; slower)")
-        self.runner_refine.toggled.connect(self._changed)
-        # 0.17.46: the Inputs water bodies as the Runner's report mask (rundam WATER_MASK)
-        self.runner_water_mask = QCheckBox("Step 7b: mask existing lakes and ponds in the Runner's report")
-        self.runner_water_mask.setToolTip(
-            "Off (default): the Runner does what it always does. On: step 7b gives the Runner the "
-            "'NHD waterbodies' layer from the Inputs tab, and the Runner's run report then shows the "
-            "flooded area and speeds twice - with and without the lakes and ponds that were "
-            "already there before the breach. Only the report changes: the flood model, its maps "
-            "and the hazard class are the same either way. Needs that layer saved in a "
-            "file (Inputs tab) and ND Dam Breach Runner 3.10.27 or later.")
-        self.runner_water_mask.toggled.connect(self._changed)
-        self.runner_tier.currentIndexChanged.connect(self._changed)
-        self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")
-        self.baseline.setToolTip("A second simulation of each dam with only the steady ambient flow, no "
-                                 "breach; the increment (breach minus baseline) is written too. A screening "
-                                 "stand-in for ND's flood-scenario comparison; the real PMF routing is the "
-                                 "Runner's.")
-        self.baseline_cfs = QDoubleSpinBox()
-        self.baseline_cfs.setRange(0.0, 1e7)
-        self.baseline_cfs.setDecimals(1)
-        self.baseline_cfs.setToolTip("Steady ambient flow through the dam site for the baseline (cfs; 0 = dry). "
-                                     "YOUR value - the tool does not know the spillway flow.")
-        self.buildings = self._combo(["Not represented (bare terrain)", "Raise the DEM at building footprints",
-                                      "Manning's n at building footprints"])
-        self.buildings.setToolTip("Step 7: how polygon footprints of the structures layer enter the terrain. "
-                                  "Points are ignored. Neither treatment is right everywhere - YOUR choice.")
-        self.building_raise_ft = QDoubleSpinBox()
-        self.building_raise_ft.setRange(0.1, 200.0)
-        self.building_raise_ft.setDecimals(1)
-        self.building_n = QDoubleSpinBox()
-        self.building_n.setRange(0.01, 5.0)
-        self.building_n.setDecimals(3)
-        self.incremental = QCheckBox("Step 8: count impacts from the incremental depth")
-        self.incremental.setToolTip("Needs step 7's baseline. A structure counts as flooded by the BREACH only "
-                                    "where breach depth minus baseline depth meets the threshold.")
-        self.ref_folder = QLineEdit()
-        self.ref_folder.setToolTip("Step 11: HEC-RAS / DSS-WISE reference rasters, in per-dam sub-folders or "
-                                   "files named by dam ID.")
-        self.ref_units = self._combo(["US customary (ft, ft/s, hours)", "Metric (m, m/s, hours)"])
-        self.old_inventory = QLineEdit()
-        self.old_inventory.setToolTip("Step 13: the previous inventory (a tool-1 GeoPackage or DWR export) "
-                                      "to compare the current 1_dams.gpkg with.")
-        self.reviewer_edit = QLineEdit()
-        self.reviewer_edit.setToolTip("Your name or initials, written with every decision on the Review tab.")
-        for e in (self.ref_folder, self.old_inventory, self.reviewer_edit):
-            e.editingFinished.connect(self._changed)
-        for c in (self.baseline, self.incremental):
-            c.toggled.connect(self._changed)
-        for sp in (self.baseline_cfs, self.building_raise_ft, self.building_n,
-                   self.dem_cell, self.grid_m, self.simh, self.simmax):
-            sp.valueChanged.connect(self._changed)
-        self.buildings.currentIndexChanged.connect(self._changed)
-        self.ref_units.currentIndexChanged.connect(self._changed)
-        self.larger_clips.currentIndexChanged.connect(self._changed)
-        self.scenario.currentIndexChanged.connect(self._changed)
-        rows = (
-            ("Local DEM folder (LiDAR tiles)", self.local_dem, "dir"),
-            ("Step 7 terrain for larger clips", self.larger_clips, None),
-            ("LISFLOOD-FP executable", self.exe, "file"),
-            ("Step 7 scenario", self.scenario, None),
-            ("DEM cell size (m)", self.dem_cell, None),
-            ("Grid size (m)", self.grid_m, None),
-            ("Simulated time (h)", self.simh, None),
-            ("Longest simulated time (h)", self.simmax, None),
-            ("Dams at the same time (0 = tool default)", self.workers, None),
-            ("ACER TM 11 chart file (.json)", self.chart_file, "json"),
-            ("Step 7b DEM for the Runner", self.runner_dem, "raster"),
-            ("Dams folder (7b, dam.json)", self.dams_folder, "dir"),
-            ("Step 7b Runner engine", self.runner_tier, None),
-            ("", self.runner_refine, None),
-            ("", self.runner_water_mask, None),
-            ("", self.baseline, None),
-            ("Baseline ambient flow (cfs)", self.baseline_cfs, None),
-            ("Step 7 buildings in the terrain", self.buildings, None),
-            ("Buildings: raise the DEM by (ft)", self.building_raise_ft, None),
-            ("Buildings: Manning's n", self.building_n, None),
-            ("", self.incremental, None),
-            ("Step 11 reference rasters folder", self.ref_folder, "dir"),
-            ("Step 11 reference units", self.ref_units, None),
-            ("Step 13 previous inventory", self.old_inventory, "file"),
-            ("Reviewer (Review tab)", self.reviewer_edit, None),
-        )
-        for i, (label, widget, kind) in enumerate(rows):
-            grid.addWidget(QLabel(label), i, 0)
-            grid.addWidget(widget, i, 1)
-            if kind:
-                b = QPushButton("Browse…")
-                b.clicked.connect(lambda _c=False, e=widget, k=kind: self._browse_for(e, k))
-                grid.addWidget(b, i, 2)
-        lay.addLayout(grid)
-        lay.addWidget(self._dem_download_box())
-        lay.addStretch(1)
-        w.setLayout(lay)
-        return w
-
-
-
-    def _county_dem_box(self):
-        """Visible on the Simple tab. County list, suite folder, and the download button."""
-        from .core.dem_download import county_names
-        box = QGroupBox("Download the county DEM")
-        box.setToolTip("Download the county DEM, if you do not already have one.")
-        box.setCheckable(True)
-        box.setChecked(False)
-        grid = QGridLayout()
-        grid.addWidget(QLabel("Source"), 0, 0)
-        self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
-                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
-        self.dem_source.currentIndexChanged.connect(self._dem_fact)
-        grid.addWidget(self.dem_source, 0, 1)
-        grid.addWidget(QLabel("Resolution"), 0, 2)
-        self.dem_res = QComboBox()
-        self.dem_res.addItems(["10 m", "1 m"])
-        self.dem_res.setToolTip("Local file is EPSG:5070, metres, tiled GeoTIFF. 10 m is the county working copy.")
-        grid.addWidget(self.dem_res, 0, 3)
-        grid.addWidget(QLabel("County"), 1, 0)
-        self.dem_county = QComboBox()
-        self.dem_county.addItems(county_names())
-        self.dem_county.setToolTip("County download clip. Same list as Inventory county. Pick the county here.")
-        grid.addWidget(self.dem_county, 1, 1)
-        self.dem_scope = QComboBox()
-        self.dem_scope.addItems(["Dam", "County", "State"])
-        self.dem_scope.setCurrentIndex(1)
-        grid.addWidget(QLabel("Area"), 1, 2)
-        grid.addWidget(self.dem_scope, 1, 3)
-        grid.addWidget(QLabel("DEM folder"), 2, 0)
-        self.dem_out = QLineEdit()
-        self.dem_out.setPlaceholderText("Where Burleigh_10m_5070.tif is written")
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(lambda _c=False: self._browse_for(self.dem_out, "dir"))
-        go = QPushButton("Download this county DEM")
-        go.clicked.connect(self._open_dem_download)
-        grid.addWidget(self.dem_out, 2, 1)
-        grid.addWidget(browse, 2, 2)
-        grid.addWidget(go, 2, 3)
-        grid.addWidget(QLabel("Dam point"), 3, 0)
-        self.dem_point = QLineEdit()
-        self.dem_point.setPlaceholderText("longitude,latitude (Area = Dam only)")
-        self.dem_buffer = QDoubleSpinBox()
-        self.dem_buffer.setRange(1.0, 50.0)
-        self.dem_buffer.setValue(15.0)
-        self.dem_buffer.setSuffix(" mi")
-        self.dem_ftp = QLineEdit()
-        self.dem_ftp.setPlaceholderText("ND LiDAR FTP link, optional")
-        grid.addWidget(self.dem_point, 3, 1)
-        grid.addWidget(self.dem_buffer, 3, 2)
-        grid.addWidget(self.dem_ftp, 3, 3)
-        self.dem_fact = QLabel("USGS 3DEP: EPSG:5070, metres, GeoTIFF.")
-        self.dem_fact.setWordWrap(True)
-        grid.addWidget(self.dem_fact, 4, 0, 1, 4)
-        self.dem_facts = QLabel(
-            "Output: GeoTIFF, EPSG:5070, metres. USGS native is the same. ND LiDAR native: DEM_Imagine .img in UTM "
-            "metres; ASCII_Grids_ft in State Plane feet, converted to metres. Then warped.")
-        self.dem_facts.setWordWrap(True)
-        grid.addWidget(self.dem_facts, 5, 0, 1, 4)
-        off = QPushButton("Download offline layers for this county")
-        off.setToolTip("County dropdown above. Writes dams, flowlines, waterbodies, roads, rail, structures, and address points to a GeoPackage.")
-        off.clicked.connect(self._open_offline_layers)
-        grid.addWidget(off, 6, 0, 1, 4)
-        self.dem_ascii = QCheckBox("ASCII grids")
-        self.dem_ascii.setChecked(False)
-        self.dem_imagine = QCheckBox("Imagine DEM")
-        self.dem_imagine.setChecked(True)
-        self.work_crs = QComboBox()
-        self.work_crs.addItems(["Keep source CRS"])
-        folded = self._fold(box, grid)
-        try:
-            self.inventory_county.currentTextChanged.connect(self._sync_download_county)
-        except Exception:
-            pass
-        return folded
-
-    def _sync_download_county(self, text):
-        if text and text != "All counties" and hasattr(self, "dem_county"):
-            self.dem_county.setCurrentText(text)
-
-    def _download_county(self):
-        if hasattr(self, "dem_county"):
-            return self.dem_county.currentText()
-        text = self.inventory_county.currentText()
-        return "" if text == "All counties" else text
-
-    def _browse_suite(self):
-        folder = QFileDialog.getExistingDirectory(self, "Suite data folder", self.suite_edit.text() or self.work_edit.text())
-        if folder:
-            self.suite_edit.setText(folder)
-            self.suite_folder = folder
-            self._fill_suite_edit()
-
-    def _fill_suite_edit(self):
-        folder = self.suite_edit.text().strip()
-        if not folder:
-            self._fill_from_suite()
-            if getattr(self, "suite_folder", ""):
-                self.suite_edit.setText(self.suite_folder)
-            return
-        self.suite_folder = folder
-        from .damsuite.suite_fill import scan
-        found, notes = scan(folder)
-        filled = []
-        for slot, combo in self.layer_combo.items():
-            uri = found.get(slot)
-            if not uri:
-                continue
-            combo.blockSignals(True)
-            i = combo.findData(uri)
-            if i < 0:
-                combo.addItem(os.path.basename(uri.split("|")[0]) + ":" + uri.split("=")[-1], uri)
-                i = combo.count() - 1
-            combo.setCurrentIndex(i)
-            combo.blockSignals(False)
-            filled.append(slot)
-        if not self.dem_out.text().strip():
-            self.dem_out.setText(os.path.join(self.work_edit.text().strip() or folder, "terrain"))
-        if hasattr(self, "local_dem") and not self.local_dem.text().strip():
-            self.local_dem.setText(self.dem_out.text().strip())
-        self.suite_note.setText("Filled {} from {}.".format(", ".join(filled) or "nothing", folder))
-        found_names = {
-            "dwr": "DWR dams", "dam_lines": "dam lines", "structures": "structures",
-            "roads": "roads", "rail": "rail", "address_points": "address points",
-            "nid": "NID", "streams": "flowlines", "waterbodies": "waterbodies",
-        }
-        shown = [found_names[k] for k in found_names if k in found]
-        status = "Found " + ", ".join(shown) + "." if shown else "Nothing matched in that folder."
-        try:
-            from .damsuite.suite_fill import find_pack
-            if find_pack(folder):
-                status = "Offline pack. " + status
-        except Exception:
-            pass
-        if hasattr(self, "data_status"):
-            self.data_status.setText(status)
-        for n in notes:
-            self._log("suite: " + n)
-        self._log("Suite folder {} autofilled {}. DEM folder {}.".format(folder, ", ".join(filled) or "nothing", self.dem_out.text()))
-        self._changed()
-
-    def _dem_download_box(self):
-        if hasattr(self, "dem_county"):
-            note = QLabel("The county DEM download is on the Run tab: data folder, county, "
-                          "10 m / 1 m, Download this county DEM.")
-            note.setWordWrap(True)
-            return note
-        from .core import dem_download as dd
-        box = QGroupBox("Download a DEM (USGS 3DEP, metres, EPSG:5070)")
-        grid = QGridLayout()
-        self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
-                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
-        self.dem_source.setToolTip("ND DWR LiDAR uses the FTP package from the map site: "
-                                   "LiDAR_NorthDakota_QL2, ASCII_Grids_ft and DEM_Imagine.")
-        self.dem_ftp = QLineEdit()
-        self.dem_ftp.setPlaceholderText("ftp://lidarftp.swc.nd.gov/temp/<id> or paste the clipboard text")
-        self.dem_ascii = QCheckBox("ASCII_Grids_ft")
-        self.dem_ascii.setChecked(True)
-        self.dem_imagine = QCheckBox("DEM_Imagine")
-        self.dem_imagine.setChecked(True)
-        self.work_crs = QComboBox()
-        self.work_crs.addItems(["Keep source CRS", "EPSG:5070 metres", "EPSG:26914 UTM 14N metres",
-                                "EPSG:2265 ND North feet", "EPSG:2266 ND South feet"])
-        self.work_crs.setToolTip("3DEP is metres in EPSG:5070. QL2 Imagine is metres in UTM. "
-                                 "ASCII_Grids_ft is feet. Pick the CRS the model should use; "
-                                 "the download is warped to it.")
-        self.dem_scope = QComboBox()
-        self.dem_scope.addItems(["Dam", "County", "State"])
-        self.dem_scope.setToolTip("Dam uses the point and buffer. County is one North Dakota county. "
-                                  "State is all of North Dakota and is a long download at a fine cell.")
-        self.dem_point = QLineEdit()
-        self.dem_point.setPlaceholderText("longitude,latitude")
-        self.dem_point.setToolTip("Dam only. Example: -97.46396,47.31054")
-        self.dem_buffer = QDoubleSpinBox()
-        self.dem_buffer.setRange(1.0, 50.0)
-        self.dem_buffer.setValue(10.0)
-        self.dem_buffer.setSuffix(" mi")
-        self.dem_county = QComboBox()
-        self.dem_county.addItems(dd.county_names())
-        self.dem_county.setCurrentText("Cass")
-        self.dem_out = QLineEdit()
-        self.dem_out.setPlaceholderText("folder for the tiles and the VRT")
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(lambda _c=False: self._browse_for(self.dem_out, "dir"))
-        counties = QPushButton("Counties on the map")
-        counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM…")
-        go.clicked.connect(self._open_dem_download)
-        grid.addWidget(QLabel("Source"), 0, 0)
-        grid.addWidget(self.dem_source, 0, 1)
-        grid.addWidget(self.dem_ascii, 0, 2)
-        grid.addWidget(self.dem_imagine, 0, 3)
-        grid.addWidget(QLabel("ND LiDAR path"), 1, 0)
-        grid.addWidget(self.dem_ftp, 1, 1, 1, 3)
-        grid.addWidget(QLabel("3DEP area"), 2, 0)
-        grid.addWidget(self.dem_scope, 2, 1)
-        grid.addWidget(QLabel("Dam point"), 3, 0)
-        grid.addWidget(self.dem_point, 3, 1)
-        grid.addWidget(QLabel("Buffer"), 3, 2)
-        grid.addWidget(self.dem_buffer, 3, 3)
-        grid.addWidget(QLabel("County"), 4, 0)
-        grid.addWidget(self.dem_county, 4, 1)
-        grid.addWidget(QLabel("Folder"), 5, 0)
-        grid.addWidget(self.dem_out, 5, 1)
-        grid.addWidget(browse, 5, 2)
-        grid.addWidget(go, 5, 3)
-        grid.addWidget(QLabel("Work CRS"), 6, 0)
-        grid.addWidget(self.work_crs, 6, 1)
-        grid.addWidget(counties, 6, 2, 1, 2)
-        box.setLayout(grid)
-        return box
-
-
-    def _work_crs(self):
-        text = self.work_crs.currentText()
-        return "" if text.startswith("Keep") else text.split()[0]
-
-    def _show_counties(self):
-        from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-                               QgsProject, QgsFillSymbol, QgsSingleSymbolRenderer)
-        from .core import dem_download as dd
-        layer = QgsVectorLayer("Polygon?crs=EPSG:4326&field=county:string",
-                               "ND counties (download clips)", "memory")
-        prov = layer.dataProvider()
-        feats = []
-        for name, ring in dd.county_features():
-            f = QgsFeature(layer.fields())
-            f.setAttribute("county", name)
-            f.setGeometry(QgsGeometry.fromPolygonXY([[QgsPointXY(x, y) for x, y in ring]]))
-            feats.append(f)
-        prov.addFeatures(feats)
-        layer.updateExtents()
-        try:
-            sym = QgsFillSymbol.createSimple({"color": "0,80,160,40", "outline_color": "0,60,120",
-                                              "outline_width": "0.6"})
-            layer.setRenderer(QgsSingleSymbolRenderer(sym))
-        except Exception:
-            pass
-        QgsProject.instance().addMapLayer(layer)
-        try:
-            layer.selectionChanged.connect(lambda *_a: self._county_from_map(layer))
-        except Exception:
-            pass
-        canvas = getattr(self.iface, "mapCanvas", lambda: None)()
-        if canvas is not None:
-            canvas.setExtent(layer.extent())
-            canvas.refresh()
-        self.log_edit.append("County clips are on the map. Select one and the county list follows it.")
-
-    def _county_from_map(self, layer):
-        names = [f["county"] for f in layer.selectedFeatures()]
-        if not names:
-            return
-        self.dem_source.setCurrentIndex(1)
-        self.dem_scope.setCurrentIndex(1)
-        self.dem_county.setCurrentText(names[0])
-
-    def _open_dem_download(self):
-        import processing
-        folder = self.dem_out.text().strip()
-        if not folder:
-            folder = os.path.join(self.work_edit.text().strip() or os.path.expanduser("~"), "terrain")
-            self.dem_out.setText(folder)
-        self.terrain_source.setCurrentIndex(1)
-        self._log("Terrain set to the local DEM folder. Download DEM: {} | {} | {} | {}".format(
-            self.dem_source.currentText(), self.dem_res.currentText(), self._download_county(), folder))
-        scope = self.dem_scope.currentIndex()
-        if scope == 2:
-            n = QMessageBox.question(self, TITLE, "A statewide DEM is tiled and can take a long time. Continue?")
-            if n != getattr(QMessageBox, 'StandardButton', QMessageBox).Yes:
-                return
-        from .core.dem_download import county_names
-        county = self._download_county()
-        names = county_names()
-        exec_tool_dialog(processing, "nddam:downloaddem", {
-            "SOURCE": self.dem_source.currentIndex() if hasattr(self, "dem_source") else 0,
-            "RES": self.dem_res.currentIndex() if hasattr(self, "dem_res") else 0,
-            "SCOPE": scope,
-            "DAM_POINT": self.dem_point.text().strip() if hasattr(self, "dem_point") else "",
-            "BUFFER_MI": float(self.dem_buffer.value()) if hasattr(self, "dem_buffer") else 15.0,
-            "COUNTY": names.index(county) if county in names else 0,
-            "CELL": 10.0 if (not hasattr(self, "dem_res") or self.dem_res.currentIndex() == 0) else 1.0,
-            "DWR_PATH": self.dem_ftp.text().strip() if hasattr(self, "dem_ftp") else "",
-            "ASCII_FT": self.dem_ascii.isChecked() if hasattr(self, "dem_ascii") else False,
-            "IMAGINE": self.dem_imagine.isChecked() if hasattr(self, "dem_imagine") else True,
-            "WORK_CRS": self._work_crs() if hasattr(self, "work_crs") else "",
-            "OUT": folder,
-        }, parent=self)
-
-
-    def _open_offline_layers(self):
-        import processing
-        from .core.dem_download import county_names
-        county = self._download_county() or "Burleigh"
-        names = county_names()
-        folder = self.work_edit.text().strip() or os.path.expanduser("~")
-        out = os.path.join(folder, "{}_offline.gpkg".format(county.replace(" ", "_")))
-        self._log("Offline layers: county {} -> {}".format(county, out))
-        exec_tool_dialog(processing, "nddam:downloadlayers", {
-            "COUNTY": names.index(county) if county in names else 0,
-            "OUT": out,
-        }, parent=self)
-
-    def _build_settings_tab(self):
-        from . import suite_settings as SS
-        from .algorithms import _settings as ST
-        try:
-            from . import provider as prov
-            catalog = ST.full_catalog(prov.ALGORITHMS)
-        except Exception as e:                                   # noqa - a tool that cannot be built here
-            catalog = []
-            self._log("!!! settings grid: {}".format(e))
-        try:
-            from .damsuite import versions as vs
-            versions = {SG.PLUGIN: vs.RELEASE.get(SG.PLUGIN, "")}
-        except Exception:                                        # noqa
-            versions = {}
-        self.grid = SS.SettingsGrid(SG.PLUGIN, catalog, DS.Settings(), parent=self,
-                                    on_change=self._grid_changed, on_file=self._grid_file,
-                                    versions=versions, tab_order=SG.TAB_ORDER,
-                                    extra_tabs=[("Run options", self._build_run_options())])
-        return self.grid
-
-    # -- Review
-    def _build_review_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout()
-        info = QLabel("The dams that need a look: uncertain breach direction (no dam line), uncertain or "
-                      "unusual pond type, borderline class, the report's review queue. Zoom to one, decide, "
-                      "and the decision is written into the layers (rev_decision / rev_by / rev_date) and "
-                      "to review_decisions.csv. An excluded dam is skipped by steps 5-8 from then on. Your "
-                      "name: Settings > Run options > Reviewer.")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-        self.review_table = QTableWidget()
-        self.review_table.setColumnCount(len(REVIEW_COLUMNS))
-        try:
-            self.review_table.setHorizontalHeaderLabels(list(REVIEW_COLUMNS))
-            self.review_table.setSelectionBehavior(self.review_table.SelectionBehavior.SelectRows)
-        except Exception:                                        # noqa
-            pass
-        lay.addWidget(self.review_table, 1)
-        row = QHBoxLayout()
-        self.review_refresh_btn = QPushButton("Refresh")
-        self.review_refresh_btn.clicked.connect(lambda _c=False: self.refresh_review())
-        self.zoom_btn = QPushButton("Zoom to")
-        self.zoom_btn.clicked.connect(lambda _c=False: self._zoom_to_selected())
-        self.accept_btn = QPushButton("Accept")
-        self.accept_btn.setToolTip("Screened and looked at; keep the result as it is.")
-        self.accept_btn.clicked.connect(lambda _c=False: self._decide("accept"))
-        self.exclude_btn = QPushButton("Exclude")
-        self.exclude_btn.setToolTip("Not a dam / not to be screened: steps 5-8 skip it from now on.")
-        self.exclude_btn.clicked.connect(lambda _c=False: self._decide("exclude"))
-        self.type_combo = QComboBox()
-        for t in rv.POND_TYPES:
-            self.type_combo.addItem(t, t)
-        self.set_type_btn = QPushButton("Set pond type")
-        self.set_type_btn.clicked.connect(lambda _c=False: self._decide("set_type", self.type_combo.currentData()))
-        self.move_btn = QPushButton("Move breach point…")
-        self.move_btn.setToolTip("Give the new point as 'x, y' in EPSG:5070 metres (the map canvas centre is "
-                                 "offered when a map is open); dir_conf becomes 'reviewed'.")
-        self.move_btn.clicked.connect(lambda _c=False: self._move_breach())
-        self.note_btn = QPushButton("Add note…")
-        self.note_btn.clicked.connect(lambda _c=False: self._add_note())
-        for b in (self.review_refresh_btn, self.zoom_btn, self.accept_btn, self.exclude_btn):
-            row.addWidget(b)
-        row.addWidget(self.type_combo)
-        row.addWidget(self.set_type_btn)
-        row.addWidget(self.move_btn)
-        row.addWidget(self.note_btn)
-        row.addStretch(1)
-        lay.addLayout(row)
-        self.review_label = QLabel("")
-        self.review_label.setWordWrap(True)
-        lay.addWidget(self.review_label)
-        w.setLayout(lay)
-        return w
-
-    # -- Results
-    def _build_results_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout()
-        self.counts_label = QLabel("")
-        self.counts_label.setWordWrap(True)
-        self.record_label = QLabel("")
-        self.record_label.setWordWrap(True)
-        lay.addWidget(self.counts_label)
-        lay.addWidget(self.record_label)
-        self.results_table = QTableWidget(0, 7)
-        self.results_table.setHorizontalHeaderLabels(
-            ["Dam", "Name", "Status", "Peak cfs", "Flooded ac", "Max depth ft", "Edge"])
-        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.results_table.setMaximumHeight(220)
-        lay.addWidget(self.results_table)
-        row = QHBoxLayout()
-        self.report_btn = QPushButton("Open the report (index.html)")
-        self.report_btn.clicked.connect(self._open_report)
-        self.add_btn = QPushButton("Add the results to the project")
-        self.add_btn.setToolTip("One layer group 'DamSafety Screening - <work folder>' with the dams by class, "
-                                "the flood extents, the breach points and arrows, and the review queue; "
-                                "every layer styled.")
-        self.add_btn.clicked.connect(lambda _c=False: self._add_results())
-        self.hazard_btn = QPushButton("Open DamSafety Hazard…")
-        self.hazard_btn.setToolTip("The classification authority: take the dams that matter there "
-                                   "(its 'Dam suite' group reads the same dam.json records).")
-        self.hazard_btn.clicked.connect(self._open_hazard)
-        row.addWidget(self.report_btn)
-        row.addWidget(self.add_btn)
-        row.addWidget(self.hazard_btn)
-        lay.addLayout(row)
-        self.one_dam_label = QLabel("")
-        self.one_dam_label.setWordWrap(True)
-        lay.addWidget(self.one_dam_label)
-        row = QHBoxLayout()
-        self.one_dam_combo = QComboBox()
-        self.one_dam_report_btn = QPushButton("Open this one-dam report")
-        self.one_dam_report_btn.clicked.connect(lambda _c=False: self._open_one_dam_report())
-        row.addWidget(self.one_dam_combo, 1)
-        row.addWidget(self.one_dam_report_btn)
-        lay.addLayout(row)
         lay.addStretch(1)
         w.setLayout(lay)
         return w
@@ -1494,149 +920,6 @@ class NDDamScreeningDialog(QDialog):
         finally:
             self._loading = was
         self._changed()
-
-    # ------------------------------------------------------------ settings file --
-    def _settings_file_edited(self):
-        self._load_settings_file(quiet=False)
-        self._changed()
-
-    def _pick_settings_file(self):
-        start = self.settings_file_edit.text().strip() or self.work_edit.text().strip() or ""
-        p, _f = QFileDialog.getOpenFileName(self, "Settings file", start,
-                                            "Settings workbook (*.xlsx);;Settings table (*.csv);;All files (*)")
-        if p:
-            self.settings_file_edit.setText(p)
-            self._settings_file_edited()
-
-    def _new_settings_file(self):
-        work = self.work_edit.text().strip()
-        start = os.path.join(work, DS.DEFAULT_NAME) if work else DS.DEFAULT_NAME
-        p, _f = QFileDialog.getSaveFileName(self, "New settings file", start,
-                                            "Settings workbook (*.xlsx);;Settings table (*.csv)")
-        if not p:
-            return ""
-        if not os.path.splitext(p)[1]:
-            p += ".xlsx"
-        self.settings_file_edit.setText(p)
-        if self.grid is not None:
-            wf.window_settings_to(self.grid.settings, self.settings())
-            self.grid.settings.path = p
-            self.grid.save(p, name=os.path.splitext(os.path.basename(p))[0].replace("_", " "))
-        DS.set_current_path(p)
-        self._log("Settings file written: {}".format(p))
-        self._fill_presets()
-        self._save_state()
-        self.refresh()
-        return p
-
-    def _load_settings_file(self, quiet=True):
-        """Read the settings file named on the Simple tab into the grid and the window."""
-        p = self.settings_file_edit.text().strip()
-        DS.set_current_path(p)
-        if self.grid is None:
-            return False
-        if not p:
-            self.grid.settings = DS.Settings()
-            self.grid.fill()
-            self._fill_presets()
-            return False
-        if not os.path.isfile(p):
-            if not quiet:
-                QMessageBox.warning(self, TITLE, "The settings file does not exist: {}".format(p))
-            self._log("!!! settings file not found: {}".format(p))
-            self._fill_presets()
-            return False
-        ok = self.grid.load(p, quiet=quiet)
-        if ok:
-            win = wf.window_settings_from(self.grid.settings)
-            if win:
-                was = self._loading
-                self._loading = True
-                try:
-                    s = self.settings()
-                    s.update(win)
-                    self._apply(s)
-                    self._fill_layers()
-                finally:
-                    self._loading = was
-            self._log("Settings file: {} ({} value(s) differ from the starting values)".format(
-                p, len(self.grid.settings.changed(self.grid.catalog))))
-        self._fill_presets()
-        return ok
-
-    def _grid_changed(self, settings):
-        """An edit in the grid: the file is saved at once when there is one (the tools read it)."""
-        self._autosave_settings()
-        if hasattr(self, "settings_btn"):
-            self._update_settings_badge()
-
-    def _grid_file(self, path):
-        if path and path != self.settings_file_edit.text().strip():
-            self.settings_file_edit.setText(path)
-            DS.set_current_path(path)
-            self._save_state()
-        self._fill_presets()
-
-    def _autosave_settings(self):
-        if self._loading or self.grid is None:
-            return
-        p = self.settings_file_edit.text().strip()
-        if not p:
-            return
-        try:
-            wf.window_settings_to(self.grid.settings, self.settings(), defaults=not os.path.isfile(p))
-            self.grid.settings.path = p
-            self.grid.settings.save(p, catalog=self.grid.catalog, versions=self.grid.versions or None)
-            DS.set_current_path(p)
-        except DS.SettingsError as e:
-            self._log("!!! settings not saved: {}".format(e))
-
-    def _fill_presets(self):
-        folders = [PRESETS_DIR]
-        p = self.settings_file_edit.text().strip()
-        if p:
-            folders.append(os.path.dirname(p))
-        self.presets = DS.list_presets(folders)
-        self.preset_combo.clear()
-        self.preset_combo.addItem("(choose a preset)", "")
-        for name, path in self.presets:
-            if p and os.path.abspath(path) == os.path.abspath(p):
-                continue
-            self.preset_combo.addItem(name, path)
-
-    def _apply_preset(self):
-        path = self.preset_combo.currentData()
-        if not path:
-            return False
-        try:
-            preset = DS.Settings.load(path)
-        except DS.SettingsError as e:
-            QMessageBox.warning(self, TITLE, str(e))
-            return False
-        n = len([k for k in preset.values if k[0] == SG.PLUGIN])
-        if QMessageBox.question(self, TITLE, "Copy the {} value(s) of the preset '{}' into the current settings?"
-                                "\n{}".format(n, self.preset_combo.currentText(), preset.meta.get("note", ""))) \
-                != self._yes():
-            return False
-        if self.grid is not None:
-            for (pl, tool, key), v in preset.values.items():
-                if pl == SG.PLUGIN:
-                    self.grid.settings.set(pl, tool, key, v)
-            self.grid.fill()
-            win = wf.window_settings_from(self.grid.settings)
-            if win:
-                s = self.settings()
-                s.update(win)
-                was = self._loading
-                self._loading = True
-                try:
-                    self._apply(s)
-                    self._fill_layers()
-                finally:
-                    self._loading = was
-        self._log("Preset applied: {} ({})".format(self.preset_combo.currentText(), path))
-        self._changed()
-        return True
 
     # ------------------------------------------------------------------ layers --
     @staticmethod
@@ -1870,13 +1153,16 @@ class NDDamScreeningDialog(QDialog):
         self.next_btn.setEnabled(bool(nxt) and not busy)
         for b in (self.chain_btn, self.run_all_btn, self.one_dam_btn, self.preflight_btn):
             b.setEnabled(have and not busy)
+        panel = getattr(self, "check_panel", None)
+        if panel is not None and panel.blocked:          # 0.18.19: red check results block Screen
+            self.run_all_btn.setEnabled(False)
         self.chain_stop_btn.setEnabled(busy)
         self.stop_btn.setEnabled(busy)
         cont = getattr(self, "continue_btn", None)
         if cont is not None:
             plugin, label, why = ("", "Continue", "")
             if have and not busy:
-                plugin, label, why = wf.continue_target(work, self._selected_dam())
+                plugin, label, why = wf.continue_target(work, self.settings(), self._selected_dam())
             cont.setText(label or "Continue")
             cont.setToolTip(why)
             cont.setEnabled(bool(plugin) and not busy)
@@ -1989,7 +1275,34 @@ class NDDamScreeningDialog(QDialog):
         self.preflight_label.setText("Check: " + pf.summary(checks))
         for line in lines[:1]:
             self._log(line)
+        self._show_checks(checks)
         return checks
+
+    def _show_checks(self, checks, extra_errors=()):
+        """The check list in the shared CheckPanel: FAIL -> red (Screen this county blocked),
+        WARN -> amber rows, the rest folded into "N checks passed". `extra_errors`: refusals
+        of the run itself (no work folder, nothing to run), reported the same way."""
+        from .ui_widgets import ERROR, WARNING, OK
+        level = {pf.FAIL: ERROR, pf.WARN: WARNING}
+        results = [(ERROR, e) for e in extra_errors]
+        for c in checks or []:
+            lvl = level.get(c.get("status"), OK)
+            text = "{}: {}".format(c.get("title", ""), c.get("detail", ""))
+            if c.get("fix") and lvl != OK:
+                text += " \u2192 " + c["fix"]
+            results.append((lvl, text))
+        self.check_panel.set_results(results)
+
+    def _refuse_run(self, text):
+        """A county run that cannot start: the reason in the red panel (never a pop-up), the
+        log, and the Run tab in front so it is seen."""
+        self._show_checks([], extra_errors=[text])
+        self._log("!!! " + text)
+        try:
+            self.tabs.setCurrentIndex(0)
+        except Exception:                                        # noqa
+            pass
+        return False
 
     # ------------------------------------------------------------ run in order --
     def _yes(self):
@@ -2088,8 +1401,7 @@ class NDDamScreeningDialog(QDialog):
         first and a FAIL stops it."""
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
@@ -2097,18 +1409,15 @@ class NDDamScreeningDialog(QDialog):
         # what would run, and which data it would run without
         first, problem = wf.chain_next(work, S, include, ())
         if first is None and problem:
-            QMessageBox.information(self, TITLE, "Nothing can run: " + problem + ".")
-            return False
+            return self._refuse_run("Nothing can run: " + problem + ".")
         steps_planned = wf.chain_plan(work, S, include)
         if not steps_planned:
-            QMessageBox.information(self, TITLE, "Nothing to run: every required step is done.")
-            return False
+            return self._refuse_run("Nothing to run: every required step is done.")
         if preflight:
             checks = self._preflight(steps=steps_planned, settings=S)
             if not pf.ready(checks):
-                QMessageBox.warning(self, TITLE, "Not ready: " + pf.summary(checks) +
-                                    "\n\nSee the check list on the Run tab and fix it first.")
-                return False
+                self._log("!!! Not ready: " + pf.summary(checks))
+                return False                   # the red panel says what to fix
         plan = ["{} - {}".format(st, wf.TITLE[st]) for st in steps_planned]
         notes = []
         for st in steps_planned:
@@ -2126,6 +1435,7 @@ class NDDamScreeningDialog(QDialog):
         self._one_dam = None
         self.chain = wf.Chain(work, self.settings, include, self._start_algorithm, log=self._log,
                               problems=self._chain_problems, on_end=self._chain_ended)
+        self.check_panel.clear()
         self.chain.begin()
         self.refresh()
         return True
@@ -2166,7 +1476,10 @@ class NDDamScreeningDialog(QDialog):
         self._one_dam = None
         self.refresh()
         if not ok:
-            QMessageBox.warning(self, TITLE, text)
+            # 0.18.19: the step that failed, in the red panel next to the Run button (the log
+            # has the detail); it clears on the next check or run
+            self._show_checks([], extra_errors=[text])
+            self._log("!!! " + text)
             return
         if one:
             dam_id, folder = one
@@ -2180,8 +1493,7 @@ class NDDamScreeningDialog(QDialog):
     def _run_one_dam(self, dam_id=None):
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
@@ -2203,8 +1515,7 @@ class NDDamScreeningDialog(QDialog):
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as e:
-            QMessageBox.warning(self, TITLE, "The one-dam folder cannot be created: {}".format(e))
-            return False
+            return self._refuse_run("The one-dam folder cannot be created: {}".format(e))
         S1 = wf.one_dam_settings(S, work, dam_id)
         what = S.get("screen_what", 0)
         include = tuple(k for k in ("16", "18") if (k == "16" and what in (1, 2)) or (k == "18" and what == 2))
@@ -2212,8 +1523,7 @@ class NDDamScreeningDialog(QDialog):
             include = ("0",) + include
         plan = wf.chain_plan(folder, S1, include)
         if not plan:
-            QMessageBox.information(self, TITLE, "Nothing to run for {}: every step is done in {}.".format(dam_id, folder))
-            return False
+            return self._refuse_run("Nothing to run for {}: every step is done in {}.".format(dam_id, folder))
         text = "Run the whole chain for {} alone?\n\nFolder: {}\nSteps: {}\n\nThe quick screen (6) is skipped so " \
                "the flood is simulated; the result is a screening of one dam, not the batch.".format(
                    dam_id, folder, ", ".join(SG.plain(k, wf.TITLE[k]) for k in plan))
@@ -2236,15 +1546,13 @@ class NDDamScreeningDialog(QDialog):
         """Pick several dams and run the county chain for those dams only."""
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
         choices = wf.dam_choices(work, S, self._read_rows)
         if not choices:
-            QMessageBox.information(self, TITLE, "No dams to pick. Run step 1 first, or fill the suite folder.")
-            return False
+            return self._refuse_run("No dams to pick. Run step 1 first, or fill the suite folder.")
         dlg = QDialog(self)
         dlg.setWindowTitle(TITLE)
         dlg.setMinimumWidth(420)
@@ -2278,8 +1586,7 @@ class NDDamScreeningDialog(QDialog):
             return False
         ids = [lst.item(i).data(getattr(Qt, "ItemDataRole", Qt).UserRole) for i in range(lst.count()) if lst.item(i).checkState() == getattr(Qt, 'CheckState', Qt).Checked]
         if not ids:
-            QMessageBox.information(self, TITLE, "No dams checked.")
-            return False
+            return self._refuse_run("No dams checked.")
         S1 = dict(S)
         S1["only_ids"] = ",".join(ids)
         what = S.get("screen_what", 0)
@@ -2288,8 +1595,7 @@ class NDDamScreeningDialog(QDialog):
             include = ("0",) + include
         plan = wf.chain_plan(work, S1, include)
         if not plan:
-            QMessageBox.information(self, TITLE, "Nothing to run: every step is done.")
-            return False
+            return self._refuse_run("Nothing to run: every step is done.")
         text = "Run the county chain for {} dams?\n\n{}\n\nSteps: {}".format(
             len(ids), ", ".join(ids[:8]) + ("\u2026" if len(ids) > 8 else ""),
             ", ".join(SG.plain(k, wf.TITLE[k]) for k in plan))
@@ -2314,291 +1620,6 @@ class NDDamScreeningDialog(QDialog):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(p))
             else:
                 QMessageBox.information(self, TITLE, "No report yet in {}.".format(folder))
-
-    # ------------------------------------------------------------------ review --
-    def refresh_review(self):
-        work = self.work_edit.text().strip()
-        self.review_rows = rv.queue(work, self._read_rows) if work and os.path.isdir(work) else []
-        t = self.review_table
-        t.setRowCount(len(self.review_rows))
-        for i, r in enumerate(self.review_rows):
-            for j, key in enumerate(("dam_id", "name", "why", "source", "decision")):
-                t.setItem(i, j, QTableWidgetItem(str(r.get(key) or "")))
-        try:
-            t.resizeColumnsToContents()
-        except Exception:                                        # noqa
-            pass
-        n_dec = sum(1 for r in self.review_rows if r["decision"])
-        excl = rv.excluded_ids(work) if work and os.path.isdir(work) else []
-        self.review_label.setText("{} dam(s) to look at, {} decided; {} excluded in total.".format(
-            len(self.review_rows), n_dec, len(excl)))
-        has = bool(self.review_rows)
-        for b in (self.zoom_btn, self.accept_btn, self.exclude_btn, self.set_type_btn, self.move_btn, self.note_btn):
-            b.setEnabled(has)
-
-    def _selected_review(self):
-        i = self.review_table.currentRow()
-        if i is None or i < 0 or i >= len(self.review_rows):
-            try:
-                item = self.review_table.item(i, 0)
-            except Exception:                                    # noqa
-                item = None
-            if item is None:
-                return None
-        try:
-            item = self.review_table.item(i, 0)
-            did = item.text() if item is not None else None
-        except Exception:                                        # noqa
-            did = None
-        for r in self.review_rows:
-            if did and r["dam_id"] == did:
-                return r
-        return self.review_rows[i] if 0 <= i < len(self.review_rows) else None
-
-    def _decide(self, action, value="", note=""):
-        r = self._selected_review()
-        if r is None:
-            QMessageBox.information(self, TITLE, "Select a dam in the list first.")
-            return None
-        work = self.work_edit.text().strip()
-        reviewer = self.reviewer_edit.text().strip()
-        if not reviewer:
-            reviewer, ok = QInputDialog.getText(self, TITLE, "Your name or initials (kept in Settings > Run options):")
-            if not ok or not reviewer.strip():
-                return None
-            self.reviewer_edit.setText(reviewer.strip())
-            self._save_state()
-        try:
-            row, done = rv.decide(work, r["dam_id"], action, value, reviewer, note)
-        except (ValueError, OSError) as e:
-            QMessageBox.warning(self, TITLE, str(e))
-            return None
-        changed = [(os.path.basename(p), n) for p, n in done]
-        self._log("Review: {} {} {} -> {}".format(r["dam_id"], action, value or "", "; ".join(
-            "{} ({})".format(p, n) for p, n in changed) or "no layer written"))
-        if any(isinstance(n, str) for _p, n in done):
-            QMessageBox.information(self, TITLE, "Recorded in review_decisions.csv, but not every layer could be "
-                                                 "written:\n" + "\n".join("{}: {}".format(p, n) for p, n in changed
-                                                                         if isinstance(n, str)))
-        self.refresh_review()
-        return row
-
-    def _move_breach(self):
-        r = self._selected_review()
-        if r is None:
-            QMessageBox.information(self, TITLE, "Select a dam in the list first.")
-            return None
-        start = ""
-        try:
-            c = self.iface.mapCanvas().center() if self.iface is not None else None
-            if c is not None:
-                start = "{:.1f}, {:.1f}".format(c.x(), c.y())
-        except Exception:                                        # noqa
-            start = ""
-        text, ok = QInputDialog.getText(self, TITLE, "New breach point for {} as 'x, y' in EPSG:5070 metres:".format(
-            r["dam_id"]), text=start) if start else QInputDialog.getText(
-            self, TITLE, "New breach point for {} as 'x, y' in EPSG:5070 metres:".format(r["dam_id"]))
-        if not ok or not str(text).strip():
-            return None
-        return self._decide("move_breach", str(text).strip())
-
-    def _add_note(self):
-        r = self._selected_review()
-        if r is None:
-            QMessageBox.information(self, TITLE, "Select a dam in the list first.")
-            return None
-        text, ok = QInputDialog.getText(self, TITLE, "Note for {}:".format(r["dam_id"]))
-        if not ok or not str(text).strip():
-            return None
-        return self._decide("note", "", str(text).strip())
-
-    def _zoom_to_selected(self):
-        r = self._selected_review()
-        if r is None or self.iface is None:
-            return False
-        work = self.work_edit.text().strip()
-        ref = wf.out(work, "18", "OUTP") or wf.out(work, "4", "OUTP") or wf.out(work, "16", "OUTP")
-        lyr = self._read_layer(ref) if ref else None
-        if lyr is None:
-            return False
-        try:
-            from qgis.core import QgsCoordinateTransform, QgsProject, QgsRectangle
-            names = lyr.fields().names()
-            for f in lyr.getFeatures():
-                if "dam_id" in names and str(f["dam_id"]) == r["dam_id"]:
-                    g = f.geometry()
-                    tr = QgsCoordinateTransform(lyr.crs(), self.iface.mapCanvas().mapSettings().destinationCrs(),
-                                                QgsProject.instance())
-                    g.transform(tr)
-                    p = g.centroid().asPoint()
-                    half = 400.0
-                    self.iface.mapCanvas().setExtent(QgsRectangle(p.x() - half, p.y() - half, p.x() + half, p.y() + half))
-                    self.iface.mapCanvas().refresh()
-                    return True
-        except Exception as e:                                   # noqa
-            self._log("zoom: {}".format(e))
-        return False
-
-    # ----------------------------------------------------------------- results --
-    def _open_work_folder(self):
-        work = self.work_edit.text().strip()
-        if work and os.path.isdir(work):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(work))
-
-    def _open_report(self):
-        p = os.path.join(self.work_edit.text().strip(), wf.REPORT_INDEX)
-        if os.path.isfile(p):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(p))
-
-    def _add_results(self, work=None, title=None):
-        """Every result layer of the work folder, styled, in one layer group (0.13); the plain
-        add when the project has no layer tree here."""
-        work = work or self.work_edit.text().strip()
-        added = 0
-        try:
-            from qgis.core import QgsProject, QgsVectorLayer
-        except Exception as e:                                   # noqa
-            self._log("!!! layers cannot be added here: {}".format(e))
-            return 0
-        try:
-            from . import suite_styles
-        except Exception:                                        # noqa
-            suite_styles = None
-        group = None
-        try:
-            root = QgsProject.instance().layerTreeRoot()
-            name = title or "DamSafety Screening - {}".format(os.path.basename(os.path.normpath(work)) or work)
-            group = root.findGroup(name) or root.insertGroup(0, name)
-        except Exception:                                        # noqa
-            group = None
-        for title_l, p in wf.result_layers(work):
-            try:
-                layer = QgsVectorLayer(p, title_l, "ogr")
-                if layer.isValid():
-                    if suite_styles is not None:
-                        suite_styles.apply(layer, suite_styles.style_for_path(p), log=self._log)
-                    if group is not None:
-                        QgsProject.instance().addMapLayer(layer, False)
-                        group.addLayer(layer)
-                    else:
-                        QgsProject.instance().addMapLayer(layer)
-                    added += 1
-                else:
-                    self._log("!!! {} could not be read as a layer".format(p))
-            except Exception as e:                               # noqa
-                self._log("!!! {}: {}".format(p, e))
-        self._fill_layers()     # before the summary: _fill_layers can log a work-folder-layout
-        self._log("Added {} result layer(s) to the project{}".format(added, " in one group" if group is not None else ""))
-        return added
-
-
-    def _dem_fact(self, index):
-        label = getattr(self, "dem_fact", None)
-        if label is None:
-            return
-        if index == 2:
-            label.setText("USGS 3DEP 1 m lidar tiles: native GeoTIFF tiles, UTM metres, kept in the suite's "
-                          "dem/lidar_1m folder. Result is a per-dam VRT. The first run lists the tiles and sizes.")
-        elif index == 1:
-            label.setText("ND DWR LiDAR: DEM_Imagine .img in UTM metres (EPSG:26914 / 3721); ASCII_Grids_ft in State "
-                          "Plane feet, converted. Saved copy is EPSG:5070, metres, GeoTIFF.")
-        else:
-            label.setText("USGS 3DEP: EPSG:5070, metres, GeoTIFF.")
-
-    def _continue(self):
-        """Open the plugin dam.json says this dam needs next."""
-        plugin, _label, why = wf.continue_target(
-            self.work_edit.text().strip(), self._selected_dam())
-        if plugin == "runner":
-            self._handoff_runner()
-        elif plugin == "hazard":
-            self._handoff_hazard()
-        else:
-            try:
-                QMessageBox.information(self, TITLE, why or "Continue is not available for this dam.")
-            except Exception:
-                self._log(why or "Continue is not available.")
-
-    def _selected_dam(self):
-        combo = getattr(self, "one_dam_combo", None)
-        if combo is not None and combo.currentText():
-            return combo.currentText().split()[0]
-        return ""
-
-    def _handoff_runner(self):
-        work = self.work_edit.text().strip()
-        dams = wf.dams_folder(work, self.settings()) if work else ""
-        dam = self._selected_dam()
-        try:
-            from qgis.utils import plugins
-            plug = plugins.get("DamSafety_Runner") or plugins.get("nd_breach_runner")
-            if plug is None:
-                raise KeyError("Runner is not installed")
-            plug.run_plugin()
-            dlg = getattr(plug, "dialog", None)
-            if dlg is not None and dams:
-                dlg.dams_edit.setText(dams)
-                if dam and hasattr(dlg, "dam_edit"):
-                    dlg.dam_edit.setText(dam)
-            self._log("Runner opened on {} {}".format(dams, dam))
-        except Exception as e:
-            self._log("Runner window not opened ({}). Opening step 7b.".format(e))
-            self._open_step("7b")
-
-    def _handoff_hazard(self):
-        work = self.work_edit.text().strip()
-        dam = self._selected_dam()
-        folder = os.path.join(wf.dams_folder(work, self.settings()), dam) if work and dam else ""
-        try:
-            from qgis.utils import plugins
-            plug = plugins.get("DamSafety_Hazard") or plugins.get("ND_Dam_Hazard_Helper")
-            if plug is None:
-                raise KeyError("Hazard is not installed")
-            plug.run_plugin()
-            dlg = getattr(plug, "dialog", None)
-            if dlg is not None and folder and hasattr(dlg, "dam_folder_edit"):
-                dlg.dam_folder_edit.setText(folder)
-            self._log("Hazard opened on {}".format(folder or work))
-        except Exception as e:
-            QMessageBox.information(self, TITLE, "Hazard could not be opened ({}).".format(e))
-
-    def _fill_results_table(self, work):
-        table = getattr(self, "results_table", None)
-        if table is None:
-            return
-        path = os.path.join(work, "7_results.gpkg")
-        if not os.path.isfile(path):
-            table.setRowCount(0)
-            return
-        try:
-            import sqlite3
-            con = sqlite3.connect(path)
-            rows = con.execute(
-                'select dam_id, name, sim_status, td_qp_m3s, area_ha, max_depth_m, edge_flag from "7_results"'
-            ).fetchall()
-            con.close()
-        except Exception:
-            table.setRowCount(0)
-            return
-        table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            peak = (r[3] or 0) * 35.3147
-            ac = (r[4] or 0) * 2.47105
-            depth = (r[5] or 0) * 3.28084
-            vals = [r[0] or "", r[1] or "", r[2] or "", "{:,.0f}".format(peak),
-                    "{:,.0f}".format(ac), "{:.1f}".format(depth), "yes" if r[6] else "no"]
-            for c, val in enumerate(vals):
-                table.setItem(i, c, QTableWidgetItem(str(val)))
-
-    def _open_hazard(self):
-        try:
-            from qgis.utils import plugins
-            plug = plugins.get("DamSafety_Hazard") or plugins.get("ND_Dam_Hazard_Helper")
-            if plug is None:
-                raise KeyError("Hazard is not installed or not enabled")
-            plug.run_plugin()
-        except Exception as e:                                   # noqa
-            QMessageBox.information(self, TITLE, "DamSafety Hazard could not be opened ({}).".format(e))
 
     def show_settings(self):
         """Open the Settings window (the gear; also the suite menu's 'Suite settings...')."""

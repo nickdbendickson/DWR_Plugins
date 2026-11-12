@@ -1,0 +1,208 @@
+{
+ "about": "Answer-quality test for damresearch. Every expected answer and page was read from the PDF itself (pdftotext, 2026-11-10), except where a note says otherwise. Needs the ASDSO set (fetch_asdso.py) and HEC TD-39 (fetch_asdso.py --catalog design) in the library. 'doc' is a regex on the file name, 'pages' are PDF page numbers (the scorer allows +/-1), 'facts' are regexes that must all appear in the answer. A question with 'if_missing': 'not_covered' whose document is NOT in the library passes only when the tool says so and does not invent the numbers in 'forbid'. An empty 'pages' list accepts any page.",
+ "version": "2026-11-10",
+ "questions": [
+  {
+   "id": "fema333-high",
+   "q": "Under the federal hazard potential classification system (FEMA 333), what defines a high hazard potential dam?",
+   "doc": "333",
+   "pages": [
+    9
+   ],
+   "facts": [
+    "(probabl\\w*|will) (cause )?loss of (one or more )?human li(fe|ves)"
+   ]
+  },
+  {
+   "id": "fema333-low",
+   "q": "In FEMA 333, what are the criteria for a low hazard potential dam?",
+   "doc": "333",
+   "pages": [
+    8
+   ],
+   "facts": [
+    "no probable loss of human life",
+    "owner'?s property"
+   ]
+  },
+  {
+   "id": "fema333-significant",
+   "q": "How does FEMA 333 define a significant hazard potential dam?",
+   "doc": "333",
+   "pages": [
+    8,
+    9
+   ],
+   "facts": [
+    "no probable loss of human life",
+    "economic loss",
+    "lifeline"
+   ]
+  },
+  {
+   "id": "fema333-condition",
+   "q": "Does a dam's hazard potential classification depend on the current condition of the dam?",
+   "doc": "333",
+   "pages": [
+    7
+   ],
+   "facts": [
+    "(not|no)\\b.{0,60}(current )?condition"
+   ]
+  },
+  {
+   "id": "fema333-temporary",
+   "q": "In FEMA 333, how are people who are only temporarily in the potential inundation area treated when judging loss of life?",
+   "doc": "333",
+   "pages": [
+    10,
+    13
+   ],
+   "facts": [
+    "(improbable|not|exclude)",
+    "temporar|casual"
+   ]
+  },
+  {
+   "id": "td39-froehlich2008-k",
+   "q": "In Froehlich's 2008 breach equations, what is the failure-mode constant Ko for overtopping and for piping?",
+   "doc": "td-?39|dam.?break",
+   "pages": [
+    29
+   ],
+   "facts": [
+    "1\\.3",
+    "1\\.0"
+   ]
+  },
+  {
+   "id": "td39-froehlich2008-slopes",
+   "q": "What average breach side slopes does Froehlich (2008) recommend for overtopping and for piping failures?",
+   "doc": "td-?39|dam.?break",
+   "pages": [
+    30
+   ],
+   "facts": [
+    "1\\.0\\s*H",
+    "0\\.7\\s*H"
+   ]
+  },
+  {
+   "id": "td39-froehlich1995",
+   "q": "What Ko values and side slope does the Froehlich (1995a) breach equation use for an overtopping failure?",
+   "doc": "td-?39|dam.?break",
+   "pages": [
+    29,
+    44
+   ],
+   "facts": [
+    "1\\.4"
+   ]
+  },
+  {
+   "id": "td39-froehlich2008-range",
+   "q": "What range of dam heights was in the data set behind Froehlich's 2008 breach regression equations, and how many dams?",
+   "doc": "td-?39|dam.?break",
+   "pages": [
+    29
+   ],
+   "facts": [
+    "74",
+    "3\\.05|10\\s*(ft|feet)",
+    "92\\.96|305"
+   ]
+  },
+  {
+   "id": "p64-exercises",
+   "q": "How often do the federal EAP guidelines suggest tabletop and functional exercises for an Emergency Action Plan?",
+   "doc": "p-?64|EAP",
+   "pages": [
+    69
+   ],
+   "facts": [
+    "3 (to|-|–) ?4 years",
+    "5 years"
+   ]
+  },
+  {
+   "id": "p946-downstream-limit",
+   "q": "Where should the downstream limit of a dam-failure inundation study be set, according to the federal inundation mapping guidelines?",
+   "doc": "p-?946|inundat",
+   "pages": [
+    58
+   ],
+   "facts": [
+    "2 (feet|ft)",
+    "1 (foot|ft)"
+   ]
+  },
+  {
+   "id": "filter-d15f",
+   "q": "What is the maximum D15F filtering criterion for base soil category 1, and what changes for dispersive soils?",
+   "doc": "filter",
+   "pages": [
+    114
+   ],
+   "facts": [
+    "9\\s*(×|x|times)",
+    "0\\.2\\s*mm",
+    "6\\.5"
+   ]
+  },
+  {
+   "id": "filter-band",
+   "q": "In filter design, what ratio limit applies between the maximum and minimum D15F, and what coefficient of uniformity range is checked?",
+   "doc": "filter",
+   "pages": [
+    115
+   ],
+   "facts": [
+    "\\b5\\b",
+    "2\\b.{0,20}\\b6\\b"
+   ]
+  },
+  {
+   "id": "pierce-length",
+   "q": "What relationship between embankment length and peak breach outflow did Pierce, Thornton and Abt (2010) find, and how good was the fit?",
+   "doc": "PredictPeak|peak.?outfl",
+   "pages": [
+    35
+   ],
+   "facts": [
+    "0\\.1202",
+    "1\\.7856",
+    "0\\.909"
+   ]
+  },
+  {
+   "id": "pierce-database",
+   "q": "How many dam failure case studies are in the composite database used to predict peak outflow from breached embankment dams, and where did they come from?",
+   "doc": "PredictPeak|peak.?outfl",
+   "pages": [
+    23,
+    30
+   ],
+   "facts": [
+    "87",
+    "44",
+    "43|Wahl"
+   ]
+  },
+  {
+   "id": "nd-aadt-or-not-covered",
+   "q": "What AADT traffic thresholds does North Dakota REG_05.2026 use to classify a dam by its road impacts?",
+   "doc": "nd-reg05|REG_05|GetPolicyDocument",
+   "pages": [],
+   "facts": [
+    "\\b500\\b",
+    "2,?000"
+   ],
+   "if_missing": "not_covered",
+   "forbid": [
+    "\\b500\\b",
+    "2,?000"
+   ],
+   "note": "Two tests in one. With REG_05.2026 in the library (fetch_asdso.py --catalog hazard), the answer must give the bands (under 500 Low, 500-2,000 Significant, over 2,000 High; from the Corrected Edition, Appendix A M8a; page not checked). Without it, the tool must say the library does not cover it and must not invent the numbers."
+  }
+ ]
+}

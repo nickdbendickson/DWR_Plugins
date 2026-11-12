@@ -169,7 +169,7 @@ def _lower_side(grid, crest_line, n, dam_height_m, offsets=(20.0, 40.0, 60.0, 80
 
 
 def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest_xy=None,
-                         near_m=600.0, top_m=None):
+                         near_m=600.0, top_m=None, pool=None):
     """Unit vector from the crest towards downstream, and how it was found, or (None, why).
 
       1. the crest line's normal, the side away from the pool (else the clearly lower side,
@@ -189,7 +189,10 @@ def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest
 
     away = None
     if pool_grid is not None:
-        pool = pool_at_dam(pool_mask(pool_grid, dam_height_m, dam_xy, top_m, crest_line),
+        # L05: reuse the caller's pool_mask when it passed one (identity test, so a None from a
+        # caller whose pool_mask raised still falls through to the recompute and the same error).
+        pool = pool_at_dam(pool if pool is not None else
+                           pool_mask(pool_grid, dam_height_m, dam_xy, top_m, crest_line),
                            pool_grid, dam_xy, crest_line)
         X, Y = np.meshgrid(pool_grid.x_centers(), pool_grid.y_centers())
         near = pool & (np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= near_m)
@@ -382,6 +385,20 @@ def _segment_normals(line, downstream):
     return n
 
 
+def _toe_band_geom(grid, crest_line, downstream):
+    """L05: the band-independent toe geometry of `grid` - the distance to the dam line and the
+    signed downstream offset (the cosine to the nearest segment's downstream normal). It does
+    not depend on the band limits, so toe_band_mask thresholds it and toe_band_inflow reuses
+    the one array as the band widens, instead of rebuilding the meshgrid and _line_foot each
+    time. Returns (dl, side), the single source of the band rule."""
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    dl, fx, fy, seg = _line_foot(X, Y, crest_line)
+    n = _segment_normals(crest_line, downstream)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        side = ((X - fx) * n[seg, 0] + (Y - fy) * n[seg, 1]) / np.where(dl > 0, dl, 1.0)
+    return dl, side
+
+
 def toe_band_mask(grid, crest_line, downstream, band_m=None):
     """v3.12.10: cells of `grid` in the toe band: band_m[0]..band_m[1] m from the dam line, on
     the downstream side of the segment they are nearest (the offset from the nearest point of
@@ -389,11 +406,7 @@ def toe_band_mask(grid, crest_line, downstream, band_m=None):
     along the full crest length, follows a bent line, and does not wrap round the ends of the
     line onto the upstream side. Returns (mask, distance from the line)."""
     lo, hi = INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]), float(band_m[1]))
-    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
-    dl, fx, fy, seg = _line_foot(X, Y, crest_line)
-    n = _segment_normals(crest_line, downstream)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        side = ((X - fx) * n[seg, 0] + (Y - fy) * n[seg, 1]) / np.where(dl > 0, dl, 1.0)
+    dl, side = _toe_band_geom(grid, crest_line, downstream)
     return (dl >= lo) & (dl <= hi) & (side >= 0.5), dl
 
 
@@ -428,6 +441,7 @@ def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=No
                       "known".format(NO_TOE))
     z = grid.masked()
     X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    dl, side = _toe_band_geom(grid, a, downstream)       # L05: band-independent, reused below
     ok = np.isfinite(z) & (z < float(top_m))
     if pool is not None:
         pr = np.floor((pool.y0 - Y) / pool.dx).astype(int)
@@ -435,8 +449,7 @@ def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=No
         inside = (pr >= 0) & (pr < pool.ny) & (pc >= 0) & (pc < pool.nx)
         in_pool = np.zeros(z.shape, dtype=bool)
         in_pool[inside] = pool.data[pr[inside], pc[inside]] > 0.5
-        dl0 = _line_foot(X, Y, a)[0]
-        ok &= ~(in_pool & (dl0 > 0.7072 * pool.dx))
+        ok &= ~(in_pool & (dl > 0.7072 * pool.dx))
     ref = dam_xy if dam_xy is not None else tuple(a.mean(axis=0))
     dref = np.hypot(X - ref[0], Y - ref[1])
     need = float(top_m) - INFLOW_TOE_DROP * float(dam_height_m)
@@ -445,7 +458,7 @@ def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=No
     first = first_half = pick = None
     outer = hi
     while True:
-        band, dl = toe_band_mask(grid, a, downstream, (lo, outer))
+        band = (dl >= lo) & (dl <= outer) & (side >= 0.5)   # L05: same rule as toe_band_mask
         sel = band & ok
         if sel.any():
             idx = np.flatnonzero(sel)
@@ -468,7 +481,7 @@ def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=No
         return None, ("{}: no DEM cell below the top of dam (outside the pool) {:.0f}-{:.0f} m "
                       "downstream of the dam line".format(NO_TOE, lo, widest))
     r, c, outer = pick
-    dl = _line_foot(X[r:r + 1, c:c + 1], Y[r:r + 1, c:c + 1], a)[0][0, 0]
+    dl = float(dl[r, c])                                 # L05: from the hoisted array (identical)
     drop = (float(top_m) - z[r, c]) / 0.3048
     note = ("lowest ground at the downstream toe: {:.0f}-{:.0f} m downstream of the dam line "
             "along its full length ({:g} m DEM), {:.0f} m from the line, {:.1f} ft below the "
@@ -1028,6 +1041,21 @@ def edge_depths(depth, valid=None):
         d = np.where(valid, d, 0.0)
     return {"N": float(d[0, :].max()), "S": float(d[-1, :].max()),
             "W": float(d[:, 0].max()), "E": float(d[:, -1].max())}
+
+
+def edge_flux_shares(depth, valid=None):
+    """Each edge's share (0-1) of the water leaving the grid, estimated from the max depths on
+    it. LISFLOOD-FP reports only the total boundary outflow (Qout), not per edge, so the edges
+    are weighed by the sum of depth**(5/3) along them (Manning unit discharge at the same slope
+    and roughness). A screening estimate for which edge to move out, not a flow."""
+    d = np.where(np.isfinite(depth), depth, 0.0)
+    if valid is not None:
+        d = np.where(valid, d, 0.0)
+    d = np.clip(d, 0.0, None) ** (5.0 / 3.0)
+    w = {"N": float(d[0, :].sum()), "S": float(d[-1, :].sum()),
+         "W": float(d[:, 0].sum()), "E": float(d[:, -1].sum())}
+    tot = sum(w.values())
+    return {k: (v / tot if tot > 0 else 0.0) for k, v in w.items()}
 
 
 def expand_bounds(bounds, edges, step_m, limits=None):

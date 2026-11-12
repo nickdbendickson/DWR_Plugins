@@ -4,10 +4,11 @@ with ND Dam Breach Runner and ND Dam Breach Screening (the dam.json record, the 
 gate, class probability, quick creep screen, rules comparison, chart sign-off, the
 reviewer's view, culvert lines and the Screening data package).
 
-Every tool is a Processing algorithm of this plugin (ndhazard:...); the buttons open its
-Processing dialog with the dam's folders filled in, so the engineer sees and can change
-every parameter before it runs, and the same tool runs in batch, in models and from
-qgis_process. The model-gate choices are settings of the classification run (cfg keys
+Every tool is a Processing algorithm of this plugin (ndhazard:...); 2.23.17: the launchers
+are the gear's "Dam suite tools" submenu (usability plan, change 8: nine buttons were wider
+than the window), each opening the tool's Processing dialog with the dam's folders filled
+in, so the engineer sees and can change every parameter before it runs, and the same tool
+runs in batch, in models and from qgis_process. The model-gate choices are settings of the classification run (cfg keys
 model_gate / gate_stop_on_fail) and are saved with the project.
 
 Dialog contract (what the host dialog provides): _log(msg), config_dam_folder,
@@ -19,8 +20,7 @@ classification cfg.
 import os
 
 from qgis.PyQt.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QGroupBox,
-    QMessageBox,
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QMessageBox,
 )
 
 from .ui_wrap import WrapCheckBox
@@ -108,17 +108,40 @@ class SuiteTabMixin(object):
     """Group 8 of the Hazard Classification tab (v2.10)."""
 
     SETTING_WIDGETS_2100 = ("suite_gate_check", "suite_gate_stop_check")
-    BUSY_WIDGETS_2100 = tuple(t[0] for t in TOOLS) + ("suite_gate_check",
-                                                       "suite_gate_stop_check",
-                                                       "suite_record_btn")
+    # 2.23.17: the nine tool launchers are actions of the gear's "Dam suite tools" menu
+    # (suite_tool_actions), not buttons; _set_busy disables the menu as one widget
+    BUSY_WIDGETS_2100 = ("suite_gate_check", "suite_gate_stop_check", "suite_record_btn",
+                         "suite_tools_menu")
+
+    def _build_suite_tools_menu(self, parent_menu):
+        """2.23.17 (usability plan, change 8): the Dam suite tools as a submenu of the gear
+        instead of nine buttons on the Classify view (the row of buttons was wider than the
+        window and made the whole tab scroll sideways). Each action opens the tool's
+        Processing dialog with this dam's folders filled in, as the buttons did. Returns the
+        QMenu; the actions are self.suite_tool_actions[alg]."""
+        from qgis.PyQt.QtWidgets import QMenu
+        menu = QMenu("Dam suite tools", parent_menu)
+        menu.setToolTip("Tools shared with DamSafety Runner and DamSafety Screening. Each opens "
+                        "its Processing dialog with this dam's folders filled in. Every "
+                        "threshold is a screening value YOU choose; none is a requirement of "
+                        "REG_05.2026 or TM 11.")
+        self.suite_tool_actions = {}
+        for _attr, label, alg, tip in TOOLS:
+            act = menu.addAction(label.replace("...", "\u2026"))   # one ellipsis character
+            act.setToolTip(tip + "\n(Processing: ndhazard:{})".format(alg))
+            act.triggered.connect(lambda _c=False, a=alg: self._open_suite_tool(a))
+            self.suite_tool_actions[alg] = act
+        self.suite_tools_menu = menu
+        return menu
 
     def _build_suite_group(self):
-        grp = QGroupBox("Dam suite - DamSafety Runner / Screening tools for this dam")
+        grp = QGroupBox("Dam suite - the model gate and this dam's record")
         lay = QVBoxLayout()
         info = QLabel(
-            "Tools shared with DamSafety Runner and DamSafety Screening. Each opens its "
-            "Processing dialog with this dam's folders filled in. Every threshold is a "
-            "screening value YOU choose; none is a requirement of REG_05.2026 or TM 11.")
+            "The tools shared with DamSafety Runner and DamSafety Screening (model gate, class "
+            "probability, creep screen, rules comparison, chart sign-off, review, culverts, "
+            "export) are under \u2699 > Dam suite tools. Every threshold is a screening value "
+            "YOU choose; none is a requirement of REG_05.2026 or TM 11.")
         info.setWordWrap(True)
         lay.addWidget(info)
         self.suite_gate_check = WrapCheckBox("Model gate before every classification run "
@@ -132,14 +155,6 @@ class SuiteTabMixin(object):
         self.suite_gate_check.toggled.connect(self.suite_gate_stop_check.setEnabled)
         lay.addWidget(self.suite_gate_check)
         lay.addWidget(self.suite_gate_stop_check)
-        grid = QGridLayout()
-        for i, (attr, label, alg, tip) in enumerate(TOOLS):
-            btn = QPushButton(label.replace("...", "\u2026"))     # one ellipsis character
-            btn.setToolTip(tip + "\n(Processing: ndhazard:{})".format(alg))
-            btn.clicked.connect(lambda _c=False, a=alg: self._open_suite_tool(a))
-            setattr(self, attr, btn)
-            grid.addWidget(btn, i // 4, i % 4)
-        lay.addLayout(grid)
         row = QHBoxLayout()
         self.suite_record_label = QLabel("dam.json: -")
         self.suite_record_label.setWordWrap(True)

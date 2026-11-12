@@ -261,6 +261,15 @@ def mocked(tmp_path, monkeypatch):
     for n, fn in HIFLD_FILES.items():
         _hifld_gpkg(str(hf / fn), n)
     monkeypatch.setattr(PB, "_TEST_HIFLD", str(hf), raising=False)
+    # 1.9.0: the OSM layers are mocked through _run_one here - keep the builder off the
+    # Geofabrik build (no Overpass probe, no .osm.pbf download); its own tests cover that path.
+    monkeypatch.setenv("NDSUITE_OSM_GEOFABRIK", "0")
+    # The 3DHP layers are mocked the same way - keep the builder off the national-file route too:
+    # with it on, every hydro build first sends a live test request to hydro.nationalmap.gov
+    # (and, when that fails, asks The National Map for the 12.5 GB file), so these tests waited
+    # on a USGS server and took minutes in CI. test_hydro_downloads_file_when_service_down and
+    # test_hydro_download_off_reads_service cover that route with the service mocked.
+    monkeypatch.setenv("NDSUITE_3DHP_DOWNLOAD", "0")
     return calls, _tif(str(tmp_path / "nlcd.tif"))
 
 
@@ -447,6 +456,9 @@ def test_hydro_per_area_fill_and_3dhp_fields(tmp_path, monkeypatch):
                 return s(url, params, post, retries, what)
         return nhd(url, params, post, retries, what)
     monkeypatch.setattr(BP, "http_json", http_json)
+    # 1.8.0: this test mocks the 3DHP / NHD web services - keep the builder on the web path
+    # (no national-file download); the download path has its own tests below.
+    monkeypatch.setenv("NDSUITE_3DHP_DOWNLOAD", "0")
     monkeypatch.setattr(BP, "SPLIT_PAUSE_S", 0.0)
     monkeypatch.setattr(PB, "HYDRO_TILE_DEG", 0.05)
     monkeypatch.setattr(PB, "HYDRO_SPLIT_DEPTH", 2)
@@ -526,3 +538,235 @@ def test_usgs_stream_crossings_in_barriers():
     assert "crossing_type" in e["spec"]["fields"]
     assert "10.5066/P9YX6KTB" in e["info"]["source"]
     assert GP.group_of("USGS_stream_crossings") == "barriers"
+
+
+# -------------------------------------------------- 1.8.0: the 3DHP national file --
+def _national_3dhp(path):
+    """A tiny stand-in for the National Map 3DHP file: one GeoPackage with a 'flowline' and a
+    'waterbody' layer in the 3DHP field names, projected (EPSG:26914) like the real file, with
+    one feature inside BBOX and one far outside (clipped away)."""
+    from osgeo import ogr, osr
+    wgs = osr.SpatialReference(); wgs.ImportFromEPSG(4326)
+    wgs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    utm = osr.SpatialReference(); utm.ImportFromEPSG(26914)
+    utm.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    to_utm = osr.CoordinateTransformation(wgs, utm)
+    drv = ogr.GetDriverByName("GPKG")
+    ds = drv.CreateDataSource(path)
+    inside = (-100.78, 46.80)       # in BBOX
+    outside = (-97.0, 47.0)         # far away: clipped out
+    for lname, geom_type, wkt in (
+            ("flowline", ogr.wkbLineString, "LINESTRING ({x0} {y0}, {x1} {y1})"),
+            ("waterbody", ogr.wkbPolygon,
+             "POLYGON (({x0} {y0}, {x1} {y0}, {x1} {y1}, {x0} {y1}, {x0} {y0}))")):
+        lyr = ds.CreateLayer(lname, utm, geom_type)
+        for fld in ("id3dhp", "gnisidlabel", "featuretypelabel", "gnisid", "featuretype"):
+            lyr.CreateField(ogr.FieldDefn(fld, ogr.OFTString))
+        for n, (lon, lat) in enumerate((inside, outside)):
+            px, py, _ = to_utm.TransformPoint(lon, lat)
+            d = 50.0
+            g = ogr.CreateGeometryFromWkt(wkt.format(x0=px, y0=py, x1=px + d, y1=py + d))
+            f = ogr.Feature(lyr.GetLayerDefn())
+            f.SetField("id3dhp", "%s-%d" % (lname, n))
+            f.SetField("gnisidlabel", "Missouri River")
+            f.SetField("featuretypelabel", "Stream/River" if lname == "flowline" else "Lake/Pond")
+            f.SetField("featuretype", "460" if lname == "flowline" else "390")
+            f.SetGeometry(g)
+            lyr.CreateFeature(f)
+    ds = None
+    return path
+
+
+def _no_service(*a, **k):
+    e = BP.BuildError("object ids: test (HTTP Error 504: Gateway Time-out)")
+    e.http_code = 504
+    raise e
+
+
+def test_hydro_from_national_file(tmp_path, monkeypatch):
+    """1.8.0: a 3DHP national file in the data folder's 3dhp/ is used - the layer is cut out of
+    it, the 3DHP fields are mapped to NHD fields, and the web service is never called."""
+    data = tmp_path / "data"; (data / "3dhp").mkdir(parents=True)
+    _national_3dhp(str(data / "3dhp" / "3dhp_all_CONUS_test_GDB.gpkg"))
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+    monkeypatch.setattr(BP, "http_json", _no_service)        # any web call fails the test
+    out = tmp_path / "h"; out.mkdir()
+    r, lines = _build(out, None, only=["NHD_flowlines", "NHD_waterbodies"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    m = r["manifest2"]["datasets"]
+    fl = m["NHD_flowlines"]
+    assert fl["hydro_route"] == "national file" and fl["count_3dhp"] == 1, fl
+    assert fl["count_nhd"] == 0 and "national file" in fl["source"], fl
+    assert any("national file found" in x for x in lines), lines
+    pack = OP.open_pack(str(out / PB.PACK1))
+    feats = [f["properties"] for f in pack.query("NHD_flowlines", BBOX)]
+    assert len(feats) == 1 and feats[0]["hydro_src"] == "3DHP", feats
+    assert feats[0]["gnis_name"] == "Missouri River" and feats[0]["ftype"] == 460, feats[0]
+    assert all(f["properties"]["hydro_src"] == "3DHP"
+               for f in pack.query("NHD_waterbodies", BBOX))
+
+
+def test_hydro_downloads_file_when_service_down(tmp_path, monkeypatch):
+    """1.8.0: with no file and the 3DHP service failing its test, the builder downloads the
+    national file (once) and cuts the layer out of it instead of hammering the service."""
+    nat = _national_3dhp(str(tmp_path / "3dhp_all_CONUS_test_GDB.gpkg"))
+    data = tmp_path / "data"; data.mkdir()
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+    monkeypatch.setenv("NDSUITE_3DHP_DOWNLOAD", "1")
+
+    calls = {"probe": 0, "download": 0}
+
+    def http_json(url, params=None, post=False, retries=None, what=""):
+        calls["probe"] += 1
+        _no_service()
+    monkeypatch.setattr(BP, "http_json", http_json)
+    monkeypatch.setattr(PB, "_newest_3dhp_product",
+                        lambda log: ("https://example.test/3dhp_conus_test.gpkg", os.path.getsize(nat)))
+
+    def fake_resume(url, dest, max_age=0, refresh=False, beat=None):
+        calls["download"] += 1
+        import shutil as _sh
+        _sh.copyfile(nat, dest)
+        return dest, True
+    monkeypatch.setattr(BP, "_download_resume", fake_resume)
+    monkeypatch.setattr(PB, "DISK_MARGIN", 0)
+
+    out = tmp_path / "h"; out.mkdir()
+    r, lines = _build(out, None, only=["NHD_flowlines", "NHD_waterbodies"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    assert calls["download"] == 1, calls                 # downloaded once, reused for both layers
+    fl = r["manifest2"]["datasets"]["NHD_flowlines"]
+    assert fl["hydro_route"] == "national file", fl
+    assert "not answering" in fl["fallback_reason"] and "504" in fl["fallback_reason"], fl
+    # the downloaded file lands in the data folder's 3dhp/, kept for later builds / the Updater
+    assert (data / "3dhp" / "3dhp_conus_test.gpkg").is_file()
+    assert any("not answering" in x and "national file" in x for x in lines), lines
+
+
+def test_hydro_download_off_reads_service(tmp_path, monkeypatch):
+    """1.8.0: with the download turned off and no file, the builder reads the web service area by
+    area as before (no probe, no download)."""
+    from DamSafety_Data.damsuite import hydro3dhp as H
+    data = tmp_path / "data"; data.mkdir()
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+    monkeypatch.setenv("NDSUITE_3DHP_DOWNLOAD", "0")
+    p3 = {"id3dhp": "a1", "gnisidlabel": "Missouri River", "gnisid": "1",
+          "featuretypelabel": "Stream/River", "featuretype": 460, "workunitid": "NHD"}
+    svc = {H.FLOWLINE_URL: _Svc(p3), H.WATERBODY_URL: _Svc(p3)}
+    nhd = _Svc({"gnis_name": "Lake", "ftype": 390}, first_id=1001)
+
+    def http_json(url, params=None, post=False, retries=None, what=""):
+        for u, s in svc.items():
+            if url.startswith(u):
+                return s(url, params, post, retries, what)
+        return nhd(url, params, post, retries, what)
+    monkeypatch.setattr(BP, "http_json", http_json)
+    monkeypatch.setattr(BP, "SPLIT_PAUSE_S", 0.0)
+    monkeypatch.setattr(PB, "HYDRO_TILE_DEG", 0.05)
+    monkeypatch.setattr(PB, "HYDRO_SPLIT_DEPTH", 2)
+    out = tmp_path / "h"; out.mkdir()
+    r, _ = _build(out, None, only=["NHD_flowlines"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    fl = r["manifest2"]["datasets"]["NHD_flowlines"]
+    assert fl["hydro_route"] == "web service" and fl["count_3dhp"] == 150, fl
+
+
+# ---------------------------------------- 1.9.0: the OSM Geofabrik extract --
+def _osm_gpkg(path, name):
+    """A tiny stand-in for an osm_layers GeoPackage: one point layer named `name` with an osm_id,
+    one feature inside BBOX and one far outside (clipped away)."""
+    from osgeo import ogr, osr
+    srs = osr.SpatialReference(); srs.ImportFromEPSG(4326)
+    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+    lyr = ds.CreateLayer(name, srs, ogr.wkbPoint)
+    for fld in ("name", "category", "osm_id", "operator"):
+        lyr.CreateField(ogr.FieldDefn(fld, ogr.OFTString))
+    for i, (lon, lat) in enumerate(((-100.78, 46.80), (-97.0, 47.0))):
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetField("name", "Station %d" % i)
+        f.SetField("category", "fire_station")
+        f.SetField("osm_id", "node/%d" % (1000 + i))
+        f.SetGeometry(ogr.CreateGeometryFromWkt("POINT (%f %f)" % (lon, lat)))
+        lyr.CreateFeature(f)
+    ds = None
+    return path
+
+
+def test_osm_from_geofabrik_file(tmp_path, monkeypatch):
+    """1.9.0: an OSM layer file in the data folder's osm_layers/ is read instead of Overpass."""
+    data = tmp_path / "data"; (data / "osm_layers").mkdir(parents=True)
+    _osm_gpkg(str(data / "osm_layers" / "OSM_lifelines.gpkg"), "OSM_lifelines")
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+
+    def no_overpass(ctx, name, label, kind, spec, bbox):
+        raise AssertionError("Overpass should not be called when the file exists")
+    monkeypatch.setattr(BP, "_run_one", no_overpass)
+
+    out = tmp_path / "o"; out.mkdir()
+    r, lines = _build(out, None, only=["OSM_lifelines"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    e = r["manifest2"]["datasets"]["OSM_lifelines"]
+    assert e["osm_route"] == "geofabrik file" and e["count"] == 1, e
+    assert any("OSM layer file found" in x for x in lines), lines
+
+
+def test_osm_builds_geofabrik_when_overpass_down(tmp_path, monkeypatch):
+    """1.9.0: no file + Overpass failing its test -> the Geofabrik extract is built once into
+    osm_layers/ and the layers are read from it (not from Overpass)."""
+    data = tmp_path / "data"; data.mkdir()
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+    monkeypatch.setenv("NDSUITE_OSM_GEOFABRIK", "1")
+    monkeypatch.setattr(PB, "_overpass_down", lambda ctx: "HTTP Error 504: Gateway Time-out")
+
+    built = {"n": 0}
+
+    def fake_build(ctx, out_dir):
+        built["n"] += 1
+        os.makedirs(out_dir, exist_ok=True)
+        for nm in ("OSM_lifelines", "OSM_places"):
+            _osm_gpkg(os.path.join(out_dir, nm + ".gpkg"), nm)
+    monkeypatch.setattr(PB, "_build_osm_geofabrik", fake_build)
+
+    def no_overpass(ctx, name, label, kind, spec, bbox):
+        raise AssertionError("Overpass should not be read after the Geofabrik build")
+    monkeypatch.setattr(BP, "_run_one", no_overpass)
+
+    out = tmp_path / "o"; out.mkdir()
+    r, lines = _build(out, None, only=["OSM_lifelines", "OSM_places"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    assert built["n"] == 1, built                        # built once, reused for both layers
+    e = r["manifest2"]["datasets"]["OSM_lifelines"]
+    assert e["osm_route"] == "geofabrik file" and "not answering" in e["fallback_reason"], e
+    assert (data / "osm_layers" / "OSM_lifelines.gpkg").is_file()
+    assert any("Overpass API is not answering" in x for x in lines), lines
+
+
+def test_osm_uses_overpass_when_up(tmp_path, monkeypatch):
+    """1.9.0: with no file and Overpass answering its test, the layer is read from Overpass as
+    before (no Geofabrik download)."""
+    data = tmp_path / "data"; data.mkdir()
+    monkeypatch.setenv("NDSUITE_DATA", str(data))
+    monkeypatch.setenv("NDSUITE_OSM_GEOFABRIK", "1")
+    monkeypatch.setattr(PB, "_overpass_down", lambda ctx: "")      # Overpass up
+
+    def fake_build(ctx, out_dir):
+        raise AssertionError("Geofabrik should not be built when Overpass is up")
+    monkeypatch.setattr(PB, "_build_osm_geofabrik", fake_build)
+
+    seen = []
+
+    def run_one(ctx, name, label, kind, spec, bbox):
+        seen.append((name, kind))
+        w = ctx.writer
+        w.begin(name, label, "overpass://" + name, resume=False)
+        w.add([{"type": "Feature", "geometry": {"type": "Point", "coordinates": [-100.8, 46.8]},
+                "properties": {"fid": 1, "osm_id": "node/7"}}], lambda f: "fid:1")
+        return w.finish("mock overpass")
+    monkeypatch.setattr(BP, "_run_one", run_one)
+
+    out = tmp_path / "o"; out.mkdir()
+    r, _ = _build(out, None, only=["OSM_lifelines"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    assert ("OSM_lifelines", "osm") in seen, seen
+    assert r["manifest2"]["datasets"]["OSM_lifelines"]["osm_route"] == "overpass"

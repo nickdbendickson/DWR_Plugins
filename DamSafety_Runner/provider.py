@@ -5,7 +5,8 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from .algorithms import (ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ALLOW_UNPATCHED,
-                         SET_ANUGA, SET_BUILTIN, SET_LISFLOOD, SET_THREADS, SET_CREST_DEM)
+                         SET_ANUGA, SET_BUILTIN, SET_LISFLOOD, SET_THREADS, SET_CREST_DEM,
+                         SET_SOLVER)
 from .core import nd_data
 from . import popup_logic as pl
 from . import suite_settings_tools as ST
@@ -18,8 +19,16 @@ def _tool_name(cls):
         return ""
 
 
+# 3.16.12 (usability plan change 3): tools nobody runs by hand from the toolbox - the self-test,
+# the analytic verification suite and the hand-off to DamSafety Hazard (the window's Results
+# button opens it) - carry FlagHideFromToolbox. Still runnable from scripts, models,
+# qgis_process and the window; only the toolbox list shrinks.
+HIDDEN_FROM_TOOLBOX = frozenset(("selftest", "verification", "classify"))
+
 # 3.5: every tool takes its parameter defaults from the suite settings file (suite_settings_tools)
-ALGORITHMS = tuple(ST.settings_aware(c, pl.PLUGIN_KEY, pl.settings_group) for c in ORIGINAL_ALGORITHMS)
+ALGORITHMS = tuple(ST.settings_aware(c, pl.PLUGIN_KEY, pl.settings_group,
+                                     hidden=_tool_name(c) in HIDDEN_FROM_TOOLBOX)
+                   for c in ORIGINAL_ALGORITHMS)
 
 ICON = os.path.join(os.path.dirname(__file__), "icon.svg")
 
@@ -64,6 +73,10 @@ class Provider(QgsProcessingProvider):
                 "arrival-depth patch (arrival times then mark the first wetting, ~1 mm, NOT the "
                 "arrival depth, so warning times are unreliable; off by default)",
                 False, valuetype=Setting.BOOL))
+            # 3.16.0: the default LISFLOOD-FP solver (ACC, FV2 or MWDG2; empty = ACC)
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV2 or MWDG2 "
+                "(empty = ACC; the NDBREACH_LISFLOOD_SOLVER environment variable wins)", ""))
             # 3.15.0
             ProcessingConfig.addSetting(Setting(
                 self.name(), SET_CREST_DEM, "Crest burn: 1 m DEM or VRT (e.g. the statewide ND "
@@ -79,7 +92,7 @@ class Provider(QgsProcessingProvider):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
             for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED,
-                      SET_CREST_DEM):
+                      SET_CREST_DEM, SET_SOLVER):
                 ProcessingConfig.removeSetting(k)
         except Exception:
             pass

@@ -1,9 +1,11 @@
 """Tool 8 through core/nd_hazard.py (ND 5.2 / 5.3, ACER TM 11 charts) and the adapter in
 core/hazard.py.
 
-The charts used here are INVENTED TEST SHAPES (copied from the runner's
-tests/test_nd_hazard.test_charts): they exercise the zone logic only and are NOT the ACER TM 11
-figures. Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_nd_hazard_adapter.py
+The chart FILE used here carries INVENTED TEST SHAPES (copied from the runner's
+tests/test_nd_hazard.test_charts); since nd_hazard 1.4.0 (audit P1) the zone comes from the suite's
+digitized REG_05.2026 table (damsuite.tm11_curves), the Hazard plugin's rule, so the test points
+are chosen on the table (house at 1 ft/s: judgment from 2.916 ft, high from 5.968 ft; mobile at
+1 ft/s: judgment from 1.905 ft, high from 2.499 ft). Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_nd_hazard_adapter.py
 """
 import os, sys, tempfile, shutil
 
@@ -37,7 +39,7 @@ if runner_core and os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
         b = open(os.path.join(runner_core, fn), "rb").read()
         assert a == b, fn + " differs from the ND Dam Breach Runner copy - re-copy it, never edit it"
     print("OK (copies identical to", runner_core + ")")
-assert hz.nh is nh and nh.MODULE_VERSION == "1.3.0"
+assert hz.nh is nh and nh.MODULE_VERSION == "1.4.0"
 
 
 # ---- invented TEST charts (not the ACER TM 11 figures)
@@ -124,6 +126,16 @@ small = [(41, 59), (44, 59), (44, 56), (41, 56)]           # no cell centre insi
 assert g.sample("polygon", [small])["depth_m"] == 0.0
 s = g.sample("polygon", [small, ring])                     # MultiPolygon: the deepest part
 assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0
+# 0.18.17 (audit P1): a STRUCTURE reads the Hazard plugin's footprint - the outline plus its
+# 5 ft (1.524 m) edge ring, a point as a 25 ft (7.62 m) disc - so the same cells as the Hazard
+near_ring = [(11, 84), (29, 84), (29, 71), (11, 71)]       # centres (15, 75), (25, 75): dry; (15, 85) 1 m above the wall
+assert g.sample("polygon", [near_ring])["depth_m"] == 0.0
+s = g.sample("polygon", [near_ring], structure=True)       # the edge ring reaches (15, 85): 2 m
+assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0 and "edge ring" in s["how"], s
+s = g.sample("point", [(18, 85)], structure=True)          # 7.62 m disc: cells (1,1) and (1,2)
+assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0 and "within 25 ft" in s["how"], s
+assert g.sample("point", [(18, 85)])["vel_ms"] == 0.5      # a lifeline point: its own cell
+assert g.sample("point", [(-50, 85)], structure=True) is None
 s = g.sample("line", [[(0, 35), (100, 35)], [(0, 15), (100, 15)]])
 assert abs(s["depth_m"] - 0.2) < 1e-12 and s["y"] == 15
 assert g.sample("line", [[(0, 35), (100, 35)]])["depth_m"] == 0.0
@@ -149,8 +161,22 @@ assert c.hazard_class == "High" and c.borderline_raised                     # ol
 assert c.governing[0].zone == nh.ZONE_JUDGMENT and c.counts["judgment_zone"] == 1
 c = hz.classify_nd([S("high", 8.0, 1.0), S("judg", 4.0, 1.0)], charts=CS)
 assert c.hazard_class == "High" and not c.borderline_raised
-c = hz.classify_nd([S("mh", 1.5, 1.0, mobile=True)], charts=CS)             # mobile chart: judgment
+c = hz.classify_nd([S("mh", 2.0, 1.0, mobile=True)], charts=CS)             # mobile table: judgment
 assert c.hazard_class == "Medium" and "Fig. 5.2" in c.governing[0].section
+assert c.governing[0].zone == nh.ZONE_JUDGMENT
+assert hz.classify_nd([S("h", 2.0, 1.0)], charts=CS).governing[0].zone == nh.ZONE_LOW
+# 0.18.17 (audit P1): the Hazard plugin's borderline option, same defaults (0.5 ft, off):
+# 5.9 ft at 0 ft/s is 0.07 ft below the house high boundary - noted, not moved; moved with
+# the option on. The old 0.01-axis tolerance band (which made it High) decides nothing now.
+c = hz.classify_nd([S("nr", 5.9, 0.0)], charts=CS)
+f = c.governing[0]
+assert c.hazard_class == "Medium" and f.zone == nh.ZONE_JUDGMENT and f.near == nh.ZONE_HIGH
+assert f.margin_ft == 0.07 and not f.borderline and c.counts["near_boundary"] == 1
+assert any("Zone rule" in n and "classifier of record" in n for n in c.notes)
+c = hz.classify_nd([S("nr", 5.9, 0.0)], charts=CS, borderline_higher=True)
+assert c.hazard_class == "High" and c.governing[0].zone == nh.ZONE_HIGH and c.borderline_raised
+assert CS.charts["house"].polygon_zone(5.9, 0.0)[0] == nh.ZONE_HIGH      # the old rule
+assert hz.classify_nd([S("nr", 5.9, 0.0)], charts=CS, near_ft=0.0).governing[0].near == ""
 c = hz.classify_nd([S("nv", 0.5, None)], charts=CS)                         # unknown velocity
 assert c.hazard_class == "High" and c.borderline_raised and "no velocity" in c.data_gaps[0]
 c = hz.classify_nd([S("barn", 5.0, 5.0, hab=False)], charts=CS)            # uninhabited -> Low

@@ -1,7 +1,12 @@
 """The shared ND 5.2 / ACER TM 11 classification module.
 
-The charts used here are TEST SHAPES with round numbers, not the ACER TM 11 figures: they
-exercise the zone logic only."""
+The chart FILE used here carries TEST SHAPES with round numbers, not the ACER TM 11 figures.
+Since nd_hazard 1.4.0 (audit P1) the zone of every point comes from the suite's digitized
+REG_05.2026 table (damsuite.tm11_curves), the rule the DamSafety Hazard plugin classifies with;
+the polygons only draw the review figures. The points below are therefore chosen on the TABLE:
+house chart at 1 ft/s low < 2.916 ft <= judgment < 5.968 ft <= high; mobile chart at 1 ft/s
+low < 1.905 ft <= judgment < 2.499 ft <= high. The invented polygons' own zones are checked
+through DangerChart.polygon_zone (comparison only)."""
 import json
 import os
 import tempfile
@@ -40,11 +45,32 @@ def nd_hazard_zones_on_a_test_chart():
     assert z == nh.ZONE_HIGH and "beyond the chart" in note
     z, note = ch.zone(0.3, 30.0)                       # faster than the axis
     assert z == nh.ZONE_HIGH and "beyond" in note
-    # just below the high boundary at v=0 (6 ft): within 1% of the 10 ft axis -> high
-    z, note = ch.zone(5.95, 0.0)
+    # 1.4.0 (audit P1): the zone is the TABLE's, whatever polygons the chart file carries - a
+    # depth ON the boundary takes the higher zone (ND 5.3), a depth just below it does not
+    assert ch.zone(5.968, 1.0)[0] == nh.ZONE_HIGH and ch.zone(5.967, 1.0)[0] == nh.ZONE_JUDGMENT
+    assert ch.zone(2.916, 1.0)[0] == nh.ZONE_JUDGMENT and ch.zone(2.915, 1.0)[0] == nh.ZONE_LOW
+    # the old polygon rule (comparison only): just below the test polygons' high edge at v=0
+    # (6 ft), within 1% of the 10 ft axis -> high; without the tolerance -> judgment
+    z, note = ch.polygon_zone(5.95, 0.0)
     assert z == nh.ZONE_HIGH and "boundary" in note
-    z, _ = nh.DangerChart(**dict(ch.__dict__, tolerance=0.0)).zone(5.95, 0.0)
+    z, _ = nh.DangerChart(**dict(ch.__dict__, tolerance=0.0)).polygon_zone(5.95, 0.0)
     assert z == nh.ZONE_JUDGMENT
+    # the Hazard's near-threshold flag: 0.07 ft below the high boundary at 0 ft/s (5.968) is
+    # "near" high within the 0.5 ft default, not moved; beyond the axes never near
+    z, note, near, m = ch.near(5.9, 0.0)
+    assert z == nh.ZONE_JUDGMENT and near == nh.ZONE_HIGH and abs(m - 0.068) < 1e-9 and not note
+    assert ch.near(5.0, 0.0)[2] == "" and ch.near(2.5, 1.0)[2] == nh.ZONE_JUDGMENT
+    assert ch.near(5.9, 0.0, near_ft=0.0)[2] == "" and ch.near(12.0, 0.0)[2] == ""
+    mh, mj = ch.margins(2.0, 1.0)
+    assert abs(mh - 3.968) < 1e-9 and abs(mj - 0.916) < 1e-9
+    # the shipped chart file's polygons ARE the table; the invented ones are not
+    assert nh.load_charts().charts["house"].table_mismatch_ft() < 1e-9
+    assert ch.table_mismatch_ft() > 0.1
+    try:
+        nh.DangerChart(**dict(ch.__dict__, key="vehicle")).zone(1.0, 1.0)
+        raise AssertionError("expected ValueError for a chart without a table")
+    except ValueError as e:
+        assert "house / mobile" in str(e)
 
 
 @test
@@ -67,16 +93,65 @@ def nd_hazard_structures_follow_5_2_1_1_and_5_3():
     assert c.counts["judgment_zone"] == 1 and "5.3" in c.governing[0].section
     c = nh.classify([S("b", 8.0, 1.0)], charts=cs)
     assert c.hazard_class == nh.HIGH and not c.borderline_raised
-    # a mobile home uses its own chart: 1.5 ft at 1 ft/s is judgment there, low for a house
-    assert nh.classify([S("m", 1.5, 1.0, mobile=True)], charts=cs).hazard_class == nh.MEDIUM
-    assert nh.classify([S("m", 1.5, 1.0, mobile=True)], settings=old,
+    # a mobile home uses its own chart: 2.0 ft at 1 ft/s is judgment there (low >= 1.905),
+    # low danger for a house (low >= 2.916)
+    assert nh.classify([S("m", 2.0, 1.0, mobile=True)], charts=cs).hazard_class == nh.MEDIUM
+    assert nh.classify([S("m", 2.0, 1.0, mobile=True)], settings=old,
                        charts=cs).hazard_class == nh.HIGH
-    assert nh.classify([S("h", 1.5, 1.0)], charts=cs).hazard_class == nh.MEDIUM
+    assert nh.classify([S("h", 2.0, 1.0)], charts=cs).hazard_class == nh.MEDIUM
+    assert nh.classify([S("h", 2.0, 1.0)], charts=cs).findings[0].zone == nh.ZONE_LOW
+    assert nh.classify([S("m", 2.0, 1.0, mobile=True)], charts=cs).findings[0].zone == \
+        nh.ZONE_JUDGMENT
     # uninhabited building, and dry structures
     c = nh.classify([S("barn", 5.0, 3.0, habitable=False), S("dry", 0.05, 0.0)], charts=cs)
     assert c.hazard_class == nh.LOW and c.counts["structures_wet"] == 1
     c = nh.classify([], charts=cs)
     assert c.hazard_class == nh.LOW and "Nothing listed" in c.notes[0]
+
+
+@test
+def nd_hazard_borderline_option_matches_the_hazard_plugin():
+    """1.4.0 (audit P1): a structure within near_ft (0.5 ft, the Hazard's
+    DEFAULT_NEAR_THRESHOLD_FT) below the next boundary is noted as near it; it is moved into
+    that zone only with borderline_higher (off by default, as in the Hazard). The 0.01-axis
+    tolerance band of 1.0.0 - 1.3.0 no longer decides anything."""
+    cs = test_charts()
+    S = nh.Structure
+    # 5.9 ft at 0 ft/s: 0.068 ft below the house high boundary (5.968)
+    c = nh.classify([S("a", 5.9, 0.0)], charts=cs)
+    f = c.findings[0]
+    assert f.level == nh.MEDIUM and f.zone == nh.ZONE_JUDGMENT and not f.borderline
+    assert f.near == nh.ZONE_HIGH and f.margin_ft == 0.07 and "not moved" in f.reason
+    assert c.counts["near_boundary"] == 1 and not c.borderline_raised
+    assert any("Zone rule" in n and "classifier of record" in n and "noted, not moved" in n
+               for n in c.notes)
+    # the Hazard's option on: moved into the high danger zone, borderline (5.3(f))
+    c = nh.classify([S("a", 5.9, 0.0)], settings=nh.Settings(borderline_higher=True), charts=cs)
+    f = c.findings[0]
+    assert f.level == nh.HIGH and f.zone == nh.ZONE_HIGH and f.borderline and f.near == \
+        nh.ZONE_HIGH
+    assert "moved from the judgment zone" in f.reason and "5.3(f)" in f.reason
+    assert c.borderline_raised and any("were moved" in n for n in c.notes)
+    # low danger near the judgment boundary: noted; moved with the option
+    c = nh.classify([S("b", 2.5, 1.0)], charts=cs)
+    assert c.findings[0].zone == nh.ZONE_LOW and c.findings[0].near == nh.ZONE_JUDGMENT
+    c = nh.classify([S("b", 2.5, 1.0)], settings=nh.Settings(borderline_higher=True), charts=cs)
+    assert c.findings[0].zone == nh.ZONE_JUDGMENT and c.findings[0].level == nh.MEDIUM
+    # a wider or no threshold; a negative one is refused
+    c = nh.classify([S("a", 5.0, 0.0)], settings=nh.Settings(near_ft=1.0), charts=cs)
+    assert c.findings[0].near == nh.ZONE_HIGH
+    c = nh.classify([S("a", 5.9, 0.0)], settings=nh.Settings(near_ft=0.0), charts=cs)
+    assert c.findings[0].near == "" and any("flag off" in n for n in c.notes)
+    try:
+        nh.Settings(near_ft=-0.1).validate()
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert "near-threshold" in str(e)
+    # the old rule would have put 5.9 ft at 0 ft/s in the high zone (within 0.1 ft of the
+    # polygon edge); every such point now agrees with the Hazard's table rule
+    assert cs.charts["house"].polygon_zone(5.9, 0.0)[0] == nh.ZONE_HIGH
+    rows = nh.finding_rows(c)
+    assert "near" in rows[0] and "margin_ft" in rows[0]
 
 
 @test
@@ -174,6 +249,7 @@ def nd_hazard_outputs_markdown_rows_and_chart_svg():
     assert "Department of Water Resources" in md
     rows = nh.finding_rows(c)
     assert len(rows) == 4 and set(rows[0]) == set(nh.FINDING_COLUMNS)
+    assert len(rows[0]) == 14
     json.dumps(c.to_dict())                                         # serialisable
     svg = nh.chart_svg(cs.charts["house"], structs)
     xml.dom.minidom.parseString(svg)
@@ -262,12 +338,10 @@ def nd_hazard_shipped_charts_are_signed_off():
             v = vmax * i / 20.0
             for j in range(1, 21):
                 d = dmax * j / 20.0
-                if min(abs(d - tm.depth_at(kind, tm.HIGH, v)),
-                       abs(d - tm.depth_at(kind, tm.LOW, v))) < 0.03 * dmax:
-                    continue                      # on or next to a line: the tolerance band
+                # 1.4.0: no tolerance band any more - every point, on or next to a line too
                 assert cs.charts[key].zone(d, v)[0] == names[tm.zone(kind, d, v)], (kind, d, v)
                 n += 1
-    assert n > 500
+    assert n == 2 * 21 * 20
 
 
 @test
@@ -291,6 +365,7 @@ def nd_hazard_sampling_matches_the_runner_tool():
     v[5, 5] = np.nan
     g = Grid(np.zeros((30, 40)), 100.0, 700.0, 10.0)
     s = an.Sampler(g, d, v, wet_ft=0.1)
+    edge = 5.0 * 0.3048                           # the grid is metres here
     for _ in range(40):
         cx, cy = rng.uniform(110, 480), rng.uniform(420, 690)
         w, h = rng.uniform(3, 60, 2)
@@ -301,16 +376,26 @@ def nd_hazard_sampling_matches_the_runner_tool():
         assert (a["vel_fts"] is None and vv is None) or abs(a["vel_fts"] - vv) < 1e-9, (a, vv)
         if a["vel_at_max_fts"] is not None and vv is not None:
             assert a["vel_fts"] >= a["vel_at_max_fts"] - 1e-9, a
+        # 3.16.9 (audit P1): a STRUCTURE reads the footprint + the 5 ft edge ring in both tools
+        b = s.polygon([np.array(ring)], (cx + w / 2, cy + h / 2), structure=True)
+        de, ve, how_e = nh.sample_footprint(d, v, 100.0, 700.0, 10.0, ring, 0.1,
+                                            1.0 / 0.3048, edge)
+        assert abs(b["depth_ft"] - de) < 1e-9 and "edge ring" in how_e and "edge ring" in b["how"]
+        assert (b["vel_fts"] is None and ve is None) or abs(b["vel_fts"] - ve) < 1e-9, (b, ve)
+        assert b["cells"] >= a["cells"] and b["depth_ft"] >= a["depth_ft"] - 1e-9
     # peak depth and peak velocity from different cells: both tools classify on the pair
     d2 = np.zeros((3, 3)); v2 = np.zeros((3, 3))
     d2[1, 0], v2[1, 0] = 3.0, 1.0          # deepest cell, slow
     d2[1, 2], v2[1, 2] = 0.5, 8.0          # shallower wet cell, fast
-    d2[0, 1], v2[0, 1] = 0.05, 12.0        # below the wet depth: not counted
+    d2[0, 1], v2[0, 1] = 0.05, 12.0        # trace-depth wet cell (d > 0), still fast
     g2 = Grid(np.zeros((3, 3)), 0.0, 30.0, 10.0)
     ring2 = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)]
+    # H07: the classifying velocity is the peak over ALL wet (d > 0) cells, matching Hazard's
+    # structures.peak_pair - the trace-depth 0.05 ft cell at 12 ft/s now counts, so vel is 12.0
+    # (was 8.0 under the old wet_ft=0.1 floor). Peak depth (3.0) and vel_at_max (1.0) unchanged.
     a2 = an.Sampler(g2, d2, v2, wet_ft=0.1).polygon([np.array(ring2)], (15.0, 15.0))
-    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), a2
-    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 8.0)
+    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 12.0, 1.0), a2
+    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 12.0)
     line = [(105.0, 695.0), (390.0, 430.0), (480.0, 600.0)]
     a = s.lines([np.array(line)])
     assert abs(a["depth_ft"] - nh.sample_line_max(d, 100.0, 700.0, 10.0, line)) < 1e-9

@@ -28,11 +28,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
+CORE = os.path.join(os.path.dirname(PLUGIN), "DamSafety_Core")    # Core 1.0.0: the one damsuite
 
 
 def _load_core():
     spec = importlib.util.spec_from_file_location(
-        "damsafety_data_core_under_test", os.path.join(PLUGIN, "damsuite", "updatecore.py"))
+        "damsafety_data_core_under_test", os.path.join(CORE, "damsuite", "updatecore.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

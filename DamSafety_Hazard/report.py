@@ -131,9 +131,21 @@ def _text_format(size, bold=False, mono=False):
         return None, font
 
 
+def _si():
+    """damsuite.display_units when the suite's display units are SI (Core 1.1.0), else None:
+    the report's text and tables are then converted as they are placed; the classification,
+    dam.json and every data file keep US units."""
+    try:
+        from .damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older than 1.1.0
+        return None
+    return DU if DU.system() == DU.SI else None
+
+
 def _label(layout, text, x, y, w, h, page=0, size=9, bold=False, mono=False):
     lab = QgsLayoutItemLabel(layout)
-    lab.setText(text)
+    du = _si()
+    lab.setText(du.convert_text(text) if du is not None and isinstance(text, str) else text)
     fmt, font = _text_format(size, bold, mono)
     try:
         if fmt is None:
@@ -301,9 +313,18 @@ def _decorations(layout, m, layers, page):
         except Exception:
             pass
         units = DIST_MILES if wide and DIST_MILES is not None else DIST_FEET
+        unit_label = "mi" if units is DIST_MILES else "ft"
+        if _si() is not None:            # Core 1.1.0: SI display units -> km / m
+            try:
+                metric = (Qgis.DistanceUnit.Kilometers if wide else Qgis.DistanceUnit.Meters)
+            except AttributeError:
+                from qgis.core import QgsUnitTypes
+                metric = (QgsUnitTypes.DistanceKilometers if wide else
+                          QgsUnitTypes.DistanceMeters)
+            units, unit_label = metric, ("km" if wide else "m")
         sb.applyDefaultSize(units)
         try:
-            sb.setUnitLabel("mi" if units is DIST_MILES else "ft")
+            sb.setUnitLabel(unit_label)
         except Exception:
             pass
         layout.addLayoutItem(sb)
@@ -429,6 +450,9 @@ def _table(layout, head, rows, page, x, y, w, h, size=7, repeat=True, title=None
     """A text table (flows onto extra pages when `repeat`, headers repeated),
     or a monospaced label if the table API is not available. `widths`:
     relative column widths; the table is made exactly `w` mm wide."""
+    du = _si()
+    if du is not None:
+        head, rows = du.convert_table(list(head), [list(r) for r in rows])
     try:
         from qgis.core import QgsLayoutItemTextTable, QgsLayoutFrame, QgsLayoutMultiFrame
         t = QgsLayoutItemTextTable(layout)
@@ -536,9 +560,12 @@ def _summary_page(layout, dam_name, res, scenario, all_results):
                                        .format(len(judg) - nj) if len(judg) > nj else "")
     _label(layout, text, MARGIN, 140, PAGE_W - 2 * MARGIN, PAGE_H - 140 - MARGIN - 8, 0,
            size=7)
-    _label(layout, "{} v{} - {} - screening result; the engineer remains responsible for the "
-           "classification".format(PLUGIN_NAME, PLUGIN_VERSION, time.strftime("%Y-%m-%d")),
-           MARGIN, PAGE_H - MARGIN - 6, PAGE_W - 2 * MARGIN, 5, 0, size=6)
+    foot = ("{} v{} - {} - screening result; the engineer remains responsible for the "
+            "classification".format(PLUGIN_NAME, PLUGIN_VERSION, time.strftime("%Y-%m-%d")))
+    du = _si()
+    if du is not None:                   # Core 1.1.0: say the report is shown in SI
+        foot += ". Units: SI, converted from the US values the classification uses"
+    _label(layout, foot, MARGIN, PAGE_H - MARGIN - 6, PAGE_W - 2 * MARGIN, 5, 0, size=6)
 
 
 def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen_layers,

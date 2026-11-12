@@ -228,14 +228,25 @@ def _scale_structures(structs, fd, fv, opts, changes=None, label=""):
         if fv != 1.0:
             V *= fv
         maxd = np.maximum.reduceat(D, starts)
+        has_v_arr = np.asarray(has_v, dtype=bool)
         with np.errstate(invalid="ignore"):
             maxv = np.fmax.reduceat(V, starts)
+            # 2.22.3 option C: classify on the PEAK pair - peak depth with the peak velocity over
+            # the structure's wet cells - exactly as evaluate_structures/peak_pair does, then take
+            # the more severe of that and the per-cell minimum. The previous per-cell minimum alone
+            # (the pre-2.22.3 same-cell rule) disagreed with the unscaled base row. Mirror peak_pair:
+            # wet is (D > 0) & finite V, falling back to any finite V, else velocity 0 (depth only).
+            neg = -np.inf
+            vwet = np.maximum.reduceat(np.where((D > 0) & np.isfinite(V), V, neg), starts)
+            vfin = np.maximum.reduceat(np.where(np.isfinite(V), V, neg), starts)
+            vpk = np.where(vwet > neg, vwet, np.where(vfin > neg, vfin, 0.0))
+            vpk = np.where(has_v_arr, vpk, 0.0)
             res = {}
             for typ, cv in curves.items():
-                cls = classify_values(D, V, *cv)
-                mh, mj = zone_margins(D, V, *cv)
-                res[typ] = (np.minimum.reduceat(cls, starts),
-                            np.minimum.reduceat(mh, starts), np.minimum.reduceat(mj, starts))
+                percell_min = np.minimum.reduceat(classify_values(D, V, *cv), starts)
+                zpk = classify_values(maxd, vpk, *cv)
+                mh, mj = zone_margins(maxd, vpk, *cv)
+                res[typ] = (np.minimum(zpk, percell_min), mh, mj)
         for k, (idx, rec) in enumerate(chunk):
             hv = has_v[k]
             types = {}
@@ -355,6 +366,11 @@ def _scale_lines(lines, fd, fv, opts, vehicle, changes=None, label="", kind="Roa
         with np.errstate(invalid="ignore"):
             nr["max_depth"] = float(np.nanmax(d)) if d.size and np.isfinite(d).any() \
                 else r.get("max_depth")
+        # M10: scale the grid depth too - mark_lines_incremental's depth branch tests
+        # grid_max_depth (not max_depth), so without this the road/rail incremental flag was
+        # frozen against the unscaled baseline and never flipped with the factor. Baseline unscaled.
+        if r.get("grid_max_depth") is not None:
+            nr["grid_max_depth"] = float(r["grid_max_depth"]) * fd
         if scale_veh:
             vz = _vehicle_zone(d, v)
             nr["vehicle_zone"] = vz

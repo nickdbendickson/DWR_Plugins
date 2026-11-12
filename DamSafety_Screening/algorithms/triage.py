@@ -13,6 +13,7 @@ from ..core import triage as tg, hazard as hz, gridutil as gu, runner as rn
 from . import _common as cm
 from ..core import errors as er
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 AF_M3 = 1233.4818375
 NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
@@ -31,11 +32,31 @@ def _wanted(f, names, only, dam_id=None):
            cm.fval(f, names, "nid_id"))
     return any(str(i).strip().upper() in only for i in ids if i not in (None, ""))
 
+def _road_name(r):
+    """The road's name and ND NG9-1-1 SHIELD code (as tool 8's _rname), so a US / State
+    highway named only there ('HIGHWAY 23', 'US 2', SHIELD USHY / STHY) counts at least
+    Medium under 5.2.1.2(b) instead of being dropped as Low on a sub-500 AADT."""
+    try:
+        low = {n.lower(): n for n in r.fields().names()}
+    except Exception:                                    # noqa  (never fails the tool)
+        return ""
+    got = ""
+    for n in ("name", "fullname", "full_name", "road_name", "rte_name", "route_name"):
+        v = r[low[n]] if n in low else None
+        if v is not None and str(v) not in ("", "NULL"):
+            got = str(v)
+            break
+    sh = r[low["shield"]] if "shield" in low else None
+    if sh is not None and str(sh).strip().upper() in ("USHY", "STHY"):
+        got = (got + " " + str(sh).strip()).strip()
+    return got
+
+
 class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16."""
 
 
-class Triage(QgsProcessingAlgorithm):
+class Triage(UnitAlgorithm):
     def name(self): return "triage"
     def displayName(self): return "6 - Quick screen (triage)"
     def group(self): return "Dam screening"
@@ -97,6 +118,8 @@ class Triage(QgsProcessingAlgorithm):
                                               [SRC_LINE], optional=True))
         P(QgsProcessingParameterFeatureSource("DAMLINES", "DWR dam lines (protected from cuts, optional)",
                                               [SRC_LINE], optional=True))
+        P(QgsProcessingParameterFeatureSource("PROTECT", "More fills to leave uncut (points, lines or polygons; e.g. the Finder's screening_dams)",
+                                              [SRC_POINT, SRC_LINE, SRC_POLYGON], optional=True))
         P(QgsProcessingParameterString(
             "ONLY_IDS", "Only these dams (comma-separated IDs; empty = every dam in the layer)",
             defaultValue="", optional=True))
@@ -137,6 +160,7 @@ class Triage(QgsProcessingAlgorithm):
         rail = self.parameterAsSource(params, "RAIL", context)
         streams = self.parameterAsSource(params, "STREAMS", context)
         damlines = self.parameterAsSource(params, "DAMLINES", context)
+        keep = self.parameterAsSource(params, "PROTECT", context)
         n = self.parameterAsDouble(params, "N", context)
         margin, margin_ft, _src = cm.feet_or_legacy(self, params, context, "MARGIN_FT", "MARGIN", 0.5)
         feedback.pushInfo("Stage safety margin at least {:.2f} ft ({:.3f} m)".format(margin_ft, margin))
@@ -225,7 +249,7 @@ class Triage(QgsProcessingAlgorithm):
                                _cols(lyr, f_sole or "", "sole_access")))
 
         def points_of(kind, parts):
-            """Points tested against the envelope: the points; a polygon's centroid and vertices;
+            """Points tested against the envelope: the points; a polygon's vertex mean and vertices;
             a line's vertices (lines are densified before)."""
             if kind == "point":
                 return parts
@@ -262,6 +286,7 @@ class Triage(QgsProcessingAlgorithm):
                 else:
                     st = [x for _, arrs in cm.lines_near(streams, bxy, 3000) for x in arrs] if streams else []
                     pr = [x for _, arrs in cm.lines_near(damlines, bxy, 3000) for x in arrs] if damlines else []
+                    pr += cm.protect_near(keep, bxy, 3000)
                     dem, gt = cm.load_cached_clip(loader, dam_id, st, pr)
                     half = 0.5 * min(dem.shape) * abs(gt[1])
                     inj = rn.injection_cells(gt, dem.shape, bxy, az, get(f, "td_bb_m", float) or 10.0,
@@ -280,6 +305,23 @@ class Triage(QgsProcessingAlgorithm):
                     def inside(x, y):
                         r, c = gu.xy_to_rc(gt, x, y)
                         return gu.inside(mask.shape, r, c) and mask[r, c]
+
+                    def receptor_hit(feat, tr):
+                        # H23: sample a polygon receptor the way tool 8 does, so the triage
+                        # shortcut is not less conservative than the 2D tool it stands in for.
+                        # The point test (vertices + their mean) covers sub-cell footprints; for
+                        # a polygon also apply tool 8's rule - any wet cell centre inside a ring
+                        # (hz.nh.sample_footprint over the wet depth, centroid-cell fallback and
+                        # all). Vertex-only sampling missed wet cells in a footprint's interior
+                        # or along its edges, reading a flooded structure/lifeline as clear.
+                        kind_geom, parts = cm.albers_parts(feat, tr)
+                        if any(inside(x, y) for x, y in points_of(kind_geom, parts)):
+                            return True
+                        if kind_geom == "polygon":
+                            return any((hz.nh.sample_footprint(env["depth"], None, gt[0], gt[3],
+                                                               abs(gt[1]), ring)[0] or 0) > 0
+                                       for ring in parts)
+                        return False
                     found = []
                     for src, kind in ((bld, "structure"), (life, "lifeline")):
                         if src is None:
@@ -288,19 +330,19 @@ class Triage(QgsProcessingAlgorithm):
                         for b in src.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
                             if kind == "structure" and not habitable(b):
                                 continue
-                            if any(inside(x, y) for x, y in points_of(*cm.albers_parts(b, ta))):
+                            if receptor_hit(b, ta):
                                 found.append(kind)
                     for lyr, occ_f, prim_f, hab_f in bld_extra:
                         ta, fa = cm.to_albers(lyr), cm.from_albers(lyr)
                         for b in lyr.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
                             if not habitable(b, occ_f, prim_f, hab_f):
                                 continue
-                            if any(inside(x, y) for x, y in points_of(*cm.albers_parts(b, ta))):
+                            if receptor_hit(b, ta):
                                 found.append("structure")
                     for lyr in life_extra:
                         ta, fa = cm.to_albers(lyr), cm.from_albers(lyr)
                         for b in lyr.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
-                            if any(inside(x, y) for x, y in points_of(*cm.albers_parts(b, ta))):
+                            if receptor_hit(b, ta):
                                 found.append("lifeline")
                     for oid, (x, y) in dam_pts:
                         if oid != dam_id and inside(x, y):
@@ -316,7 +358,8 @@ class Triage(QgsProcessingAlgorithm):
                                 # low (AADT < 500, not interstate, not US / State) cannot raise the class; an
                                 # unknown AADT is assumed Medium there, so it counts here too
                                 rd = hz.nd_road("r", 1.0, aadt, str(r[f_rcls]) if f_rcls and r[f_rcls] else "",
-                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False)
+                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False,
+                                                name=_road_name(r))
                                 lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
                                 if lvl == "Low":
                                     continue            # cannot raise the class above Low
@@ -329,7 +372,8 @@ class Triage(QgsProcessingAlgorithm):
                             aadt = cm.fval(r, nms, faadt, float)
                             rd = hz.nd_road("r", 1.0, aadt,
                                             str(r[frcls]) if frcls and r[frcls] else "",
-                                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False)
+                                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False,
+                                            name=_road_name(r))
                             if hz.nh.road_class(rd, hz.nh.Settings())[0] == "Low":
                                 continue
                             gl = r.geometry(); gl.transform(ta); gl = gl.densifyByDistance(abs(gt[1]))

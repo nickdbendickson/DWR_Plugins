@@ -35,6 +35,16 @@ def _pump(n=4):
         _app.processEvents()
 
 
+def _wait_idle(d, timeout_s=90):
+    """2.23.15: Check inputs runs in a QgsTask - pump until its done callback has run."""
+    import time
+    end = time.monotonic() + timeout_s
+    while d._busy and time.monotonic() < end:
+        _app.processEvents()
+        time.sleep(0.01)
+    assert not d._busy, "the background input check did not finish"
+
+
 def _raster(path, arr):
     ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((600000, 10, 0, 5200000, 0, -10))
@@ -94,6 +104,7 @@ def test_check_state_shown_once_badge_is_warning_sign():
         d.dam_folder_edit.setText(_bad_dam())
         with _NoPopups() as np_:
             d._on_check_inputs()
+            _wait_idle(d)
         _pump()
         assert not np_.calls
         assert d.check_panel.blocked and d.check_panel.isVisible()
@@ -121,6 +132,7 @@ def test_red_box_sits_with_check_and_classify_on_classify_only():
         d.dam_folder_edit.setText(_bad_dam())
         with _NoPopups():
             d._on_check_inputs()
+            _wait_idle(d)
         _pump()
         panel = d.check_panel
         # item 3: in the action bar under the tabs (not inside a Classify-page section),

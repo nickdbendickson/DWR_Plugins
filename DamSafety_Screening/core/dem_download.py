@@ -271,6 +271,76 @@ def _product_of(path, root=None):
     return "DEM_Imagine"
 
 
+def _crs_gt(path):
+    ds = gdal.Open(path)
+    wkt = (ds.GetProjection() or "") if ds is not None else ""
+    gt = ds.GetGeoTransform() if ds is not None else None
+    ds = None
+    return wkt, gt
+
+
+def _same_crs(a, b):
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    try:
+        sa, sb = osr.SpatialReference(), osr.SpatialReference()
+        sa.ImportFromWkt(a)
+        sb.ImportFromWkt(b)
+        return bool(sa.IsSame(sb))
+    except Exception:                                            # noqa
+        return False
+
+
+def _mosaic_one_product(paths, vrt_path, feedback=None):
+    """H10: BuildVRT over tiles that may span CRSs. A bare gdal.BuildVRT keeps only the first
+    tile's CRS and silently DROPS the rest, so an ND LiDAR download whose tiles straddle UTM
+    13N/14N (DEM_Imagine) or State Plane N/S (ASCII feet) lost tiles and understated the reservoir
+    surface -> storage -> hazard class. All-one-CRS (or all CRS-less) -> the plain BuildVRT,
+    unchanged. Mixed -> each minority tile is warped (values as stored, no vertical shift) into
+    the CRS most tiles have, at that product's native cell, before the mosaic."""
+    groups = []                                  # [[wkt, [paths], [cells]]]
+    for p in paths:
+        wkt, gt = _crs_gt(p)
+        cell = abs(gt[1]) if gt else None
+        for g in groups:
+            if _same_crs(g[0], wkt):
+                g[1].append(p)
+                g[2].append(cell)
+                break
+        else:
+            groups.append([wkt, [p], [cell]])
+    if len(groups) > 1 and any(not g[0] for g in groups):
+        raise IOError("ND LiDAR tiles mix a CRS with CRS-less tiles; cannot mosaic: " +
+                      ", ".join(os.path.basename(p) for g in groups if not g[0] for p in g[1][:5]))
+    if len(groups) <= 1:
+        return gdal.BuildVRT(vrt_path, paths)    # single CRS or all CRS-less: behaviour unchanged
+    groups.sort(key=lambda g: len(g[1]), reverse=True)
+    target = groups[0][0]
+    res = min([c for g in groups for c in g[2] if c] or [1.0])   # branch is unit-homogeneous
+    work = os.path.splitext(vrt_path)[0] + "_tiles"
+    os.makedirs(work, exist_ok=True)
+    parts, warped, i = [], 0, 0
+    for wkt, ps, _cells in groups:
+        for p in ps:
+            if _same_crs(wkt, target):
+                parts.append(p)
+            else:
+                q = os.path.join(work, "{:05d}_warp.vrt".format(i))
+                kw = dict(format="VRT", dstSRS=target, xRes=res, yRes=res, resampleAlg="bilinear",
+                          targetAlignedPixels=True, dstNodata=-9999, outputType=gdal.GDT_Float32)
+                gdal.Warp(q, p, **no_vshift(gdal, kw))
+                parts.append(q)
+                warped += 1
+            i += 1
+    if feedback is not None:
+        feedback.pushWarning("ND LiDAR: tiles span {} CRSs; {} warped into the majority CRS for "
+                             "the mosaic (earlier downloads spanning CRSs dropped them silently)"
+                             .format(len(groups), warped))
+    return gdal.BuildVRT(vrt_path, parts)
+
+
 def build_vrts(rasters, out_dir, feedback=None):
     """One VRT per product, never a mosaic of feet and metres (ported from the ND copy).
 
@@ -284,7 +354,7 @@ def build_vrts(rasters, out_dir, feedback=None):
         by.setdefault(_product_of(r, out_dir), []).append(r)
     if by.get("DEM_Imagine"):
         use = os.path.join(out_dir, "nd_lidar_imagine_m.vrt")
-        gdal.BuildVRT(use, by["DEM_Imagine"])
+        _mosaic_one_product(by["DEM_Imagine"], use, feedback)
         ds = gdal.Open(use, gdal.GA_Update)
         if ds is not None:
             ds.GetRasterBand(1).SetUnitType("m")
@@ -295,7 +365,7 @@ def build_vrts(rasters, out_dir, feedback=None):
         return use
     if by.get("ASCII_Grids_ft"):
         ft = os.path.join(out_dir, "nd_lidar_ascii_ft.vrt")
-        ds = gdal.BuildVRT(ft, by["ASCII_Grids_ft"])
+        ds = _mosaic_one_product(by["ASCII_Grids_ft"], ft, feedback)
         if ds is not None:
             ds.GetRasterBand(1).SetUnitType("ft")
             ds = None
@@ -579,8 +649,10 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
     os.makedirs(out_dir, exist_ok=True)
     ftp = _ftp() if transport == "ftp" else None
     try:
-        rasters = []
+        rasters, failed = [], []
         for i, tile in enumerate(tiles):
+            if getattr(feedback, "isCanceled", lambda: False)():
+                raise Cancelled("tile download cancelled after {} of {} tiles".format(i, len(tiles)))
             for product in products:
                 if product == "ASCII_Grids_ft":
                     remote = "/{}/{}/ASCII_Grids_ft/gft{}.zip".format(
@@ -598,7 +670,8 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                             ftp.retrbinary("RETR " + remote, f.write)
                     else:
                         _https_get(HTTPS_ROOT + remote, local)
-                except Exception:
+                except Exception as e:                       # M23: record, do not skip silently
+                    failed.append("{} ({})".format(remote, e))
                     try:
                         os.remove(local)
                     except OSError:
@@ -609,11 +682,28 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                 try:
                     with zipfile.ZipFile(local) as z:
                         _safe_extract(z, dest)
-                except (zipfile.BadZipFile, ValueError):
+                except zipfile.BadZipFile:
+                    failed.append("{} (not a zip - the host may have returned an error page)"
+                                  .format(remote))
+                    continue
+                except ValueError as e:
+                    failed.append("{} (unsafe zip: {})".format(remote, e))
                     continue
                 rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                             for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
         _ftp_close(ftp)
+        # M23: a tile that could not be downloaded or unzipped used to be skipped with no message,
+        # so a county whose index no longer matches the host (or a captive-portal HTML error page)
+        # built a DEM with holes - tools 2 / 3 then clip / compute storage on a partial reservoir -
+        # or returned the never-written nd_lidar.vrt as if real. The ND QL2 path has no fallback
+        # DEM, so fail loudly on any missing tile instead of writing a holed surface.
+        if failed:
+            raise IOError("{} of {} QL2 tile download(s) failed, so a DEM with holes is not built: "
+                          "{}{}. Check the county lidar index against lidar.dwr.nd.gov.".format(
+                              len(failed), len(tiles) * len(products), "; ".join(failed[:20]),
+                              " ..." if len(failed) > 20 else ""))
+        if not rasters:
+            raise IOError("no QL2 raster was found in the downloaded tiles")
         return build_vrts(rasters, out_dir, feedback), len(tiles)
     finally:
         _ftp_close(ftp)

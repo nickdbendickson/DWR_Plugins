@@ -66,8 +66,14 @@ class NDDamScreeningPlugin:
             _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
         except Exception:  # noqa: BLE001 - never block the plugin's start-up
             pass
+        try:                          # Core 1.0.0: the shared package's files vs its FILES.json
+            from . import damsuite as _ds
+            _ds.log_selfcheck(LOG_TAG)
+        except Exception:  # noqa: BLE001
+            pass
         self.initProcessing()
         self._add_menu_action()
+        self._add_suite_menu()
         # suite version check once QGIS has loaded every plugin (at start-up: when the
         # interface is ready; enabled later: right after this call returns to the event loop)
         try:
@@ -100,16 +106,14 @@ class NDDamScreeningPlugin:
             self._log_failure("Menu entry not available: {}".format(e))
 
     def _add_suite_menu(self):
-        """0.13: the shared Plugins > ND Dam Suite menu (one menu, the three plugins add their
-        window to it; 'Dam suite home' and 'Suite settings' once)."""
+        """0.18.19: the one "Dam suite home…" entry of Plugins > Dam safety (suite_home.add_home_action;
+        whichever suite plugin loads first adds it). 0.13 wrote this for a separate ND Dam Suite
+        menu and nothing called it, so the home had no menu entry at all."""
+        if self.iface is None:
+            return
         try:
             from . import suite_home
-            for label, name, slot in (("DamSafety Screening\u2026", "NDSuiteScreeningWindow", self.run_plugin),
-                                      ("Dam suite home\u2026", "NDSuiteHome", self.run_home),
-                                      ("Suite settings\u2026", "NDSuiteSettings", self.run_settings)):
-                a = suite_home.add_suite_action(self.iface, label, name, slot)
-                if a is not None:
-                    self.suite_actions.append(a)
+            suite_home.add_home_action(self, self.iface)
         except Exception as e:                                   # noqa
             self._log_failure("Suite menu not available: {}".format(e))
 

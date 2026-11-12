@@ -14,7 +14,7 @@ from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from . import core
 from .http_qgis import QgisHttp, gdal_merger
 from .qtcompat import MSG_INFO, MSG_WARNING, TASK_CAN_CANCEL, VECTOR_LAYER, QAction
-from .settings import Settings
+from .settings import Settings, auto_check_blocked
 from .settings_dialog import SettingsDialog
 from .sources import SOURCE_INFO, build_sources
 
@@ -81,6 +81,11 @@ class NdDataUpdaterPlugin:
             from .damsuite import connections as _conn, versions as _vs
             _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
         except Exception:  # noqa: BLE001 - never block the plugin's start-up
+            pass
+        try:                          # Core 1.0.0: the shared package's files vs its FILES.json
+            from . import damsuite as _ds
+            _ds.log_selfcheck(LOG_TAG)
+        except Exception:  # noqa: BLE001
             pass
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
@@ -197,6 +202,14 @@ class NdDataUpdaterPlugin:
             return
         if time.time() - self.settings.last_auto_check < self.settings.check_hours * 3600:
             return
+        # 1.9.6: no automatic download until a folder is set (settings.auto_check_blocked)
+        folder, how, _notice = self.settings.resolve()
+        why = auto_check_blocked(how, folder)
+        if why:
+            if why not in self._logged:
+                self._logged.add(why)
+                log("Automatic update check skipped: " + why, MSG_INFO)
+            return
         self.start_update(force=False, quiet=True)
 
     def start_update(self, force=False, quiet=False):
@@ -258,7 +271,7 @@ class NdDataUpdaterPlugin:
                             + ", ".join(r.name for r in missing) + ".")
         elif offline and not quiet:
             bar.pushInfo(LOG_TAG, "No internet connection. Using the local copies already "
-                                  "on this Mac.")
+                                  "on this computer.")
         if by_status.get("cancelled"):
             bar.pushInfo(LOG_TAG, "Update check cancelled. Local data was not changed.")
         if not quiet and not (updated or errors or offline or by_status.get("cancelled")):

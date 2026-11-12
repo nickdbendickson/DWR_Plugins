@@ -36,6 +36,17 @@ MAX_HFLOW = 10.0       # LISFLOOD-FP's MaxHflow
 VEL_MIN_DEPTH_M = 0.01
 NODATA = -9999.0
 NAME = "ND Dam Breach Runner built-in engine (local inertial, LISFLOOD-FP compatible)"
+# audit M16 (Runner 3.17.8): the wet window is recomputed every WINDOW_EVERY steps with a
+# WINDOW_MARGIN-cell margin. Invariant: Model.step writes h ONLY through the window view, so
+# every wet cell stays inside the window last returned (wet bbox + margin); margin >
+# WINDOW_EVERY because the front moves at most one cell per step. Model.window(prev=...)
+# therefore scans only the previous window, guarded (a non-clamped side touched -> full scan)
+# and re-checked against a full scan every WINDOW_SELF_CHECK-th call. Any future term that
+# writes h outside the window (rainfall, infiltration, evaporation over the whole grid) must
+# pass prev=None.
+WINDOW_EVERY = 10
+WINDOW_MARGIN = 12
+WINDOW_SELF_CHECK = 50
 
 
 class EngineError(RuntimeError):
@@ -48,7 +59,26 @@ class Cancelled(RuntimeError):
 
 # -- input files ---------------------------------------------------------------------------
 
-def _read_asc(path):
+# what a cut-short or damaged input file raises while it is parsed
+_INPUT_FAULTS = (ValueError, IndexError, KeyError, TypeError, OverflowError, MemoryError)
+
+
+def _load(what, reader, path, *args):
+    """reader(path, *args), with a damaged or truncated file reported as an EngineError that
+    names the file (a raw IndexError or ValueError used to reach the user)."""
+    try:
+        return reader(path, *args)
+    except EngineError:
+        raise
+    except _INPUT_FAULTS as e:
+        detail = str(e) or type(e).__name__
+        if isinstance(e, KeyError):
+            detail = "no {} line".format(e)
+        raise EngineError("the {} {} is truncated or damaged ({}); write the model files "
+                          "again".format(what, os.path.basename(path), detail[:200])) from None
+
+
+def _read_asc(path, shape=None):
     hdr = {}
     with open(path) as f:
         for _ in range(6):
@@ -61,6 +91,15 @@ def _read_asc(path):
         data = np.loadtxt(f, ndmin=2)
     ny, nx = int(hdr["nrows"]), int(hdr["ncols"])
     dx = hdr["cellsize"]
+    if ny <= 0 or nx <= 0 or not (np.isfinite(dx) and dx > 0):
+        raise ValueError("the header gives {} rows, {} columns and cell size {}".format(
+            ny, nx, dx))
+    if data.size != ny * nx:
+        raise ValueError("it holds {:,} values but its header says {:,} x {:,}".format(
+            data.size, ny, nx))
+    if shape is not None and (ny, nx) != tuple(shape):
+        raise ValueError("it is {} x {} cells but the DEM is {} x {}".format(
+            ny, nx, shape[0], shape[1]))
     xll = hdr.get("xllcorner", hdr.get("xllcenter", 0.0) - 0.5 * dx)
     yll = hdr.get("yllcorner", hdr.get("yllcenter", 0.0) - 0.5 * dx)
     return data.reshape(ny, nx), xll, yll, dx, hdr.get("nodata_value", NODATA)
@@ -106,6 +145,8 @@ def read_bdy(path):
             vals.append(float(v))
             ts.append(float(t) * scale)
             i += 1
+        if not vals:
+            raise ValueError("series '{}' has no values".format(name))
         out[name] = (np.asarray(ts), np.asarray(vals))
     return out
 
@@ -156,8 +197,10 @@ class Model:
             self.src_mask[rr, cc] = True
         self.out_vol = 0.0
         self.clip_vol = 0.0
+        self.window_calls = 0
+        self.window_mismatch = 0                # self-checks that disagreed (expected: 0)
 
-    def window(self, margin):
+    def _window_full(self, margin):
         wet = (self.h > 0) | self.src_mask
         rows = np.flatnonzero(wet.any(axis=1))
         cols = np.flatnonzero(wet.any(axis=0))
@@ -165,6 +208,44 @@ class Model:
             return None
         return (max(0, rows[0] - margin), min(self.ny, rows[-1] + margin + 1),
                 max(0, cols[0] - margin), min(self.nx, cols[-1] + margin + 1))
+
+    def _window_in(self, margin, prev):
+        """The window from a scan of `prev` only, or None when the wet bbox found there touches
+        a side of `prev` that is not the grid edge (water could reach past it) or nothing is
+        wet in it."""
+        pr0, pr1, pc0, pc1 = (int(v) for v in prev)
+        if not (0 <= pr0 < pr1 <= self.ny and 0 <= pc0 < pc1 <= self.nx):
+            return None
+        wet = (self.h[pr0:pr1, pc0:pc1] > 0) | self.src_mask[pr0:pr1, pc0:pc1]
+        rows = np.flatnonzero(wet.any(axis=1))
+        cols = np.flatnonzero(wet.any(axis=0))
+        if not len(rows):
+            return None
+        r0, r1 = pr0 + rows[0], pr0 + rows[-1]
+        c0, c1 = pc0 + cols[0], pc0 + cols[-1]
+        if ((pr0 > 0 and r0 <= pr0) or (pr1 < self.ny and r1 >= pr1 - 1)
+                or (pc0 > 0 and c0 <= pc0) or (pc1 < self.nx and c1 >= pc1 - 1)):
+            return None                          # touches a non-clamped side: full scan
+        return (max(0, r0 - margin), min(self.ny, r1 + margin + 1),
+                max(0, c0 - margin), min(self.nx, c1 + margin + 1))
+
+    def window(self, margin, prev=None):
+        """Wet (or source) bbox + margin, clamped to the grid; None when nothing is wet.
+        prev (audit M16): the window last returned - only it is scanned (see WINDOW_EVERY);
+        None, an unusable prev, a touched non-clamped side or every WINDOW_SELF_CHECK-th call
+        scans the whole grid, and a self-check that disagrees returns the full-grid answer."""
+        self.window_calls += 1
+        if prev is None:
+            return self._window_full(margin)
+        got = self._window_in(margin, prev)
+        if got is None:
+            return self._window_full(margin)
+        if self.window_calls % WINDOW_SELF_CHECK == 0:
+            full = self._window_full(margin)
+            if full != got:
+                self.window_mismatch += 1
+                return full
+        return got
 
     def source_rate(self, t, win):
         """m3/s per cell of every source at time t, on the window's cells (a source past the
@@ -315,24 +396,32 @@ def run_par(par_path, progress=None, cancel=None, log=None):
     for key in ("demfile", "sim_time"):
         if key not in par:
             raise EngineError("the .par file has no '{}'".format(key))
-    z, xll, yll, dx, nod = _read_asc(path("demfile"))
+    z, xll, yll, dx, nod = _load("DEM file", _read_asc, path("demfile"))
     z = np.where(z == nod, np.nan, z)
     ny, nx = z.shape
-    sim = float(par["sim_time"])
-    massint = float(par.get("massint", 300.0))
-    saveint = float(par.get("saveint", sim + 10.0))
-    arr_depth = float(par.get("inittm_depth", 0.0))
-    n_def = float(par.get("fpfric", 0.06))
+
+    def num(key, default):
+        v = par.get(key, default)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise EngineError("the .par file's '{}' is not a number ({!r})".format(key, v))
+    sim = num("sim_time", None)
+    massint = num("massint", 300.0)
+    saveint = num("saveint", sim + 10.0)
+    arr_depth = num("inittm_depth", 0.0)
+    n_def = num("fpfric", 0.06)
     n = np.full(z.shape, n_def)
     if "manningfile" in par:
-        ng, _, _, _, nn = _read_asc(path("manningfile"))
+        ng, _, _, _, nn = _load("Manning's n file", _read_asc, path("manningfile"), z.shape)
         n = np.where((ng == nn) | ~np.isfinite(ng) | (ng <= 0), n_def, ng)
     h0 = np.zeros(z.shape)
     if "startfile" in par:
-        s, _, _, _, sn = _read_asc(path("startfile"))
+        s, _, _, _, sn = _load("start-depth file", _read_asc, path("startfile"), z.shape)
         h0 = np.where((s == sn) | ~np.isfinite(s), 0.0, s)
-    pts, free = read_bci(path("bcifile")) if "bcifile" in par else ([], set())
-    bdy = read_bdy(path("bdyfile")) if "bdyfile" in par else {}
+    pts, free = _load("boundary (.bci) file", read_bci, path("bcifile")) if "bcifile" in par \
+        else ([], set())
+    bdy = _load("inflow (.bdy) file", read_bdy, path("bdyfile")) if "bdyfile" in par else {}
     ytop = yll + ny * dx
     by_name = {}
     for x, y, name in pts:
@@ -350,7 +439,7 @@ def run_par(par_path, progress=None, cancel=None, log=None):
         rr = np.array([c[0] for c in cells])
         cc = np.array([c[1] for c in cells])
         sources.append((rr, cc, ts, vals * dx))       # QVAR is per unit width
-    gauges = read_gauges(path("gaugefile")) if "gaugefile" in par else []
+    gauges = _load("gauge file", read_gauges, path("gaugefile")) if "gaugefile" in par else []
     solver = "fv1" if "fv1" in par else "acceleration"
     if solver == "fv1":
         say("The built-in engine runs 'fv1' with its local-inertial scheme.")
@@ -407,7 +496,7 @@ def run_par(par_path, progress=None, cancel=None, log=None):
     vol0 = float(m.h.sum()) * dx * dx
     vin = vout = 0.0
     qin = qout = 0.0
-    win = None
+    win = win_prev = None
     wall = time.time()
     last_prog = wall
     t_start = time.time()
@@ -436,8 +525,11 @@ def run_par(par_path, progress=None, cancel=None, log=None):
                 _write_asc("{}-{:04d}.wd".format(root, snap_k), m.h, xll, yll, dx)
                 snap_k += 1
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
-            if steps % 10 == 0 or win is None:
-                win = m.window(12)
+            if steps % WINDOW_EVERY == 0 or win is None:
+                # audit M16: scan only the previous real window; never the (0, 1, 0, 1)
+                # stand-in below
+                win = m.window(WINDOW_MARGIN, prev=win_prev)
+                win_prev = win
                 if win is None:
                     win = (0, 1, 0, 1)
             hm = float(m.h[win[0]:win[1], win[2]:win[3]].max())
@@ -504,6 +596,9 @@ def run_par(par_path, progress=None, cancel=None, log=None):
              "wall_s": round(time.time() - t_start, 1),
              "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
              "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": m.clip_vol}
+    if m.window_mismatch:
+        say("WARNING: built-in engine: {} wet-window self-check(s) found water outside the "
+            "scanned window; the full-grid scan was used there.".format(m.window_mismatch))
     say("Built-in engine: {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(steps, t / 3600.0, stats["wall_s"] / 60.0,
                                         stats["mass_error_m3"], vin))

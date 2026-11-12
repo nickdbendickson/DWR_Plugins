@@ -308,7 +308,8 @@ def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False
     depth = depth_proxy(water, cell, shore, max_depth, p.shape_factor)
     below = float(depth[water].sum() * cell * cell)
     top = max(crest, ground + 1e-6)
-    curve_up = st.above_pool_curve(dem, water, pool, top, cell, max(p.steps, 20))
+    steps_up = max(p.steps, 20)
+    curve_up = st.above_pool_curve(dem, water, pool, top, cell, steps_up)
     ce = np.array([e for e, _ in curve_up]); cv = np.array([v for _, v in curve_up])
     bed = pool - depth[water]
     A = cell * cell
@@ -322,7 +323,15 @@ def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False
     total = below + above_pool
     above_grade = max(0.0, vol(crest) - vol(ground)) if crest > ground else 0.0
     height = crest - ground
-    curve = [(e, v + below) for e, v in st.above_pool_curve(dem, water, pool, crest, cell, p.steps)]
+    # L07: when top == crest and steps_up == p.steps (the default, and every rim-ed pond that
+    # actually produces a breach flood) this is the same point set as curve_up - reuse it instead
+    # of a second above_pool_curve (ndi.label + np.isin per stage). The fallback keeps the exact
+    # sample elevations in the degenerate crest == ground case (top = crest + 1e-6; no_flood then).
+    if abs(top - crest) <= 1e-9 and steps_up == p.steps:
+        curve = [(e, v + below) for e, v in curve_up]
+    else:
+        curve = [(e, v + below)
+                 for e, v in st.above_pool_curve(dem, water, pool, crest, cell, p.steps)]
 
     no_flood, why_none = False, ""
     if height < p.min_height_m:

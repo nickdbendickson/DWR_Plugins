@@ -86,6 +86,11 @@ def _bootstrap():
     name = "nd_breach_runner"
     mod = sys.modules.get(name)
     here = os.path.realpath(PLUGIN_DIR)
+    # Core 1.0.0: the plugin's damsuite is a shim onto the DamSafety_Core plugin, installed next
+    # to this one (python/plugins/, or the DWR_Plugins checkout): make its parent importable
+    parent = os.path.dirname(here)
+    if os.path.isdir(os.path.join(parent, "DamSafety_Core")) and parent not in sys.path:
+        sys.path.append(parent)
     if mod is not None and os.path.realpath(os.path.dirname(
             getattr(mod, "__file__", "") or "")) == here:
         return name
@@ -188,6 +193,7 @@ MODEL_KEYS = {
     "cell_size_m": ("cell_size_m", ("num", 1.0, None)),
     "arrival_depth_ft": ("arrival_depth_ft", ("num", 0.01, None)),
     "edge_tolerance_ft": ("edge_tolerance_ft", ("num", 0.01, None)),
+    "outflow_extend_pct": ("outflow_extend_pct", ("num", 0.0, 100.0)),   # Grok audit 3.1
     "initial_length_mi": ("initial_length_mi", ("num", 0.25, None)),
     "half_width_mi": ("half_width_mi", ("num", 0.1, None)),
     "expand_step_mi": ("expand_step_mi", ("num", 0.1, None)),
@@ -213,6 +219,14 @@ MODEL_KEYS = {
     "crest_burn_dem": ("crest_burn_dem", ("path",)),
     "grid_refine": ("grid_refine", ("bool",)),
     "grid_check_cell_m": ("grid_check_cell_m", ("num", 0.0, None)),
+    # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
+    "lisflood_solver": ("lisflood_solver", ("str",)),
+    "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
+    # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
+    "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
+    "max_total_wall_s": ("max_total_wall_s", ("num", 0.0, None)),
+    "lisflood_rate": ("lisflood_rate", ("num", 0.0, None)),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -453,9 +467,14 @@ TEMPLATE = {
                  "qa_basemap: auto | imagery | hillshade (under the QA maps: the aerial photo, "
                  "else the hillshade; default auto); qa_basemap_labels: street / town labels. "
                  "reservoir_carve: off | auto | on (carve the reservoir bottom from the storage "
-                 "curve where the LiDAR shows a water surface; default off).",
+                 "curve where the LiDAR shows a water surface; default off). max_wall_s / "
+                 "max_total_wall_s: wall-clock limit of one LISFLOOD-FP run / budget of the "
+                 "whole domain-growth loop, in seconds (0 = automatic: 6 x the run-time "
+                 "estimate when lisflood_rate - the cell-seconds per second `estimate` "
+                 "measures - is given, else 24 h; the budget is max_iterations x that).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 0.1,
-        "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
+        "edge_tolerance_ft": 1.0, "outflow_extend_pct": workflow.OUTFLOW_WARN_PCT,
+        "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth",
         "qa_basemap": "auto", "qa_basemap_labels": True, "reservoir_carve": "off",
         "max_iterations": 6, "sim_time_hr": None,
@@ -464,7 +483,8 @@ TEMPLATE = {
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
         "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
-        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M},
+        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M,
+        "max_wall_s": 0.0, "max_total_wall_s": 0.0, "lisflood_rate": None},
     "output": {
         "_help": "Each dam goes to <folder>/<Dam ID>/, as in the QGIS tools.",
         "folder": "dams", "keep_model_files": True, "products": True, "resume": False},
@@ -1067,6 +1087,13 @@ def build_settings(cfg, opts, need_models=True):
                 v = tuple(v)
             if key == "crest_burn_dem":
                 v = v or ""
+            if key == "lisflood_rate" and not v:           # audit P2: 0 / null = unknown
+                v = None
+            if key == "lisflood_solver":                   # 3.16.0
+                try:
+                    v = workflow.lfmod.solver_from_text(v, st.lisflood_solver)
+                except workflow.lfmod.ModelError as e:
+                    raise CliError(str(e))
             if not hasattr(st, attr):
                 raise CliError("this version of the plugin has no run setting '{}'".format(attr))
             setattr(st, attr, v)
@@ -1471,13 +1498,21 @@ def cmd_run(args):
     return 0
 
 
-def _hecras_stage(p, res, log):
+def _hecras_stage(p, res, log, unattended=False):
     """3.10.66: model.tier 'hecras' (LISFLOOD-FP then HEC-RAS 2D) runs the HEC-RAS 2D stage
-    after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError."""
+    after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError.
+    `unattended` (audit R6): the batch command - the HEC-RAS wall clock then defaults to
+    hecras_engine.BATCH_TIMEOUT_S (12 h) unless NDBREACH_HECRAS_TIMEOUT_S says otherwise."""
     if p.st.tier != workflow.TIER_HECRAS or not res.summary.get("breach_occurs", True):
         return
-    log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>')")
-    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log)
+    log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>'{})"
+        .format("; unattended: a 12 h wall-clock limit per compute and preprocess step unless "
+                "NDBREACH_HECRAS_TIMEOUT_S says otherwise" if unattended else ""))
+    # audit M18 (3.17.7): Ctrl-C (CANCEL["flag"], _install_sigint) stops the Wine preprocess
+    # and RasUnsteady through wallclock.stop_group - start_new_session keeps the terminal's
+    # SIGINT away from them - and lfmod.Cancelled reaches the command's cancel exit (130)
+    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log,
+                              unattended=unattended, cancel=lambda: CANCEL["flag"])
 
 
 def cmd_hydrograph(args):
@@ -1535,6 +1570,11 @@ def cmd_estimate(args):
     est = estmod.estimate(plan, rate, p.st.tier == workflow.TIER_BOTH)
     for ln in estmod.describe(plan, est):
         say(ln)
+    # audit P2: the measured speed sets the automatic wall-clock limit of a run (6 x the
+    # estimate instead of 24 h) when the configuration carries it
+    say("LISFLOOD-FP speed on this computer: {:.0f} cell-seconds per second (set "
+        "model.lisflood_rate to this for an automatic wall-clock limit of {:g} x the "
+        "estimate).".format(rate, lfmod.WALL_ESTIMATE_FACTOR))
     return 0
 
 
@@ -1564,6 +1604,12 @@ def cmd_check(args):
             bad = bad or not ok
             lines.append(("OK " if ok else "PROBLEM ") + "LISFLOOD-FP ({}): {}".format(
                 exe, r["message"]))
+            if r["ok"] and not r.get("velocity"):       # M21: a build that writes no .maxVc
+                lines.append("PROBLEM LISFLOOD-FP ({}): the test run wrote no maximum velocity "
+                             "(.maxVc) - the ACER depth-velocity hazard needs it, and a run on "
+                             "this build would report velocity-driven HIGH cells as low. Use a "
+                             "patched build (scripts/build_lisflood_*.sh) or the built-in "
+                             "engine.".format(exe))
         if py:
             a = anmod.check_anuga(py, tmp)
             bad = bad or not a["ok"]
@@ -1788,12 +1834,10 @@ def cmd_batch(args):
                 results.append(out)
                 continue
             out["Structure_Flag"] += " (run allowed)"
-        depth_names = (workflow.FINAL_NAMES["depth"],
-                       os.path.splitext(workflow.FINAL_NAMES["depth"])[0] + ".asc")
-        if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names) \
+        if skip_done and workflow.run_finished(folder) \
                 and (cfg.get("model", "tier", workflow.TIER_LISFLOOD) != workflow.TIER_HECRAS
                      or workflow.hecras_done(folder)):
-            out.update({"Status": "skipped", "Message": "already has Depth (Max)"})
+            out.update({"Status": "skipped", "Message": "already run (finished)"})
             results.append(out)
             continue
         say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
@@ -1816,7 +1860,7 @@ def cmd_batch(args):
                 say(note)
             res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
                                    p.folder, None, pr.progress, pr.log, pr.cancel)
-            _hecras_stage(p, res, pr.log)
+            _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
             s = res.summary
             if not s.get("breach_occurs", True):
                 out.update({"Status": "no breach",
