@@ -18,6 +18,7 @@ from ..core import damrecord_io as dri
 from ..core import runner_dem as rdem
 from ..damsuite import versions as vs
 from . import _common as cm
+from ._common import UnitAlgorithm
 from ..compat import (FIELD_ANY, FIELD_NUMERIC, FILE_FOLDER, FT_STRING, GEOM_POINT, NUM_DOUBLE,
                       SRC_LINE, SRC_POINT, SRC_POLYGON, set_advanced)
 
@@ -83,7 +84,7 @@ def _user_method_index(alg):
     return ho.USER_METHOD_INDEX
 
 
-class RunnerHandoff(QgsProcessingAlgorithm):
+class RunnerHandoff(UnitAlgorithm):
     def name(self): return "runnerhandoff"
     def displayName(self): return "7b - Detailed runs with DamSafety Runner"
     def group(self): return "Dam screening"

@@ -13,6 +13,7 @@ from ..core import benchmark as bm, gridutil as gu
 from . import _common as cm
 from ..compat import (FILE_FOLDER, NUM_DOUBLE, SRC_POINT)
 from ..damsuite import gdalsafe as GS
+from ._common import UnitAlgorithm
 
 REF_UNITS = ["US customary: depth ft, velocity ft/s, arrival h (HEC-RAS, DSS-WISE Lite after ND Dam "
              "Hazard's import, ND Dam Breach Runner)",
@@ -21,7 +22,7 @@ SCENARIOS = ["td - top of dam (ND standard)", "sd - sunny day"]
 M2_PER_AC = 4046.8564224
 
 
-class CompareReference(QgsProcessingAlgorithm):
+class CompareReference(UnitAlgorithm):
     def name(self): return "comparereference"
     def displayName(self): return "11 - Compare with a reference model"
     def group(self): return "Dam screening"

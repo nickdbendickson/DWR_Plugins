@@ -74,6 +74,39 @@ def test_fmt():
     assert DU.fmt(15, "ft", "us") == "15 ft"
 
 
+def test_convert_text_quantities_and_chains():
+    c = lambda t: DU.convert_text(t, "si")                         # noqa: E731
+    assert c("3,215 cfs") == "91 m³/s"
+    assert c("Maximum depth / velocity | 17.2 ft / 9.8 ft/s") == \
+        "Maximum depth / velocity | 5.24 m / 2.99 m/s"
+    assert c("10.21 x 9.23 mi") == "16.43 x 14.85 km"
+    # a quantity before a colon is not a key named by its unit
+    assert c("8,049.2 / 8,011.4 ac (at or above 1 ft: 2,198.9 / 2,169.9 ac)") == \
+        "3,257.4 / 3,242.1 ha (at or above 0.305 m: 889.9 / 878.1 ha)"
+    # every number of a chain carries the unit at its end
+    assert c("at or above 0.1 / 1 / 2 ft") == "at or above 0.0305 / 0.305 / 0.61 m"
+    assert c("4.86 / 13.09 vs 4.84 / 13.09 ft/s") == "1.48 / 3.99 vs 1.48 / 3.99 m/s"
+    assert c("- peak cfs: 28671.4") == "- peak m³/s: 811.9"
+    # numbers that are not quantities, and metric ones, are left alone
+    for t in ("REG_05.2026 5.4(c)", "v3.10.84 at 10 m", "at (-106230, 2666610)", "5 min",
+              "96 h", "10 in the pool"):
+        assert c(t) == t, t
+    assert DU.convert_text("3,215 cfs", "us") == "3,215 cfs"
+
+
+def test_convert_table_and_markdown():
+    head, rows = DU.convert_table(["ID", "Depth ft", "Vel ft/s", "Arrival h"],
+                                  [["7", "12.3", "4.5", "1.25"]], "si")
+    assert head == ["ID", "Depth m", "Vel m/s", "Arrival h"]
+    assert rows == [["7", "3.75", "1.37", "1.25"]]
+    md = ("| Pass | Size (mi) | Edge depth N/S/E/W (ft) |\n|---|---|---|\n"
+          "| 1 | 4.21 x 3.23 | 0.0/5.89/2.93/0.0 |")
+    out = DU.convert_markdown(md, "si").split("\n")
+    assert out[0] == "| Pass | Size (km) | Edge depth N/S/E/W (m) |"
+    assert out[2] == "| 1 | 6.78 x 5.2 | 0/1.8/0.893/0 |"
+    assert DU.convert_markdown(md, "us") == md
+
+
 if __name__ == "__main__":
     n = 0
     for k, f in sorted(globals().items()):

@@ -13,6 +13,7 @@ from ..core import triage as tg, hazard as hz, gridutil as gu, runner as rn
 from . import _common as cm
 from ..core import errors as er
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 AF_M3 = 1233.4818375
 NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
@@ -55,7 +56,7 @@ class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16."""
 
 
-class Triage(QgsProcessingAlgorithm):
+class Triage(UnitAlgorithm):
     def name(self): return "triage"
     def displayName(self): return "6 - Quick screen (triage)"
     def group(self): return "Dam screening"

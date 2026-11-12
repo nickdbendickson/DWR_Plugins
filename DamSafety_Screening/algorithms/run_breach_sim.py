@@ -15,6 +15,7 @@ from ..core import solver_io as sio, runner as rn, gridutil as gu
 from ..core.proposed import PHRASE as PROPOSED_PHRASE
 from . import _common as cm
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, GEOM_POLYGON, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
               ("sim_engine", FT_STRING), ("sim_cell_m", FT_DOUBLE),
@@ -329,7 +330,7 @@ def _write_us_rasters(outdir, dam_id, r):
     return dest if wrote else None
 
 
-class RunBreachSim(QgsProcessingAlgorithm):
+class RunBreachSim(UnitAlgorithm):
     def name(self): return "runbreachsim"
     def displayName(self): return "7 - Run breach flood simulations"
     def group(self): return "Dam screening"

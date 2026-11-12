@@ -4,9 +4,10 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingException,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination)
 
 from ..core import offline
+from ._common import UnitAlgorithm
 
 
-class DownloadLayers(QgsProcessingAlgorithm):
+class DownloadLayers(UnitAlgorithm):
     def name(self):
         return "downloadlayers"
 
