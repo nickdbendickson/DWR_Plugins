@@ -91,9 +91,11 @@ import numpy as np
 try:                    # 3.10.50: the worker runs as a script (python anuga_worker.py ...)
     from . import omp_probe
     from . import anuga_dtdiag
+    from . import anuga_fine_maxima
 except ImportError:
     import omp_probe
     import anuga_dtdiag
+    import anuga_fine_maxima
 
 
 def crest_vertex_values(vertex_xy, vertex_values, crest_xy, crest_z, tol=1e-3):
@@ -525,7 +527,8 @@ CKPT_KEYS = ("ckpt_every_min", "ckpt_every_steps", "ckpt_keep", "ckpt_dir",
 # not part of the fingerprint: the thread count and gmsh's own report (timings) do not
 # change the model, so a run can resume with another thread count
 # 3.10.70: nor the read-only time-step diagnostic (a run resumes with it turned on or off)
-FINGERPRINT_SKIP = CKPT_KEYS + ("threads", "mesh_stats") + anuga_dtdiag.DT_DIAG_KEYS
+FINGERPRINT_SKIP = CKPT_KEYS + ("threads", "mesh_stats", "keep_fine_maxima",
+                                 "keep_fine_support", "fine_maxima_crs") + anuga_dtdiag.DT_DIAG_KEYS
 PARTIAL_NAME = "anuga_partial.npz"
 META_NAME = "checkpoint.json"
 # 3.12.6 (DWR-2801 r3): an explicit resume from a named checkpoint folder (resume_from)
@@ -1876,15 +1879,22 @@ def main(job_path, out_path):
     stats["host_pauses"] = clock.summary()
     if dtdiag is not None:
         stats["dt_diag"] = dtdiag.finish()
+    fine_record = anuga_fine_maxima.retain(
+        os.path.dirname(os.path.abspath(out_path)), job, domain, env, x_ref, y_ref, ckdir)
+    if fine_record.get("enabled"):
+        stats["fine_maxima"] = fine_record
+    if fine_record.get("warning"):
+        print("WARNING: " + fine_record["warning"], flush=True)
+    keep_support = fine_record.get("support_kept", False)
     if ck is not None:
-        if ckdir and os.path.isdir(ckdir):       # finished: the pickles are not needed
+        if ckdir and os.path.isdir(ckdir) and not keep_support:       # finished: the pickles are not needed
             shutil.rmtree(ckdir, ignore_errors=True)
             ckinfo["checkpoints_removed_after_run"] = True
             try:
                 os.rmdir(os.path.dirname(ckdir))     # the checkpoint folder, when empty
             except OSError:
                 pass
-        if partial_path and os.path.exists(partial_path):
+        if partial_path and os.path.exists(partial_path) and not keep_support:
             os.remove(partial_path)                  # superseded by result.npz
             ckinfo["partial_removed_after_run"] = True
         stats["checkpoint"] = ckinfo
