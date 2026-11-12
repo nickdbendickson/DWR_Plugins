@@ -38,8 +38,9 @@ LAS_SIGNATURE = b"LASF"
 WATER_CLASS = 9           # ASPRS: 9 = Water, 2 = Ground, 1 = Unclassified
 
 
-class LasError(Exception):
-    """A LAS file that could not be read."""
+class LasError(RuntimeError):
+    """A LAS file that could not be read. A RuntimeError so the tools turn it into a clean
+    QgsProcessingException (the plugin converts RuntimeError) instead of leaking a traceback."""
 
 
 class LasCompressedError(LasError):
