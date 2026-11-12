@@ -485,13 +485,18 @@ LINE_STREAM, LINE_DEM = "stream line", "DEM drainage"
 def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, bbox=None, cell=3.0,
                     z_feet=None, params=None, match_ft=500.0, unsure_factor=2.0, tile_m=5000.0,
                     road_buffer_m=6.0, hillshade=True, drainage_ac=0.0, drain_cell=10.0,
-                    ridges=False, dugouts=False, ridge_params=None, model=None, log=print,
+                    ridges=False, dugouts=False, dikes=True, dike_near_m=200.0,
+                    ridge_params=None, model=None, log=print,
                     progress=None, cancelled=None):
     """Fills across the stream lines in the DEM, checked against the known structures, and (with
     `hillshade`) a multi-direction hillshade of the area beside the GeoPackage for the review.
     drainage_ac > 0: also walk every draw of the DEM draining that many acres (core/terrain.py,
     traced at drain_cell metres), mapped or not. ridges / dugouts: also look for raised ridges
     (levees, dikes) and dug pits anywhere (core/ridges.py; layers 'ridges' and 'dugouts').
+    dikes (on by default): also look for a dike that holds water running BESIDE a stream or draw
+    (within dike_near_m), which no line crosses - a pond dam built along a channel, not across it.
+    These go into the 'ridges' layer and screening_dams. The whole-DEM ridge search (ridges) finds
+    them too, so the dike pass is skipped when ridges is on.
     model: a score model (core/score.py JSON) - each fill gets its score.
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
@@ -545,7 +550,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             return b[0] <= xx < b[2] and b[1] <= yy < b[3]
 
         dl, deep = [], None
-        if drainage_ac or ridges:
+        if drainage_ac or ridges or dikes:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
             if drainage_ac:
                 # routed over the DEM with narrow raised features opened away, so a draw runs
@@ -553,7 +558,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 rec, order, _f = tr.flow(tr.open_ridges(z10, abs(gt10[1]), rp.width_m))
                 area, _len = tr.accumulate(rec, order, z10.shape, abs(gt10[1]))
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
-            if ridges:
+            if ridges or dikes:
                 _r, _o, filled = tr.flow(z10)
                 d10 = tr.depth(z10, filled)
                 rr = np.clip(((gt[3] + (np.arange(z.shape[0]) + 0.5) * gt[5]) - gt10[3]) / gt10[5],
@@ -567,14 +572,24 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         found.extend(got)
         msg = "tile {}/{}: {} line(s){}, {} fill(s)".format(
             ti + 1, len(tiles), len(tl), " + {} DEM draw(s)".format(len(dl)) if drainage_ac else "", len(got))
+        wide = None
+        if rmask is not None:                  # a road embankment's base, not just its centreline
+            wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
         if ridges and not cancelled():
-            wide = None
-            if rmask is not None:              # a road embankment's base, not just its centreline
-                wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
             rg = rd.find_ridges(z, gt, depth=deep, road_mask=wide, params=rp, keep=keep,
                                 exclude=[(e.x, e.y) for e in got])
             ridge_rows.extend(rg)
             msg += ", {} ridge(s)".format(len(rg))
+        elif dikes and not cancelled() and (tl or dl):
+            near = np.zeros(z.shape, bool)     # a buffer around the stream lines and draws
+            for ln in tl + dl:
+                for r, c in em.line_cells(ln, gt, z.shape):
+                    near[r, c] = True
+            near = ndi.binary_dilation(near, iterations=max(1, int(round(dike_near_m / cell))))
+            dk = rd.find_ridges(z, gt, depth=deep, road_mask=wide, params=rp, keep=keep,
+                                exclude=[(e.x, e.y) for e in got], near_mask=near, water_only=True)
+            ridge_rows.extend(dk)
+            msg += ", {} channel-side dike(s)".format(len(dk))
         if dugouts and not cancelled():
             dg = rd.find_dugouts(z, gt, params=rp, keep=keep)
             dug_rows.extend(dg)
@@ -623,11 +638,12 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                            "lat": round(lat, 6), "lon": round(lon, 6)})
     write_points(out_gpkg, "spillways", SPILL_FIELDS, spills)
     extra = []
-    if ridges:
+    if ridges or dikes:
         extra = _ridge_rows(ridge_rows, kn, match_ft, unsure_factor, ll)
         write_points(out_gpkg, "ridges", RIDGE_FIELDS, extra)
         write_csv(os.path.splitext(out_gpkg)[0] + "_ridges.csv", RIDGE_FIELDS, extra)
-        log(_summary(extra, "raised ridge(s) off the stream lines"))
+        log(_summary(extra, "channel-side dike(s)" if dikes and not ridges
+                     else "raised ridge(s) off the stream lines"))
     dugs = []
     if dugouts:
         dugs = _dug_rows(dug_rows, kn, match_ft, unsure_factor, ll)

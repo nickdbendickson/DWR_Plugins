@@ -122,12 +122,15 @@ def min_rect(rows, cols, cell):
     return best
 
 
-def find_ridges(dem, gt, depth=None, road_mask=None, params=None, keep=None, exclude=()):
+def find_ridges(dem, gt, depth=None, road_mask=None, params=None, keep=None, exclude=(),
+                near_mask=None, water_only=False):
     """Ridges of a DEM (2-D m, NaN = no data; gt a north-up geotransform). `depth`: the depth of
     each cell below its spill level (terrain.depth), same grid; without it no ridge is said to hold
     water. `exclude`: (x, y) points (fills already found): a ridge within 3 cells of one is that
-    fill and is left out. Returns [dict(x, y, kind, height_m, length_m, width_m, head_m, cells)],
-    highest first."""
+    fill and is left out. `near_mask`: a bool grid (same shape); a ridge is kept only if some of it
+    lies on the mask (e.g. within a buffer of the stream lines - a dike beside a channel, not one
+    out in a field). `water_only`: keep only the ridges that hold water (K_LEVEE). Returns
+    [dict(x, y, kind, height_m, length_m, width_m, head_m, cells)], highest first."""
     p = params or RidgeParams()
     z = np.asarray(dem, float)
     cell = abs(gt[1])
@@ -171,6 +174,8 @@ def find_ridges(dem, gt, depth=None, road_mask=None, params=None, keep=None, exc
         rows, cols = rr + sl[0].start, cc + sl[1].start
         if road_mask is not None and road_mask[rows, cols].mean() > p.road_share:
             continue
+        if near_mask is not None and not near_mask[rows, cols].any():
+            continue
         top = int(np.argmax(rise[rows, cols]))
         x = gt[0] + (cols[top] + 0.5) * gt[1]
         y = gt[3] + (rows[top] + 0.5) * gt[5]
@@ -185,7 +190,10 @@ def find_ridges(dem, gt, depth=None, road_mask=None, params=None, keep=None, exc
             ring = ndi.binary_dilation(mm, iterations=3) & ~mm
             dd = depth[r0:r1, c0:c1][ring]
             head = float(np.percentile(dd, 90)) if dd.size else 0.0
-        out.append({"x": x, "y": y, "kind": K_LEVEE if head >= p.min_head_m else K_RIDGE,
+        kind = K_LEVEE if head >= p.min_head_m else K_RIDGE
+        if water_only and kind != K_LEVEE:
+            continue
+        out.append({"x": x, "y": y, "kind": kind,
                     "height_m": float(rise[rows, cols].max()), "length_m": major,
                     "width_m": len(rows) * cell * cell / max(major, cell), "head_m": head,
                     "cells": len(rows)})

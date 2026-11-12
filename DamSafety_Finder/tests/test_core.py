@@ -247,6 +247,24 @@ class Ridges(unittest.TestCase):
         road[:, 96:106] = True
         self.assertEqual(rd.find_ridges(z, gt, road_mask=road), [])
 
+    def test_near_mask_and_water_only(self):
+        # a dike beside a channel (holds water) and one out in a field (dry): near a channel and
+        # water-holding keeps only the first, which is what the default dike pass looks for
+        z, gt = self.flat()
+        z[40:160, 98:104] = 102.0                          # dike A, by the channel, holds water
+        z[40:160, 150:156] = 102.0                         # dike B, dry, out in the field
+        depth = np.zeros(z.shape)
+        depth[40:160, 80:98] = 1.0                         # a pool on dike A's west side
+        channel = np.zeros(z.shape, bool)
+        channel[:, 72:74] = True                           # a stream down the west side
+        from scipy import ndimage as ndi
+        near = ndi.binary_dilation(channel, iterations=28)  # its buffer reaches dike A, not dike B
+        got = rd.find_ridges(z, gt, depth=depth, near_mask=near, water_only=True)
+        self.assertEqual([d["kind"] for d in got], [rd.K_LEVEE])
+        self.assertAlmostEqual(got[0]["x"], 101.0, delta=4.0)
+        self.assertEqual(rd.find_ridges(z, gt, depth=depth, water_only=True)[0]["kind"], rd.K_LEVEE)
+        self.assertEqual(len(rd.find_ridges(z, gt, depth=depth)), 2)   # both, without the filters
+
     def test_round_hump_and_bend_are_not_ridges(self):
         z, gt = self.flat()
         r, c = np.mgrid[0:200, 0:200]
