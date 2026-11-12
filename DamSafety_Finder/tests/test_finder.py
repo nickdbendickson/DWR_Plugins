@@ -30,11 +30,12 @@ def srs(epsg):
     return s
 
 
-def write_dem(path, dem, feet=False, tag=True):
+def write_dem(path, dem, feet=False, tag=True, srs_epsg=5070):
     drv = gdal.GetDriverByName("GTiff")
     ds = drv.Create(path, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + dem.shape[0] * tc.CELL, 0.0, -tc.CELL))
-    ds.SetProjection(srs(5070).ExportToWkt())
+    if srs_epsg is not None:
+        ds.SetProjection(srs(srs_epsg).ExportToWkt())
     b = ds.GetRasterBand(1)
     b.SetNoDataValue(-9999.0)
     b.WriteArray(np.where(np.isfinite(dem), dem / (0.3048 if feet else 1.0), -9999.0))
@@ -134,6 +135,16 @@ class Runs(unittest.TestCase):
         self.assertEqual(info["match_ft"], "200.0")
         self.assertEqual(info["cancelled"], "False")
         self.assertIn("min_height_m=", info["params"])
+        self.assertTrue(any(k.startswith("sha256_") for k in info), info)
+        f = ds.GetLayerByName("embankments").GetNextFeature()
+        # rewind: at least one is_new field is yes or no
+        ds2 = ogr.Open(self.out)
+        vals = []
+        lyr = ds2.GetLayerByName("embankments")
+        for feat in lyr:
+            vals.append(feat.GetField("is_new"))
+        self.assertTrue(vals and all(v in ("yes", "no") for v in vals), vals)
+        self.assertIn("yes", vals)
         hs = gdal.Open(res["hillshade"])
         self.assertEqual(hs.GetRasterBand(1).DataType, gdal.GDT_Byte)
         self.assertGreater(hs.GetRasterBand(1).ComputeRasterMinMax(False)[1], 0)
@@ -151,11 +162,12 @@ class Runs(unittest.TestCase):
 
     def test_a_dem_with_no_unit_is_refused(self):
         dem, _road = tc.scene()
+        # EPSG:5070, no Z tag: the horizontal CRS unit is metres (with a confirm warning)
         bare = os.path.join(self.tmp, "bare.tif")
         write_dem(bare, dem, tag=False)
-        with self.assertRaises(RuntimeError) as cm:
-            self.f.run_embankments(bare, self.streams, self.out, log=lambda *_: None)
-        self.assertIn("DEM elevation unit", str(cm.exception))
+        in_feet, how = self.f.dem_unit(bare)
+        self.assertFalse(in_feet)
+        self.assertIn("horizontal CRS", how)
         # the same values with the unit chosen: run, and the choice is logged
         logs = []
         self.f.run_embankments(bare, self.streams, self.out, z_feet=False, hillshade=False, log=logs.append)
@@ -173,6 +185,18 @@ class Runs(unittest.TestCase):
         logs = []
         self.f.check_dem_unit(nd, False, logs.append)
         self.assertFalse(any("WARNING" in str(m) for m in logs), logs)
+        # no CRS and an ambiguous typical value (800 fits metres and feet): still refused
+        none = os.path.join(self.tmp, "nogeo.tif")
+        write_dem(none, np.full((20, 20), 1200.0), tag=False, srs_epsg=None)
+        with self.assertRaises(RuntimeError) as cm:
+            self.f.dem_unit(none)
+        self.assertIn("DEM elevation unit", str(cm.exception))
+        # value heuristic: 2,000 looks like feet
+        ftish = os.path.join(self.tmp, "ftish.tif")
+        write_dem(ftish, np.full((20, 20), 2000.0), tag=False, srs_epsg=None)
+        in_feet, how = self.f.dem_unit(ftish)
+        self.assertTrue(in_feet)
+        self.assertIn("looks like feet", how)
 
     def test_cancel_stops_and_says_so(self):
         calls = []
