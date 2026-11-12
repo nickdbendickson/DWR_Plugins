@@ -415,6 +415,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFeatureSource("DAMLINES", "DWR dam lines (protect from cuts; cascade; "
                                               "reservoir-in-grid)", [SRC_LINE],
                                               optional=True))
+        P(QgsProcessingParameterFeatureSource("PROTECT", "More fills to leave uncut (points, lines or polygons; e.g. the Finder's screening_dams)",
+                                              [SRC_POINT, SRC_LINE, SRC_POLYGON], optional=True))
         P(QgsProcessingParameterField("LID", "Dam lines: structure ID field", defaultValue="structure_id",
                                       parentLayerParameterName="DAMLINES", optional=True))
         P(QgsProcessingParameterEnum("CASCADE", "Downstream dams reached by the flood",
@@ -471,6 +473,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         streams = self.parameterAsSource(params, "STREAMS", context)
         roadcut = self.parameterAsSource(params, "ROADCUT", context)
         damlines = self.parameterAsSource(params, "DAMLINES", context)
+        keep = self.parameterAsSource(params, "PROTECT", context)
         lid = self.parameterAsString(params, "LID", context) or None
         cascade = ["off", "flag", "breach"][self.parameterAsEnum(params, "CASCADE", context)]
         nlcd = self.parameterAsRasterLayer(params, "NLCD", context)
@@ -576,6 +579,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
                             for _, arrs in dl for a in arrs), key=lambda x: x[0])
                 if best[0] < 300: own = best[1]
             protect = [o["line_xy"] for o in others] + ([own] if own is not None else [])
+            protect += cm.protect_near(keep, bxy, reach)         # 0.19.4: Finder dams, not cut
             pool = get(f, "est_pool_m", float)
             v_below = None
             if curves and pool is not None:
