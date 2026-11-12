@@ -692,7 +692,7 @@ Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **mediu
 Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, Oct 30, 6:11 PM CDT: "Would be medium hazard and judgement call for engineer").
 
 
-## NoData receptors on coarse grids (Hazard 2.24.7, Screening 0.19.7, Runner 3.17.13, Hazard Lite 0.2.1)
+## NoData receptors on coarse grids (Hazard 2.24.8, Screening 0.19.7, Runner 3.17.13, Hazard Lite 0.2.1)
 
 When a structure, road or rail receptor sits on a NoData cell next to water, the path depends on the depth-grid cell size (the larger side, converted to metres; `NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20` m, strictly greater than):
 

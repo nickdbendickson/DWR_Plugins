@@ -78,6 +78,12 @@ class ClassificationTabMixin(object):
             "TM 11: count ACER judgment-zone persons in lives in jeopardy")
         self.judgment_check.setChecked(True)
         cform.addRow("", self.judgment_check)
+        # 2.24.7: opt-in 911 / reviewed-habitable class rule (default off = classification unchanged)
+        self.habitable_rule_check = WrapCheckBox(
+            "Class: only ND 911 address points and engineer-reviewed structures count as "
+            "habitable (opt-in; off = existing rule, classification unchanged)")
+        self.habitable_rule_check.setChecked(False)
+        cform.addRow("", self.habitable_rule_check)
         self.near_spin = QDoubleSpinBox()
         self.near_spin.setRange(0.0, 5.0)
         self.near_spin.setSingleStep(0.1)
@@ -964,6 +970,7 @@ class ClassificationTabMixin(object):
             one_d=self.model_combo.currentData() == "1d",
             judgment_as_probable=self.judgment_check.isChecked(),
             nd_judgment_as_probable=self.nd_judgment_check.isChecked(),
+            habitable_rule=("reviewed" if self.habitable_rule_check.isChecked() else "legacy"),
             persons_per_dwelling=int(self.ppd_spin.value()),
             min_area_ft2=float(self.min_area_spin.value()),
             occupancy=float(self.occ_spin.value()), speed_mph=float(self.speed_spin.value()),

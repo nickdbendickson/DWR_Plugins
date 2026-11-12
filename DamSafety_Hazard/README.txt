@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.24.7
+ND Dam Hazard Classification Helper - Version 2.24.8
 ====================================================
 
 WHAT IT DOES
@@ -16,7 +16,7 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
-- NoData receptors (2.24.7): when the cell under a structure (or every cell
+- NoData receptors (2.24.8): when the cell under a structure (or every cell
   in its footprint) is NoData and a neighbour is wet, the path depends on
   the depth-grid cell size (larger side, in metres; threshold
   NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m, strictly greater than). Coarser
@@ -953,9 +953,28 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   classification by lives in jeopardy, with the reasons and a list of
   items that need engineering judgment.
 - Outputs: Habitable_Structures, Roads_Inundated, Rail_Inundated
-  (GPKG/CSV/XLSX, styled in the project) and
-  Hazard_Classification_Summary (TXT/XLSX/CSV). Downloads are cached in
-  outputs/_downloads with the date.
+  (GPKG/CSV/XLSX, styled in the project),
+  Hazard_Classification_Summary (TXT/XLSX/CSV), and (2.24.7)
+  ND_DV_Habitable.png / .csv in outputs/Classification: the wet
+  habitable structures on the ND depth-velocity charts (Fig. 5.1 /
+  5.2), peak depth vs peak velocity. Only ND 911 address points
+  (is_911, source nd911/911/e911/ng911, placed='911 address point',
+  an nguid / ND_Site_NGUID, or ND GIS Hub NENA / NDGISHUB) are
+  plotted as habitable until an engineer reviews a structure with
+  the Processing tool ndhazard:reviewhabitable, which writes
+  habitable_review.json in the dam folder (reviewer, note, history;
+  this does not replace the existing Review tab /
+  Structure_Review_Decisions.csv). reviewed_habitable is yes /
+  unverified / no; reviewed-habitable non-911 points use a distinct
+  marker; other wet non-911 structures are a count in a note and
+  listed in ND_DV_Habitable_unverified.csv. Written for Runner,
+  Screening and imported (e.g. DSS-WISE) rasters, labelled by
+  source; also a page in the PDF report. The ND / TM 11 class is
+  unchanged by default (legacy habitability). An opt-in HABITABLE_RULE
+  (Classify tool / Classify tab) uses only 911 points and
+  engineer-reviewed structures for the class; when that would change
+  the class, the summary logs a habitable_rule_differs warning.
+  Downloads are cached in outputs/_downloads with the date.
 
 ND CRITERIA APPLIED (REG_05.2026, effective 04/01/2026, Section 5.2)
 - HIGH: any habitable structure in the high danger zone of Figs 5.1/5.2

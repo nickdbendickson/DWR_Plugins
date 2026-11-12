@@ -221,9 +221,15 @@ def _provider_check(rep):
         from .processing_provider import Provider
         prov = Provider()
         prov.refreshAlgorithms()
-        # acerzones, classify, batch, dsswise and (v2.5) hecrasplan; (2.18.59) savedamstate; (2.21.0) adddamresults
-        rep.check("Processing provider loads 22 algorithms", len(prov.algorithms()) == 22,
-                  len(prov.algorithms()))
+        # Count follows Provider.algorithm_classes() so a new tool (2.24.7 reviewhabitable)
+        # does not need a hard-coded number here. savedamstate is hidden from the toolbox
+        # but still loaded.
+        expected = len(list(Provider.algorithm_classes()))
+        names = [a.name() for a in prov.algorithms()]
+        rep.check("Processing provider loads {} algorithms".format(expected),
+                  len(names) == expected and "reviewhabitable" in names
+                  and "classify" in names,
+                  "{0} algorithms: {1}".format(len(names), names))
     except Exception:
         rep.error("Processing provider", traceback.format_exc())
 
