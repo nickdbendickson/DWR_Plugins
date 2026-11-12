@@ -30,6 +30,7 @@ from scipy import ndimage as ndi
 
 from .core import crossings as cx
 from .core import embankments as em
+from .core import lidar as li
 from .core import listed as ls
 from .core import ponds as pd
 from .core import ridges as rd
@@ -39,7 +40,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -1142,6 +1143,8 @@ def _built_mask(built, box, gt, shape, built_m, cell):
 def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, threshold=0.15,
               open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, green_frac=0.35,
               built=None, built_m=5.0, mapped=None, tile_m=4000.0,
+              las_src_epsg=None, las_classes=(li.WATER_CLASS,), las_min_pts=1,
+              water_raster=None, water_raster_band=1, water_count_min=1,
               persist=0.5, log=print, progress=None, cancelled=None, opener=None):
     """Open-water polygons from 4-band / colour-infrared imagery: a raster file (or VRT) or an
     ArcGIS ImageServer address (then bbox is required; tiles are cached beside the output).
@@ -1155,9 +1158,28 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
     every band and otherwise read as water in town. 0 turns the shadow test off.
     `built`: a buildings / pavement / roads layer (lines or polygons); water patches on it, within
     built_m, are dropped (roofs, streets and in-town pools). Writes layer 'water' (polygons,
-    EPSG:5070) and a CSV. Returns {'rows', 'counts', 'gpkg', 'csv'}."""
+    EPSG:5070) and a CSV. Returns {'rows', 'counts', 'gpkg', 'csv'}.
+    `image` may instead be a classified LiDAR tile (.las/.laz) or a list of them: then there is no
+    imagery at all - a cell is water when the point cloud classes it so (ASPRS class 9). The NDWI,
+    shadow and built filters don't apply; `las_classes` is the water class set, `las_min_pts` the
+    points a cell needs, and `las_src_epsg` the tile CRS when the file carries none.
+    `water_raster`: a prebuilt class-9 water-count raster / VRT (band `water_raster_band`), e.g. the
+    statewide class-9 LiDAR mosaic - a cell is water where the count is at least `water_count_min`.
+    This is the scalable path when reading the raw LAS statewide is too much; no imagery, LAS, NDWI
+    or shadow filters apply. Its own nodata (and the -999999 LiDAR nodata) read as no water."""
     progress = progress or _noop
     cancelled = cancelled or _noop
+    if water_raster:
+        return _run_water_raster(water_raster, int(water_raster_band), float(water_count_min),
+                                 out_gpkg, bbox, cell, open_px, min_ac, max_ac, min_width_m,
+                                 mapped, tile_m, log, progress, cancelled)
+    raw = list(image) if isinstance(image, (list, tuple)) else [image]
+    las_sources = [s if isinstance(s, str) else s[0] for s in raw]
+    las_mode = bool(las_sources) and all(li.is_las(s) for s in las_sources)
+    if las_mode:
+        return _run_water_las(las_sources, out_gpkg, bbox, cell, las_src_epsg, tuple(las_classes),
+                              las_min_pts, open_px, min_ac, max_ac, min_width_m, mapped, tile_m,
+                              log, progress, cancelled)
     srcs = list(image) if isinstance(image, (list, tuple)) else [(image, green_band, nir_band)]
     if not srcs:
         raise RuntimeError("no imagery given")
@@ -1220,58 +1242,8 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
                                       reject=reject)
         if n == 0:
             continue
-        polys = _mapped_polys(mapped, box)
-        mmask = _rasterize(polys, gt, lab.shape) if polys else None
-        cells, mean, share = wt.patch_stats(lab, n, idx, mmask)
-        wet = wt.patch_stats(lab, n, frac)[1] if frac is not None else None
-        # keep a patch in the tile whose core holds its first cell (row-major): each once
-        first = np.full(n + 1, -1, dtype=np.int64)
-        flat = lab.ravel()
-        nz = np.nonzero(flat)[0]
-        first_idx = np.unique(flat[nz], return_index=True)
-        first[first_idx[0]] = nz[first_idx[1]]
-        src = gdal.GetDriverByName("MEM").Create("", lab.shape[1], lab.shape[0], 1, gdal.GDT_Int32)
-        src.SetGeoTransform(gt)
-        src.SetProjection(_srs(WORK_EPSG).ExportToWkt())
-        src.GetRasterBand(1).WriteArray(lab)
-        mds = mem.CreateDataSource("p")
-        ml = mds.CreateLayer("p", _srs(WORK_EPSG), ogr.wkbPolygon)
-        ml.CreateField(ogr.FieldDefn("lab", ogr.OFTInteger))
-        band = src.GetRasterBand(1)
-        gdal.Polygonize(band, band, ml, 0, [], callback=None)
-        ml.ResetReading()                  # GDAL < 3.6: the iterator does not rewind after writing
-        geoms = {}
-        for f in ml:
-            k = f.GetField("lab")
-            g = f.GetGeometryRef().Clone()
-            if k in geoms:
-                geoms[k] = geoms[k].Union(g)
-            else:
-                geoms[k] = g
-        for k, g in geoms.items():
-            if k <= 0:
-                continue
-            r, c = divmod(int(first[k]), lab.shape[1])
-            fx, fy = gt[0] + (c + 0.5) * gt[1], gt[3] + (r + 0.5) * gt[5]
-            if not (core[0] <= fx < core[2] and core[1] <= fy < core[3]):
-                continue
-            area = cells[k] * cell * cell / AC_M2
-            if max_ac and area > max_ac:
-                continue
-            pt = g.PointOnSurface()
-            lon, lat = _lonlat(pt.GetX(), pt.GetY(), ll)
-            row = {"water_id": find_id("WATER", pt.GetX(), pt.GetY()), "area_ac": round(area, 3),
-                   "ndwi": round(float(mean[k]), 3),
-                   "wet_share": round(float(wet[k]), 2) if wet is not None else 1.0, "images": len(srcs),
-                   "mapped": "yes" if share[k] >= 0.5 else "no",
-                   "mapped_share": round(float(share[k]), 2), "lat": round(lat, 6), "lon": round(lon, 6)}
-            f = ogr.Feature(lyr.GetLayerDefn())
-            for name, _t in WATER_FIELDS:
-                f.SetField(name, row[name])
-            f.SetGeometry(ogr.ForceToMultiPolygon(g))
-            lyr.CreateFeature(f)
-            rows.append(row)
-        mds = None
+        _emit_water_patches(lab, n, idx, frac, gt, core, cell, mapped, box, max_ac, len(srcs),
+                            lyr, mem, ll, rows)
         log("tile {}/{}: {} water patch(es)".format(ti + 1, len(tiles), n))
         progress(100.0 * (ti + 1) / len(tiles))
     ds = None
@@ -1282,6 +1254,189 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
         len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
     return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
             "csv": out_csv, "image": image}
+
+
+def _emit_water_patches(lab, n, idx, frac, gt, core, cell, mapped, box, max_ac, n_images,
+                        lyr, mem, ll, rows):
+    """Polygonise the water labels of one tile, keep each patch in the tile whose core holds its
+    first cell, and append its feature + row. Shared by the imagery and the LiDAR paths."""
+    polys = _mapped_polys(mapped, box)
+    mmask = _rasterize(polys, gt, lab.shape) if polys else None
+    cells, mean, share = wt.patch_stats(lab, n, idx, mmask)
+    wet = wt.patch_stats(lab, n, frac)[1] if frac is not None else None
+    first = np.full(n + 1, -1, dtype=np.int64)
+    flat = lab.ravel()
+    nz = np.nonzero(flat)[0]
+    first_idx = np.unique(flat[nz], return_index=True)
+    first[first_idx[0]] = nz[first_idx[1]]
+    src = gdal.GetDriverByName("MEM").Create("", lab.shape[1], lab.shape[0], 1, gdal.GDT_Int32)
+    src.SetGeoTransform(gt)
+    src.SetProjection(_srs(WORK_EPSG).ExportToWkt())
+    src.GetRasterBand(1).WriteArray(lab)
+    mds = mem.CreateDataSource("p")
+    ml = mds.CreateLayer("p", _srs(WORK_EPSG), ogr.wkbPolygon)
+    ml.CreateField(ogr.FieldDefn("lab", ogr.OFTInteger))
+    band = src.GetRasterBand(1)
+    gdal.Polygonize(band, band, ml, 0, [], callback=None)
+    ml.ResetReading()                  # GDAL < 3.6: the iterator does not rewind after writing
+    geoms = {}
+    for f in ml:
+        k = f.GetField("lab")
+        g = f.GetGeometryRef().Clone()
+        if k in geoms:
+            geoms[k] = geoms[k].Union(g)
+        else:
+            geoms[k] = g
+    for k, g in geoms.items():
+        if k <= 0:
+            continue
+        r, c = divmod(int(first[k]), lab.shape[1])
+        fx, fy = gt[0] + (c + 0.5) * gt[1], gt[3] + (r + 0.5) * gt[5]
+        if not (core[0] <= fx < core[2] and core[1] <= fy < core[3]):
+            continue
+        area = cells[k] * cell * cell / AC_M2
+        if max_ac and area > max_ac:
+            continue
+        pt = g.PointOnSurface()
+        lon, lat = _lonlat(pt.GetX(), pt.GetY(), ll)
+        row = {"water_id": find_id("WATER", pt.GetX(), pt.GetY()), "area_ac": round(area, 3),
+               "ndwi": round(float(mean[k]), 3),
+               "wet_share": round(float(wet[k]), 2) if wet is not None else 1.0, "images": n_images,
+               "mapped": "yes" if share[k] >= 0.5 else "no",
+               "mapped_share": round(float(share[k]), 2), "lat": round(lat, 6), "lon": round(lon, 6)}
+        f = ogr.Feature(lyr.GetLayerDefn())
+        for name, _t in WATER_FIELDS:
+            f.SetField(name, row[name])
+        f.SetGeometry(ogr.ForceToMultiPolygon(g))
+        lyr.CreateFeature(f)
+        rows.append(row)
+
+
+def _run_water_las(sources, out_gpkg, bbox, cell, src_epsg, classes, min_pts, open_px, min_ac,
+                   max_ac, min_width_m, mapped, tile_m, log, progress, cancelled):
+    """Open water from classified LiDAR tiles (ASPRS class 9), tile by tile. Each spatial tile
+    reads only the LAS files that overlap it, ORs their water cells, then runs the same patch
+    filters (open, min size, min width) and output as the imagery path."""
+    min_px = max(1, int(round(min_ac * AC_M2 / (cell * cell))))
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    bounds = []                                    # (path, (x0,y0,x1,y1) in work CRS)
+    for s in sources:
+        try:
+            bounds.append((s, li.las_bounds(s, WORK_EPSG, src_epsg)))
+        except Exception as e:
+            log("skipping {}: {}".format(os.path.basename(str(s)), e))
+    if not bounds:
+        raise RuntimeError("no readable LAS/LAZ tiles")
+    if bbox is not None:
+        ext = tuple(bbox)
+    else:
+        ext = (min(b[1][0] for b in bounds), min(b[1][1] for b in bounds),
+               max(b[1][2] for b in bounds), max(b[1][3] for b in bounds))
+    drv = _checked(ogr.GetDriverByName("GPKG"), "the GeoPackage driver")
+    ds = ogr.Open(out_gpkg, 1) if os.path.exists(out_gpkg) else drv.CreateDataSource(out_gpkg)
+    _checked(ds, "opening {} for writing".format(out_gpkg))
+    for i in range(ds.GetLayerCount()):
+        if ds.GetLayer(i).GetName() == "water":
+            ds.DeleteLayer(i)
+            break
+    lyr = ds.CreateLayer("water", _srs(WORK_EPSG), ogr.wkbMultiPolygon)
+    kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
+    for name, t in WATER_FIELDS:
+        lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
+    tiles = []
+    x = ext[0]
+    while x < ext[2]:
+        y = ext[1]
+        while y < ext[3]:
+            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
+            y += tile_m
+        x += tile_m
+    rows = []
+    mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")
+    for ti, core in enumerate(tiles):
+        if cancelled():
+            break
+        pad = 300.0
+        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
+        grid = gt = None
+        for path, bb in bounds:
+            if bb[2] <= box[0] or bb[0] >= box[2] or bb[3] <= box[1] or bb[1] >= box[3]:
+                continue                                    # this tile does not overlap the box
+            g, gt = li.water_grid(path, box, cell, WORK_EPSG, classes, min_pts, src_epsg, log)
+            grid = g if grid is None else np.fmax(grid, g)  # water in any file wins (NaN ignored)
+        if grid is None:
+            continue
+        idx = np.where(np.isfinite(grid), grid, np.nan)
+        lab, n = wt.water_patches(idx, 0.5, open_px, min_px, min_width_m / cell)
+        if n == 0:
+            continue
+        _emit_water_patches(lab, n, idx, None, gt, core, cell, mapped, box, max_ac, len(sources),
+                            lyr, mem, ll, rows)
+        log("tile {}/{}: {} water patch(es)".format(ti + 1, len(tiles), n))
+        progress(100.0 * (ti + 1) / len(tiles))
+    ds = None
+    out_csv = os.path.splitext(out_gpkg)[0] + "_water.csv"
+    write_csv(out_csv, WATER_FIELDS, rows)
+    unm = sum(1 for r in rows if r["mapped"] == "no")
+    log("{} open-water patch(es) of {:g} ac or more from LiDAR: {} not on the water-body "
+        "layer{}".format(len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
+    return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
+            "csv": out_csv, "image": sources}
+
+
+def _run_water_raster(src, band, count_min, out_gpkg, bbox, cell, open_px, min_ac, max_ac,
+                      min_width_m, mapped, tile_m, log, progress, cancelled):
+    """Open water from a prebuilt class-9 water-count raster / VRT (e.g. the statewide LiDAR water
+    mosaic): a cell is water where its count is at least `count_min`. Same tiling, patch filters
+    and output as the imagery and LiDAR paths; reuses read_bands (which warps to the work grid and
+    reads the source's nodata, so -999999 and the raster's own nodata come through as no water)."""
+    min_px = max(1, int(round(min_ac * AC_M2 / (cell * cell))))
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    ext = tuple(bbox) if bbox is not None else _image_box(src)
+    drv = _checked(ogr.GetDriverByName("GPKG"), "the GeoPackage driver")
+    ds = ogr.Open(out_gpkg, 1) if os.path.exists(out_gpkg) else drv.CreateDataSource(out_gpkg)
+    _checked(ds, "opening {} for writing".format(out_gpkg))
+    for i in range(ds.GetLayerCount()):
+        if ds.GetLayer(i).GetName() == "water":
+            ds.DeleteLayer(i)
+            break
+    lyr = ds.CreateLayer("water", _srs(WORK_EPSG), ogr.wkbMultiPolygon)
+    kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
+    for name, t in WATER_FIELDS:
+        lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
+    tiles = []
+    x = ext[0]
+    while x < ext[2]:
+        y = ext[1]
+        while y < ext[3]:
+            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
+            y += tile_m
+        x += tile_m
+    rows = []
+    mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")
+    for ti, core in enumerate(tiles):
+        if cancelled():
+            break
+        pad = 300.0
+        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
+        bands, gt = read_bands(src, box, cell, (band,))
+        counts = bands[band]
+        idx = np.where(np.isnan(counts), np.nan, np.where(counts >= count_min, 1.0, 0.0))
+        lab, n = wt.water_patches(idx, 0.5, open_px, min_px, min_width_m / cell)
+        if n == 0:
+            continue
+        _emit_water_patches(lab, n, idx, None, gt, core, cell, mapped, box, max_ac, 1,
+                            lyr, mem, ll, rows)
+        log("tile {}/{}: {} water patch(es)".format(ti + 1, len(tiles), n))
+        progress(100.0 * (ti + 1) / len(tiles))
+    ds = None
+    out_csv = os.path.splitext(out_gpkg)[0] + "_water.csv"
+    write_csv(out_csv, WATER_FIELDS, rows)
+    unm = sum(1 for r in rows if r["mapped"] == "no")
+    log("{} open-water patch(es) of {:g} ac or more from the water-count raster: {} not on the "
+        "water-body layer{}".format(len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
+    return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
+            "csv": out_csv, "image": src}
 
 
 # ----------------------------------------------------------------------------- OpenStreetMap --

@@ -411,6 +411,26 @@ class FindWater(_Base):
         self.addParameter(QgsProcessingParameterVectorLayer(
             "BUILT", "Buildings / streets in town (drops roofs, pavement, pools; optional)", [SRC_ANY],
             optional=True))
+        _folder = (QgsProcessingParameterFile.Behavior.Folder
+                   if hasattr(QgsProcessingParameterFile, "Behavior")
+                   else QgsProcessingParameterFile.Folder)
+        self.addParameter(QgsProcessingParameterFile(
+            "LAS", "Classified LiDAR tile (.las/.laz; ASPRS class 9 = water, instead of imagery)",
+            extension="", optional=True))
+        self.addParameter(QgsProcessingParameterFile(
+            "LAS_DIR", "...or a folder of classified LiDAR tiles", behavior=_folder, optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "LAS_CLASSES", "LiDAR water classes (ASPRS numbers, comma-separated)", "9", optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "LAS_EPSG", "LiDAR tile EPSG (only if the file carries no CRS; e.g. 26914)", "",
+            optional=True))
+        self._num("LAS_MIN_PTS", "LiDAR: points a cell needs to count as water", 1.0, 1.0)
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "WATER_RASTER", "Prebuilt class-9 water-count raster / VRT (e.g. the statewide LiDAR "
+            "water mosaic; instead of imagery or LAS)", optional=True))
+        self.addParameter(QgsProcessingParameterNumber(
+            "WATER_BAND", "Band of the water-count raster", INTEGER, 1, minValue=1))
+        self._num("WATER_COUNT_MIN", "Water-count raster: count a cell needs to be water", 1.0, 0.0)
         self._num("CELL", "Analysis cell size (m)", 1.0, 0.1)
         self._num("THRESHOLD", "Water when NDWI is at least (YOUR value; check it on a known pond)", 0.15, -1.0)
         self._num("NIR_FRAC", "and the near-infrared is at most this share of the land's (0 = no test)", 0.25, 0.0)
@@ -424,9 +444,73 @@ class FindWater(_Base):
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
+    def _las_sources(self, params, context):
+        """The LAS/LAZ tiles to read: the single file and/or every .las/.laz in the folder."""
+        import glob
+        import os
+        out = []
+        one = (self.parameterAsString(params, "LAS", context) or "").strip()
+        if one:
+            out.append(one)
+        folder = (self.parameterAsString(params, "LAS_DIR", context) or "").strip()
+        if folder and os.path.isdir(folder):
+            for pat in ("*.las", "*.laz", "*.LAS", "*.LAZ"):
+                out.extend(sorted(glob.glob(os.path.join(folder, pat))))
+        return out
+
     def processAlgorithm(self, params, context, feedback):
         from . import finder
+        import glob
+        import os
         self._feedback = feedback
+        bbox = _bbox(self, params, context)
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        wr = _src(self, params, "WATER_RASTER", context, False)
+        if wr:
+            try:
+                res = finder.run_water(
+                    None, out, bbox=bbox, cell=self.parameterAsDouble(params, "CELL", context),
+                    min_ac=self.parameterAsDouble(params, "MIN_AC", context),
+                    max_ac=self.parameterAsDouble(params, "MAX_AC", context),
+                    min_width_m=self.parameterAsDouble(params, "MIN_WIDTH", context),
+                    water_raster=wr, water_raster_band=self.parameterAsInt(params, "WATER_BAND", context),
+                    water_count_min=self.parameterAsDouble(params, "WATER_COUNT_MIN", context),
+                    mapped=_src(self, params, "MAPPED", context, False) or None,
+                    log=self._log(feedback), progress=feedback.setProgress,
+                    cancelled=feedback.isCanceled)
+            except RuntimeError as e:
+                raise QgsProcessingException(str(e))
+            self._stop_if_cancelled(feedback, out)
+            feedback.pushInfo("Open water from the water-count raster: {} patch(es), {} not on the "
+                              "mapped water bodies".format(res["counts"]["water"], res["counts"]["unmapped"]))
+            self._load(context, out, "water", "Open water (LiDAR water mosaic)")
+            return {"OUT": out}
+        las = self._las_sources(params, context)
+        if las:
+            classes = tuple(int(c) for c in
+                            (self.parameterAsString(params, "LAS_CLASSES", context) or "9").replace(
+                                ";", ",").split(",") if c.strip())
+            epsg = (self.parameterAsString(params, "LAS_EPSG", context) or "").strip()
+            try:
+                res = finder.run_water(
+                    las if len(las) > 1 else las[0], out, bbox=bbox,
+                    cell=self.parameterAsDouble(params, "CELL", context),
+                    min_ac=self.parameterAsDouble(params, "MIN_AC", context),
+                    max_ac=self.parameterAsDouble(params, "MAX_AC", context),
+                    min_width_m=self.parameterAsDouble(params, "MIN_WIDTH", context),
+                    las_classes=classes or (9,),
+                    las_min_pts=int(self.parameterAsDouble(params, "LAS_MIN_PTS", context)),
+                    las_src_epsg=int(epsg) if epsg else None,
+                    mapped=_src(self, params, "MAPPED", context, False) or None,
+                    log=self._log(feedback), progress=feedback.setProgress,
+                    cancelled=feedback.isCanceled)
+            except RuntimeError as e:
+                raise QgsProcessingException(str(e))
+            self._stop_if_cancelled(feedback, out)
+            feedback.pushInfo("Open water from LiDAR: {} patch(es), {} not on the mapped water "
+                              "bodies".format(res["counts"]["water"], res["counts"]["unmapped"]))
+            self._load(context, out, "water", "Open water (LiDAR class 9)")
+            return {"OUT": out}
         green = self.parameterAsInt(params, "GREEN", context)
         nir = self.parameterAsInt(params, "NIR", context)
         images = []

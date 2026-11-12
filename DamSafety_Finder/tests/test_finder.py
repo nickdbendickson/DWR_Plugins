@@ -323,6 +323,44 @@ class Runs(unittest.TestCase):
         self.assertEqual(ds.GetLayerByName("water").GetFeatureCount(), 1)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "out_water.csv")))
 
+    def test_water_from_a_las_tile(self):
+        # class-9 (water) points over a 40 m square at the pond centre, class-2 ground elsewhere,
+        # written at the grid's EPSG:5070 coords; run_water should find exactly that one patch
+        cx, cy = X0 + 150.0, Y0 + 150.0
+        wx, wy = np.meshgrid(np.arange(cx - 20, cx + 20, 1.0), np.arange(cy - 20, cy + 20, 1.0))
+        gx = np.linspace(X0 + 10, X0 + 290, 80)
+        gy = np.full(80, Y0 + 280.0)
+        x = np.concatenate([wx.ravel(), gx])
+        y = np.concatenate([wy.ravel(), gy])
+        cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(80, 2, np.uint8)])
+        path = os.path.join(self.tmp, "tile.las")
+        tc.write_las(path, x, y, cls)
+        res = self.f.run_water(path, self.out, cell=1.0, min_ac=0.02, min_width_m=3.0,
+                               las_src_epsg=5070, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        self.assertAlmostEqual(res["rows"][0]["area_ac"], 40 * 40 / 4046.8564224, delta=0.05)
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("water").GetFeatureCount(), 1)
+
+    def test_water_from_a_count_raster(self):
+        # a prebuilt class-9 water-count raster (band 1): a 40 m block of count 3, nodata elsewhere
+        path = os.path.join(self.tmp, "wcount.tif")
+        counts = np.zeros((300, 300), np.float32)
+        counts[120:160, 120:160] = 3.0                    # 40 x 40 m of water, count 3
+        drv = gdal.GetDriverByName("GTiff")
+        ds = drv.Create(path, 300, 300, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + 300, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        b = ds.GetRasterBand(1); b.WriteArray(counts); b.SetNoDataValue(0.0); ds = None
+        res = self.f.run_water(None, self.out, water_raster=path, cell=1.0, min_ac=0.02,
+                               min_width_m=3.0, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        self.assertAlmostEqual(res["rows"][0]["area_ac"], 40 * 40 / 4046.8564224, delta=0.05)
+        # count_min above the raster's value finds nothing
+        res = self.f.run_water(None, self.out, water_raster=path, water_count_min=5, cell=1.0,
+                               min_ac=0.02, min_width_m=3.0, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 0)
+
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
         res = self.f.run_water(img, self.out, cell=1.0, mapped=self.pond_layer(), tile_m=100.0,
