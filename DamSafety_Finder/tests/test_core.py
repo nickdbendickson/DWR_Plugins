@@ -103,6 +103,23 @@ class Embankments(unittest.TestCase):
         wander = [(XS, N * CELL - 1.0), (XS, 700.0), (XS + 60.0, 650.0), (XS, 600.0), (XS, 1.0)]
         self.assertEqual(em.find(dem, GT, [wander]), [])
 
+    def test_toe_reaches_the_foot_past_a_bench(self):
+        # a downstream face with a bench part-way down: the toe is the ground at the foot, not the
+        # top of the bench (Absaraka read 17 ft instead of ~28 ft when it stopped on a bench)
+        crest = [110.0, 108.0, 106.0]                      # steep face
+        bench = [105.8, 105.7, 105.6]                      # a short flat shelf
+        more = [104.0, 102.0, 100.0]                       # the face carries on
+        floor = [99.8, 99.7, 99.6, 99.5]                   # the valley floor (gentle)
+        z = np.array(crest + bench + more + floor)
+        kd, still = em.face_toe(z, 0, len(z), CELL, 8.0)
+        self.assertLessEqual(z[kd], 100.2)                 # the foot, well past the 105.6 bench top
+        self.assertFalse(still)
+        # a face that flattens straight onto a gentle floor stops there, not on down the valley
+        z2 = np.array([110.0, 107.0, 104.0, 101.0, 100.8, 100.6, 100.4, 100.2, 100.0])
+        kd2, _ = em.face_toe(z2, 0, len(z2), CELL, 8.0)
+        self.assertLessEqual(z2[kd2], 101.0)
+        self.assertGreaterEqual(z2[kd2], 100.0)
+
     def test_low_fill_left_out_and_threshold_is_yours(self):
         dem, y = valley()
         dem = add_fill(dem, y, 200, 1.0)
