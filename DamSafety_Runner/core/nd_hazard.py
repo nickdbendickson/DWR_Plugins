@@ -101,7 +101,29 @@ def _load_tm11_curves():
 
 TM11 = _load_tm11_curves()
 
-MODULE_VERSION = "1.4.0"
+
+def _load_nodata_sample():
+    """damsuite.nodata_sample - the 20 m NoData-receptor rule (shared with Hazard)."""
+    try:
+        from ..damsuite import nodata_sample as ns
+        return ns
+    except (ImportError, ValueError):
+        pass
+    import importlib.util
+    plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(plugin, "damsuite", "nodata_sample.py")
+    if not os.path.exists(path):
+        path = os.path.join(os.path.dirname(plugin),
+                            "DamSafety_Core", "damsuite", "nodata_sample.py")
+    spec = importlib.util.spec_from_file_location("_nd_hazard_nodata_sample", path)
+    ns = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ns)
+    return ns
+
+
+NDS = _load_nodata_sample()
+
+MODULE_VERSION = "1.4.1"
 POLICY = "North Dakota Dam Safety Standards Policy REG_05.2026, Sections 5.2 and 5.3"
 CHART_REFERENCE = ("Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                    "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), "
@@ -614,6 +636,11 @@ def class_from_text(text):
 # ------------------------------------------------------------------------------ sampling
 # Rasters as numpy arrays with a north-up transform: x0 = left edge, y_top = top edge,
 # cell = cell size (square cells). Depth and velocity arrays hold NaN or 0 where dry.
+# 1.4.1: a receptor whose cell is NoData takes the peak of wet cells in the 3x3 (and the
+# footprint) only when the depth-grid cell (metres; pass cell_m when `cell` is not metres)
+# is coarser than NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m. At 20 m or finer, NoData scores
+# dry (sampling=centre_nodata_dry) and is flagged (nodata_dry_review). A finite 0 is always
+# dry. Peak depth and peak velocity may come from different wet cells (option C).
 def _cell(x, y, x0, y_top, cell, shape):
     try:
         if not (math.isfinite(x) and math.isfinite(y)):
@@ -632,12 +659,53 @@ def _val(a, rc):
     return v if math.isfinite(v) else None
 
 
-def sample_point(depth, vel, x0, y_top, cell, x, y):
-    """(depth, velocity) at a point; (None, None) outside the grid; NaN -> None."""
+class SamplePV(tuple):
+    """(depth, velocity) plus sampling path and review flag (damit PR #67 names).
+    Unpacks as a 2-tuple so existing `d, v = sample_point(...)` callers stay valid."""
+    def __new__(cls, d, v, sampling=NDS.SAMPLING_CENTRE, flag=None):
+        obj = tuple.__new__(cls, (d, v))
+        obj.sampling = sampling
+        obj.flag = flag
+        return obj
+
+
+def _policy_for_cell(cell, cell_m=None):
+    m = float(cell) if cell_m is None else float(cell_m)
+    return NDS.nodata_policy(m)
+
+
+def _neighbour_peak(depth, vel, rcs):
+    """Peak wet depth/velocity over the 3x3 (union) around each (r, c)."""
+    seen, depths, vels = set(), [], []
+    nr, nc = depth.shape
+    for r0, c0 in rcs:
+        for r, c in NDS.neighbourhood_rc(r0, c0, nr, nc):
+            if (r, c) in seen:
+                continue
+            seen.add((r, c))
+            depths.append(_val(depth, (r, c)))
+            vels.append(_val(vel, (r, c)) if vel is not None else None)
+    return NDS.peak_wet_cells(depths, vels)
+
+
+def sample_point(depth, vel, x0, y_top, cell, x, y, cell_m=None):
+    """(depth, velocity) at a point; (None, None) outside the grid; NaN at a cell
+    in the grid is NoData and follows the 20 m neighbourhood rule. The result is a
+    SamplePV (sampling, flag attributes)."""
     rc = _cell(x, y, x0, y_top, cell, depth.shape)
     if rc is None:
-        return None, None
-    return _val(depth, rc), _val(vel, rc)
+        return SamplePV(None, None, "outside the raster", None)
+    d, v = _val(depth, rc), _val(vel, rc)
+    if not NDS.is_nodata(d):
+        return SamplePV(d, v, NDS.SAMPLING_CENTRE, None)
+    decided = NDS.resolve_nodata(True, _neighbour_peak(depth, vel, [rc]),
+                                 _policy_for_cell(cell, cell_m))
+    if decided["flag"] == NDS.FLAG_NEIGHBOURHOOD:
+        return SamplePV(decided["depth"], decided["velocity"], decided["sampling"],
+                        decided["flag"])
+    # scored dry (centre_nodata_dry, or NoData with no wet neighbour)
+    return SamplePV(0.0 if decided["flag"] or decided["depth"] == 0.0 else 0.0,
+                    None, decided["sampling"], decided["flag"])
 
 
 def _inside_mask(xs, ys, ring):
@@ -716,13 +784,28 @@ def _peak_of_cells(depth, vel, r0, r1, c0, c1, m):
     return dmax, vmax, int(m.sum())
 
 
-def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0, edge=0.0):
+def _nodata_from_rcs(depth, vel, rcs, cell, cell_m, plain_how):
+    """Apply the 20 m rule when every requested cell is NoData. Returns (d, v, how)."""
+    decided = NDS.resolve_nodata(True, _neighbour_peak(depth, vel, rcs),
+                                 _policy_for_cell(cell, cell_m),
+                                 plain_sampling=plain_how)
+    if decided["flag"] == NDS.FLAG_NEIGHBOURHOOD:
+        how = "neighbourhood (peak of wet cells in the 3x3; {})".format(plain_how)
+        return decided["depth"], decided["velocity"], how
+    if decided["flag"] == NDS.FLAG_DRY_REVIEW:
+        return 0.0, None, "centre_nodata_dry ({})".format(plain_how)
+    return 0.0, None, plain_how
+
+
+def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0, edge=0.0,
+                     cell_m=None):
     """A structure polygon (exterior ring [(x, y), ...]): (depth at the deepest cell whose
     centre is inside the outline or within `edge` (grid units) of its wall, the maximum
     velocity over the wet cells of that area, how). 1.4.0 (audit P1): `edge` is the Hazard's
     edge ring (EDGE_RING_FT in the grid's units); 0 reads the bare footprint, the rule before
     1.4.0. A footprint with no cell centre in the area uses the cell under its centroid. Depth
-    units follow the arrays; `to_ft` converts them to ft for the wet test."""
+    units follow the arrays; `to_ft` converts them to ft for the wet test. 1.4.1: all-NoData
+    footprints follow the 20 m neighbourhood rule (`cell_m` when `cell` is not metres)."""
     ring = [p for p in (ring or ()) if math.isfinite(p[0]) and math.isfinite(p[1])]
     if not ring:                         # 3.4.1 / 0.11.1: empty or all-NaN ring: no sample
         return None, None, "footprint has no valid vertex"
@@ -738,19 +821,33 @@ def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0, e
             m |= _edge_mask(xs, ys, ring, edge)
         if m.any():
             dmax, vmax, n = _peak_of_cells(depth, vel, r0, r1, c0, c1, m)
-            return dmax, vmax, "deepest of {} cells in the footprint{}".format(
+            how = "deepest of {} cells in the footprint{}".format(
                 n, " + {:g} ft edge ring".format(edge * to_ft) if edge > 0 else "")
+            if dmax is not None:
+                return dmax, vmax, how
+            rr, cc = [], []
+            import numpy as _np
+            for i, j in _np.argwhere(m):
+                rr.append(r0 + int(i))
+                cc.append(c0 + int(j))
+            return _nodata_from_rcs(depth, vel, list(zip(rr, cc)), cell, cell_m, how)
     cx, cy = sum(xs_) / len(xs_), sum(ys_) / len(ys_)
-    d, v = sample_point(depth, vel, x0, y_top, cell, cx, cy)
-    return d, v, "no cell centre inside: cell under the centroid"
+    pv = sample_point(depth, vel, x0, y_top, cell, cx, cy, cell_m=cell_m)
+    how_pt = "no cell centre inside: cell under the centroid"
+    if getattr(pv, "flag", None) == NDS.FLAG_NEIGHBOURHOOD:
+        return pv[0], pv[1], "neighbourhood ({})".format(how_pt)
+    if getattr(pv, "flag", None) == NDS.FLAG_DRY_REVIEW:
+        return pv[0], pv[1], "centre_nodata_dry ({})".format(how_pt)
+    return pv[0], pv[1], how_pt
 
 
-def sample_disc(depth, vel, x0, y_top, cell, x, y, radius, wet_ft=0.1, to_ft=1.0):
+def sample_disc(depth, vel, x0, y_top, cell, x, y, radius, wet_ft=0.1, to_ft=1.0,
+                cell_m=None):
     """A point structure as the Hazard reads it: (peak depth, peak velocity over the wet
     cells, how) of the cells whose centre lies within `radius` (grid units: the assumed
     footprint POINT_RADIUS_FT plus the EDGE_RING_FT ring, converted by the caller) of the
     point; the cell under the point when no cell centre is that close. (None, None, how)
-    off the grid."""
+    off the grid. 1.4.1: all-NoData discs follow the 20 m neighbourhood rule."""
     try:
         if not (math.isfinite(x) and math.isfinite(y)):
             return None, None, "point has no valid coordinate"
@@ -765,14 +862,28 @@ def sample_disc(depth, vel, x0, y_top, cell, x, y, radius, wet_ft=0.1, to_ft=1.0
             m = (xs - x) ** 2 + (ys - y) ** 2 <= radius ** 2
             if m.any():
                 dmax, vmax, n = _peak_of_cells(depth, vel, r0, r1, c0, c1, m)
-                return dmax, vmax, "deepest of {} cells within {:g} ft of the point".format(
+                how = "deepest of {} cells within {:g} ft of the point".format(
                     n, radius * to_ft)
-    d, v = sample_point(depth, vel, x0, y_top, cell, x, y)
-    return d, v, "point"
+                if dmax is not None:
+                    return dmax, vmax, how
+                rr, cc = [], []
+                import numpy as _np
+                for i, j in _np.argwhere(m):
+                    rr.append(r0 + int(i))
+                    cc.append(c0 + int(j))
+                return _nodata_from_rcs(depth, vel, list(zip(rr, cc)), cell, cell_m, how)
+    pv = sample_point(depth, vel, x0, y_top, cell, x, y, cell_m=cell_m)
+    if getattr(pv, "flag", None) == NDS.FLAG_NEIGHBOURHOOD:
+        return pv[0], pv[1], "neighbourhood (point)"
+    if getattr(pv, "flag", None) == NDS.FLAG_DRY_REVIEW:
+        return pv[0], pv[1], "centre_nodata_dry (point)"
+    return pv[0], pv[1], "point"
 
 
-def sample_line_max(depth, x0, y_top, cell, vertices):
-    """Deepest water along a line, sampled every half cell; None when entirely outside."""
+def sample_line_max(depth, x0, y_top, cell, vertices, cell_m=None):
+    """Deepest water along a line, sampled every half cell; None when entirely outside.
+    1.4.1: a NoData sample follows the 20 m neighbourhood rule (a neighbourhood fill can
+    raise the line's peak; a fine-grid NoData sample stays dry)."""
     best = None
     step = 0.5 * cell
     for (xa, ya), (xb, yb) in zip(vertices[:-1], vertices[1:]):
@@ -781,11 +892,11 @@ def sample_line_max(depth, x0, y_top, cell, vertices):
         for i in range(n + 1):
             t = i / n
             d, _ = sample_point(depth, None, x0, y_top, cell, xa + t * (xb - xa),
-                                ya + t * (yb - ya))
+                                ya + t * (yb - ya), cell_m=cell_m)
             if d is not None and (best is None or d > best):
                 best = d
     if best is None and len(vertices) == 1:
-        best, _ = sample_point(depth, None, x0, y_top, cell, *vertices[0])
+        best, _ = sample_point(depth, None, x0, y_top, cell, *vertices[0], cell_m=cell_m)
     return best
 
 

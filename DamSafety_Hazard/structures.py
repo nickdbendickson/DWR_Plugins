@@ -68,12 +68,14 @@ from .helpers import (
     log_message, LimitedLogger, create_memory_layer, transform_geometry,
     buffer_distance_in_layer_units, classify_values, add_features_batched,
     is_null, transform_xy, curve_pair, CancelledByUser, strip_rows,
+    sampler_cell_size_m,
 )
 from .processing import point_from_geometry
 from .extent import distance_xy_in_crs, center_latitude, is_geographic, is_web_mercator
 from .hazard import zone_margins, zone_label
 from . import fastsample as FS
 from . import footprints as FP
+from .damsuite import nodata_sample as ND
 
 TYPE_HOUSE = "House on foundation"
 TYPE_MOBILE = "Mobile home"
@@ -2497,6 +2499,33 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls, zone=None):
 
 
 # --------------------------------------------------------------- sampling --
+def _neighbourhood_peak(dep, vel, points, to_vel=None):
+    """(peak depth, peak velocity, n_wet) of wet cells in the 3x3 around points, or None."""
+    xs, ys = ND.neighbourhood_centres(dep.gt, dep.xsize, dep.ysize, points)
+    if not xs:
+        return None
+    d = dep.values_at(np.asarray(xs, float), np.asarray(ys, float))
+    v = None
+    if vel is not None and getattr(vel, "ok", False):
+        vx, vy = transform_xy(np.asarray(xs, float), np.asarray(ys, float), to_vel)
+        v = vel.values_at(vx, vy)
+    return ND.peak_wet_cells(list(d), None if v is None else list(v))
+
+
+def _neighbourhood_wet_arrays(dep, points):
+    """(xs, ys, depths) of wet cells in the 3x3 around points, or (empty, empty, empty)."""
+    empty = (np.empty(0), np.empty(0), np.empty(0))
+    xs, ys = ND.neighbourhood_centres(dep.gt, dep.xsize, dep.ysize, points)
+    if not xs:
+        return empty
+    xa, ya = np.asarray(xs, float), np.asarray(ys, float)
+    d = dep.values_at(xa, ya)
+    wet = np.isfinite(d) & (d > 0)
+    if not wet.any():
+        return empty
+    return xa[wet], ya[wet], d[wet]
+
+
 COARSE_TARGET = 2048          # coarse wet mask: at most this many cells per side
 
 
@@ -2751,7 +2780,9 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           # snapshot (EVAL_KEYS) so the last breach's flags do not leak into every report
           "cells_xy": None, "_types": None, "vel_unknown": False,
           "arrival_below": False, "snap_flip": None,
-          "eval_failed": None}                     # audit R2: the error text, else None
+          "eval_failed": None,                    # audit R2: the error text, else None
+          "nodata_flag": None, "cell_m": None, "neighbourhood": False,
+          "nodata_neighbourhood_min_cell_m": None}
 
 
 # v2.7.1: which cells around a structure are read for its maximum depth / velocity
@@ -2826,7 +2857,15 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
     GDAL rasterisation; GEOS regions are then built only for the wet
     structures (rec["region"], display) and for the coarse-grid fallback.
     Same cells except in the arc/chord gap of GEOS buffers (see fastsample);
-    any error, a rotated raster or an unsupported geometry uses the GEOS path."""
+    any error, a rotated raster or an unsupported geometry uses the GEOS path.
+
+    When the cell under a point (or every cell in a footprint) is NoData and a
+    neighbour is wet, the path depends on the depth-grid cell size (larger side,
+    converted to metres; NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m, strictly
+    greater than): coarser than 20 m uses the peak over wet cells in the 3x3
+    neighbourhood (sampling=neighbourhood, flag nodata_neighbourhood); at 20 m
+    or finer the NoData cell is still scored dry (sampling=centre_nodata_dry)
+    and flagged for review (nodata_dry_review). A finite 0 is always dry."""
     if sample_area not in (SAMPLE_AREA, SAMPLE_RING, SAMPLE_BAND):
         sample_area = SAMPLE_AREA
     if lat is None and samplers["depth"].layer is not None:
@@ -2905,8 +2944,13 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             bb = rec["geom"].boundingBox()
             # dry structures (most of them in a large study area) are dropped
             # by the coarse wet mask before any GEOS work
-            if not _near_flood(mask_f, dep, bb.xMinimum() - reach, bb.yMinimum() - reach,
-                               bb.xMaximum() + reach, bb.yMaximum() + reach):
+            # one extra cell so a NoData hole next to water is not skipped (20 m rule)
+            cell_pad_x = abs(dep.gt[1]) + abs(dep.gt[2]) if dep.gt else 0.0
+            cell_pad_y = abs(dep.gt[5]) + abs(dep.gt[4]) if dep.gt else 0.0
+            if not _near_flood(mask_f, dep, bb.xMinimum() - reach - cell_pad_x,
+                               bb.yMinimum() - reach - cell_pad_y,
+                               bb.xMaximum() + reach + cell_pad_x,
+                               bb.yMaximum() + reach + cell_pad_y):
                 continue
             if use_fast:
                 shp = FS.shape_from_geometry(rec["geom"], r_disc)
@@ -3018,12 +3062,15 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             if np.isfinite(d):
                 cells[sid] = (np.array([x]), np.array([y]), np.array([d]))
     # wet cells only; a structure without one is dry and, as before 2.6,
-    # keeps no evaluation area
+    # keeps no evaluation area. A finite 0 is always dry (not filled from neighbours).
     wet_ids = []
+    finite_dry = set()
     for sid in list(cells):
         xs, ys, d = cells[sid]
         wet = np.isfinite(d) & (d > 0)
         if not wet.any():
+            if np.isfinite(d).any():
+                finite_dry.add(sid)
             del cells[sid]
             continue
         cells[sid] = (xs[wet], ys[wet], d[wet])
@@ -3032,6 +3079,67 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         if not rec["sampling"]:
             rec["sampling"] = rec.get("sampling") or "GEOS region: cells whose centre lies in the area"
         rec["n_cells"] = int(cells[sid][2].size)
+
+    # NoData at the centre / whole footprint: neighbourhood fill only when the
+    # depth grid is coarser than NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m; at 20 m
+    # or finer, score dry and flag for review (nodata_dry_review).
+    policy = ND.nodata_policy(sampler_cell_size_m(dep))
+    candidates = []
+    seen = set()
+    for sid in list(regions) + list(fast):
+        if sid in seen:
+            continue
+        seen.add(sid)
+        candidates.append(sid)
+    n_nb, n_dry = 0, 0
+    for sid in candidates:
+        if sid in wet_ids or sid in finite_dry:
+            continue
+        rec = by_id[sid]
+        if rec.get("eval_failed") is not None:
+            continue
+        region = rec.get("region") or regions.get(sid)
+        pts = []
+        try:
+            if region is not None and not region.isEmpty():
+                c = region.centroid().asPoint()
+                pts.append((c.x(), c.y()))
+            elif rec.get("geom") is not None:
+                c = rec["geom"].centroid().asPoint()
+                pts.append((c.x(), c.y()))
+        except Exception:
+            pts = []
+        if not pts:
+            continue
+        d0 = dep.values_at(np.array([pts[0][0]]), np.array([pts[0][1]]))
+        if not ND.is_nodata(d0[0] if d0.size else None):
+            continue
+        peak = _neighbourhood_peak(dep, samplers.get("vel"), pts, to_vel)
+        decided = ND.resolve_nodata(True, peak, policy,
+                                    plain_sampling=rec.get("sampling") or
+                                    "grid coarser than the area: the cell under its centre")
+        rec["sampling"] = decided["sampling"]
+        rec["nodata_flag"] = decided["flag"]
+        rec["cell_m"] = decided["cell_m"]
+        rec["nodata_neighbourhood_min_cell_m"] = decided["nodata_neighbourhood_min_cell_m"]
+        rec["neighbourhood"] = decided["neighbourhood"]
+        if decided["flag"] == ND.FLAG_NEIGHBOURHOOD:
+            xs, ys, dd = _neighbourhood_wet_arrays(dep, pts)
+            if dd.size:
+                cells[sid] = (xs, ys, dd)
+                wet_ids.append(sid)
+                rec["n_cells"] = int(dd.size)
+                n_nb += 1
+        elif decided["flag"] == ND.FLAG_DRY_REVIEW:
+            n_dry += 1
+    if n_nb or n_dry:
+        log_message(
+            "NoData receptors: depth-grid cell {:g} m (larger side); neighbourhood fill "
+            "only when coarser than NODATA_NEIGHBOURHOOD_MIN_CELL_M = {:g} m. "
+            "{} filled from the 3x3 neighbourhood (nodata_neighbourhood); "
+            "{} scored dry and flagged for review (nodata_dry_review).".format(
+                policy["cell_m"] if policy["cell_m"] is not None else float("nan"),
+                policy["nodata_neighbourhood_min_cell_m"], n_nb, n_dry))
 
     wet_set = set(wet_ids)
     for sid in regions:
@@ -3504,6 +3612,11 @@ def structure_notes(rec):
         notes.append("campground / RV park ({}) - seasonal overnight occupancy; verify the "
                      "number of sites and when it is open".format(rec["camp"].get("shape")
                                                                   or "OSM"))
+    note = ND.note_for_flag(rec.get("nodata_flag"), rec.get("cell_m"),
+                            rec.get("nodata_neighbourhood_min_cell_m") or
+                            ND.NODATA_NEIGHBOURHOOD_MIN_CELL_M)
+    if note:
+        notes.append(note)
     return notes
 
 
@@ -3536,7 +3649,9 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
         if rec["category"] == CAT_NOT_HABITABLE:
             continue
         if not include_dry and rec.get("outcome", OUT_DRY) == OUT_DRY:
-            continue
+            # 20 m or finer: a NoData receptor scored dry is still listed for review
+            if rec.get("nodata_flag") != ND.FLAG_DRY_REVIEW:
+                continue
         geom = rec["geom"] if rec["footprint"] else rec.get("region") or rec["geom"].buffer(
             _ft_units(DEFAULT_POINT_RADIUS_FT, crs), 8)
         try:

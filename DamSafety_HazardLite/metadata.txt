@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters.
 about=One Processing tool (Processing Toolbox > DamSafety Hazard Lite). Reads the ND Dam Suite offline pack: 911 address points on their FEMA outline, NG9-1-1 roads with NDDOT traffic counts, NARN rail with FRA crossings. Screening aid; the engineer of record classifies the dam.
-version=0.2.0
+version=0.2.1
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 author=N.D. Bendickson
@@ -14,7 +14,8 @@ tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
 homepage=https://github.com/nickdbendickson/dAmIt_Plugins
 experimental=True
 hasProcessingProvider=yes
-changelog=
+changelog=0.2.1 (2026-11-12; NoData receptors: on a depth grid coarser than NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m (larger cell side, converted to metres; strictly greater than 20 m) a receptor whose cell is NoData takes the peak depth and peak velocity from wet cells in the 3x3 neighbourhood or the footprint (option C: the two peaks may come from different cells; sampling=neighbourhood, flag nodata_neighbourhood). At 20 m or finer, NoData still scores dry (sampling=centre_nodata_dry) and is flagged for review (nodata_dry_review). A finite 0 is always dry. Recorded per receptor on Sampling / Notes (no new golden-schema CSV columns). Shared damsuite.nodata_sample; used by Hazard structures and roads/rail, the Screening/Runner nd_hazard sampler, Runner Receptors, and Hazard Lite. Named threshold, documented. Synthetic tests at 10, 20 and 30 m. Sibling: damit PR #67.)
+    
     
     
     0.1.6 - 2026-11-07 (usability / docs / release): metadata.txt names the real repository / tracker / homepage (https://github.com/nickdbendickson/dAmIt_Plugins; tools/ci_checks.py now rejects an example.com address, an empty repository= and author=Your Name), and the changelog= keeps its newest entries only: the older ones moved verbatim to docs/CHANGELOG.md ('Archived metadata changelog'), where the CI rule 'no changelog entry of the base is missing' finds them (changelog= over 12 KB now fails; QGIS's Plugin Manager renders the whole value of every installed plugin). A GitHub Release workflow (.github/workflows/release.yml, tag v*) builds the plugin zips and publishes plugins.xml to gh-pages, the QGIS plugin repository https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml. Root README.md written.

@@ -38,6 +38,7 @@ import numpy as np
 from osgeo import gdal, ogr, osr
 
 from . import tm11
+from .damsuite import nodata_sample as NDS
 
 # audit R3 (2026-11-07): no gdal.UseExceptions() / ogr.UseExceptions() at import. The call is
 # process-wide in the GDAL bindings QGIS ships, so a plugin that makes it when QGIS loads it
@@ -127,9 +128,17 @@ class Grid:
         a = b.ReadAsArray().astype(np.float64)
         nd = b.GetNoDataValue()
         if nd is not None:
-            a[a == nd] = 0.0
-        a[~np.isfinite(a)] = 0.0
-        return np.clip(a, 0.0, None)
+            a[a == nd] = np.nan
+        a[np.isfinite(a) & (a < 0)] = 0.0
+        return a
+
+    def cell_m(self):
+        """Larger cell side in metres (CRS linear units; geographic metres-per-degree)."""
+        dx, dy = abs(self.gt[1]), abs(self.gt[5])
+        wkt = self.srs.ExportToWkt() if self.srs is not None else ""
+        mid_x = self.gt[0] + self.nx * self.gt[1] / 2.0
+        mid_y = self.gt[3] + self.ny * self.gt[5] / 2.0
+        return NDS.cell_size_m_from_wkt(dx, dy, wkt=wkt, mid_x=mid_x, mid_y=mid_y)
 
     def bounds(self):
         x0, y1 = self.gt[0], self.gt[3]
@@ -142,13 +151,42 @@ class Grid:
                 x0 + (cols.max() + 1) * dx, y0 + rows.min() * dy)
 
     def at(self, xs, ys):
-        """Depth and velocity at points (nearest cell; 0 off the grid)."""
+        """Depth and velocity at points (nearest cell; NaN off the grid or NoData)."""
         c = np.floor((np.asarray(xs) - self.gt[0]) / self.gt[1]).astype(int)
         r = np.floor((np.asarray(ys) - self.gt[3]) / self.gt[5]).astype(int)
         ok = (c >= 0) & (c < self.nx) & (r >= 0) & (r < self.ny)
-        d, v = np.zeros(len(c)), np.zeros(len(c))
+        d, v = np.full(len(c), np.nan), np.full(len(c), np.nan)
         d[ok], v[ok] = self.depth[r[ok], c[ok]], self.vel[r[ok], c[ok]]
         return d, v
+
+    def fill_nodata_points(self, xs, ys, d, v):
+        """Apply the 20 m NoData-receptor rule to point samples (in place). Returns flags."""
+        policy = NDS.nodata_policy(self.cell_m())
+        flags = [None] * len(d)
+        for i in range(len(d)):
+            if not NDS.is_nodata(d[i]):
+                continue
+            # off the grid (at() set NaN for ok=False): do not flag, leave dry
+            c = int(np.floor((xs[i] - self.gt[0]) / self.gt[1]))
+            r = int(np.floor((ys[i] - self.gt[3]) / self.gt[5]))
+            if not (0 <= c < self.nx and 0 <= r < self.ny):
+                d[i] = 0.0
+                v[i] = 0.0
+                continue
+            depths, vels = [], []
+            for rr, cc in NDS.neighbourhood_rc(r, c, self.ny, self.nx):
+                depths.append(self.depth[rr, cc])
+                vels.append(self.vel[rr, cc])
+            peak = NDS.peak_wet_cells(depths, vels)
+            decided = NDS.resolve_nodata(True, peak, policy)
+            flags[i] = decided["flag"]
+            if decided["flag"] == NDS.FLAG_NEIGHBOURHOOD:
+                d[i] = decided["depth"]
+                if decided["velocity"] is not None:
+                    v[i] = decided["velocity"]
+            else:
+                d[i] = 0.0 if not np.isfinite(d[i]) else d[i]
+        return flags
 
     def under(self, geom):
         """Depth and velocity of every cell the polygon touches."""
@@ -271,8 +309,25 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=False, ex
     excluded_ag = 0
     for s in sites.values():
         d, v = grid.under(s["geom"])
-        if not len(d) or d.max() < WET_FT:
-            continue
+        sampling, nodata_flag = NDS.SAMPLING_CENTRE, None
+        wet_peak = float(np.nanmax(d)) if len(d) and np.isfinite(d).any() else None
+        if wet_peak is None or wet_peak < WET_FT:
+            if len(d) and np.isfinite(d).any():
+                continue                       # finite dry (including 0): do not fill
+            cpt = s["geom"].Centroid()
+            dd = np.array([np.nan])
+            vv = np.array([np.nan])
+            flags = grid.fill_nodata_points(np.array([cpt.GetX()]), np.array([cpt.GetY()]), dd, vv)
+            nodata_flag = flags[0]
+            if nodata_flag == NDS.FLAG_NEIGHBOURHOOD and np.isfinite(dd[0]) and dd[0] >= WET_FT:
+                d, v = dd, vv
+                sampling = NDS.SAMPLING_NEIGHBOURHOOD
+            elif nodata_flag == NDS.FLAG_DRY_REVIEW:
+                sampling = NDS.SAMPLING_CENTRE_NODATA_DRY
+                # listed dry for review
+                d, v = np.array([0.0]), np.array([np.nan])
+            else:
+                continue
         kind = "mobile" if ("MANUFACTURED" in s["occ"].upper() or "MOBILE HOME" in s["place"]) else "house"
         # FEMA Agriculture outlines (barns, sheds, bins) are out-buildings under 5.2.1.1 unless the
         # 911 point or the occupancy marks a dwelling. Excluded by default (exclude_ag).
@@ -281,20 +336,29 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=False, ex
         if exclude_ag and is_ag and not residential:
             excluded_ag += 1
             continue
-        zone, gd, gv = peak_zone(kind, d, v)
-        if zone == tm11.HIGH or (zone == tm11.JUDGMENT and judgment_high):
-            nd = "High"
+        if nodata_flag == NDS.FLAG_DRY_REVIEW:
+            zone, gd, gv, nd = tm11.LOW, 0.0, None, "Low"
         else:
-            nd = "Medium"
+            zone, gd, gv = peak_zone(kind, d, v)
+            if zone == tm11.HIGH or (zone == tm11.JUDGMENT and judgment_high):
+                nd = "High"
+            else:
+                nd = "Medium"
         c = s["geom"].Centroid()
+        how = s["how"]
+        note = NDS.note_for_flag(nodata_flag, grid.cell_m())
+        if note:
+            how = (how + "; " if how else "") + note
+        hmax = float(np.nanmax(d)) if len(d) and np.isfinite(d).any() else 0.0
         out.append({"geom": s["geom"], "x": c.GetX(), "y": c.GetY(),
                     "address": "; ".join(sorted(set(s["addresses"])))[:250],
                     "units": len(s["addresses"]), "build_id": s["build_id"], "occupancy": s["occ"],
-                    "place_type": ", ".join(sorted(p for p in s["place"] if p)), "matched": s["how"], "chart": "Fig. 5.2 mobile home" if kind == "mobile" else "Fig. 5.1 house",
-                    "cells": len(d), "hmax_ft": round(float(d.max()), 2), "vmax_fps": (round(float(np.nanmax(v)), 2) if np.isfinite(v).any() else None),
+                    "place_type": ", ".join(sorted(p for p in s["place"] if p)), "matched": how, "chart": "Fig. 5.2 mobile home" if kind == "mobile" else "Fig. 5.1 house",
+                    "cells": len(d), "hmax_ft": round(hmax, 2), "vmax_fps": (round(float(np.nanmax(v)), 2) if np.isfinite(v).any() else None),
                     "gov_depth_ft": round(gd, 2), "gov_vel_fps": None if gv is None else round(gv, 2),
                     "velocity_unknown": gv is None,
-                    "zone": tm11.ZONE_NAMES[zone], "nd_class": nd})
+                    "zone": tm11.ZONE_NAMES[zone], "nd_class": nd,
+                    "sampling": sampling, "nodata_flag": nodata_flag})
     out.sort(key=lambda r: (-{"High": 2, "Judgment": 1, "Low": 0}[r["zone"]], -r["hmax_ft"]))
     return out, excluded_ag
 
@@ -515,7 +579,8 @@ def wet_stretches(grid, g, crown=None, crown_note="", checked=None):
         s = np.arange(0, cum[-1] + step, step).clip(max=cum[-1])
         xs, ys = np.interp(s, cum, pts[:, 0]), np.interp(s, cum, pts[:, 1])
         d, v = grid.at(xs, ys)
-        wet = d >= WET_FT
+        flags = grid.fill_nodata_points(xs, ys, d, v)
+        wet = np.isfinite(d) & (d >= WET_FT)
         if not wet.any():
             continue
         edges = np.flatnonzero(np.diff(np.concatenate([[0], wet.astype(int), [0]])))
@@ -523,12 +588,25 @@ def wet_stretches(grid, g, crown=None, crown_note="", checked=None):
             k = a + int(np.argmax(d[a:b]))
             st = {"x": float(xs[k]), "y": float(ys[k]),
                   "length_ft": round(max(b - a, 1) * step * grid.unit_ft),
-                  "hmax_ft": round(float(d[a:b].max()), 2),
-                  "vmax_fps": round(float(v[a:b].max()), 2),
+                  "hmax_ft": round(float(np.nanmax(d[a:b])), 2),
+                  "vmax_fps": round(float(np.nanmax(v[a:b])), 2),
                   "xs": xs[a:b], "ys": ys[a:b]}
             st["grid_hmax_ft"] = st["hmax_ft"]
+            run_flags = [f for f in flags[a:b] if f]
+            if NDS.FLAG_NEIGHBOURHOOD in run_flags:
+                st["sampling"] = NDS.SAMPLING_NEIGHBOURHOOD
+                st["nodata_flag"] = NDS.FLAG_NEIGHBOURHOOD
+            elif NDS.FLAG_DRY_REVIEW in flags:
+                st["sampling"] = NDS.SAMPLING_CENTRE_NODATA_DRY
+                st["nodata_flag"] = NDS.FLAG_DRY_REVIEW
+            else:
+                st["sampling"] = NDS.SAMPLING_CENTRE
+                st["nodata_flag"] = None
+            note = NDS.note_for_flag(st.get("nodata_flag"), grid.cell_m()) or ""
             st.update({"depth_basis": BASIS_GRID, "crown_ft": None, "wse_ft": None,
-                       "freeboard_ft": None, "decision": "counted", "check_note": crown_note})
+                       "freeboard_ft": None, "decision": "counted",
+                       "check_note": (note + ("; " + crown_note if crown_note else "")) if note
+                       else crown_note})
             if crown is not None:
                 lo = 0.5 * (s[a] + s[a - 1]) if a > 0 else s[a]
                 hi = 0.5 * (s[b - 1] + s[b]) if b < len(s) else s[b - 1]

@@ -448,6 +448,10 @@ class HazardClassification(UnitAlgorithm):
                     for b in feats(bld, fb):
                         kind, parts = cm.albers_parts(b, tb)
                         s = grid.sample(kind, parts, wet_ft, structure=True) if parts else None
+                        if s and s.get("nodata_flag") == "nodata_dry_review":
+                            extra_gaps.append(
+                                "structure on a NoData cell scored dry (centre_nodata_dry; "
+                                "nodata_dry_review) - verify")
                         if not s or s["depth_m"] < mind:
                             continue
                         hab = hz.is_habitable(b[occ] if occ else None, b[prim] if prim else None,
@@ -462,6 +466,10 @@ class HazardClassification(UnitAlgorithm):
                     for b in feats(src, fback):
                         kind, parts = cm.albers_parts(b, tfm)
                         s = grid.sample(kind, parts, wet_ft, structure=True) if parts else None
+                        if s and s.get("nodata_flag") == "nodata_dry_review":
+                            extra_gaps.append(
+                                "structure on a NoData cell scored dry (centre_nodata_dry; "
+                                "nodata_dry_review) - verify")
                         if not s or s["depth_m"] < mind:
                             continue
                         hab = hz.is_habitable(b[occ_f] if occ_f else None, b[prim_f] if prim_f else None,

@@ -36,8 +36,9 @@ from . import crown as CR
 from .helpers import (
     log_message, LimitedLogger, create_memory_layer, transform_geometry, transform_xy,
     buffer_distance_in_layer_units, classify_values, add_features_batched, is_null,
-    curve_pair,
+    curve_pair, sampler_cell_size_m,
 )
+from .damsuite import nodata_sample as ND
 
 ROAD_INTERSTATE = "Interstate"
 ROAD_US = "US Highway"
@@ -288,6 +289,36 @@ BATCH_POINTS = 2000000          # v2.6.2: line points per depth read (memory bou
 BATCH_FEATURES = 500
 
 
+def _fill_nodata_line_depths(pts, depths, samplers, to_v=None):
+    """Apply the 20 m NoData-receptor rule to line sample points (roads / rail).
+
+    A NoData sample on a grid coarser than 20 m takes the peak depth (and later
+    the peak velocity, option C, at the wet-stretch stage) from wet cells in the
+    3x3 neighbourhood. At 20 m or finer the sample stays dry (NaN) and is flagged.
+    A finite 0 is left dry. Returns (depths, flags) where flags[i] is
+    nodata_neighbourhood / nodata_dry_review / None.
+    """
+    dep = samplers["depth"]
+    policy = ND.nodata_policy(sampler_cell_size_m(dep))
+    flags = [None] * len(depths)
+    if not len(depths):
+        return depths, flags
+    for i, (xy, d) in enumerate(zip(pts, depths)):
+        if not ND.is_nodata(d):
+            continue
+        peak = None
+        xs, ys = ND.neighbourhood_centres(dep.gt, dep.xsize, dep.ysize, [tuple(xy)])
+        if xs:
+            dd = dep.values_at(np.asarray(xs, float), np.asarray(ys, float))
+            peak = ND.peak_wet_cells(list(dd), None)
+        decided = ND.resolve_nodata(True, peak, policy)
+        flags[i] = decided["flag"]
+        if decided["flag"] == ND.FLAG_NEIGHBOURHOOD and decided["depth"] is not None:
+            depths[i] = decided["depth"]
+        # centre_nodata_dry and no-neighbour stay non-finite / 0: not wet
+    return depths, flags
+
+
 def _depth_reader(sampler):
     return lambda xy: sampler.values_at(np.asarray(xy)[:, 0], np.asarray(xy)[:, 1])
 
@@ -322,21 +353,31 @@ def _stretches(pending, samplers, to_v, to_r, dist, checked=None):
         d_all = samplers["depth"].values_at(np.concatenate([p[:, 0] for _f, p in pending]),
                                             np.concatenate([p[:, 1] for _f, p in pending]))
         depths = np.split(d_all, np.cumsum([len(p) for _f, p in pending])[:-1])
-    runs = []                                   # (feature, points, depths, i0, i1)
+    line_flags = []
+    filled = []
     for (feat, pts), d in zip(pending, depths):
+        d = np.array(d, copy=True)
+        d, fl = _fill_nodata_line_depths(pts, d, samplers, to_v)
+        filled.append(d)
+        line_flags.append(fl)
+    depths = filled
+    runs = []                                   # (feature, points, depths, i0, i1, flags)
+    for (feat, pts), d, fl in zip(pending, depths, line_flags):
         for i0, i1 in wet_runs(d):
-            runs.append((feat, pts, d, i0, i1))
+            runs.append((feat, pts, d, i0, i1, fl))
+        # a NoData sample scored dry on a fine grid has no wet run: still flag
+        # the feature via a zero-length note on neighbouring stretches below
     if not runs:
         return
-    wx = np.concatenate([pts[i0:i1 + 1, 0] for _f, pts, _d, i0, i1 in runs])
-    wy = np.concatenate([pts[i0:i1 + 1, 1] for _f, pts, _d, i0, i1 in runs])
+    wx = np.concatenate([pts[i0:i1 + 1, 0] for _f, pts, _d, i0, i1, _fl in runs])
+    wy = np.concatenate([pts[i0:i1 + 1, 1] for _f, pts, _d, i0, i1, _fl in runs])
     vx, vy = transform_xy(wx, wy, to_v)
     v_all = samplers["vel"].values_at(vx, vy)
     v_all = np.where(np.isnan(v_all), 0.0, v_all)
     ax, ay = transform_xy(wx, wy, to_r)
     a_all = samplers["arr"].values_at(ax, ay)
     off = 0
-    for feat, pts, d, i0, i1 in runs:
+    for feat, pts, d, i0, i1, fl in runs:
         k = i1 - i0 + 1
         vs, a = v_all[off:off + k], a_all[off:off + k]
         off += k
@@ -358,6 +399,22 @@ def _stretches(pending, samplers, to_v, to_r, dist, checked=None):
             "arrival": float(np.nanmin(a)) if np.isfinite(a).any() else None,
         }
         st["grid_max_depth"] = st["max_depth"]
+        run_flags = [f for f in (fl[i0:i1 + 1] if fl is not None else ()) if f]
+        if ND.FLAG_NEIGHBOURHOOD in run_flags:
+            st["sampling"] = ND.SAMPLING_NEIGHBOURHOOD
+            st["nodata_flag"] = ND.FLAG_NEIGHBOURHOOD
+        elif ND.FLAG_DRY_REVIEW in (fl or []):
+            # a dry-review sample sits next to this stretch
+            st["sampling"] = st.get("sampling") or ND.SAMPLING_CENTRE_NODATA_DRY
+            st["nodata_flag"] = ND.FLAG_DRY_REVIEW
+        else:
+            st["sampling"] = st.get("sampling") or ND.SAMPLING_CENTRE
+            st["nodata_flag"] = None
+        if st.get("nodata_flag"):
+            note = ND.note_for_flag(st["nodata_flag"], ND.nodata_policy(
+                sampler_cell_size_m(samplers["depth"])).get("cell_m"))
+            if note:
+                st["nodata_note"] = note
         decision, c = CR.line_check(st, arrival_ok, src, pts, i0, i1, depth_ft)
         st["line_check"] = _check_record(decision, c, fallback)
         if CR.arrival_unknown(st, arrival_ok):
@@ -897,6 +954,9 @@ def check_note(r):
     n = _check_note(lc)
     if lc.get("arrival_unknown"):
         n = CR.NOTE_ARRIVAL_UNKNOWN + ("; " + n if n else "")
+    extra = r.get("nodata_note") or ""
+    if extra:
+        n = extra + ("; " + n if n else "")
     return n
 
 
