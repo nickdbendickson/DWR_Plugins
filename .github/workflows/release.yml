@@ -134,7 +134,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0     # tools/build_release.py reads the tag's commit with git archive
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Collect the LISFLOOD-FP builds
