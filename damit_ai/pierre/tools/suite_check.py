@@ -14,8 +14,8 @@ import os, sys, re, json, shutil, argparse, subprocess, time, urllib.request, ur
 from datetime import datetime
 
 CHAT_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 REPORT_DIR = os.path.expanduser("~/local-ai/reports")
 DEFAULT_LISFLOOD = os.path.expanduser("~/nd-dam-suite/bin/lisflood")   # built by the Mac installer
 

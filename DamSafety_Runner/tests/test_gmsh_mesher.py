@@ -41,7 +41,7 @@ except Exception:
 # broke the LTR leg. terrain.mask_outline uses contourpy when installed (qgis334 has it,
 # venv_scipy does not), tracing the mesh polygons up to one cell differently, so the pin is
 # checked with the tracer forced.
-MAIN_JOB_SHA256 = "99dece2a77b64ec1afafb56b5910a180a4dcf0991fdd2c6bd145042611456c8d"
+MAIN_JOB_SHA256 = "99dece2a77b64ec1afafb56b5910a180a4dcf0991fdd2c6bd145042611456c8d"  # pragma: allowlist secret
 
 
 def _case():
