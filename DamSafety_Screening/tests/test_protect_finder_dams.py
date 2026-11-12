@@ -3,7 +3,7 @@
 Tools 6, 7 and 9 cut every short barrier on a 3DHP stream (<= 8 m high, <= 150 m long) unless a
 DWR dam line protects it, so an unlisted stock dam on a mapped stream was cut like a road fill.
 A PROTECT layer (points, lines or polygons; the Finder's screening_dams points) now protects
-those fills too: a point as an 80 m cross, a line as it is, a polygon by its outline.
+those fills too: a point as an 40 m cross, a line as it is, a polygon by its outline.
 
 Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_protect_finder_dams.py
 """
@@ -72,6 +72,17 @@ assert len(outline) == 1 and len(outline[0]) == 5
 _, info = hc.breach_barriers(dem, [stream], gt, protect=prot_of(outline))
 assert info["skipped_protected"] == 1, info
 assert cm.protect_near(None, dam_xy, 3000) == []
+# a road fill from the Finder is never protected (Screening cuts it to open the culvert)
+kinds = make_layer([("finder_kind", "string")],
+                   [(QgsGeometry.fromPointXY(QgsPointXY(*dam_xy)), {"finder_kind": "dam"}),
+                    (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "road fill (ponding)"}),
+                    (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "road fill"})], "point")
+got = cm.protect_near(kinds, dam_xy, 3000)
+assert len(got) == 2, len(got)                      # only the dam's cross
+cond, info = hc.breach_barriers(dem, [stream], gt, protect=prot_of(got))
+assert info["cuts"] == 1 and info["skipped_protected"] == 1, info
+assert cond[151, col] < dem[151, col] - 3.0         # the road is still cut
+assert cm.is_road_fill("road fill") and cm.is_road_fill("Rail fill") and not cm.is_road_fill("dry embankment")
 print("OK protect_near: points, lines, polygons")
 
 # ---- the window passes the Finder layer to steps 6, 7 and 9, and nowhere else

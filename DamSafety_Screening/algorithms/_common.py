@@ -225,7 +225,8 @@ def lines_near(source, xy, radius, key_field=None):
     return out
 
 
-PROTECT_HALF_M = 40.0      # a protected point covers a cross 80 m across (a small dam's crest)
+PROTECT_HALF_M = 20.0      # a protected point covers a cross 40 m across: it meets the stream at the fill
+                           # without reaching a road fill a few dozen metres away
 
 
 def point_cross(x, y, half=PROTECT_HALF_M):
@@ -235,17 +236,31 @@ def point_cross(x, y, half=PROTECT_HALF_M):
     return [np.array([(x - half, y), (x + half, y)]), np.array([(x, y - half), (x, y + half)])]
 
 
+KIND_FIELDS = ("finder_kind", "kind")     # the Finder's screening_dams / embankments layers
+
+
+def is_road_fill(kind):
+    """True for a Finder kind that is a road or rail fill ('road fill', 'road fill (ponding)'):
+    those keep being cut so the culvert under them is open."""
+    return "road" in str(kind or "").lower() or "rail" in str(kind or "").lower()
+
+
 def protect_near(source, xy, radius, half=PROTECT_HALF_M):
     """0.19.4: fills to leave uncut, from any layer - lines as they are, polygon outlines, and a
     point as a cross `half` m each way (the Finder's screening_dams / embankments points stand on
-    the fill where the stream crosses it). EPSG:5070 numpy arrays within radius of xy."""
+    the fill where the stream crosses it). A feature whose finder_kind / kind names a road or rail
+    fill is skipped. EPSG:5070 numpy arrays within radius of xy."""
     if not source:          # None, or False from an unset optional input
         return []
     ta, fa = to_albers(source), from_albers(source)
     box = fa.transformBoundingBox(QgsRectangle(xy[0] - radius, xy[1] - radius,
                                                xy[0] + radius, xy[1] + radius))
     out = []
+    names = source.fields().names()
+    kf = next((n for n in names if str(n).lower() in KIND_FIELDS), None)
     for f in source.getFeatures(QgsFeatureRequest().setFilterRect(box)):
+        if kf is not None and is_road_fill(f[kf]):
+            continue                    # a road fill is cut on purpose (the culvert), never kept
         g = f.geometry()
         if g is None or g.isEmpty():
             continue
