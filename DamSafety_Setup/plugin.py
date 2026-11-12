@@ -181,6 +181,20 @@ class SetupPlugin(object):
         lay.addRow("Suite data folder", data)
         lay.addRow("Dams folder (results)", dams)
         lay.addRow("LISFLOOD-FP", flood)
+        # Core 1.1.0: the unit system the suite's windows show and accept (display only)
+        try:
+            from .damsuite import display_units as DU
+        except ImportError:              # DamSafety Core older than 1.1.0
+            DU = None
+        units = None
+        if DU is not None:
+            from qgis.PyQt.QtWidgets import QComboBox
+            units = QComboBox()
+            for code in DU.SYSTEMS:
+                units.addItem(DU.LABELS[code], code)
+            units.setCurrentIndex(max(0, units.findData(DU.system())))
+            units.setToolTip(UNITS_TIP)
+            lay.addRow("Units shown in windows", units)
         note = QLabel("Choose each folder once. Results never go in the suite data folder.")
         note.setWordWrap(True)
         lay.addRow(note)
@@ -190,6 +204,8 @@ class SetupPlugin(object):
             set("dams_folder", dams.text().strip())
             ensure_dams_folder(dams.text().strip())
             set("lisflood_exe", flood.text().strip())
+            if units is not None:
+                DU.set_system(units.currentData())
             dlg.accept()
         save.clicked.connect(_save)
         lay.addRow(save)
@@ -218,6 +234,12 @@ class SetupPlugin(object):
 
 class DamSafetySetupPlugin(SetupPlugin):
     pass
+
+
+UNITS_TIP = ("What the tool windows show and accept. SI shows metres, hectares, cubic metres and "
+             "m\u00b3/s and converts what you type back to the tool's own units (feet, acres, "
+             "acre-feet, cfs) when it runs: files, dam.json, reports, logs and saved models "
+             "do not change, and no datum changes. Tool windows opened after Save use it.")
 
 
 RUNNER_PLUGINS = ("DamSafety_Runner", "nd_breach_runner")
