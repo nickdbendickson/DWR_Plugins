@@ -32,7 +32,7 @@ def split_files(text):
     return [t.strip() for t in str(text or "").split(";") if t.strip()]
 
 
-# verdict codes (Lumo v1.8): popsource and the run log test these, not the wording
+# verdict codes (Pierre v1.8): popsource and the run log test these, not the wording
 V_NOT_COMPARED, V_BOTH_ZERO, V_ONLY_PLUGIN = "not_compared", "both_zero", "only_plugin"
 V_CONSISTENT, V_HIGHER, V_LOWER = "consistent", "higher", "lower"
 
