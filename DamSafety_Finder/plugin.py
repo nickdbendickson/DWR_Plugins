@@ -289,6 +289,11 @@ class FindPonds(_Base):
                   "a dugout (0-1; YOUR value)", 0.85, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
             "KEEP_DEP", "Also list natural depressions (prairie potholes)", False))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "WATER_ELEV", "Class-9 water-surface mosaic (water_elev.vrt from 'Build a class-9 water "
+            "mosaic'; sets the pool level from the LiDAR water, not the DEM; optional)", optional=True))
+        self.addParameter(QgsProcessingParameterNumber(
+            "WATER_ELEV_BAND", "Band of the water-surface mosaic", INTEGER, 1, minValue=1))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -311,6 +316,8 @@ class FindPonds(_Base):
                 keep_depressions=self.parameterAsBool(params, "KEEP_DEP", context),
                 dug_rect=self.parameterAsDouble(params, "DUG_RECT", context),
                 match_ft=self.parameterAsDouble(params, "MATCH_FT", context),
+                water_elev=_src(self, params, "WATER_ELEV", context, False) or None,
+                water_elev_band=self.parameterAsInt(params, "WATER_ELEV_BAND", context),
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
