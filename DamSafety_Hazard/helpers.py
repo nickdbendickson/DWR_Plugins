@@ -49,8 +49,12 @@ def sampler_cell_size_m(sampler):
     gt = sampler.gt
     dx, dy = abs(float(gt[1])), abs(float(gt[5]))
     crs = getattr(sampler, "crs", None)
-    mid_x = gt[0] + sampler.xsize * gt[1] / 2.0
-    mid_y = gt[3] + sampler.ysize * gt[5] / 2.0
+    # mid-point is only used for a geographic CRS (metres-per-degree). Test
+    # samplers may omit xsize/ysize; the origin is then a fine fallback.
+    xsize = getattr(sampler, "xsize", 0) or 0
+    ysize = getattr(sampler, "ysize", 0) or 0
+    mid_x = gt[0] + xsize * gt[1] / 2.0
+    mid_y = gt[3] + ysize * gt[5] / 2.0
     if crs is not None and hasattr(crs, "isGeographic") and crs.isGeographic():
         lat = mid_y if abs(mid_y) <= 90.0 else mid_x
         return ND.cell_size_m(dx, dy, geographic=True, lat=lat)

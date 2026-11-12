@@ -38,7 +38,7 @@ import numpy as np
 from osgeo import gdal, ogr, osr
 
 from . import tm11
-from .damsuite import nodata_sample as NDS
+from DamSafety_Core.damsuite import nodata_sample as NDS
 
 # audit R3 (2026-11-07): no gdal.UseExceptions() / ogr.UseExceptions() at import. The call is
 # process-wide in the GDAL bindings QGIS ships, so a plugin that makes it when QGIS loads it
