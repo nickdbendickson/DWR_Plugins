@@ -270,6 +270,24 @@ class Grid:
             return None
         return nh.sample_point(self.dv, None, self.x0, self.y_top, self.cell, x, y)[0]
 
+    def _stamp_how(self, best, how, src=None):
+        """Copy damit-style sampling / flag from a how-string or a SamplePV onto best."""
+        if best is None:
+            return best
+        flag = getattr(src, "flag", None)
+        sampling = getattr(src, "sampling", None)
+        text = how or ""
+        if flag is None:
+            if "centre_nodata_dry" in text:
+                flag = "nodata_dry_review"
+                sampling = sampling or "centre_nodata_dry"
+            elif "neighbourhood" in text:
+                flag = "nodata_neighbourhood"
+                sampling = sampling or "neighbourhood"
+        best["sampling"] = sampling or "centre"
+        best["nodata_flag"] = flag
+        return best
+
     def sample(self, kind, parts, wet_ft=0.1, structure=False):
         """{depth_m, vel_ms, dv_m2s, x, y, how} for a feature's parts, or None when it is off
         the grid. kind: 'point' (parts = [(x, y)...]: the deepest point, the largest velocity of
@@ -292,6 +310,10 @@ class Grid:
                 d, v, how = nh.sample_disc(self.depth, self.vel, self.x0, self.y_top, self.cell,
                                            x, y, radius, wet_ft, 1.0 / M_PER_FT)
                 if d is None:
+                    if "centre_nodata_dry" in (how or "") and best is None:
+                        best = {"depth_m": 0.0, "vel_ms": v, "x": x, "y": y,
+                                "how": "point structure: " + how}
+                        self._stamp_how(best, how)
                     continue
                 if d / M_PER_FT >= wet_ft:
                     wet_any = True
@@ -300,6 +322,7 @@ class Grid:
                 if best is None or d > best["depth_m"]:
                     best = {"depth_m": d, "vel_ms": v, "x": x, "y": y,
                             "how": "point structure: " + how}
+                    self._stamp_how(best, how)
             return _peak_dv(best, vmax, wet_any)
         if kind == "point":
             # TM 11 practice (Nick, 2026-11-01, option C): a multipoint classifies on its
@@ -307,8 +330,14 @@ class Grid:
             # points; dv is that peak depth x peak velocity (_peak_dv)
             vmax, wet_any = None, False
             for x, y in parts:
-                d, v = self.point(x, y)
+                pv = self.point(x, y)
+                d, v = pv
                 if d is None:
+                    if (getattr(pv, "flag", None) == "nodata_dry_review"
+                            and best is None):
+                        best = {"depth_m": 0.0, "vel_ms": v, "x": x, "y": y,
+                                "how": "centre_nodata_dry"}
+                        self._stamp_how(best, "centre_nodata_dry", pv)
                     continue
                 if d / M_PER_FT >= wet_ft:
                     wet_any = True
@@ -316,6 +345,7 @@ class Grid:
                         vmax = v if vmax is None else max(vmax, v)
                 if best is None or d > best["depth_m"]:
                     best = {"depth_m": d, "vel_ms": v, "x": x, "y": y, "how": "point"}
+                    self._stamp_how(best, "point", pv)
             return _peak_dv(best, vmax, wet_any)
         if kind == "polygon":
             # TM 11 practice (Nick, 2026-11-01, option C): peak depth and peak velocity over
@@ -337,6 +367,7 @@ class Grid:
                 if best is None or d > best["depth_m"]:
                     best = {"depth_m": d, "vel_ms": v, "x": cx, "y": cy,
                             "how": "polygon: " + how}
+                    self._stamp_how(best, how)
             return _peak_dv(best, vmax, wet_any)
         if kind == "line":
             for verts in parts:

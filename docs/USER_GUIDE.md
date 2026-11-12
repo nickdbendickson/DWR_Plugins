@@ -691,6 +691,17 @@ Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **mediu
 
 Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, Oct 30, 6:11 PM CDT: "Would be medium hazard and judgement call for engineer").
 
+
+## NoData receptors on coarse grids (Hazard 2.24.9, Screening 0.19.7, Runner 3.17.13, Hazard Lite 0.2.1)
+
+When a structure, road or rail receptor sits on a NoData cell next to water, the path depends on the depth-grid cell size (the larger side, converted to metres; `NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20` m, strictly greater than):
+
+- **Coarser than 20 m:** the peak depth and peak velocity come from wet cells in the 3×3 neighbourhood (and the footprint, if there is one). The two peaks may come from different cells. Sampling is recorded as `neighbourhood` and the receptor is flagged `nodata_neighbourhood` for review.
+- **20 m or finer:** the NoData cell is still scored dry (`sampling=centre_nodata_dry`) and flagged for review (`nodata_dry_review`). The dry receptor is listed so it can be checked.
+- A finite 0 is always dry, even when a neighbour is wet.
+
+The path, the 20 m threshold and the cell size are written to the existing Sampling / Notes fields (no new CSV columns). The same rule is used in Hazard, the Screening/Runner `nd_hazard` sampler, Runner receptor summaries, and Hazard Lite.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:

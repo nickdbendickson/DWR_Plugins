@@ -33,10 +33,41 @@ from .constants import (
     MAX_REPEATED_WARNINGS, XLSX_MAX_SHEET_NAME, CURVE_V_MAX,
 )
 from . import constants as _CONST
+from .damsuite import nodata_sample as ND
 
 
 class CancelledByUser(Exception):
     pass
+
+
+def sampler_cell_size_m(sampler):
+    """Larger side of one cell of `sampler`, in metres (feet/CRS units converted;
+    non-square cells use the larger side; a geographic CRS uses metres-per-degree
+    at the raster mid-latitude). Documented part of the 20 m NoData-receptor rule."""
+    if sampler is None or not getattr(sampler, "ok", False) or not sampler.gt:
+        return None
+    gt = sampler.gt
+    dx, dy = abs(float(gt[1])), abs(float(gt[5]))
+    crs = getattr(sampler, "crs", None)
+    # mid-point is only used for a geographic CRS (metres-per-degree). Test
+    # samplers may omit xsize/ysize; the origin is then a fine fallback.
+    xsize = getattr(sampler, "xsize", 0) or 0
+    ysize = getattr(sampler, "ysize", 0) or 0
+    mid_x = gt[0] + xsize * gt[1] / 2.0
+    mid_y = gt[3] + ysize * gt[5] / 2.0
+    if crs is not None and hasattr(crs, "isGeographic") and crs.isGeographic():
+        lat = mid_y if abs(mid_y) <= 90.0 else mid_x
+        return ND.cell_size_m(dx, dy, geographic=True, lat=lat)
+    factor = 1.0
+    if crs is not None:
+        try:
+            factor = float(QgsUnitTypes.fromUnitToUnitFactor(
+                crs.mapUnits(), QgsUnitTypes.DistanceMeters))
+        except Exception:
+            wkt = crs.toWkt() if hasattr(crs, "toWkt") else ""
+            return ND.cell_size_m_from_wkt(dx, dy, wkt=wkt, mid_x=mid_x, mid_y=mid_y)
+    return ND.cell_size_m(dx, dy, linear_units=factor)
+
 
 
 # ----------------------------------------------------------------- logging --

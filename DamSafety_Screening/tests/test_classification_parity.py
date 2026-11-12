@@ -34,7 +34,7 @@ gt = (0.0, 1.0, 0.0, 60.0, 0.0, -1.0)
 structs = P.structures()
 want = P.hazard_leg(d, v, gt, structs)
 got = P.screening_leg(d, v, gt, structs)
-assert hz.nh.MODULE_VERSION == nh.MODULE_VERSION == "1.4.0"
+assert hz.nh.MODULE_VERSION == nh.MODULE_VERSION == "1.4.1"
 problems = []
 for sid, _k, _g, _m, note in structs:
     w, g = want[sid], got[sid]

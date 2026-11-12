@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.24.8
+ND Dam Hazard Classification Helper - Version 2.24.9
 ====================================================
 
 WHAT IT DOES
@@ -16,6 +16,16 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
+- NoData receptors (2.24.9): when the cell under a structure (or every cell
+  in its footprint) is NoData and a neighbour is wet, the path depends on
+  the depth-grid cell size (larger side, in metres; threshold
+  NODATA_NEIGHBOURHOOD_MIN_CELL_M = 20 m, strictly greater than). Coarser
+  than 20 m: peak depth and velocity from wet cells in the 3x3 neighbourhood
+  (and the footprint); sampling=neighbourhood, flag nodata_neighbourhood.
+  At 20 m or finer: scored dry, sampling=centre_nodata_dry, flagged
+  nodata_dry_review and still listed. A finite 0 is always dry. The path is
+  recorded on Sampling / Notes. The same rule applies to roads and rail, and
+  in Screening, the Runner and Hazard Lite.
 
 THE WINDOW (2.18.34)
 - Three tabs instead of nine. Classify: the dam folder and the rasters
