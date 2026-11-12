@@ -39,7 +39,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -1123,9 +1123,25 @@ def _mapped_polys(src, box):
     return out
 
 
+def _built_mask(built, box, gt, shape, built_m, cell):
+    """Bool grid True on (and within built_m of) a buildings / pavement / roads layer - buildings
+    filled, roads as lines. None when no layer is given."""
+    if not built:
+        return None
+    polys = _mapped_polys(built, box)                  # polygon interiors (buildings, lots)
+    mask = _rasterize(polys, gt, shape) if polys else np.zeros(shape, bool)
+    for ln in read_lines(built, None):                 # road / rail centrelines, polygon outlines
+        if _meets(ln, box):
+            for r, c in em.line_cells(ln, gt, shape):
+                mask[r, c] = True
+    k = max(1, int(round(built_m / cell)))
+    return ndi.binary_dilation(mask, iterations=k)
+
+
 @_records_run("water")
 def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, threshold=0.15,
-              open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, mapped=None, tile_m=4000.0,
+              open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, green_frac=0.35,
+              built=None, built_m=5.0, mapped=None, tile_m=4000.0,
               persist=0.5, log=print, progress=None, cancelled=None, opener=None):
     """Open-water polygons from 4-band / colour-infrared imagery: a raster file (or VRT) or an
     ArcGIS ImageServer address (then bbox is required; tiles are cached beside the output).
@@ -1133,8 +1149,13 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
     water when it is water in at least `persist` of the images that cover it (a pond is wet most
     years, a flooded field or a pothole only in a wet one).
     `mapped`: a water-body layer (3DHP / NHD / NWI); each patch gets mapped = yes when at least
-    half of it lies on a mapped water body. Writes layer 'water' (polygons, EPSG:5070) and a CSV.
-    Returns {'rows', 'counts', 'gpkg', 'csv'}."""
+    half of it lies on a mapped water body.
+    `green_frac`: a cell dark in near-infrared is water only if its green is at least this much of
+    the land's median green - drops the shadows (behind buildings, trees, bins) that are dark in
+    every band and otherwise read as water in town. 0 turns the shadow test off.
+    `built`: a buildings / pavement / roads layer (lines or polygons); water patches on it, within
+    built_m, are dropped (roofs, streets and in-town pools). Writes layer 'water' (polygons,
+    EPSG:5070) and a CSV. Returns {'rows', 'counts', 'gpkg', 'csv'}."""
     progress = progress or _noop
     cancelled = cancelled or _noop
     srcs = list(image) if isinstance(image, (list, tuple)) else [(image, green_band, nir_band)]
@@ -1186,12 +1207,17 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
             bands, gt = read_bands(image, box, cell, (srcs[0][1], srcs[0][2]))
             idx = wt.ndwi(bands[srcs[0][1]], bands[srcs[0][2]])
             dark = wt.dark_in_nir(bands[srcs[0][2]], idx, nir_frac) if nir_frac else None
-            lab, n = wt.water_patches(idx, threshold, open_px, min_px, min_width_m / cell, dark)
+            bright = wt.bright_in_green(bands[srcs[0][1]], idx, green_frac) if green_frac else None
+            reject = _built_mask(built, box, gt, idx.shape, built_m, cell)
+            lab, n = wt.water_patches(idx, threshold, open_px, min_px, min_width_m / cell, dark,
+                                      bright=bright, reject=reject)
             frac = None
         else:
             idx, frac, gt = wt.persistence([read_bands(sx, box, cell, (gb, nb)) + (gb, nb) for sx, gb, nb in srcs],
-                                           threshold, nir_frac)
-            lab, n = wt.water_patches(frac, persist, open_px, min_px, min_width_m / cell, None)
+                                           threshold, nir_frac, green_frac)
+            reject = _built_mask(built, box, gt, frac.shape, built_m, cell)
+            lab, n = wt.water_patches(frac, persist, open_px, min_px, min_width_m / cell, None,
+                                      reject=reject)
         if n == 0:
             continue
         polys = _mapped_polys(mapped, box)

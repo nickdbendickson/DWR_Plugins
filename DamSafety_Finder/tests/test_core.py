@@ -421,6 +421,29 @@ class Water(unittest.TestCase):
         _l, n = wt.water_patches(idx, 0.6, 1, 50, 0.0, None)
         self.assertEqual(n, 0)                     # the threshold is yours
 
+    def test_shadow_is_not_water(self):
+        # a cast shadow (dark in every band) has a positive NDWI and is dark in NIR, so the old
+        # filters passed it; the green-brightness test drops it, the pond stays
+        g, nir, pond = image()
+        g[200:230, 200:230], nir[200:230, 200:230] = 15.0, 5.0   # a 30 m shadow
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark)
+        self.assertEqual(n, 2)                     # pond + shadow, with only the old filters
+        bright = wt.bright_in_green(g, idx, 0.35)
+        lab, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, bright=bright)
+        self.assertEqual(n, 1)                     # the shadow is gone
+        self.assertGreater((lab > 0)[pond].mean(), 0.97)
+
+    def test_reject_mask_drops_patches(self):
+        g, nir, pond = image()
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        built = np.zeros(g.shape, bool)
+        built[108:192, 108:192] = True             # a built-up block over the whole pond
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, reject=built)
+        self.assertEqual(n, 0)                     # the pond is on the built-up mask, dropped
+
     def test_persistence_keeps_the_pond_drops_a_wet_year(self):
         g, nir, pond = image()
         g2, nir2 = g.copy(), nir.copy()

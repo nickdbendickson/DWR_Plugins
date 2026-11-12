@@ -51,18 +51,40 @@ def dark_in_nir(nir, index, frac=0.25):
     return np.isfinite(n) & (n <= frac * float(np.median(n[land])))
 
 
-def water_patches(index, threshold=0.15, open_px=1, min_px=50, min_width_px=0.0, dark=None):
+def bright_in_green(green, index, frac=0.35):
+    """Cells whose green is at least `frac` x the median green of the land (NDWI below 0). Open
+    water reflects some visible light (NAIP: about 60 of 255 on a pond against about 100 on crops),
+    but a cast shadow - behind a building, a tree line or a grain bin, in town - is dark in EVERY
+    band, so its high NDWI and dark near-infrared look like water. Dropping the cells that are also
+    dark in green removes those shadows. All True when there is no land to compare with or frac is
+    0."""
+    g = np.asarray(green, float)
+    if not frac:
+        return np.ones(g.shape, bool)
+    land = np.isfinite(g) & np.isfinite(index) & (index < 0)
+    if land.sum() < 100:
+        return np.ones(g.shape, bool)
+    return np.isfinite(g) & (g >= frac * float(np.median(g[land])))
+
+
+def water_patches(index, threshold=0.15, open_px=1, min_px=50, min_width_px=0.0, dark=None,
+                  bright=None, reject=None):
     """(labels, n): 4-connected water patches of an NDWI grid (NaN = no data, never water),
     opened and closed by `open_px` cells, patches under `min_px` cells removed, and patches
     nowhere wider than `min_width_px` cells (twice the largest distance to their edge: a road or
     railroad ditch, a shadow strip along a shelterbelt) removed; labels 1..n. `dark` (bool grid,
-    dark_in_nir) must also hold for a cell to be water."""
+    dark_in_nir) and `bright` (bool grid, bright_in_green: not a shadow) must also hold for a cell
+    to be water; `reject` (bool grid, e.g. buildings / pavement in town) must not."""
     if ndi is None:
         raise RuntimeError("scipy is required for the water outlines")
     idx = np.asarray(index, float)
     wet = np.isfinite(idx) & (idx >= threshold)
     if dark is not None:
         wet &= dark
+    if bright is not None:
+        wet &= bright
+    if reject is not None:
+        wet &= ~np.asarray(reject, bool)
     if open_px > 0:
         st = ndi.generate_binary_structure(2, 1)
         wet = ndi.binary_opening(wet, structure=st, iterations=open_px)
@@ -83,10 +105,11 @@ def water_patches(index, threshold=0.15, open_px=1, min_px=50, min_width_px=0.0,
     return remap[lab], int(keep.sum())
 
 
-def persistence(reads, threshold=0.15, nir_frac=0.25):
+def persistence(reads, threshold=0.15, nir_frac=0.25, green_frac=0.35):
     """(mean NDWI, wet share, geotransform) of several images of one grid: reads = [({band:
     array}, gt, green band, NIR band)]. The wet share of a cell is the share of the images with
-    data there in which it is water (NDWI >= threshold and dark in NIR); NaN where none has data."""
+    data there in which it is water (NDWI >= threshold, dark in NIR and not a shadow); NaN where
+    none has data."""
     wet = cnt = idx_sum = None
     gt = None
     for bands, gtk, gb, nb in reads:
@@ -96,6 +119,8 @@ def persistence(reads, threshold=0.15, nir_frac=0.25):
         w = ok & (idx >= threshold)
         if nir_frac:
             w &= dark_in_nir(bands[nb], idx, nir_frac)
+        if green_frac:
+            w &= bright_in_green(bands[gb], idx, green_frac)
         if wet is None:
             wet = np.zeros(idx.shape)
             cnt = np.zeros(idx.shape)
