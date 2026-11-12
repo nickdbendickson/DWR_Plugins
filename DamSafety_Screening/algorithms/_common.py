@@ -225,6 +225,48 @@ def lines_near(source, xy, radius, key_field=None):
     return out
 
 
+PROTECT_HALF_M = 40.0      # a protected point covers a cross 80 m across (a small dam's crest)
+
+
+def point_cross(x, y, half=PROTECT_HALF_M):
+    """Two short lines crossing at (x, y) (EPSG:5070 m), so a point can be protected from the
+    road-crossing cuts as a dam line is: rasterized and dilated, the cross covers the fill the
+    point stands on whichever way the stream crosses it."""
+    return [np.array([(x - half, y), (x + half, y)]), np.array([(x, y - half), (x, y + half)])]
+
+
+def protect_near(source, xy, radius, half=PROTECT_HALF_M):
+    """0.19.4: fills to leave uncut, from any layer - lines as they are, polygon outlines, and a
+    point as a cross `half` m each way (the Finder's screening_dams / embankments points stand on
+    the fill where the stream crosses it). EPSG:5070 numpy arrays within radius of xy."""
+    if not source:          # None, or False from an unset optional input
+        return []
+    ta, fa = to_albers(source), from_albers(source)
+    box = fa.transformBoundingBox(QgsRectangle(xy[0] - radius, xy[1] - radius,
+                                               xy[0] + radius, xy[1] + radius))
+    out = []
+    for f in source.getFeatures(QgsFeatureRequest().setFilterRect(box)):
+        g = f.geometry()
+        if g is None or g.isEmpty():
+            continue
+        g.transform(ta)
+        kind = QgsWkbTypes.geometryType(g.wkbType())
+        if kind == QgsWkbTypes.LineGeometry:
+            parts = g.asMultiPolyline() if g.isMultipart() else [g.asPolyline()]
+        elif kind == QgsWkbTypes.PolygonGeometry:
+            polys = g.asMultiPolygon() if g.isMultipart() else [g.asPolygon()]
+            parts = [ring for poly in polys for ring in poly[:1]]
+        elif kind == QgsWkbTypes.PointGeometry:
+            pts = g.asMultiPoint() if g.isMultipart() else [g.asPoint()]
+            for p in pts:
+                out.extend(point_cross(p.x(), p.y(), half))
+            continue
+        else:
+            continue
+        out.extend(np.array([(p.x(), p.y()) for p in pl]) for pl in parts if len(pl) >= 2)
+    return out
+
+
 def mosaic_key(tiles):
     """A short hash of the sorted tile list (path, size, modified time): the name of a mosaic
     that is reused only while the local DEM folder holds exactly these files (Grok audit
