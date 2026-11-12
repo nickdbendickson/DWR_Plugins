@@ -17,6 +17,7 @@ from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsPr
                        QgsProcessingParameterEnum, QgsProcessingParameterExtent,
                        QgsProcessingParameterFile,
                        QgsProcessingParameterField, QgsProcessingParameterFileDestination,
+                       QgsProcessingParameterFolderDestination,
                        QgsProcessingParameterMultipleLayers, QgsProcessingParameterNumber,
                        QgsProcessingParameterRasterLayer, QgsProcessingParameterVectorLayer,
                        QgsProcessingProvider)
@@ -554,6 +555,78 @@ class FindWater(_Base):
         return {"OUT": out}
 
 
+class BuildWaterMosaic(_Base):
+    def name(self):
+        return "water_mosaic"
+
+    def displayName(self):
+        return "Build a class-9 water mosaic from LiDAR tiles"
+
+    def shortHelpString(self):
+        return (brand.MOSAIC_HELP + "<br><br>Output CRS: " + brand.MOSAIC_REGION
+                + ". Two rasters are written: water_count (class-9 points per cell) and water_elev "
+                "(their mean elevation, the pond water surface). Give the count VRT to 'Find open "
+                "water' as its 'Prebuilt class-9 water-count raster'.")
+
+    def initAlgorithm(self, config=None):
+        _folder = (QgsProcessingParameterFile.Behavior.Folder
+                   if hasattr(QgsProcessingParameterFile, "Behavior")
+                   else QgsProcessingParameterFile.Folder)
+        self.addParameter(QgsProcessingParameterFile(
+            "LAS", "A single classified LiDAR tile (.las/.laz; optional)", extension="", optional=True))
+        self.addParameter(QgsProcessingParameterFile(
+            "LAS_DIR", "...or a folder of classified LiDAR tiles", behavior=_folder, optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "LAS_CLASSES", "Water classes (ASPRS numbers, comma-separated)", "9", optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "LAS_EPSG", "LiDAR tile EPSG (only if the file carries no CRS; e.g. 26914)", "",
+            optional=True))
+        self._num("CELL", "Cell size of the mosaic (m)", 1.0, 0.1)
+        self.addParameter(QgsProcessingParameterFolderDestination(
+            "OUT", "Output folder (water_count.vrt + water_elev.vrt + per-tile GeoTIFFs)"))
+
+    def _las_sources(self, params, context):
+        import glob
+        import os
+        out = []
+        one = (self.parameterAsString(params, "LAS", context) or "").strip()
+        if one:
+            out.append(one)
+        folder = (self.parameterAsString(params, "LAS_DIR", context) or "").strip()
+        if folder and os.path.isdir(folder):
+            for pat in ("*.las", "*.laz", "*.LAS", "*.LAZ"):
+                out.extend(sorted(glob.glob(os.path.join(folder, pat))))
+        return out
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        srcs = self._las_sources(params, context)
+        if not srcs:
+            raise QgsProcessingException("give a LiDAR tile or a folder of tiles")
+        classes = tuple(int(c) for c in
+                        (self.parameterAsString(params, "LAS_CLASSES", context) or "9").replace(
+                            ";", ",").split(",") if c.strip()) or (9,)
+        epsg = (self.parameterAsString(params, "LAS_EPSG", context) or "").strip()
+        out_dir = self.parameterAsString(params, "OUT", context)
+        try:
+            res = finder.build_water_mosaic(
+                srcs, out_dir, cell=self.parameterAsDouble(params, "CELL", context),
+                classes=classes, mosaic_epsg=brand.MOSAIC_EPSG,
+                src_epsg=int(epsg) if epsg else None,
+                log=self._log(feedback), progress=feedback.setProgress,
+                cancelled=feedback.isCanceled)
+        except RuntimeError as e:
+            raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out_dir)
+        feedback.pushInfo("Water mosaic: {} of {} tile(s) held water -> {} and {}".format(
+            res["n_wet_tiles"], res["n_tiles"], res["count_vrt"], res["elev_vrt"]))
+        if context.project() is not None:
+            context.addLayerToLoadOnCompletion(
+                res["count_vrt"], context.LayerDetails("Water-count mosaic", context.project()))
+        return {"OUT": out_dir, "COUNT_VRT": res["count_vrt"], "ELEV_VRT": res["elev_vrt"]}
+
+
 class OsmStructures(_Base):
     def name(self):
         return "osm"
@@ -651,7 +724,8 @@ class Provider(QgsProcessingProvider):
         return QIcon(os.path.join(os.path.dirname(__file__), "icon.svg"))
 
     def loadAlgorithms(self):
-        for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater(), OsmStructures(), ScoreFills()):
+        for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater(), BuildWaterMosaic(),
+                    OsmStructures(), ScoreFills()):
             self.addAlgorithm(alg)
 
 
