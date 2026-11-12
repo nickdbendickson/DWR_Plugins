@@ -32,6 +32,11 @@ class AddResultsDialog(QDialog):
 
     def __init__(self, parent=None, on_use=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.setWindowTitle("DamSafety Hazard \u2014 Add model results to a dam")
         self.on_use = on_use
         self.last = None

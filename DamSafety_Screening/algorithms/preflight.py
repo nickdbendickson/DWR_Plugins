@@ -10,9 +10,10 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
 from ..core import preflight as pf
 from ..compat import FILE_FOLDER
 from . import run_chain as rc
+from ._common import UnitAlgorithm
 
 
-class Preflight(QgsProcessingAlgorithm):
+class Preflight(UnitAlgorithm):
     def name(self): return "preflight"
     def displayName(self): return "17 - Preflight check"
     def group(self): return "Dam screening"

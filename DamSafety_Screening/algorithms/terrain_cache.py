@@ -15,6 +15,7 @@ from ..compat import (FILE_FOLDER, NUM_DOUBLE, SRC_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
 from ..core import errors as er
+from ._common import UnitAlgorithm
 
 
 # ----------------------------------------- elevation units and local mosaics (H9 fix) --
@@ -171,7 +172,7 @@ def local_mosaic(tiles, vrt, log=None):
     return vrt
 
 
-class TerrainCache(QgsProcessingAlgorithm):
+class TerrainCache(UnitAlgorithm):
     DAMS, SRC, LOCAL, RADIUS, CELL, OUT, ID = ("DAMS", "SRC", "LOCAL", "RADIUS",
                                                "CELL", "OUT", "ID")
 

@@ -14,6 +14,7 @@ import math
 from ..core import breach_dir as bd
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_LONGLONG, FT_STRING, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from . import _common as cm
+from ._common import UnitAlgorithm
 
 PT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
              ("line_fid", FT_LONGLONG), ("n_lines", FT_INT),
@@ -28,7 +29,7 @@ MC_FIELDS = [("mc_x", FT_DOUBLE), ("mc_y", FT_DOUBLE), ("mc_z_m", FT_DOUBLE),
              ("mc_moved_m", FT_DOUBLE)]
 
 
-class BreachDirection(QgsProcessingAlgorithm):
+class BreachDirection(UnitAlgorithm):
     DAMS, LINES, WB, DEMDIR, MATCH, OUTP, OUTL, ARROW = (
         "DAMS", "LINES", "WB", "DEMDIR", "MATCH", "OUTP", "OUTL", "ARROW")
 

@@ -163,8 +163,15 @@ class SettingsTabMixin(object):
             ("Reviewer (Review tab)", self.reviewer_edit, None),
         )
         for i, (label, widget, kind) in enumerate(rows):
-            grid.addWidget(QLabel(label), i, 0)
+            lab = QLabel(label)
+            grid.addWidget(lab, i, 0)
             grid.addWidget(widget, i, 1)
+            if label.endswith(("(cfs)", "(ft)")):     # Core 1.1.0: shown in SI when chosen
+                try:
+                    widget.setProperty("storedUnit", label[label.rindex("(") + 1:-1])
+                    lab.setProperty("unitLabel", True)
+                except Exception:                                 # noqa - test doubles
+                    pass
             if kind:
                 b = QPushButton("Browse…")
                 b.clicked.connect(lambda _c=False, e=widget, k=kind: self._browse_for(e, k))

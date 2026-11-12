@@ -12,9 +12,10 @@ from ..core.fv_engine import Engine
 from . import _common as cm
 from .run_breach_sim import ENGINES, SCENARIOS
 from ..compat import (FILE_FOLDER, NUM_DOUBLE, NUM_INT, SRC_POINT)
+from ._common import UnitAlgorithm
 
 
-class EstimateRuntime(QgsProcessingAlgorithm):
+class EstimateRuntime(UnitAlgorithm):
     def name(self): return "estimateruntime"
     def displayName(self): return "12 - Estimate the run time of the simulations"
     def group(self): return "Dam screening"

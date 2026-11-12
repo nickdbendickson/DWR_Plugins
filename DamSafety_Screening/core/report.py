@@ -213,6 +213,16 @@ def _fmt(v, nd=1):
     return html.escape(str(v))
 
 
+def _si():
+    """damsuite.display_units when the suite's display units are SI (Core 1.1.0), else None.
+    The HTML pages then show SI; summary.csv and the GeoPackages keep their fields and units."""
+    try:
+        from ..damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older than 1.1.0
+        return None
+    return DU if DU.system() == DU.SI else None
+
+
 def _page(title, body):
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -235,6 +245,12 @@ def dam_page(rec, map_png=None, hydro=None, impacts=(), out_path=None):
              f'{rec.get("n_bldg_wet", "–")} / {rec.get("n_bldg_lethal", "–")}'),
              ("Roads / rail overtopped", f'{rec.get("n_road_wet", "–")} / {rec.get("n_rail_wet", "–")}'),
              ("Class stable (sensitivity)", rec.get("class_stable"))]
+    du = _si()
+    if du is not None:                    # Core 1.1.0: SI display units - US facts converted
+        h = rec.get("height_m")
+        facts = [(k, ("{:.2f} m".format(float(h)) if k == "Height" and h not in (None, "") else v))
+                 for k, v in facts]
+        facts = [tuple(du.convert_row([k, _fmt(v)], [])) for k, v in facts]
     kv = "".join(f"<div><span>{html.escape(k)}</span><b>{_fmt(v)}</b></div>" for k, v in facts)
     rev = review_reasons(rec)
     body = (f'<h1>{html.escape(str(rec.get("name") or rec.get("dam_id")))}</h1>'
@@ -330,6 +346,17 @@ def summary(records, out_dir, title="ND dam breach screening – statewide summa
         tiles += ('<div class="card"><b>Proposed dam.</b> {} — {} of {}.</div>'.format(
             html.escape(PROPOSED_PHRASE), n_prop, n))
 
+    du = _si()
+
+    def store(r):                          # Core 1.1.0: storage in m³ under SI display units
+        v = r.get("store_af")
+        if du is None or v in (None, ""):
+            return _fmt(v, 0)
+        try:
+            return "{:,.0f}".format(du.to_display(float(v), "ac-ft"))
+        except (TypeError, ValueError):
+            return _fmt(v, 0)
+
     def row(r):
         nm = html.escape(str(r.get("name") or r["dam_id"]))
         page = os.path.join(out_dir, "dams", f'{r["dam_id"]}.html')
@@ -339,11 +366,12 @@ def summary(records, out_dir, title="ND dam breach screening – statewide summa
         return (f'<tr data-s="{html.escape(s)}"><td>{html.escape(str(r["dam_id"]))}</td><td>{link}</td>'
                 f'<td data-v="{rk}">{badge(r.get("hz_class"))}</td><td>{_fmt(r.get("haz_existing"))}</td>'
                 f'<td>{_fmt(r.get("hz_vs_existing"))}</td><td class="num">{_fmt(r.get("n_bldg_wet"))}</td>'
-                f'<td class="num">{_fmt(r.get("n_bldg_lethal"))}</td><td class="num">{_fmt(r.get("store_af"), 0)}</td>'
+                f'<td class="num">{_fmt(r.get("n_bldg_lethal"))}</td><td class="num">{store(r)}</td>'
                 f'<td>{html.escape(r["review"])}</td></tr>')
     head = ('<thead><tr><th data-k>ID</th><th data-k>Dam</th><th data-k>Screened</th><th data-k>DWR</th>'
             '<th data-k>Comparison</th><th class="num" data-k>Bldg wet</th><th class="num" data-k>Lethal</th>'
-            '<th class="num" data-k>ac-ft</th><th data-k>Review</th></tr></thead>')
+            '<th class="num" data-k>{}</th><th data-k>Review</th></tr></thead>'.format(
+                "m\u00b3" if du is not None else "ac-ft"))
     body = (f'<h1>{html.escape(title)}</h1><p class="sub">Screening results for {n:,} dams. '
             f'Click a column to sort; the CSV has the same table (<a href="summary.csv">summary.csv</a>).</p>'
             + _suite_note(out_dir) + f'{tiles}'
