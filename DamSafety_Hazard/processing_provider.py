@@ -354,6 +354,13 @@ class ClassifyAlgorithm(_Base):
         P(QgsProcessingParameterBoolean("ND_JUDGMENT_HIGH", "ND old option: judgment-zone "
                                         "houses count as probable loss of life (HIGH) - off: "
                                         "MEDIUM by rule", defaultValue=False))
+        P(QgsProcessingParameterEnum(
+            "HABITABLE_RULE", "Habitable structures for the class (default: existing rule; "
+            "'911 / reviewed' is opt-in and changes the class when NSI-only or outline-only "
+            "structures are inundated)",
+            options=["Existing rule (legacy; classification unchanged)",
+                     "Only ND 911 address points and engineer-reviewed structures"],
+            defaultValue=0))
         P(QgsProcessingParameterBoolean("DOWNLOAD_NSI", "Download NSI", defaultValue=True))
         P(QgsProcessingParameterBoolean("DOWNLOAD_ADDRESS", "Download ND GIS Hub address "
                                         "points (if none loaded)", defaultValue=True))
@@ -468,6 +475,8 @@ class ClassifyAlgorithm(_Base):
             judgment_as_probable=self.parameterAsBool(parameters, "JUDGMENT", context),
             nd_judgment_as_probable=self.parameterAsBool(parameters, "ND_JUDGMENT_HIGH",
                                                          context),
+            habitable_rule=("reviewed" if int(self.parameterAsEnum(
+                parameters, "HABITABLE_RULE", context) or 0) else "legacy"),
             download_nsi=self.parameterAsBool(parameters, "DOWNLOAD_NSI", context),
             download_address=self.parameterAsBool(parameters, "DOWNLOAD_ADDRESS", context),
             download_usa_structures=self.parameterAsBool(parameters, "DOWNLOAD_USA", context),
@@ -1575,7 +1584,7 @@ _TOOL_TAB = {"acerzones": "Classification", "classify": "Classification", "batch
              "fillform": "Classification", "dsswise": "Models", "adddamresults": "Models", "hecrasplan": "Models", "damsinseries": "Models",
              "portfolio": "Models", "reproduce": "Models", "creepwatch": "Review & QA", "ensemble": "Review & QA",
              "modelgate": "Review & QA", "quickcreep": "Review & QA", "reviewpackage": "Review & QA",
-             "reviewsummary": "Review & QA", "markreviewed": "Review & QA", "runnerculverts": "Dam suite",
+             "reviewsummary": "Review & QA", "markreviewed": "Review & QA", "reviewhabitable": "Review & QA", "runnerculverts": "Dam suite",
              "suiteexport": "Dam suite", "chartsignoff": "Dam suite", "rulecompare": "Dam suite"}
 
 
@@ -1610,13 +1619,14 @@ class Provider(QgsProcessingProvider):
         from .chartsign_alg import ChartSignOffAlgorithm
         from .rulecompare_alg import RuleCompareAlgorithm
         from .markreviewed_alg import MarkReviewedAlgorithm          # v2.12
+        from .reviewhabitable_alg import ReviewHabitableAlgorithm      # 2.24.7
         classes = [AcerZonesAlgorithm, ClassifyAlgorithm, BatchAlgorithm, DssWiseAlgorithm, RasPlanAlgorithm,
                    AddDamResultsAlgorithm, WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
                    SaveDamStateAlgorithm]
         classes += list(QA_ALGORITHMS)
         classes += [type(a) for a in review_algorithms()]
         classes += [RunnerCulvertsAlgorithm, SuiteExportAlgorithm, ChartSignOffAlgorithm, RuleCompareAlgorithm,
-                    MarkReviewedAlgorithm]
+                    MarkReviewedAlgorithm, ReviewHabitableAlgorithm]
         return classes
 
     # 2.23.17 (usability plan change 3): the window-state hand-off the batch chain runs

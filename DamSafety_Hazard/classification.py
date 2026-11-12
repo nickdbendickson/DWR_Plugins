@@ -896,6 +896,7 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
                        ("future", "FUTURE DEVELOPMENT (5.3(b))"),
                        ("eap", "EMERGENCY ACTION PLAN OUTPUTS"),
                        ("dv_chart", "HABITABLE STRUCTURES DEPTH-VELOCITY CHART"),
+                       ("habitability", "HABITABILITY (911 / REVIEWED RULE)"),
                        ("vintage", "DATA VINTAGE"),
                        ("qa", "INVENTORY COMPLETENESS")):
         if extra.get(key):

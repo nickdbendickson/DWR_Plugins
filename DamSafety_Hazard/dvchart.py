@@ -8,7 +8,16 @@ Nick's DWR_Plugins rule (2026-11-12, t367u):
   reviews them in Hazard. NSI-only points and building outlines without a 911
   address are not plotted as habitable until reviewed. Reviewed-habitable
   non-911 structures are plotted with a distinct marker. Unreviewed non-911
-  wet structures are a count in a note, not points.
+  wet structures are a count in a note, not points, and a worklist CSV
+  (ND_DV_Habitable_unverified.csv, struct_key for ndhazard:reviewhabitable).
+
+  reviewed_habitable is yes / unverified / no (Hazard's words; aligned with
+  damit PR #66). An explicit review is saved in habitable_review.json (written
+  only by ndhazard:reviewhabitable) and is also taken from the existing Review
+  tab (Structure_Review_Decisions.csv). classify never writes the JSON file.
+  Classification is unchanged by default; cfg habitable_rule = "reviewed" is
+  the opt-in that applies this rule to classify_nd / TM 11, with a
+  habitable_rule_differs warning when the two rules disagree.
 
 This is a CHART filter only. classify_nd / TM 11 still use the automatic
 Habitable flag (NSI residential, FEMA outlines, etc.). An engineer's review
@@ -50,14 +59,25 @@ ZOOM_V_FTS, ZOOM_D_FT = 4.0, 3.5
 LABEL_MAX = 80
 TRACE_FT = 0.1                               # structures.CONSEQUENCE_DEPTH_FT
 CHART_STEM = "ND_DV_Habitable"
+UNVERIFIED_STEM = "ND_DV_Habitable_unverified"
+YES, UNVERIFIED, NO = "yes", "unverified", "no"
+RULE_LEGACY, RULE_REVIEWED = "legacy", "reviewed"
+BASIS_911, BASIS_REVIEWED = "911_address", "reviewed_habitable"
+BASIS_REVIEWED_NOT, BASIS_911_NOT = "reviewed_not_habitable", "911_not_habitable"
+BASIS_UNREVIEWED = "unreviewed_not_911"
+SOURCES_911 = ("nd911", "nd_911", "911", "e911", "ng911", "address_point_911", "ndgishub")
 SAMPLING_PEAK = "peak depth and peak velocity over the structure's wet cells"
 KIND_HOUSE, KIND_MOBILE = "house", "mobile"
 TYPE_MOBILE = "Mobile home"
 ND_FAMILY = "NDGISHUB"
 ROLE_911 = "911"
 ROLE_REVIEWED = "reviewed_habitable"
-CSV_COLUMNS = ("id", "label", "acer_type", "chart", "zone", "depth_ft", "velocity_fps",
-               "trace_depth", "has_911", "reviewed", "role", "source", "sampling")
+CSV_COLUMNS = ("id", "label", "struct_key", "acer_type", "chart", "zone", "depth_ft",
+               "velocity_fps", "trace_depth", "has_911", "reviewed_habitable",
+               "habitable_status", "habitability_basis", "role", "source", "sampling")
+UNVERIFIED_COLUMNS = ("id", "struct_key", "Sources", "Address", "Occupancy", "Habitable",
+                      "ACER_Type", "Max_Depth_ft", "Max_Vel_fps", "reviewed_habitable",
+                      "habitable_status", "habitability_basis", "why")
 
 # path / filename hints used when the scenario has no source tag
 _SCREEN_NAME = re.compile(r"^screening[\s_]", re.I)
@@ -92,40 +112,142 @@ def _num(v, default=None):
         return default
 
 
-def has_911(rec):
-    """True when an ND GIS Hub (NENA) 911 address point is joined to this structure.
+def _truthy_flag(v):
+    """True/False from an explicit is_911-like flag, or None if unset."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    k = str(v).strip().lower()
+    if k in ("1", "true", "t", "yes", "y"):
+        return True
+    if k in ("0", "false", "f", "no", "n"):
+        return False
+    return None
 
-    In-memory inventory: family NDGISHUB on rec['families'] or rec['sources'].
-    Habitable_Structures.csv: ND_Address_Points > 0, or Sources contains NDGISHUB.
+
+def has_911(rec):
+    """True when this structure is an ND 911 (NENA / NG911) address point.
+
+    Matches DamIT (damit PR #66) plus DWR Hazard's own inventory tags:
+      * an explicit is_911 / nd911 / address_point_911 flag
+      * source / address_source in nd911, 911, e911, ng911, address_point_911, NDGISHUB
+      * placed = "911 address point"
+      * a NENA GUID (nguid / ND_Site_NGUID)
+      * family NDGISHUB on rec['families'] or rec['sources']
+      * Habitable_Structures.csv: ND_Address_Points > 0, or Sources contains NDGISHUB
     A FEMA parcel address (Address column only) is not a 911 point.
     """
+    flag = rec.get("is_911")
+    if flag is None:
+        for k in ("nd911", "address_point_911"):
+            if rec.get(k) is not None and rec.get(k) != "":
+                flag = rec.get(k)
+                break
+    tf = _truthy_flag(flag)
+    if tf is not None:
+        return tf
+    src = str(rec.get("address_source") or rec.get("source") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if src in SOURCES_911:
+        return True
+    if str(rec.get("placed") or "").strip().lower() == "911 address point":
+        return True
+    nguid = rec.get("nguid") or rec.get("ND_Site_NGUID") or rec.get("ng911_guid")
+    if _text(nguid):
+        return True
     n = rec.get("ND_Address_Points", rec.get("nd_address_points"))
     if _num(n, 0) > 0:
         return True
     fams = rec.get("families") or ()
-    if ND_FAMILY in fams or "ND GIS Hub" in fams:
+    fam_l = {str(f).strip().upper() for f in fams}
+    if ND_FAMILY in fam_l or "ND GIS HUB" in fam_l:
+        return True
+    if any(str(f).strip().lower().replace("-", "_").replace(" ", "_") in SOURCES_911 for f in fams):
         return True
     srcs = rec.get("sources")
     if isinstance(srcs, (list, tuple)):
-        if any((s.get("family") if isinstance(s, dict) else "") == ND_FAMILY for s in srcs):
-            return True
+        for s in srcs:
+            if not isinstance(s, dict):
+                continue
+            if (s.get("family") or "").upper() == ND_FAMILY:
+                return True
+            if _text(s.get("nguid") or s.get("ng911_guid")):
+                return True
+            fam = str(s.get("family") or s.get("source") or "").strip().lower().replace("-", "_")
+            if fam in SOURCES_911:
+                return True
+            if str(s.get("placed") or "").strip().lower() == "911 address point":
+                return True
     col = rec.get("Sources")
-    if isinstance(col, str) and ND_FAMILY in col.upper():
-        return True
+    if isinstance(col, str):
+        bits = [b.strip().lower().replace("-", "_").replace(" ", "_") for b in col.replace(";", ",").split(",")]
+        if ND_FAMILY.lower() in bits or any(b in SOURCES_911 for b in bits):
+            return True
     return False
 
 
-def is_reviewed(rec):
-    """True when an engineer has a saved review decision on this structure.
-
-    After structures._apply_review, rec['reviewed'] is a non-empty string
-    (reviewer, date, and 'confirmed' or the fields that changed). The raw
-    decision may also sit on rec['review'] (a dict) after ReviewStore.attach.
-    The CSV 'Reviewed' column is that same string. An empty Reviewed cell is
-    not a review: the flag only changes on an explicit review action.
-    """
+def _review_from_existing(rec):
+    """yes / no from a Review-tab decision already applied to this record, or None."""
+    # dedicated field already set (habitable_review.json)
+    from_file = rec.get("reviewed_habitable")
+    if from_file in (YES, NO, True, False):
+        return YES if from_file in (YES, True) else NO
+    if isinstance(from_file, str) and from_file.strip():
+        k = from_file.strip().lower()
+        if k in ("yes", "y", "true"):
+            return YES
+        if k in ("no", "n", "false"):
+            return NO
     rv = rec.get("review")
-    if isinstance(rv, dict) and any(_text(rv.get(k)) for k in
+    if isinstance(rv, dict):
+        cat = _text(rv.get("category") or "").lower()
+        if cat in ("dwelling", "occupied non-residential", "occupied"):
+            return YES
+        if cat in ("not habitable", "not_habitable"):
+            return NO
+        if cat in ("unverified",):
+            return UNVERIFIED
+        # "Confirmed" or empty category: the engineer confirmed the automatic result
+        if cat in ("confirmed", "") and (rv.get("reviewer") or rv.get("date") or rv.get("note")
+                                         or rv.get("acer_type") or rv.get("persons") is not None):
+            if is_habitable_yes(rec):
+                return YES
+            hab = _text(rec.get("habitable", rec.get("Habitable"))).lower()
+            if hab in ("no", "false", "0"):
+                return NO
+            return UNVERIFIED
+    if any(_text(rec.get(k)) for k in ("reviewed", "Reviewed")):
+        if is_habitable_yes(rec):
+            return YES
+        hab = _text(rec.get("habitable", rec.get("Habitable"))).lower()
+        if hab in ("no", "false", "0"):
+            return NO
+        return UNVERIFIED
+    return None
+
+
+def reviewed_habitable_of(rec):
+    """The engineer's reviewed_habitable value: yes / no, or None if not explicitly reviewed."""
+    v = _review_from_existing(rec)
+    if v in (YES, NO):
+        return v
+    return None
+
+
+def is_reviewed(rec):
+    """True when an engineer has a saved habitability or Review-tab decision on this structure.
+
+    After structures._apply_review, rec['reviewed'] is a non-empty string. rec['review'] is
+    the decision dict. The CSV 'Reviewed' column is that string. habitable_review.json sets
+    reviewed_habitable to yes / no. An empty Reviewed cell is not a review: the flag only
+    changes on an explicit review action.
+    """
+    if reviewed_habitable_of(rec) in (YES, NO):
+        return True
+    rv = rec.get("review")
+    if isinstance(rv, dict) and any(_text(str(rv.get(k) or "")) for k in
                                     ("category", "acer_type", "persons", "reviewer",
                                      "date", "note")):
         return True
@@ -137,7 +259,33 @@ def is_reviewed(rec):
 
 def is_habitable_yes(rec):
     v = rec.get("habitable", rec.get("Habitable"))
+    if v is True:
+        return True
+    if v is False:
+        return False
     return _text(v).lower() in ("yes", "1", "true", "y")
+
+
+def habitability_status(rec):
+    """(status, basis) under the 911 / reviewed rule: yes / unverified / no.
+
+    The review wins over everything. A non-911 structure is unverified until reviewed.
+    A 911 point is yes unless Habitable is No (or a review says no).
+    """
+    rv = reviewed_habitable_of(rec)
+    if rv == YES:
+        return YES, BASIS_REVIEWED
+    if rv == NO:
+        return NO, BASIS_REVIEWED_NOT
+    if not has_911(rec):
+        return UNVERIFIED, BASIS_UNREVIEWED
+    hab = rec.get("habitable", rec.get("Habitable"))
+    if hab is False or _text(hab).lower() in ("no", "false", "0"):
+        return NO, BASIS_911_NOT
+    if is_habitable_yes(rec) or hab in (None, ""):
+        return YES, BASIS_911
+    # Unverified 911 (e.g. vacant-lot rule)
+    return UNVERIFIED, BASIS_911_NOT
 
 
 def depth_of(rec):
@@ -172,27 +320,28 @@ def is_wet(rec, wet_min=0.0):
 
 
 def role_of(rec, wet_min=0.0):
-    """Which chart bucket a structure falls in (see module docstring).
+    """Which chart bucket a structure falls in.
 
     Returns one of: 'dry', '911', 'reviewed_habitable', 'unreviewed_non911',
-    'not_plotted' (a wet 911 / reviewed record that is not Habitable=Yes).
+    'not_plotted' (a wet 911 / reviewed-no record that is not plotted).
     """
     if rec.get("dwelling_extra"):
         return "not_plotted"
-    wet = is_wet(rec, wet_min)
-    if not wet:
+    if not is_wet(rec, wet_min):
         return "dry"
-    nine = has_911(rec)
-    if is_habitable_yes(rec) and nine:
+    status, basis = habitability_status(rec)
+    if status == YES and has_911(rec) and basis == BASIS_911:
         return ROLE_911
-    if is_habitable_yes(rec) and is_reviewed(rec) and not nine:
+    if status == YES and (basis == BASIS_REVIEWED or (reviewed_habitable_of(rec) == YES and not has_911(rec))):
         return ROLE_REVIEWED
-    if not nine:
+    if status == YES and has_911(rec):
+        # reviewed yes on a 911 point: still drawn as a 911 point
+        return ROLE_911
+    if not has_911(rec):
         return "unreviewed_non911"
     return "not_plotted"
 
 
-# ----------------------------------------------------------------- source label --
 def _units_says_screening(folder):
     path = os.path.join(folder, "UNITS.txt") if folder else ""
     try:
@@ -314,14 +463,46 @@ def select(structs, source="", sampling=SAMPLING_PEAK, wet_min=0.0):
         d = float(depth_of(rec))
         v = float(velocity_of(rec))
         kind = chart_kind(rec)
+        status, basis = habitability_status(rec)
+        try:
+            from .habitable_review import preferred_key
+        except ImportError:
+            from DamSafety_Hazard.habitable_review import preferred_key
         pts.append({
-            "id": rec_id(rec), "label": rec_id(rec), "acer_type": acer_type_of(rec),
+            "id": rec_id(rec), "label": rec_id(rec),
+            "struct_key": rec.get("struct_key") or preferred_key(rec),
+            "acer_type": acer_type_of(rec),
             "chart": kind, "zone": TM11.zone(kind, d, v), "depth_ft": d, "velocity_fps": v,
             "trace_depth": bool(round(d, 2) <= TRACE_FT),
-            "has_911": role == ROLE_911, "reviewed": is_reviewed(rec),
+            "has_911": has_911(rec), "reviewed": is_reviewed(rec),
+            "reviewed_habitable": reviewed_habitable_of(rec) or "",
+            "habitable_status": status, "habitability_basis": basis,
             "role": role, "source": source, "sampling": sampling,
         })
-    return {"points": pts, "left_out": left}
+    unverified = []
+    for rec in structs or []:
+        if rec.get("dwelling_extra") or not is_wet(rec, wet_min):
+            continue
+        status, basis = habitability_status(rec)
+        if status == UNVERIFIED or role_of(rec, wet_min) == "unreviewed_non911":
+            try:
+                from .habitable_review import preferred_key
+            except ImportError:
+                from DamSafety_Hazard.habitable_review import preferred_key
+            unverified.append({
+                "id": rec_id(rec), "struct_key": rec.get("struct_key") or preferred_key(rec),
+                "Sources": rec.get("Sources") or ";".join(sorted(rec.get("families") or ())),
+                "Address": rec.get("Address") or "",
+                "Occupancy": rec.get("Occupancy") or rec.get("occupancy") or "",
+                "Habitable": rec.get("Habitable") or rec.get("habitable") or "",
+                "ACER_Type": acer_type_of(rec),
+                "Max_Depth_ft": depth_of(rec), "Max_Vel_fps": velocity_of(rec),
+                "reviewed_habitable": reviewed_habitable_of(rec) or "",
+                "habitable_status": status, "habitability_basis": basis,
+                "why": "not an ND 911 address point; not yet reviewed in Hazard"
+                if not has_911(rec) else "911 point flagged unverified or not habitable",
+            })
+    return {"points": pts, "unverified": unverified, "left_out": left}
 
 
 def counts(points):
@@ -400,11 +581,32 @@ def write_csv(points, path):
         w = csv.writer(fh)
         w.writerow(CSV_COLUMNS)
         for p in sorted(points, key=lambda q: (-ZONE_RANK[q["zone"]], -q["depth_ft"])):
-            w.writerow([p["id"], p["label"], p["acer_type"], p["chart"], ZONE_TEXT[p["zone"]],
+            w.writerow([p["id"], p["label"], p.get("struct_key") or "", p["acer_type"],
+                        p["chart"], ZONE_TEXT[p["zone"]],
                         "{:.3f}".format(p["depth_ft"]), "{:.3f}".format(p["velocity_fps"]),
                         "yes" if p["trace_depth"] else "",
                         "yes" if p["has_911"] else "",
-                        "yes" if p["reviewed"] else "", p["role"], p["source"], p["sampling"]])
+                        p.get("reviewed_habitable") or "",
+                        p.get("habitable_status") or "", p.get("habitability_basis") or "",
+                        p["role"], p["source"], p["sampling"]])
+    return path
+
+
+def write_unverified(rows, path):
+    """Worklist of wet unverified (non-911, not yet reviewed) structures for ndhazard:reviewhabitable."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(UNVERIFIED_COLUMNS), extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            row = dict(r)
+            if isinstance(row.get("Max_Depth_ft"), (int, float)):
+                row["Max_Depth_ft"] = "{:.3f}".format(row["Max_Depth_ft"])
+            if isinstance(row.get("Max_Vel_fps"), (int, float)):
+                row["Max_Vel_fps"] = "{:.3f}".format(row["Max_Vel_fps"])
+            w.writerow(row)
     return path
 
 
@@ -516,15 +718,22 @@ def build(structs, meta, out_dir, stem=CHART_STEM, wet_min=0.0, log=None):
     meta.setdefault("sampling", SAMPLING_PEAK)
     sel = select(structs, meta.get("source") or "", meta["sampling"], wet_min)
     pts, left = sel["points"], sel["left_out"]
+    unverified = sel.get("unverified") or []
     c = counts(pts)
     res = {"png": None, "csv": os.path.join(out_dir, stem + ".csv"), "counts": c,
            "text": counts_text(c), "left_out": left, "note": left_out_note(left),
            "status": "ok", "source": meta.get("source"),
-           "title": " - ".join(title_lines(meta, c, left)[:2]), "points": pts}
+           "title": " - ".join(title_lines(meta, c, left)[:2]), "points": pts,
+           "unverified": unverified, "unverified_csv": None}
     if not pts:
         res["note"] = "; ".join(x for x in (
             res["note"], "no wet habitable structures: the chart shows the empty zones only") if x)
     write_csv(pts, res["csv"])
+    if stem.startswith(CHART_STEM):
+        u_stem = UNVERIFIED_STEM + stem[len(CHART_STEM):]
+    else:
+        u_stem = (stem or CHART_STEM) + "_unverified"
+    res["unverified_csv"] = write_unverified(unverified, os.path.join(out_dir, u_stem + ".csv"))
     try:
         res["png"] = draw(pts, meta, os.path.join(out_dir, stem + ".png"), left=left)
     except ChartSkipped as e:
@@ -553,8 +762,19 @@ def build_from_csv(csv_path, meta, out_dir, stem=CHART_STEM, wet_min=0.0, log=No
 
 
 def write_for_run(structs, out_dir, depth_path="", scenario=None, dam_id="", dam_name="",
-                  source_override="", suffix="", log=None, no_velocity=False):
-    """Pipeline helper: label the source, write the chart next to the classify outputs."""
+                  source_override="", suffix="", log=None, no_velocity=False, reviews=None):
+    """Pipeline helper: label the source, write the chart and unverified worklist.
+
+    `reviews` is the {key: entry} from habitable_review.load (already applied to
+    structs is fine; applying twice is idempotent). This function never writes
+    habitable_review.json.
+    """
+    if reviews:
+        try:
+            from . import habitable_review as HR
+        except ImportError:
+            from DamSafety_Hazard import habitable_review as HR
+        HR.apply(structs, reviews)
     sc_source = ""
     sc_name = ""
     if scenario is not None:
@@ -568,3 +788,61 @@ def write_for_run(structs, out_dir, depth_path="", scenario=None, dam_id="", dam
             "sampling": SAMPLING_PEAK, "no_velocity": bool(no_velocity)}
     stem = CHART_STEM + (suffix or "")
     return build(structs, meta, out_dir, stem=stem, log=log)
+
+
+def structs_for_rule(structs, rule=RULE_LEGACY):
+    """Shallow copies with Habitable overridden when rule is 'reviewed'. The original
+    records (and their automatic Habitable flag) are not mutated. Used only for
+    classify_nd / classify_tm11; default rule 'legacy' returns the same list."""
+    if (rule or RULE_LEGACY) != RULE_REVIEWED:
+        return structs
+    out = []
+    for s in structs or []:
+        c = dict(s)
+        status, basis = habitability_status(s)
+        c["habitable_status"] = status
+        c["habitability_basis"] = basis
+        c["habitable"] = "Yes" if status == YES else ("No" if status == NO else "Unverified")
+        out.append(c)
+    return out
+
+
+def tally(structs, wet_min=0.0):
+    """Counts of wet structures under the 911 / reviewed rule vs the automatic Habitable flag."""
+    t = {"wet_structures": 0, YES: 0, UNVERIFIED: 0, NO: 0, "legacy_habitable": 0,
+         "differs": 0, "legacy_yes_reviewed_not": 0, "reviews_applied": 0}
+    for r in structs or []:
+        if r.get("dwelling_extra") or not is_wet(r, wet_min):
+            continue
+        t["wet_structures"] += 1
+        status, _basis = habitability_status(r)
+        t[status] += 1
+        legacy = is_habitable_yes(r)
+        t["legacy_habitable"] += int(legacy)
+        if legacy != (status == YES):
+            t["differs"] += 1
+            if legacy:
+                t["legacy_yes_reviewed_not"] += 1
+        t["reviews_applied"] += int(reviewed_habitable_of(r) in (YES, NO))
+    return t
+
+
+def differs_text(t, applied_rule, applied_cls, other_cls):
+    """Warning text when the two habitability rules disagree on some wet structure, or None."""
+    if not t.get("differs"):
+        return None
+    applied = applied_rule or RULE_LEGACY
+    changed = (applied_cls or "") != (other_cls or "")
+    what = ("the ND class would change from {} to {}".format(applied_cls, other_cls)
+            if changed else "the ND class would stay {}".format(applied_cls or "(unchanged)"))
+    if applied == RULE_LEGACY:
+        return ("Habitability rule: the ND / TM 11 class follows Hazard's existing rule "
+                "(NSI / outlines can be habitable). {} of {} wet structure(s) are counted "
+                "habitable there but are not ND 911 address points and have no engineer "
+                "review. Under the 911 / reviewed rule (habitable_rule = reviewed) {}. "
+                "Not applied by default: this needs a decision. Warning flag: "
+                "habitable_rule_differs.".format(
+                    t["legacy_yes_reviewed_not"], t["wet_structures"], what))
+    return ("Habitability rule: habitable_rule = reviewed is applied (only ND 911 address "
+            "points and structures an engineer reviewed habitable count). Under the existing "
+            "rule {}.".format(what))

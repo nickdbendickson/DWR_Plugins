@@ -102,6 +102,8 @@ DEFAULTS = {
     "access": True, "access_ft": DEFAULT_ACCESS_SEARCH_FT, "access_as_medium": True,
     "report_pdf": True, "report_pages": 8,
     "review_file": None, "add_to_project": True,
+    # 2.24.7: habitability chart / opt-in class rule (default legacy = unchanged)
+    "habitable_rule": "legacy", "habitable_review": None,
     "facility_review_file": None,       # v2.9: roads / facilities decisions (default: outputs)
     # v2.2
     "download_dams": True, "dam_layer": None, "subject_dam_nid": "",
@@ -1864,6 +1866,27 @@ def _classify_and_write(run, cfg, state):
             n_rev, os.path.basename(store.path)))
     reinterpret(structs, float(cfg["min_area_ft2"]), int(cfg["persons_per_dwelling"]),
                 **ST.mobile_rules_from_cfg(cfg))
+    # 2.24.7: habitable_review.json is read only (written solely by ndhazard:reviewhabitable)
+    hab_reviews, hab_review_path, hab_review_probs = {}, None, []
+    try:
+        from . import habitable_review as HR
+        search = [cfg.get("habitable_review"), cfg.get("dam_folder"), out]
+        if cfg.get("scenarios"):
+            search.extend(getattr(s, "depth", None) for s in cfg["scenarios"])
+        hab_review_path = cfg.get("habitable_review") or HR.find([x for x in search if x])
+        if hab_review_path:
+            hab_reviews, hab_review_probs = HR.load(hab_review_path)
+            n_hr = HR.apply(structs, hab_reviews)
+            if n_hr:
+                run.sources.append("Habitability reviews: {} applied from {}".format(
+                    n_hr, hab_review_path))
+                run.log("Habitability reviews: {} applied from {}".format(n_hr, hab_review_path))
+        for prob in hab_review_probs:
+            run.log(">>> WARNING: habitability review: " + prob)
+    except Exception as e:                  # noqa - never fails the run
+        run.log("habitable_review.json: {}".format(e))
+    run.habitable_reviews = hab_reviews
+    run.habitable_review_path = hab_review_path
     # H4 / 2.16.0: the per-address dwelling collapse is NOT applied (audit). It zeroed
     # the persons of every further habitable building sharing one 911/street address
     # (apartment buildings, mobile-home parks, multi-home farmsteads), under-counting
@@ -1937,13 +1960,20 @@ def _classify_and_write(run, cfg, state):
         s_view, r_view, l_view = (incremental_view(structs, res["roads"], res["rails"])
                                   if res.get("incremental") else
                                   (structs, res["roads"], res["rails"]))
+        from . import dvchart as DVC
+        hab_rule = (cfg.get("habitable_rule") or DVC.RULE_LEGACY)
+        if hab_rule not in (DVC.RULE_LEGACY, DVC.RULE_REVIEWED):
+            hab_rule = DVC.RULE_LEGACY
+        s_class = DVC.structs_for_rule(s_view, hab_rule)
+        s_other = DVC.structs_for_rule(s_view, DVC.RULE_REVIEWED
+                                       if hab_rule == DVC.RULE_LEGACY else DVC.RULE_LEGACY)
         try:
-            nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=nd_judge,
+            nd = classify_nd(s_class, r_view, l_view, judgment_as_probable=nd_judge,
                              one_d=one_d,
                              roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
                              structs_evaluated=inputs.get("structs_on", True),
                              structs_failed=int(res.get("structs_failed") or 0))  # audit R2
-            tm11 = classify_tm11(s_view, r_view, judgment_as_probable=judge)
+            tm11 = classify_tm11(s_class, r_view, judgment_as_probable=judge)
             if nd.get("structs_failed"):                                   # audit R2
                 run.log(">>> WARNING: {}: ND classification {} is INCOMPLETE - {} structure(s) "
                         "could not be evaluated and are not counted as dry; re-run or review "
@@ -1953,6 +1983,21 @@ def _classify_and_write(run, cfg, state):
             run.log(">>> ERROR: classification failed for {}: {}: {}".format(
                 sc.name, type(e).__name__, e))
             raise
+        try:
+            nd_other = classify_nd(s_other, r_view, l_view, judgment_as_probable=nd_judge,
+                                   one_d=one_d,
+                                   roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
+                                   structs_evaluated=inputs.get("structs_on", True),
+                                   structs_failed=int(res.get("structs_failed") or 0))
+        except Exception:
+            nd_other = None
+        hab_tally = DVC.tally(s_view)
+        hab_warn = DVC.differs_text(hab_tally, hab_rule, nd.get("cls"),
+                                    (nd_other or {}).get("cls"))
+        res["habitability"] = {"rule": hab_rule, "tally": hab_tally,
+                               "warning": hab_warn, "other_cls": (nd_other or {}).get("cls")}
+        if hab_warn:
+            run.log(">>> WARNING: " + hab_warn)
         extra_criteria(nd, s_view, res, cfg)
         if nd_judge and (nd.get("counts") or {}).get("habitable_judgment"):
             try:                                # 2.21.1 (DWR-4031): ND, not only TM 11
@@ -2092,12 +2137,15 @@ def _classify_and_write(run, cfg, state):
                 structs, d_class, scenario=sc, dam_id=dam_id, dam_name=dam_name,
                 source_override=cfg.get("dv_chart_source_label") or "",
                 suffix=suffix, log=lambda m: run.log(m),
-                no_velocity=not bool(sc.velocity))
+                no_velocity=not bool(sc.velocity),
+                reviews=getattr(run, "habitable_reviews", None))
             res["dv_chart"] = chart
             if chart.get("csv"):
                 written.append(os.path.relpath(chart["csv"], out))
             if chart.get("png"):
                 written.append(os.path.relpath(chart["png"], out))
+            if chart.get("unverified_csv"):
+                written.append(os.path.relpath(chart["unverified_csv"], out))
             if chart.get("note"):
                 run.log(">>> NOTE: " + chart["note"])
         except Exception as e:                # noqa: BLE001 - a chart must never fail a run
@@ -2338,6 +2386,21 @@ def _classify_and_write(run, cfg, state):
                 _clines.append(bit)
         if _clines:
             extra["dv_chart"] = _clines
+        _hab = (governing.get("habitability") or {})
+        _ht = _hab.get("tally") or {}
+        if _ht:
+            extra["habitability"] = [
+                "rule applied: {}{}".format(
+                    _hab.get("rule") or "legacy",
+                    " (opt-in 911 / reviewed)" if _hab.get("rule") == "reviewed" else
+                    " (default: classification unchanged)"),
+                "{} wet structure(s): {} yes, {} unverified, {} no under the 911 / reviewed "
+                "rule; {} habitable under the existing rule; {} differ".format(
+                    _ht.get("wet_structures", 0), _ht.get("yes", 0), _ht.get("unverified", 0),
+                    _ht.get("no", 0), _ht.get("legacy_habitable", 0), _ht.get("differs", 0)),
+            ]
+            if _hab.get("warning"):
+                extra["habitability"].append(_hab["warning"])
         lines = summary_lines(governing["nd"], governing["tm11"], s_view, r_view, l_view,
                               dam_name, run.sources, one_d, extra=extra)
         paths = write_summary(out, lines, governing["nd"], governing["tm11"], run.ctx)

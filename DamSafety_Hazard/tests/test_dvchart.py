@@ -258,5 +258,60 @@ with tempfile.TemporaryDirectory() as td:
     check("write_for_run writes the standard stem",
           os.path.basename(wr["csv"]) == "ND_DV_Habitable.csv")
 
+# ----------------------------------------------------------------- damit #66 alignment --
+check("explicit is_911 flag", DV.has_911({"is_911": True}) and not DV.has_911({"is_911": False, "families": {"NDGISHUB"}}))
+check("source nd911 / e911 / ng911",
+      DV.has_911({"address_source": "nd911"}) and DV.has_911({"source": "e911"})
+      and DV.has_911({"address_source": "NG911"}))
+check("placed = 911 address point", DV.has_911({"placed": "911 address point"}))
+check("nguid / ND_Site_NGUID is a 911 point",
+      DV.has_911({"nguid": "ADDR-123"}) and DV.has_911({"ND_Site_NGUID": "ADDR-123"}))
+
+st = rec(id=20, families={"NSI"}, habitable="Yes", max_depth=2.0, max_vel=1.0,
+         reviewed_habitable="yes")
+check("reviewed_habitable=yes on a non-911 is plotted as reviewed",
+      DV.role_of(st) == DV.ROLE_REVIEWED and DV.habitability_status(st)[0] == DV.YES)
+st_no = rec(id=21, families={"NDGISHUB"}, habitable="Yes", max_depth=2.0, max_vel=1.0,
+            reviewed_habitable="no")
+check("reviewed_habitable=no wins over a 911 point (not plotted as habitable)",
+      DV.habitability_status(st_no)[0] == DV.NO and DV.role_of(st_no) == "not_plotted")
+
+# worklist + struct_key + reviewed_habitable column
+with tempfile.TemporaryDirectory() as td:
+    built = DV.build([
+        nine(id=1, max_depth=1.5, max_vel=1.0),
+        rec(id=2, families={"NSI"}, habitable="Yes", max_depth=2.0, max_vel=1.0),
+    ], {"dam_id": "X", "source": "Runner", "run_date": "2026-11-12"}, td)
+    check("unverified worklist is written",
+          built.get("unverified_csv") and os.path.isfile(built["unverified_csv"]))
+    with open(built["unverified_csv"], newline="", encoding="utf-8") as fh:
+        urows = list(csv.DictReader(fh))
+    check("worklist has the unreviewed NSI row and a struct_key",
+          len(urows) == 1 and urows[0]["id"] == "2" and urows[0].get("struct_key"),
+          urows)
+    with open(built["csv"], newline="", encoding="utf-8") as fh:
+        crows = list(csv.DictReader(fh))
+    check("chart CSV has reviewed_habitable and habitable_status",
+          "reviewed_habitable" in crows[0] and "struct_key" in crows[0]
+          and crows[0]["habitable_status"] == "yes", crows[0].keys())
+    check("build does not create habitable_review.json",
+          not os.path.isfile(os.path.join(td, "habitable_review.json")))
+
+# structs_for_rule: default legacy is the same list; reviewed does not mutate
+raw = [rec(id=2, families={"NSI"}, habitable="Yes", max_depth=2.0)]
+legacy = DV.structs_for_rule(raw, DV.RULE_LEGACY)
+reviewed = DV.structs_for_rule(raw, DV.RULE_REVIEWED)
+check("legacy rule returns the same list (classification unchanged)", legacy is raw)
+check("reviewed rule marks NSI-only as Unverified without mutating the original",
+      reviewed[0]["habitable"] == "Unverified" and raw[0]["habitable"] == "Yes")
+tl = DV.tally(raw)
+check("tally: one wet, legacy habitable, differs under the 911 rule",
+      tl["wet_structures"] == 1 and tl["legacy_habitable"] == 1 and tl["differs"] == 1
+      and tl["unverified"] == 1, tl)
+warn = DV.differs_text(tl, DV.RULE_LEGACY, "Medium", "Low")
+check("habitable_rule_differs warning names the flag and that it is not applied",
+      warn and "habitable_rule_differs" in warn and "Not applied" in warn, warn)
+
 print("\n{} failure(s)".format(len(FAILS)) if FAILS else "\nall checks passed")
 sys.exit(1 if FAILS else 0)
+
