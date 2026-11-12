@@ -11,6 +11,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterBoolean, Qg
 from ..core import selftest as st
 from . import run_breach_sim as rbs
 from ..compat import FILE_FILE, NUM_DOUBLE
+from ._common import UnitAlgorithm
 
 QVARIANT = {"string": "String", "double": "Double", "int": "Int"}
 
@@ -69,7 +70,7 @@ def software_versions():
     return v
 
 
-class SelfTest(QgsProcessingAlgorithm):
+class SelfTest(UnitAlgorithm):
     def name(self): return "selftest"
     def displayName(self): return "14 - Self-test in this QGIS"
     def group(self): return "Dam screening"

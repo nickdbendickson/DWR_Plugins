@@ -4015,6 +4015,23 @@ def render_report(r):
     lines += ["", "Units: {}.".format(s["units"]),
               "These rasters are the input for the ND hazard classification; this tool does "
               "not classify the dam.", ""]
+    return _display_units_md("\n".join(lines))
+
+
+def _display_units_md(md):
+    """Core 1.1.0: under the suite's SI display units the report text is converted (pipe tables
+    column by column, quantities in the text) and says so; run_report.json, the rasters and the
+    CSVs keep US units. Under US, or with an older Core, `md` comes back unchanged."""
+    try:
+        from ..damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older than 1.1.0
+        return md
+    if DU.system() != DU.SI:
+        return md
+    out = DU.convert_markdown(md)
+    lines = out.split("\n")
+    lines = [ln for ln in lines if not ln.startswith("Units: ")]
+    lines.insert(min(2, len(lines)), DU.report_note() + "\n")
     return "\n".join(lines)
 
 

@@ -62,6 +62,11 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                         DssWiseTabMixin, RasImportTabMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.config_dam_folder = ""
         self.config_output_folder = ""
         self._rasters = {}

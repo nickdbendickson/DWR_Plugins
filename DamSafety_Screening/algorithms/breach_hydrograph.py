@@ -15,6 +15,7 @@ from ..core.proposed import PHRASE as PROPOSED_PHRASE
 from . import _common as cm
 from ..core import errors as er
 from ..compat import (FIELD_NUMERIC, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT)
+from ._common import UnitAlgorithm
 
 AF_M3 = 1233.4818375
 SCEN_FIELDS = [("start_m", FT_DOUBLE), ("vw_m3", FT_DOUBLE),
@@ -46,7 +47,7 @@ class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16: nothing stands above the natural ground."""
 
 
-class BreachHydrograph(QgsProcessingAlgorithm):
+class BreachHydrograph(UnitAlgorithm):
     DAMS, CURVES, BPTS, MODE, SUNNY, EXP, OUTDIR, OUT, METHOD = (
         "DAMS", "CURVES", "BPTS", "MODE", "SUNNY", "EXP", "OUTDIR", "OUT", "METHOD")
     PARAM_SOURCE = "PARAM_SOURCE"

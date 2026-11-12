@@ -6,9 +6,10 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
 
 from ..core import merge as mg
 from ..compat import FILE_FOLDER
+from ._common import UnitAlgorithm
 
 
-class MergePonds(QgsProcessingAlgorithm):
+class MergePonds(UnitAlgorithm):
     def name(self): return "mergeponds"
     def displayName(self): return "18 - Merge dams and ponds"
     def group(self): return "Dam screening"

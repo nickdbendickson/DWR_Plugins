@@ -22,6 +22,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..damsuite import settings as DS
+from ..damsuite import display_units as DU
 from .tokens import TOKENS
 
 COLUMNS = ("#", "Parameter", "Value", "Unit", "Starting value")
@@ -108,6 +109,39 @@ def _fmt(v):
     return str(v)
 
 
+def _conv(s):
+    """True when setting `s` is a number in a unit the display system converts (Core 1.1.0)."""
+    return s is not None and s.kind == "number" and DU.factor(s.unit) != 1.0
+
+
+def _show(v, s):
+    """A stored value as the grid shows it (SI: converted; the file keeps the stored unit)."""
+    if not _conv(s) or v is None or isinstance(v, bool):
+        return v
+    try:
+        return float("{:.6g}".format(DU.to_display(float(v), s.unit)))
+    except (TypeError, ValueError):
+        return v
+
+
+def _back(raw, s):
+    """Typed grid text back to the stored unit (non-numbers pass through for coerce to refuse)."""
+    if not _conv(s) or raw is None or isinstance(raw, bool):
+        return raw
+    try:
+        return DU.from_display(float(str(raw).strip().replace(",", "")), s.unit)
+    except (TypeError, ValueError):
+        return raw
+
+
+def units_note():
+    if DU.system() == DU.SI:
+        return ("Shown in SI (m, ha, m\u00b3, m\u00b3/s); the settings file and the tools keep feet, "
+                "acres, acre-feet and cfs. Cell sizes are in metres either way.")
+    return ("Cell sizes stay in metres (the DEM's unit); every other distance is in feet, areas in "
+            "acres, volumes in acre-feet.")
+
+
 class SettingsGrid(QWidget):
     """The grid. `catalog` = [damsuite.settings.Setting] of this plugin's tools (in tab order),
     `settings` = the damsuite.settings.Settings object edited in place. `on_change(settings)` is
@@ -181,8 +215,7 @@ class SettingsGrid(QWidget):
                         "not a standard.")
         legend.setWordWrap(True)
         lay.addWidget(legend)
-        units = QLabel("Cell sizes stay in metres (the DEM's unit); every other distance is in feet, areas in "
-                       "acres, volumes in acre-feet.")
+        units = QLabel(units_note())
         units.setWordWrap(True)
         units.setStyleSheet("color: {};".format(TOKENS["muted"]))
         lay.addWidget(units)
@@ -243,9 +276,9 @@ class SettingsGrid(QWidget):
                     label.setToolTip("{}\n{} - {} ({})".format(s.label, s.tool_title or s.tool, s.key,
                                                              s.help or "").strip())
                     _set_flags(label, FLAGS_FIXED)
-                    unit = QTableWidgetItem(s.unit)
+                    unit = QTableWidgetItem(DU.display_unit(s.unit) if _conv(s) else s.unit)
                     _set_flags(unit, FLAGS_FIXED)
-                    default = QTableWidgetItem(_fmt(DS.display_value(s.default, s)))
+                    default = QTableWidgetItem(_fmt(_show(DS.display_value(s.default, s), s)))
                     _set_flags(default, FLAGS_FIXED)
                     t.setItem(i, C_NUM, num)
                     t.setItem(i, C_LABEL, label)
@@ -274,7 +307,7 @@ class SettingsGrid(QWidget):
                         t.setItem(i, C_VALUE, value)
                     else:
                         _set_flags(value, FLAGS_EDIT)
-                        value.setText(_fmt(shown))
+                        value.setText(_fmt(_show(shown, s)))
                         t.setItem(i, C_VALUE, value)
                     _bold(value, changed)
                     _bold(label, changed)
@@ -316,7 +349,7 @@ class SettingsGrid(QWidget):
             else:
                 raw = (st == CHECKED)
         else:
-            raw = item.text()
+            raw = _back(item.text(), s)           # SI: typed in m ... -> stored ft ...
         self.set_value(s.id, raw, from_widget=True)
 
     def _combo_changed(self, sid, index):
@@ -389,7 +422,7 @@ class SettingsGrid(QWidget):
                     if CHECKED is not None:
                         item.setCheckState(CHECKED if shown else UNCHECKED)
             elif item is not None:
-                item.setText(_fmt(shown))
+                item.setText(_fmt(_show(shown, s)))
             if item is not None:
                 _bold(item, changed)
             lab = t.item(i, C_LABEL)

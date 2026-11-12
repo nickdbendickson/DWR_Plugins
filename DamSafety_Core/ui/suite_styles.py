@@ -96,6 +96,35 @@ def style_for_layer(layer):
     return None
 
 
+def relabel_legend(layer):
+    """Under the suite's SI display units, a raster style's legend labels ('1 ft', '>= 10 ft',
+    '3 ft/s') name SI values; the class breaks stay on the raster's own US values. Returns the
+    number of labels changed; never raises."""
+    try:
+        from ..damsuite import display_units as DU
+        if DU.system() != DU.SI:
+            return 0
+        ren = layer.renderer()
+        shader = ren.shader() if hasattr(ren, "shader") else None
+        fn = shader.rasterShaderFunction() if shader is not None else None
+        if fn is None or not hasattr(fn, "colorRampItemList"):
+            return 0
+        items, n = fn.colorRampItemList(), 0
+        for it in items:
+            new = DU.convert_text(it.label)
+            if new != it.label:
+                it.label, n = new, n + 1
+        if n:
+            fn.setColorRampItemList(items)
+            try:
+                ren.setClassificationMin(ren.classificationMin())     # refresh the legend
+            except Exception:                                        # noqa
+                pass
+        return n
+    except Exception:                                                # noqa
+        return 0
+
+
 def apply(layer, qml=None, log=None):
     """Load a QML onto a layer. Returns True when applied; never raises."""
     qml = qml or style_for_layer(layer)
@@ -110,6 +139,7 @@ def apply(layer, qml=None, log=None):
         if isinstance(res, (tuple, list)) and len(res) >= 2:
             ok = bool(res[1])
         if ok:
+            relabel_legend(layer)          # Core 1.1.0: SI legend labels when chosen
             try:
                 layer.triggerRepaint()
             except Exception:                                    # noqa

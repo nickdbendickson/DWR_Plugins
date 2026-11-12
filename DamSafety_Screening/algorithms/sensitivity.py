@@ -14,6 +14,7 @@ from . import _common as cm
 from .hazard_classification import CRIT_LABELS
 from .run_breach_sim import ENGINES
 from ..compat import (FILE_FILE, FILE_FOLDER, FT_INT, FT_STRING, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 VARIANTS = [("F2008", 1.0, "base: Froehlich 2008, n x1"),
             ("F1995", 1.0, "Froehlich 1995"),
@@ -26,7 +27,7 @@ VARIANTS = [("F2008", 1.0, "base: Froehlich 2008, n x1"),
             ("TR60", 1.0, "NRCS TR-60 peak, triangular hydrograph")]
 
 
-class Sensitivity(QgsProcessingAlgorithm):
+class Sensitivity(UnitAlgorithm):
     def name(self): return "sensitivity"
     def displayName(self): return "9 - Sensitivity of the class (borderline dams)"
     def group(self): return "Dam screening"

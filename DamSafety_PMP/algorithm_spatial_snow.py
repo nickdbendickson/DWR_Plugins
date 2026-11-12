@@ -39,7 +39,14 @@ def _wgs84_point(alg, p, name, context):
     return (pt.x(), pt.y())
 
 
-class SpatialDistributionAlgorithm(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class SpatialDistributionAlgorithm(_UnitParams, QgsProcessingAlgorithm):
     def name(self): return "spatial_distribution"
     def displayName(self): return "PMP spatial distribution (SPAS storm patterns)"
     def createInstance(self): return SpatialDistributionAlgorithm()
@@ -82,7 +89,7 @@ class SpatialDistributionAlgorithm(QgsProcessingAlgorithm):
         return {"OUTPUT_FOLDER": out, "SUMMARY_CSV": os.path.join(out, "spatial_distribution_summary.csv") if rs else ""}
 
 
-class SnowmeltAlgorithm(QgsProcessingAlgorithm):
+class SnowmeltAlgorithm(_UnitParams, QgsProcessingAlgorithm):
     def name(self): return "snowmelt"
     def displayName(self): return "Snowmelt (100-yr SWE, degree-day, rain-on-snow)"
     def createInstance(self): return SnowmeltAlgorithm()

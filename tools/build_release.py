@@ -27,7 +27,8 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 PLUGINS = ["DamSafety_Core", "DamSafety_Setup", "DamSafety_Data", "DamSafety_Runner", "DamSafety_Hazard",
-           "DamSafety_Screening", "DamSafety_PMP", "DamSafety_HazardLite"]
+           "DamSafety_Screening", "DamSafety_PMP", "DamSafety_HazardLite",
+           "DamSafety_Finder"]
 FIXED = (2026, 1, 1, 0, 0, 0)                      # fixed timestamps -> reproducible zips
 BIN_PLATFORMS = ("linux-x64", "windows-x64", "macos-arm64", "macos-x64")
 
