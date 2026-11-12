@@ -323,6 +323,25 @@ class Runs(unittest.TestCase):
         self.assertEqual(ds.GetLayerByName("water").GetFeatureCount(), 1)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "out_water.csv")))
 
+    def test_water_from_a_las_tile(self):
+        # class-9 (water) points over a 40 m square at the pond centre, class-2 ground elsewhere,
+        # written at the grid's EPSG:5070 coords; run_water should find exactly that one patch
+        cx, cy = X0 + 150.0, Y0 + 150.0
+        wx, wy = np.meshgrid(np.arange(cx - 20, cx + 20, 1.0), np.arange(cy - 20, cy + 20, 1.0))
+        gx = np.linspace(X0 + 10, X0 + 290, 80)
+        gy = np.full(80, Y0 + 280.0)
+        x = np.concatenate([wx.ravel(), gx])
+        y = np.concatenate([wy.ravel(), gy])
+        cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(80, 2, np.uint8)])
+        path = os.path.join(self.tmp, "tile.las")
+        tc.write_las(path, x, y, cls)
+        res = self.f.run_water(path, self.out, cell=1.0, min_ac=0.02, min_width_m=3.0,
+                               las_src_epsg=5070, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        self.assertAlmostEqual(res["rows"][0]["area_ac"], 40 * 40 / 4046.8564224, delta=0.05)
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("water").GetFeatureCount(), 1)
+
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
         res = self.f.run_water(img, self.out, cell=1.0, mapped=self.pond_layer(), tile_m=100.0,

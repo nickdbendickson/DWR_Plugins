@@ -469,5 +469,120 @@ class Water(unittest.TestCase):
         self.assertEqual(cells[1], (lab == 1).sum())
 
 
+def write_las(path, x, y, cls, scale=0.01, offset=(0.0, 0.0, 0.0), fmt=0, rec_len=20,
+              version=(1, 2)):
+    """Write a minimal uncompressed LAS (point format 0 by default) for the reader tests."""
+    import struct
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    cls = np.asarray(cls, np.uint8)
+    n = len(x)
+    header_size = 227 if version == (1, 2) else 375
+    hdr = bytearray(header_size)
+    hdr[0:4] = b"LASF"
+    hdr[24], hdr[25] = version
+    struct.pack_into("<H", hdr, 94, header_size)
+    struct.pack_into("<I", hdr, 96, header_size)          # point data right after the header
+    struct.pack_into("<I", hdr, 100, 0)                   # no VLRs
+    hdr[104] = fmt
+    struct.pack_into("<H", hdr, 105, rec_len)
+    struct.pack_into("<I", hdr, 107, n)                   # legacy point count
+    struct.pack_into("<3d", hdr, 131, scale, scale, scale)
+    struct.pack_into("<3d", hdr, 155, *offset)
+    struct.pack_into("<6d", hdr, 179, float(x.max()), float(x.min()),
+                     float(y.max()), float(y.min()), 0.0, 0.0)
+    if version[1] >= 4:
+        struct.pack_into("<Q", hdr, 247, n)
+    body = bytearray()
+    class_off = 15 if fmt < 6 else 17
+    for i in range(n):
+        rec = bytearray(rec_len)
+        struct.pack_into("<i", rec, 0, int(round((x[i] - offset[0]) / scale)))
+        struct.pack_into("<i", rec, 4, int(round((y[i] - offset[1]) / scale)))
+        rec[class_off] = int(cls[i])
+        body += rec
+    with open(path, "wb") as fh:
+        fh.write(hdr)
+        fh.write(body)
+
+
+class Lidar(unittest.TestCase):
+    def _cloud(self):
+        # water (class 9) in a 20 x 20 m block at (50,50); ground (class 2) scattered elsewhere
+        from .. core import lidar as li  # noqa
+        wx, wy = np.meshgrid(np.arange(50, 70, 1.0), np.arange(50, 70, 1.0))
+        wx, wy = wx.ravel(), wy.ravel()
+        gx = np.linspace(0, 100, 60)
+        gy = np.full(60, 10.0)
+        x = np.concatenate([wx, gx])
+        y = np.concatenate([wy, gy])
+        cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(60, 2, np.uint8)])
+        return x, y, cls
+
+    def test_reads_points_and_classes(self):
+        from ..core import lidar as li
+        import tempfile, os
+        x, y, cls = self._cloud()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.las")
+            write_las(p, x, y, cls)
+            ax, ay, acls, hdr = li.read_points(p)
+            self.assertEqual(len(ax), len(x))
+            self.assertTrue(np.allclose(sorted(ax), sorted(x), atol=0.02))
+            self.assertEqual(int((acls == 9).sum()), 400)
+            # a class filter reads only the water points
+            wx, wy, wcls, _h = li.read_points(p, {9})
+            self.assertEqual(len(wx), 400)
+            self.assertTrue(np.all(wcls == 9))
+
+    def test_extended_class_byte_format6(self):
+        from ..core import lidar as li
+        import tempfile, os
+        x, y, cls = self._cloud()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t6.las")
+            write_las(p, x, y, cls, fmt=6, rec_len=30, version=(1, 4))
+            _ax, _ay, acls, _h = li.read_points(p, {9})
+            self.assertEqual(int((acls == 9).sum()), 400)   # full byte, no 5-bit mask
+
+    def test_point_grid_marks_only_water(self):
+        from ..core import lidar as li
+        x, y, cls = self._cloud()
+        gt = (0.0, 1.0, 0.0, 100.0, 0.0, -1.0)             # 100 x 100 m, 1 m cells, top-left origin
+        grid = li.point_grid(x, y, cls, (9,), gt, (100, 100), min_pts=1)
+        # the water block is wet
+        self.assertEqual(grid[40, 55], 1.0)                 # row = 100 - 60 (y=60) -> 40; col 55
+        self.assertEqual(grid[45, 60], 1.0)
+        # a ground-only cell is dry (0.0), not NaN
+        self.assertEqual(grid[90, 50], 0.0)
+        # a cell with no points at all is no-data
+        self.assertTrue(np.isnan(grid[5, 5]))
+        self.assertEqual(int((grid == 1.0).sum()), 400)
+
+    def test_min_pts_threshold(self):
+        from ..core import lidar as li
+        x = np.array([10.0, 10.0, 20.0])
+        y = np.array([10.0, 10.0, 20.0])
+        cls = np.array([9, 9, 9], np.uint8)
+        gt = (0.0, 1.0, 0.0, 100.0, 0.0, -1.0)
+        g2 = li.point_grid(x, y, cls, (9,), gt, (100, 100), min_pts=2)
+        self.assertEqual(g2[90, 10], 1.0)                  # the two-point cell survives
+        self.assertEqual(g2[80, 20], 0.0)                  # the one-point cell does not
+
+    def test_laz_is_refused_by_the_pure_reader(self):
+        from ..core import lidar as li
+        import tempfile, os, struct
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.laz")
+            write_las(p, [0.0], [0.0], [9])
+            with open(p, "rb") as fh:
+                buf = bytearray(fh.read())
+            buf[104] |= 0x80                               # mark the format compressed
+            with open(p, "wb") as fh:
+                fh.write(buf)
+            with self.assertRaises(li.LasCompressedError):
+                li.read_points(p)
+
+
 if __name__ == "__main__":
     unittest.main()
