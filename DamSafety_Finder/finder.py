@@ -918,6 +918,9 @@ def read_bands(image, ext, cell, bands):
                 width=n_x, height=n_y, resampleAlg="average", outputType=gdal.GDT_Float32,
                 dstNodata=-9999.0)
     wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
+    # a 4-band image's last band can be tagged alpha (GDAL 3.4 writes and reads a plain 4-band
+    # byte GeoTIFF that way): gdalwarp would then use the NIR band as a mask and write 255
+    opts["options"] = list(opts.get("options") or []) + ["-nosrcalpha"]
     out = _checked(gdal.Warp("", ds, **opts), "warping the image")
     res = {}
     for b in bands:
