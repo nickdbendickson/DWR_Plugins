@@ -6,15 +6,17 @@ flight year misses a pond. A classified point cloud has already made the call. U
 classified LAS/LAZ, and ASPRS class 9 is **Water** (class 2 is ground). A cell is water when it
 holds at least `min_pts` points of the water class - no sun angle, no shadows, no imagery year.
 
-Three ways to read the points, tried in this order:
+Two ways to read the points:
 
-* **laspy** (if installed): reads LAS and LAZ and exposes the tile's CRS. The usual path on a
-  machine with the dam suite installed.
+* **laspy** (if installed): reads LAS **and LAZ** and exposes the tile's CRS. The usual path on a
+  machine with the dam suite installed (laspy with its lazrs/laszip backend is the LAZ reader).
 * a small **pure-numpy reader** here (`read_points`): uncompressed LAS only (point formats 0-10,
   versions 1.0-1.4). No dependency, so the class filter and the rasteriser are unit-testable
-  without laspy or GDAL. It cannot read LAZ (compressed) and raises `LasCompressedError` for one.
-* the **PDAL** command-line tool (`pdal`), for LAZ when laspy is absent: a pipeline filters to the
-  water class, reprojects to the work grid and writes a count raster this reads back with GDAL.
+  without laspy or GDAL. It cannot decode LAZ and raises `LasCompressedError` for one; a LAZ with
+  no laspy installed is reported with a clear message to install laspy.
+
+The reader never launches an outside process (the DamIT suite forbids it), so LAZ support rests on
+laspy rather than a PDAL command line.
 
 Points carry no colour, so the output grid is 1.0 on a water cell and 0.0 on dry land (NaN only
 where the tile has no points at all); feed it to core/water.water_patches with threshold 0.5, the
@@ -22,18 +24,14 @@ same opening, min-size and min-width filters as the imagery tool. The LAS tile's
 the points; USGS tiles usually carry it in a WKT VLR this reader understands, otherwise pass
 `src_epsg` (the UTM zone of the delivery).
 """
-import os
-import shutil
 import struct
-import subprocess
-import tempfile
 
 import numpy as np
 
-try:  # GDAL ships with the QGIS bundles; only the PDAL read-back and reprojection need it
-    from osgeo import gdal, osr
+try:  # GDAL/OSR ships with the QGIS bundles; only the reprojection to the work grid needs it
+    from osgeo import osr
 except Exception:  # pragma: no cover
-    gdal = osr = None
+    osr = None
 
 
 LAS_SIGNATURE = b"LASF"
@@ -220,16 +218,11 @@ def _points_via_laspy(path, classes):
     return x, y, cls, wkt
 
 
-def has_pdal():
-    """Whether the PDAL command-line tool is on PATH."""
-    return shutil.which("pdal") is not None
-
-
 def water_grid(path, box, cell, work_epsg=5070, classes=(WATER_CLASS,), min_pts=1,
                src_epsg=None, log=print):
     """(grid, geotransform) of water over `box` (in work_epsg) at `cell` metres from a LAS/LAZ
-    tile: 1.0 water, 0.0 dry, NaN no-data. Reads with laspy, else the pure-numpy reader, else
-    PDAL for LAZ. `src_epsg` names the tile's CRS when the file carries none."""
+    tile: 1.0 water, 0.0 dry, NaN no-data. Reads with laspy (LAS and LAZ), else the pure-numpy
+    reader (uncompressed LAS only). `src_epsg` names the tile's CRS when the file carries none."""
     nx, ny, gt = _grid_for(box, cell)
     low = str(path).lower()
     got = _points_via_laspy(path, set(classes))
@@ -238,54 +231,10 @@ def water_grid(path, box, cell, work_epsg=5070, classes=(WATER_CLASS,), min_pts=
         x, y = _reproject(x, y, wkt, src_epsg, work_epsg)
         return point_grid(x, y, cls, classes, gt, (ny, nx), min_pts), gt
     if low.endswith(".laz"):
-        if not has_pdal():
-            raise LasError("{} is a LAZ file; install laspy or PDAL to read it".format(path))
-        log("reading {} with PDAL".format(os.path.basename(path)))
-        return _water_grid_pdal(path, box, cell, work_epsg, classes, min_pts, gt, nx, ny, log), gt
+        raise LasError("{} is a LAZ (compressed) file; install laspy to read it".format(path))
     x, y, cls, hdr = read_points(path, set(classes))
     x, y = _reproject(x, y, hdr.get("wkt"), src_epsg, work_epsg)
     return point_grid(x, y, cls, classes, gt, (ny, nx), min_pts), gt
-
-
-def _water_grid_pdal(path, box, cell, work_epsg, classes, min_pts, gt, nx, ny, log):
-    """Water grid from a LAZ via the PDAL CLI: a pipeline filters to the water class(es),
-    reprojects to work_epsg and writes a per-cell count GeoTIFF, which GDAL reads back onto the
-    tile grid. Counts >= min_pts are water. Needs `pdal` on PATH and GDAL."""
-    import json
-    if gdal is None:
-        raise LasError("GDAL is needed to read PDAL's output raster")
-    lo, hi = min(classes), max(classes)
-    tmp = tempfile.mkdtemp(prefix="finder_las_")
-    try:
-        tif = os.path.join(tmp, "count.tif")
-        pipeline = {"pipeline": [
-            str(path),
-            {"type": "filters.range", "limits": "Classification[{}:{}]".format(lo, hi)},
-            {"type": "filters.reprojection", "out_srs": "EPSG:{}".format(work_epsg)},
-            {"type": "writers.gdal", "filename": tif, "resolution": float(cell),
-             "output_type": "count", "data_type": "uint32", "nodata": 0,
-             "bounds": "([{},{}],[{},{}])".format(box[0], box[2], box[1], box[3])},
-        ]}
-        pj = os.path.join(tmp, "p.json")
-        with open(pj, "w") as fh:
-            json.dump(pipeline, fh)
-        res = subprocess.run(["pdal", "pipeline", pj], capture_output=True, text=True)
-        if res.returncode != 0:
-            raise LasError("PDAL failed on {}: {}".format(path, (res.stderr or "").strip()[:400]))
-        # warp PDAL's count raster onto the exact tile grid (sum when cells don't line up)
-        opts = dict(format="MEM", dstSRS="EPSG:{}".format(work_epsg),
-                    outputBounds=(gt[0], gt[3] + ny * gt[5], gt[0] + nx * gt[1], gt[3]),
-                    width=nx, height=ny, resampleAlg="sum", outputType=gdal.GDT_Float32,
-                    srcNodata=0, dstNodata=0)
-        ds = gdal.Open(tif)
-        if ds is None:
-            return np.full((ny, nx), np.nan)
-        out = gdal.Warp("", ds, **opts)
-        counts = out.GetRasterBand(1).ReadAsArray().astype(float)
-        grid = np.where(counts >= max(1, int(min_pts)), 1.0, 0.0)
-        return grid
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _header_bounds(path):

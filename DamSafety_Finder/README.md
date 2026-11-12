@@ -135,10 +135,11 @@ dugouts* to ask the LiDAR whether each pool is held above the ground.
 tile, or a folder of them, in `LAS` / `LAS_DIR`. A cell is water when the cloud holds at least
 `LAS_MIN_PTS` points of a water class (`LAS_CLASSES`, ASPRS class 9 by default) - no NDWI, sun
 angle, shadow or imagery-year to guess at, because the classification is already made (USGS 3DEP
-delivers classified LAZ). The points are read with laspy when it is installed, else a small
-pure-numpy reader here for uncompressed LAS (so the class filter and rasteriser are unit-tested
-without laspy or GDAL), else the PDAL command-line tool for LAZ; the same open / min-size /
-min-width filters and output follow. Pass `LAS_EPSG` only when a tile carries no CRS of its own.
+delivers classified LAZ). The points are read with laspy when it is installed (LAS and LAZ), else
+a small pure-numpy reader here for uncompressed LAS (so the class filter and rasteriser are
+unit-tested without laspy or GDAL); the reader launches no outside process. The same open /
+min-size / min-width filters and output follow. Pass `LAS_EPSG` only when a tile carries no CRS of
+its own.
 
 An image service is downloaded for the extent only, in 2000-pixel GeoTIFF tiles kept beside the
 output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
