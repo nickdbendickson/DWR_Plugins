@@ -285,15 +285,16 @@ def water_grid(path, box, cell, work_epsg=5070, classes=(WATER_CLASS,), min_pts=
 
 def tile_points(path, work_epsg=5070, classes=(WATER_CLASS,), src_epsg=None):
     """x, y, z, classification of one LAS/LAZ tile, reprojected into `work_epsg` - the points the
-    water-mosaic builder rasterises. Reads with laspy (LAS and LAZ), else the pure-numpy reader
+    water-mosaic builder rasterises (classes None = every point, for the return-count raster). Reads with laspy (LAS and LAZ), else the pure-numpy reader
     (uncompressed LAS only). `src_epsg` names the tile's CRS when the file carries none."""
-    got = _points_via_laspy(path, set(classes), with_z=True)
+    want = set(classes) if classes is not None else None       # None = every point
+    got = _points_via_laspy(path, want, with_z=True)
     if got is not None:
         x, y, z, cls, wkt = got
     elif str(path).lower().endswith(".laz"):
         raise LasError("{} is a LAZ (compressed) file; install laspy to read it".format(path))
     else:
-        x, y, z, cls, hdr = read_points(path, set(classes), with_z=True)
+        x, y, z, cls, hdr = read_points(path, want, with_z=True)
         wkt = hdr.get("wkt")
     x, y = _reproject(x, y, wkt, src_epsg, work_epsg)
     return x, y, z, cls

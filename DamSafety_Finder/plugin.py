@@ -6,6 +6,8 @@
     water        Find open water in aerial imagery (pond outlines)          finder.run_water
     osm          Dams / dikes / culverts of an OpenStreetMap file           finder.osm_structures
     score        Score fills by how much they look like the listed dams     finder.run_score
+    evidence     Add evidence to fills (water years, NWI, LiDAR, below)     finder.run_evidence
+    review_batch Pick a review batch (random control, top, near the cut)    finder.run_review_batch
 
 The provider id and names come from brand.py (the file that differs between DamSafety Finder
 and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
@@ -589,6 +591,9 @@ class BuildWaterMosaic(_Base):
             "LAS_EPSG", "LiDAR tile EPSG (only if the file carries no CRS; e.g. 26914)", "",
             optional=True))
         self._num("CELL", "Cell size of the mosaic (m)", 1.0, 0.1)
+        self.addParameter(QgsProcessingParameterBoolean(
+            "POINTS", "Also count every return per cell (point_count.vrt: LiDAR drop-out evidence for "
+            "'Add evidence to fills')", False))
         self.addParameter(QgsProcessingParameterFolderDestination(
             "OUT", "Output folder (water_count.vrt + water_elev.vrt + per-tile GeoTIFFs)"))
 
@@ -621,6 +626,7 @@ class BuildWaterMosaic(_Base):
                 srcs, out_dir, cell=self.parameterAsDouble(params, "CELL", context),
                 classes=classes, mosaic_epsg=brand.MOSAIC_EPSG,
                 src_epsg=int(epsg) if epsg else None,
+                point_counts=self.parameterAsBool(params, "POINTS", context),
                 log=self._log(feedback), progress=feedback.setProgress,
                 cancelled=feedback.isCanceled)
         except RuntimeError as e:
@@ -631,7 +637,10 @@ class BuildWaterMosaic(_Base):
         if context.project() is not None:
             context.addLayerToLoadOnCompletion(
                 res["count_vrt"], context.LayerDetails("Water-count mosaic", context.project()))
-        return {"OUT": out_dir, "COUNT_VRT": res["count_vrt"], "ELEV_VRT": res["elev_vrt"]}
+        if res.get("points_vrt"):
+            feedback.pushInfo("Return-count mosaic -> {}".format(res["points_vrt"]))
+        return {"OUT": out_dir, "COUNT_VRT": res["count_vrt"], "ELEV_VRT": res["elev_vrt"],
+                "POINTS_VRT": res.get("points_vrt")}
 
 
 class OsmStructures(_Base):
@@ -689,6 +698,15 @@ class ScoreFills(_Base):
         self.addParameter(QgsProcessingParameterFile(
             "MODEL", "Use this score model instead of learning one (optional)", extension="json",
             optional=True))
+        self.addParameter(QgsProcessingParameterEnum(
+            "KIND", "What the model learns from", ["The 11 measurements of Finder 0.4 (v1)",
+                                                   "Every 0.5 measurement, one fill per listed dam",
+                                                   "As above, terrain-aware (flat / rolling / cut)",
+                                                   "As above, boosted trees (bagged, positive-unlabelled)"],
+            defaultValue=0))
+        self.addParameter(QgsProcessingParameterFile(
+            "MARKS", "Reviewers' marks of these fills, as trusted labels (a CSV of find_id, mark; optional). "
+            "Use per region: marks from one terrain can misrank another", extension="csv", optional=True))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -707,12 +725,133 @@ class ScoreFills(_Base):
         try:
             res = finder.run_score(layers, out, positive_words=words or ["dam"],
                                    model_in=self.parameterAsFile(params, "MODEL", context) or None,
+                                   kind=finder.SCORE_KINDS[self.parameterAsEnum(params, "KIND", context)],
+                                   marks=self.parameterAsFile(params, "MARKS", context) or None,
                                    log=self._log(feedback))
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
         self._stop_if_cancelled(feedback, out)
         self._load(context, out, "scored_fills", "Fills, scored")
         return {"OUT": out, "MODEL": res.get("model_path")}
+
+
+class AddEvidence(_Base):
+    def name(self):
+        return "evidence"
+
+    def displayName(self):
+        return "Add evidence to fills (water by year, NWI, LiDAR drop-out, what is below)"
+
+    def shortHelpString(self):
+        from .core import evidence
+        return (evidence.__doc__.strip().replace("\n\n", "<br><br>") + "<br><br>Imagery, one per line: "
+                "<tt>YEAR | file or ImageServer address | green=G nir=N [red=R blue=B]</tt>. "
+                + brand.EVIDENCE_IMAGES_HELP)
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "FILLS", "'embankments' (or 'scored_fills') layer from 'Find fills'", [SRC_POINT]))
+        self.addParameter(QgsProcessingParameterString(
+            "IMAGES", "Imagery with a near-infrared band, one per line (YEAR | source | green=G nir=N "
+            "[red=R blue=B]); empty = no water history", brand.EVIDENCE_IMAGES, multiLine=True, optional=True))
+        self._num("NDWI", "Open water where NDWI is over (YOUR value)", 0.15, -1.0)
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "NWI", "NWI wetlands (polygons with ATTRIBUTE codes; optional)", [SRC_POLYGON], optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "QUARRIES", "Quarries / gravel pits (polygons, e.g. OSM landuse=quarry; optional)", [SRC_POLYGON],
+            optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "LANDCOVER", "Land cover raster (USDA CDL classes; optional) - pasture share within 250 m",
+            optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "SOILS", "Soils (polygons; optional)", [SRC_POLYGON], optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "SOIL_FIELD", "Soil field to report (e.g. drainagecl)", "drainagecl", optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "LIDAR_POINTS", "LiDAR return-count raster (point_count.vrt from 'Build a class-9 water mosaic'; "
+            "optional)", optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "LIDAR_WATER", "LiDAR class-9 water-count raster (water_count.vrt; optional)", optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "DEM", "DEM for the flow path below each fill (optional; with buildings and / or roads)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterEnum("Z_UNIT", "DEM elevation unit", Z_UNITS, defaultValue=0))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "BUILDINGS", "Buildings (points or footprints; optional)", [SRC_ANY], optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "ROADS", "Roads / railroads (lines; optional)", [SRC_LINE], optional=True))
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        opt = lambda n: _src(self, params, n, context, required=False) or None  # noqa: E731
+        try:
+            res = finder.run_evidence(
+                _src(self, params, "FILLS", context), out,
+                images=self.parameterAsString(params, "IMAGES", context) or None,
+                ndwi_threshold=self.parameterAsDouble(params, "NDWI", context),
+                nwi=opt("NWI"), quarries=opt("QUARRIES"), landcover=opt("LANDCOVER"), soils=opt("SOILS"),
+                soil_field=(self.parameterAsString(params, "SOIL_FIELD", context) or None),
+                lidar_points=opt("LIDAR_POINTS"), lidar_water=opt("LIDAR_WATER"), dem=opt("DEM"),
+                z_feet=_z(self, params, context), buildings=opt("BUILDINGS"), roads=opt("ROADS"),
+                log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
+        except (RuntimeError, ValueError) as e:
+            raise QgsProcessingException(str(e))
+        self._stop_if_cancelled(feedback, out)
+        self._load(context, out, "evidence", "Fills with evidence")
+        return {"OUT": out}
+
+
+class ReviewBatch(_Base):
+    def name(self):
+        return "review_batch"
+
+    def displayName(self):
+        return "Pick a review batch (random control, top-ranked, near the cut)"
+
+    def shortHelpString(self):
+        from .core import review
+        return review.__doc__.strip().replace("\n\n", "<br><br>")
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "FILLS", "Scored fills ('embankments', 'scored_fills' or 'evidence' layer)", [SRC_POINT]))
+        self.addParameter(QgsProcessingParameterNumber("N", "Cards in the batch", INTEGER, 90, minValue=5))
+        self._num("RANDOM", "Share that is a fixed random control", 0.18, 0.0)
+        self._num("TOP", "Share from the top of the ranking", 0.37, 0.0)
+        self._num("SECOND", "Share flagged for a blind second reviewer", 0.12, 0.0)
+        self.addParameter(QgsProcessingParameterNumber("CAP", "At most this many near-the-cut cards from one "
+                                                       "5 km tile", INTEGER, 3, minValue=1))
+        self.addParameter(QgsProcessingParameterFile(
+            "REVIEWED", "Cards already reviewed (any text / CSV file holding their FIND- ids; optional)",
+            extension="", optional=True))
+        self.addParameter(QgsProcessingParameterNumber("SEED", "Random seed (keep it to keep the control set)",
+                                                       INTEGER, 0, minValue=0))
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        rnd = self.parameterAsDouble(params, "RANDOM", context)
+        top = self.parameterAsDouble(params, "TOP", context)
+        if rnd + top > 1.0:
+            raise QgsProcessingException("the random and top shares add up to more than the batch")
+        try:
+            finder.run_review_batch(
+                _src(self, params, "FILLS", context), out, n=self.parameterAsInt(params, "N", context),
+                random_frac=rnd, top_frac=top, second_frac=self.parameterAsDouble(params, "SECOND", context),
+                per_tile_cap=self.parameterAsInt(params, "CAP", context),
+                reviewed=self.parameterAsFile(params, "REVIEWED", context) or None,
+                seed=self.parameterAsInt(params, "SEED", context), log=self._log(feedback))
+        except RuntimeError as e:
+            raise QgsProcessingException(str(e))
+        self._load(context, out, "review_batch", "Review batch")
+        return {"OUT": out}
 
 
 class Provider(QgsProcessingProvider):
@@ -732,7 +871,7 @@ class Provider(QgsProcessingProvider):
 
     def loadAlgorithms(self):
         for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater(), BuildWaterMosaic(),
-                    OsmStructures(), ScoreFills()):
+                    OsmStructures(), ScoreFills(), AddEvidence(), ReviewBatch()):
             self.addAlgorithm(alg)
 
 

@@ -325,6 +325,22 @@ class Runs(unittest.TestCase):
         res2 = self.f.run_embankments(self.dem, self.streams, self.out, model=res["model_path"],
                                       hillshade=False, log=lambda *_: None)
         self.assertTrue(all(0.0 <= r["score"] <= 1.0 for r in res2["rows"]))
+        self.assertTrue(all("score_note" in r for r in res2["rows"]))
+        # the 0.5 kinds, with reviewers' marks as trusted labels (self.out now holds the run above)
+        self.f.write_points(self.out, "embankments", self.f.EMB_FIELDS, rows)
+        marks = os.path.join(self.tmp, "marks.csv")
+        with open(marks, "w") as fh:
+            fh.write("find_id,mark\nFIND-0,no\nFIND-1,yes\nFIND-2,unsure\nFIND-9999,yes\n")
+        for kind in ("0.5", "0.5-terrain", "0.5-trees"):
+            r3 = self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, kind + ".gpkg"),
+                                  kind=kind, marks=marks, log=lambda *_: None)
+            # the unknown id is left out; the trees take only yes / no
+            self.assertEqual(r3["model"]["trusted_labels"], 2 if kind == "0.5-trees" else 3)
+            self.assertIn("ag_head", r3["model"]["features"])
+            self.assertGreater(r3["cv_auc"], 0.7)
+        with self.assertRaises(RuntimeError):
+            self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "x.gpkg"), kind="v9",
+                             log=lambda *_: None)
 
     # -------------------------------------------------------------------------------- water --
     def write_image(self, path, epsg=5070):
@@ -443,6 +459,17 @@ class Runs(unittest.TestCase):
         r2 = self.f.run_water(None, self.out, water_raster=res["count_vrt"], cell=1.0, min_ac=0.02,
                               min_width_m=3.0, log=lambda *_: None)
         self.assertEqual(len(r2["rows"]), 2)
+        self.assertIsNone(res["points_vrt"])
+        # with the return counts: every point counted (water and ground), the mosaic unchanged
+        r3 = self.f.build_water_mosaic(tiles, os.path.join(self.tmp, "m3"), cell=1.0, mosaic_epsg=5070,
+                                       src_epsg=5070, point_counts=True, log=lambda *_: None)
+        pds = gdal.Open(r3["points_vrt"])
+        pa = pds.GetRasterBand(1).ReadAsArray()
+        self.assertEqual(int(pa.sum()), 2 * (40 * 40 + 60))
+        cds3 = gdal.Open(r3["count_vrt"])
+        ca3 = cds3.GetRasterBand(1).ReadAsArray()
+        pds = cds3 = None
+        self.assertEqual(int((ca3 == 1).sum()), 2 * 40 * 40)
 
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
@@ -510,6 +537,50 @@ class Runs(unittest.TestCase):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
         with self.assertRaises(RuntimeError):
             self.f.run_water(img, self.out, nir_band=5, log=lambda *_: None)
+
+    def test_evidence(self):
+        res = self.emb()
+        dam = [r for r in res["rows"] if r["kind"] == "dam"][0]
+        for k in ("ag_head_ft", "below_frac", "outlet_dist_ft", "drain_ac", "relief_ft", "pool_lat"):
+            self.assertIsNotNone(dam.get(k), k)
+        self.assertGreater(dam["ag_head_ft"], 3.0)
+        self.assertGreater(dam["drain_ac"], 1.0)
+        # imagery at the DEM's grid: open water on the dam's pool in 2018, none in 2014
+        dem, _r = tc.scene()
+        pool = np.isclose(dem, tc.bed(200) + 3.0) & (np.arange(tc.N)[:, None] < 197)
+        imgs = []
+        for year, wet in ((2014, False), (2018, True)):
+            path = os.path.join(self.tmp, "img{}.tif".format(year))
+            ds = gdal.GetDriverByName("GTiff").Create(path, tc.N, tc.N, 4, gdal.GDT_Byte)
+            ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + tc.N * tc.CELL, 0.0, -tc.CELL))
+            ds.SetProjection(srs(5070).ExportToWkt())
+            nir = np.where(pool & wet, 20, 140)
+            for b, a in ((1, np.full(pool.shape, 70)), (2, np.full(pool.shape, 80)), (3, np.full(pool.shape, 60)), (4, nir)):
+                ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+            ds = None
+            imgs.append({"year": year, "src": path, "green": 2, "nir": 4, "red": 1, "blue": 3})
+        x = gx(tc.XS)
+        nwi = write_layer(self.vec, "nwi", [("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=x - 300.0, b=x + 300.0, c=row_y(197), d=row_y(0)), {"ATTRIBUTE": "PUBHh"})], fields=("ATTRIBUTE",))
+        blds = write_layer(self.vec, "buildings", [("POINT ({} {})".format(x + 9.0, row_y(360)), {})])
+        out = os.path.join(self.tmp, "ev.gpkg")
+        ev = self.f.run_evidence(self.out + "|layername=embankments", out, images=imgs, nwi=nwi, dem=self.dem,
+                                 buildings=blds, roads=self.roads, log=lambda *_: None)
+        d = [r for r in ev["rows"] if r["kind"] == "dam"][0]
+        self.assertEqual((d["img_years"], d["wet_years"], d["first_wet"]), (2, 1, 2018))
+        self.assertEqual((d["nwi_code"], d["nwi_h"], d["nwi_x"], d["nwi_regime"]), ("PUBHh", "yes", "no", "H"))
+        self.assertGreaterEqual(d["bld_1mi"], 1)
+        self.assertGreaterEqual(d["roads_1mi"], 1)
+        self.assertGreater(d["conseq"], 0)
+        self.assertEqual(ev["counts"]["nwi_h"], 1)
+        back = self.f.read_rows(out + "|layername=evidence")
+        self.assertEqual(len(back), len(ev["rows"]))
+        self.assertIn("wet_years", back[0])
+        txt = "2018 | /x/img.tif | green=3 nir=1 red=2\n# a comment\n2020|svc|nir=1, green=3"
+        self.assertEqual(self.f.parse_images(txt), [{"year": 2018, "src": "/x/img.tif", "green": 3, "nir": 1, "red": 2},
+                                                    {"year": 2020, "src": "svc", "nir": 1, "green": 3}])
+        with self.assertRaises(ValueError):
+            self.f.parse_images("2018 | x | red=1")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,15 @@ IMAGE_SERVICES = [
     ("ND GIS Hub 2019 NAIP colour-infrared, 60 cm", _HUB.format("AerialImage_ND_2019_CIR"), 3, 1),
     ("ND GIS Hub 2017 NAIP colour-infrared, 60 cm", _HUB.format("AerialImage_ND_2017_CIR"), 3, 1),
 ]
+# 'Add evidence to fills': the default imagery for the water history, one per line (YEAR | source |
+# bands). The ND GIS Hub has statewide NAIP colour-infrared 2009-2020 (NIR, red, green) and the
+# 2018 4-band 30 cm (red, green, blue, NIR); its 2021-2024 NAIP is natural colour only.
+EVIDENCE_IMAGES = "\n".join(
+    ["{0} | {1} | nir=1 red=2 green=3".format(y, _HUB.format("AerialImage_ND_{}_CIR".format(y)))
+     for y in (2009, 2010, 2012, 2014, 2015, 2016, 2017, 2019, 2020)]
+    + ["2018 | {} | red=1 green=2 blue=3 nir=4".format(_HUB.format("AerialImage_ND_2018_30cm"))])
+EVIDENCE_IMAGES_HELP = ("The default list is every statewide ND GIS Hub image year with a near-infrared "
+                        "band (2009-2020): one small download per fill per year.")
 WATER_HELP = ("Layers: the pack's 3DHP_waterbodies (or NHD / NWI) as the mapped water bodies. The "
               "'water' polygons with mapped = no are the ponds no layer has: give them to 'Find ponds "
               "and dugouts' as its water bodies to ask the LiDAR whether each is held above the ground.")
