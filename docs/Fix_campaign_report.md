@@ -432,14 +432,14 @@ byte-identical-across-plugins CI assertion.
   Screening-wide units module (or vendoring `damsuite/units.py`), left for the end-state decision.
 
 ### 13.3 Split `pipeline.py` / `structures.py` — assessed, correctly deferred (rec 3)
-Both import `qgis.core` at module scope, and their coverage (`test_lumo_real*`,
+Both import `qgis.core` at module scope, and their coverage (`test_pierre_real*`,
 `test_m1m2_classify_nd`, `test_flagged_structures`, …; 19 of 27 Hazard test files import qgis)
 runs **only with real QGIS**, which this environment lacks. Per rec 3, **not split here**. Proposed
 themed split (the files already carry `# --- inputs --` / `# --- scenarios --` section markers):
 pull the product-reuse / evaluation-key machinery (`_layer_sig`…`_evaluate`), the input collection
 (`_collect_inputs`…`_collect_facilities`), and the scenario runner (`_run_scenario`…`_result_items`)
 into themed submodules, leaving `pipeline.py` as the `Run` orchestrator. Execute it on a branch
-where the `lumo_real` suite can confirm before/after parity.
+where the `pierre_real` suite can confirm before/after parity.
 
 ### 13.4 Recs 4 & 5
 Rec 4 (leave damsuite vendoring alone): honored — the pin slice is identical-copy-plus-assertion

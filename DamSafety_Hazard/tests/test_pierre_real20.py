@@ -1,6 +1,6 @@
-"""Lumo vReal.20 BP.1-3 / XT.1-2 and vReal.21 SM.2/4/5/6 (Hazard 2.18.31).
+"""Pierre vReal.20 BP.1-3 / XT.1-2 and vReal.21 SM.2/4/5/6 (Hazard 2.18.31).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real20.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real20.py
 """
 import os
 import sys
@@ -22,7 +22,7 @@ from DamSafety_Hazard import build_nd_pack as BP  # noqa: E402
 from DamSafety_Hazard import offline_pack as OP  # noqa: E402
 from DamSafety_Hazard import extent as XT  # noqa: E402
 from DamSafety_Hazard import submittal as SB  # noqa: E402
-import test_lumo_real18b as R18B  # noqa: E402
+import test_pierre_real18b as R18B  # noqa: E402
 
 
 class Svc(object):

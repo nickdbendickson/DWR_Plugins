@@ -1,14 +1,14 @@
 #!/bin/zsh
-# setup-dam-research.zsh v1.1 — the dam-literature research assistant, next to (not inside) lumo.
+# setup-dam-research.zsh v1.1 — the dam-literature research assistant, next to (not inside) pierre.
 #
 #   * Ollama model "dam-research": a reasoning model chosen for this Mac's memory, with a
-#     citation-first system prompt. lumo is not touched.
+#     citation-first system prompt. pierre is not touched.
 #   * Embedding model qwen3-embedding:0.6b (falls back to nomic-embed-text).
 #   * conda env "ndresearch" (Python 3.12, numpy, PyMuPDF; --ocr adds ocrmypdf + tesseract).
 #   * ~/local-ai/research/damresearch.py, library folders under ~/DamResearch.
 #   * `damresearch` command (and `damchain research ...` when dam_chain.py is the shipped copy).
 #
-# Needs Ollama already installed (setup-local-lumo.sh / install_all.zsh put it in ~/local-ai/bin,
+# Needs Ollama already installed (setup-local-pierre.sh / install_all.zsh put it in ~/local-ai/bin,
 # or the Ollama app in /Applications). Run from INSIDE the unpacked folder:
 #   zsh setup-dam-research.zsh               # pick the model from this Mac's memory
 #   zsh setup-dam-research.zsh --big         # try qwen3.6:35b-a3b even on a 32 GB Mac
@@ -68,9 +68,9 @@ if [[ -z "$OLLAMA" && -f "$OLLAMA_ZIP" ]]; then
   OLLAMA="$LOCAL_AI/bin/Ollama.app/Contents/Resources/ollama"
   [[ -x "$OLLAMA" ]] && ok "Ollama installed from the bundled, sha256-checked zip -> ~/local-ai/bin" || die "Ollama binary missing after unzip"
 fi
-[[ -n "$OLLAMA" ]] || die "Ollama not found. Install it first: zsh setup-local-lumo.sh (in the dam-suites package), or the app from https://ollama.com/download"
+[[ -n "$OLLAMA" ]] || die "Ollama not found. Install it first: zsh setup-local-pierre.sh (in the dam-suites package), or the app from https://ollama.com/download"
 ok "ollama: $OLLAMA"
-# Same model store as lumo, so a base model both use is downloaded once.
+# Same model store as pierre, so a base model both use is downloaded once.
 [[ "$OLLAMA" == "$LOCAL_AI/bin/"* ]] && export OLLAMA_MODELS="${OLLAMA_MODELS:-$LOCAL_AI/models}"
 export OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0
 SERVE_PID=""
@@ -97,7 +97,7 @@ else
 fi
 # Candidates, best first; the first one that downloads wins.
 #   qwen3.6:35b-a3b  ~24 GB, 3B active (fast), 256K context; needs a recent Ollama
-#   qwen3:30b-a3b    ~19 GB, 3B active; the model lumo already uses on 32 GB Macs (no extra download)
+#   qwen3:30b-a3b    ~19 GB, 3B active; the model pierre already uses on 32 GB Macs (no extra download)
 #   qwen3:14b        ~9 GB dense;  qwen3:8b ~5 GB dense
 if [[ -n "$FORCE_MODEL" ]]; then
   CANDIDATES=("$FORCE_MODEL")
@@ -166,7 +166,7 @@ page number, equation coefficient or value. If you are not sure, say so plainly.
 You are not a licensed engineer and your output is not engineering judgement."""
 EOF
 "$OLLAMA" create "$PERSONA" -f "$TOOL_DIR/Modelfile" >/dev/null || die "could not create the $PERSONA model"
-ok "'$PERSONA' created from $BASE (lumo untouched)"
+ok "'$PERSONA' created from $BASE (pierre untouched)"
 
 # ---------------------------------------------------------------------------
 say "4/6  Python (conda env '$ENV_NAME')"
@@ -259,7 +259,7 @@ if [[ -f "$DC" ]]; then
     ok "damchain research already available"
   elif (( ${SHIPPED[(Ie)$(shasum "$DC" | awk '{print $1}')]} )); then
     NEW_DC="$HERE/damchain-1.4/dam_chain.py"
-    [[ -f "$NEW_DC" ]] || NEW_DC="$HERE/../lumo/tools/dam_chain.py"   # damit_ai repo layout
+    [[ -f "$NEW_DC" ]] || NEW_DC="$HERE/../pierre/tools/dam_chain.py"   # damit_ai repo layout
     cp "$DC" "$DC.bak-1.3" && cp "$NEW_DC" "$DC" \
       && ok "dam_chain.py 1.3 -> 1.4: 'damchain research ...' works (old copy: dam_chain.py.bak-1.3)"
   else
@@ -276,7 +276,7 @@ cat << EOF
 
 Done. Open a NEW Terminal tab (or: source ~/.zshrc), then:
 
-  lumo-start                                  # Ollama server, in its own tab (if not already running)
+  pierre-start                                  # Ollama server, in its own tab (if not already running)
   # copy or move your publications into  $RHOME/library   (sub-folders are fine)
   damresearch ingest                          # index them (first run: ~1-3 s per page)
   damresearch search "Froehlich breach width" # passages only, no model, instant

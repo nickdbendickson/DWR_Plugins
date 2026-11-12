@@ -34,6 +34,17 @@ IMAGE_SERVICES = [
 WATER_HELP = ("Layers: the pack's 3DHP_waterbodies (or NHD / NWI) as the mapped water bodies. The "
               "'water' polygons with mapped = no are the ponds no layer has: give them to 'Find ponds "
               "and dugouts' as its water bodies to ask the LiDAR whether each is held above the ground.")
+# Build-the-water-mosaic tool: the output CRS of the per-tile count / elevation rasters. DamSafety
+# builds for North Dakota (EPSG:26914, UTM 14N, the DWR 1 m terrain grid); DamIT builds for the
+# whole U.S. (EPSG:5070, CONUS Albers) so a tile from any state lands on one grid.
+MOSAIC_EPSG = 26914
+MOSAIC_REGION = "North Dakota (UTM 14N)"
+MOSAIC_HELP = ("Point it at a folder of classified LiDAR tiles (USGS 3DEP .las/.laz) and it writes "
+               "the water_count.vrt and water_elev.vrt that 'Find open water' reads with its "
+               "'Prebuilt class-9 water-count raster' input. Build it once per area; the open-water "
+               "tool then reads the mosaic a tile at a time, so a county or the whole state is in "
+               "reach without re-reading the raw point cloud. Tiles whose CRS is not in the file "
+               "need their EPSG. Dry land and the gaps between tiles read back as no water.")
 OSM_HELP = ("Use the Geofabrik North Dakota extract the offline pack's OpenStreetMap step downloads "
             "(north-dakota-latest.osm.pbf). The pack's OSM_crossings layer (culverts, fords, rail "
             "bridges) can be given to the crossings tool as it is; this tool adds the dams, weirs and "

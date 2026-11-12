@@ -9,8 +9,10 @@ Pages (US Letter, landscape):
   2. overview map of the study area with legend and scale bar
   3..n. zoom maps of the areas with the most habitable structures in the
      ACER high / judgment zones (up to `max_pages`)
-  then: roads / railroads table, structures table (ND outcome and ACER
-  zone of every flooded habitable structure)
+  then: the habitable-structures ND depth-velocity chart (911 address
+  points until reviewed; PNG when written), roads / railroads table,
+  structures table (ND outcome and ACER zone of every flooded habitable
+  structure)
 
 The layout is rebuilt on every run (the previous one of the same name is
 replaced), so the PDF and the layout always show the latest results.
@@ -568,9 +570,47 @@ def _summary_page(layout, dam_name, res, scenario, all_results):
     _label(layout, foot, MARGIN, PAGE_H - MARGIN - 6, PAGE_W - 2 * MARGIN, 5, 0, size=6)
 
 
+
+def _dv_chart_page(layout, chart, title_suffix=""):
+    """A landscape page with the habitable-structure depth-velocity PNG, or None."""
+    png = (chart or {}).get("png") if isinstance(chart, dict) else chart
+    if not png or not os.path.isfile(png):
+        return None
+    try:
+        from qgis.core import QgsLayoutItemPicture
+    except Exception:
+        return None
+    page = _add_page(layout)
+    heading = "Habitable structures on the ND depth-velocity charts"
+    if title_suffix:
+        heading += " - " + title_suffix
+    _label(layout, heading, MARGIN, MARGIN, PAGE_W - 2 * MARGIN, 8, page, size=11, bold=True)
+    pic = QgsLayoutItemPicture(layout)
+    pic.setPicturePath(png)
+    try:
+        pic.setMode(QgsLayoutItemPicture.FormatRaster)
+    except Exception:
+        pass
+    try:
+        pic.setResizeMode(QgsLayoutItemPicture.Zoom)
+    except Exception:
+        pass
+    layout.addLayoutItem(pic)
+    # leave a caption strip under the figure
+    _place(pic, MARGIN, 20, PAGE_W - 2 * MARGIN, PAGE_H - 20 - MARGIN - 16, page)
+    cap = ""
+    if isinstance(chart, dict):
+        cap = chart.get("title") or chart.get("text") or ""
+        if chart.get("note"):
+            cap = (cap + "  " if cap else "") + chart["note"]
+    cap = cap or "ND 911 address points only, until an engineer reviews a structure in Hazard."
+    _label(layout, cap, MARGIN, PAGE_H - MARGIN - 14, PAGE_W - 2 * MARGIN, 12, page, size=7)
+    return page
+
+
 def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen_layers,
                  max_pages=8, add_to_project=True, all_results=None, hydraulics_group=None,
-                 imagery=False, info=None, basemap=None):
+                 imagery=False, info=None, basemap=None, dv_chart=None):
     """Build the layout and export Hazard_Classification_Report.pdf.
     Returns (pdf path, note) - note says when the usual file name could not
     be used (the old PDF is open in another program).
@@ -613,6 +653,13 @@ def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen
 
     # 1. summary tables
     _summary_page(layout, dam_name, res, scenario, all_results)
+
+    # 1b. habitable-structure depth-velocity chart (2.24.7)
+    try:
+        _dv_chart_page(layout, dv_chart or (res or {}).get("dv_chart"),
+                       title_suffix=getattr(scenario, "name", "") or "")
+    except Exception as e:
+        log_message("Report depth-velocity chart page skipped: {}".format(e))
 
     # 2. overview map
     p = _add_page(layout)

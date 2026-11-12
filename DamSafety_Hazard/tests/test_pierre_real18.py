@@ -1,6 +1,6 @@
-"""Lumo vReal.18 OP.1/OP.3/OP.4, OS.1/OS.2/OS.3, EVC.1/EVC.5 (Hazard 2.18.29).
+"""Pierre vReal.18 OP.1/OP.3/OP.4, OS.1/OS.2/OS.3, EVC.1/EVC.5 (Hazard 2.18.29).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real18.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real18.py
 """
 import os
 import sys

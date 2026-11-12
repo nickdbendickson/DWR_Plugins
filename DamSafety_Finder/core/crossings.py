@@ -44,12 +44,17 @@ def _segments(lines):
                 yield li, (float(a[0]), float(a[1])), (float(b[0]), float(b[1]))
 
 
-def find(roads, streams, bucket_m=250.0, dedupe_m=15.0):
+def find(roads, streams, bucket_m=250.0, dedupe_m=15.0, cancelled=None):
     """[{'x', 'y', 'road', 'stream', 'angle'}]: every crossing of a road line with a stream line
     (both lists of [(x, y), ...] in one projected CRS, metres). `road` / `stream` are the line
-    indices; `angle` the crossing angle in degrees (90 = square)."""
+    indices; `angle` the crossing angle in degrees (90 = square). `cancelled` is a callable: when
+    it returns true the intersections already found are returned (a partial result)."""
     grid = {}
+    n = 0
     for si, a, b in _segments(streams):
+        n += 1
+        if cancelled is not None and n % 200 == 0 and cancelled():
+            return []
         x0, x1 = sorted((a[0], b[0]))
         y0, y1 = sorted((a[1], b[1]))
         for i in range(int(math.floor(x0 / bucket_m)), int(math.floor(x1 / bucket_m)) + 1):
@@ -57,6 +62,9 @@ def find(roads, streams, bucket_m=250.0, dedupe_m=15.0):
                 grid.setdefault((i, j), []).append((si, a, b))
     out = []
     for ri, a, b in _segments(roads):
+        n += 1
+        if cancelled is not None and n % 200 == 0 and cancelled():
+            return dedupe(out, dedupe_m)
         x0, x1 = sorted((a[0], b[0]))
         y0, y1 = sorted((a[1], b[1]))
         seen = set()

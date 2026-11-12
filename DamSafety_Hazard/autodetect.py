@@ -94,7 +94,7 @@ def _is_units_label(label):
 
 
 # a "max" token (Max, Hmax, Dmax, Vmax, "(Max)"), not "max" inside a word ("Maxwell",
-# "Climax"): the same word boundary as the time-step check (Lumo v1.6)
+# "Climax"): the same word boundary as the time-step check (Pierre v1.6)
 _MAX_TOKEN_RE = re.compile(r"(?<![a-z])[hdv]?max(?![a-z])")
 
 

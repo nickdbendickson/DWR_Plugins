@@ -54,7 +54,8 @@ class Tools(tf.Runs):
     def test_registered(self):
         reg = QgsApplication.processingRegistry()
         names = sorted(a.name() for a in reg.providerById(self.pid).algorithms())
-        self.assertEqual(names, ["crossings", "embankments", "osm", "ponds", "score", "water"])
+        self.assertEqual(names, ["crossings", "embankments", "osm", "ponds", "score", "water",
+                                 "water_mosaic"])
 
     def test_embankments_tool(self):
         from osgeo import ogr
@@ -107,6 +108,27 @@ class Tools(tf.Runs):
         ds.SetProjection(tf.srs(5070).ExportToWkt())
         b = ds.GetRasterBand(1); b.WriteArray(counts); b.SetNoDataValue(0.0); ds = None
         self.run_alg("water", {"WATER_RASTER": path, "WATER_BAND": 1, "WATER_COUNT_MIN": 1.0,
+                               "CELL": 1.0, "MIN_AC": 0.02, "MIN_WIDTH": 3.0, "OUT": self.out})
+        d = ogr.Open(self.out)
+        self.assertEqual(d.GetLayerByName("water").GetFeatureCount(), 1)
+
+    def test_build_water_mosaic_tool(self):
+        import numpy as np
+        from osgeo import gdal, ogr
+        cx, cy = tf.X0 + 150.0, tf.Y0 + 150.0
+        wx, wy = np.meshgrid(np.arange(cx - 20, cx + 20, 1.0), np.arange(cy - 20, cy + 20, 1.0))
+        x = wx.ravel(); y = wy.ravel()
+        z = np.full(x.size, 305.0)
+        cls = np.full(x.size, 9, np.uint8)
+        las = os.path.join(self.tmp, "mt.las")
+        tf.tc.write_las(las, x, y, cls, z=z)
+        mdir = os.path.join(self.tmp, "qmosaic")
+        res = self.run_alg("water_mosaic", {"LAS": las, "LAS_CLASSES": "9", "LAS_EPSG": "5070",
+                                            "CELL": 1.0, "OUT": mdir})
+        cvrt = res["COUNT_VRT"]
+        self.assertTrue(os.path.exists(cvrt))
+        # the mosaic feeds the open-water tool
+        self.run_alg("water", {"WATER_RASTER": cvrt, "WATER_BAND": 1, "WATER_COUNT_MIN": 1.0,
                                "CELL": 1.0, "MIN_AC": 0.02, "MIN_WIDTH": 3.0, "OUT": self.out})
         d = ogr.Open(self.out)
         self.assertEqual(d.GetLayerByName("water").GetFeatureCount(), 1)
