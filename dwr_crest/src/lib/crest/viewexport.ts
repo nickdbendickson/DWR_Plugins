@@ -1,5 +1,5 @@
 /**
- * "Save as PDF…" / "Save image…" for the Flood and Report views: a picture of what is on screen (map, flood strip,
+ * "Save view as PDF…" / "Save image…" for the Flood and Report views: a picture of what is on screen (map, flood strip,
  * PLSS, results), with the dam, the date, the key numbers and the map credits.
  *
  * The capture is html-to-image (the page drawn into a canvas). Basemap tiles come from servers that allow it (USGS and

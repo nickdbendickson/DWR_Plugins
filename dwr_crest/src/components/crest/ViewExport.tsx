@@ -4,7 +4,7 @@ import { captureView, NO_EXPORT_ATTR, viewFileName, type ViewMeta, viewPdf, view
 
 type Props = Omit<ViewMeta, "savedAt"> & { target: RefObject<HTMLElement | null> };
 
-/** "Save as PDF…" and "Save image…" for the view in `target` (left out of the picture itself). */
+/** "Save view as PDF…" and "Save image…" for the view in `target` (left out of the picture itself). */
 export function ViewExport({ target, ...meta }: Props) {
   const [busy, setBusy] = useState<"pdf" | "png" | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
@@ -38,7 +38,7 @@ export function ViewExport({ target, ...meta }: Props) {
     <div {...{ [NO_EXPORT_ATTR]: "" }} data-testid="view-export" className="flex flex-col items-end gap-1">
       <div className="flex flex-wrap gap-2">
         <button type="button" className={btn} disabled={busy !== null} onClick={() => void run("pdf")}>
-          Save as PDF…
+          Save view as PDF…
         </button>
         <button type="button" className={btn} disabled={busy !== null} onClick={() => void run("png")}>
           Save image…
