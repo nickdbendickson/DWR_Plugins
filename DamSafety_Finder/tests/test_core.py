@@ -103,6 +103,23 @@ class Embankments(unittest.TestCase):
         wander = [(XS, N * CELL - 1.0), (XS, 700.0), (XS + 60.0, 650.0), (XS, 600.0), (XS, 1.0)]
         self.assertEqual(em.find(dem, GT, [wander]), [])
 
+    def test_toe_reaches_the_foot_past_a_bench(self):
+        # a downstream face with a bench part-way down: the toe is the ground at the foot, not the
+        # top of the bench (Absaraka read 17 ft instead of ~28 ft when it stopped on a bench)
+        crest = [110.0, 108.0, 106.0]                      # steep face
+        bench = [105.8, 105.7, 105.6]                      # a short flat shelf
+        more = [104.0, 102.0, 100.0]                       # the face carries on
+        floor = [99.8, 99.7, 99.6, 99.5]                   # the valley floor (gentle)
+        z = np.array(crest + bench + more + floor)
+        kd, still = em.face_toe(z, 0, len(z), CELL, 8.0)
+        self.assertLessEqual(z[kd], 100.2)                 # the foot, well past the 105.6 bench top
+        self.assertFalse(still)
+        # a face that flattens straight onto a gentle floor stops there, not on down the valley
+        z2 = np.array([110.0, 107.0, 104.0, 101.0, 100.8, 100.6, 100.4, 100.2, 100.0])
+        kd2, _ = em.face_toe(z2, 0, len(z2), CELL, 8.0)
+        self.assertLessEqual(z2[kd2], 101.0)
+        self.assertGreaterEqual(z2[kd2], 100.0)
+
     def test_low_fill_left_out_and_threshold_is_yours(self):
         dem, y = valley()
         dem = add_fill(dem, y, 200, 1.0)
@@ -247,6 +264,24 @@ class Ridges(unittest.TestCase):
         road[:, 96:106] = True
         self.assertEqual(rd.find_ridges(z, gt, road_mask=road), [])
 
+    def test_near_mask_and_water_only(self):
+        # a dike beside a channel (holds water) and one out in a field (dry): near a channel and
+        # water-holding keeps only the first, which is what the default dike pass looks for
+        z, gt = self.flat()
+        z[40:160, 98:104] = 102.0                          # dike A, by the channel, holds water
+        z[40:160, 150:156] = 102.0                         # dike B, dry, out in the field
+        depth = np.zeros(z.shape)
+        depth[40:160, 80:98] = 1.0                         # a pool on dike A's west side
+        channel = np.zeros(z.shape, bool)
+        channel[:, 72:74] = True                           # a stream down the west side
+        from scipy import ndimage as ndi
+        near = ndi.binary_dilation(channel, iterations=28)  # its buffer reaches dike A, not dike B
+        got = rd.find_ridges(z, gt, depth=depth, near_mask=near, water_only=True)
+        self.assertEqual([d["kind"] for d in got], [rd.K_LEVEE])
+        self.assertAlmostEqual(got[0]["x"], 101.0, delta=4.0)
+        self.assertEqual(rd.find_ridges(z, gt, depth=depth, water_only=True)[0]["kind"], rd.K_LEVEE)
+        self.assertEqual(len(rd.find_ridges(z, gt, depth=depth)), 2)   # both, without the filters
+
     def test_round_hump_and_bend_are_not_ridges(self):
         z, gt = self.flat()
         r, c = np.mgrid[0:200, 0:200]
@@ -385,6 +420,29 @@ class Water(unittest.TestCase):
         self.assertEqual(n, 2)                     # the roof is not dark in NIR
         _l, n = wt.water_patches(idx, 0.6, 1, 50, 0.0, None)
         self.assertEqual(n, 0)                     # the threshold is yours
+
+    def test_shadow_is_not_water(self):
+        # a cast shadow (dark in every band) has a positive NDWI and is dark in NIR, so the old
+        # filters passed it; the green-brightness test drops it, the pond stays
+        g, nir, pond = image()
+        g[200:230, 200:230], nir[200:230, 200:230] = 15.0, 5.0   # a 30 m shadow
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark)
+        self.assertEqual(n, 2)                     # pond + shadow, with only the old filters
+        bright = wt.bright_in_green(g, idx, 0.35)
+        lab, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, bright=bright)
+        self.assertEqual(n, 1)                     # the shadow is gone
+        self.assertGreater((lab > 0)[pond].mean(), 0.97)
+
+    def test_reject_mask_drops_patches(self):
+        g, nir, pond = image()
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        built = np.zeros(g.shape, bool)
+        built[108:192, 108:192] = True             # a built-up block over the whole pond
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark, reject=built)
+        self.assertEqual(n, 0)                     # the pond is on the built-up mask, dropped
 
     def test_persistence_keeps_the_pond_drops_a_wet_year(self):
         g, nir, pond = image()

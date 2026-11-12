@@ -192,6 +192,8 @@ class FindEmbankments(_Base):
         self._num("DRAIN_AC", "Also walk every draw of the DEM draining at least (acres; 0 = only the "
                   "stream lines; YOUR value)", 10.0, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
+            "DIKES", "Also find dikes that hold water beside a stream (dams built along a channel)", True))
+        self.addParameter(QgsProcessingParameterBoolean(
             "DUGOUTS", "Also look for dug pits (dugouts) anywhere in the DEM", True))
         self.addParameter(QgsProcessingParameterBoolean(
             "RIDGES", "Also list raised ridges anywhere (levees, dikes; a review list)", False))
@@ -228,6 +230,7 @@ class FindEmbankments(_Base):
                 hillshade=self.parameterAsBool(params, "HILLSHADE", context),
                 drainage_ac=self.parameterAsDouble(params, "DRAIN_AC", context),
                 dugouts=self.parameterAsBool(params, "DUGOUTS", context),
+                dikes=self.parameterAsBool(params, "DIKES", context),
                 ridges=self.parameterAsBool(params, "RIDGES", context),
                 model=self.parameterAsFile(params, "MODEL", context) or None,
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
@@ -242,8 +245,9 @@ class FindEmbankments(_Base):
         self._load(context, out, "spillways", "Where each pool gets out (spillways)")
         if res.get("dugouts") is not None and self.parameterAsBool(params, "DUGOUTS", context):
             self._load(context, out, "dugouts", "Dug pits (LiDAR)")
-        if self.parameterAsBool(params, "RIDGES", context):
-            self._load(context, out, "ridges", "Raised ridges (review)")
+        if res["counts"].get("ridges"):
+            self._load(context, out, "ridges", "Raised ridges (review)" if self.parameterAsBool(
+                params, "RIDGES", context) else "Channel-side dikes (hold water)")
         self._load(context, out, "screening_dams", "Fills for screening (not listed)")
         return {"OUT": out}
 
@@ -404,9 +408,14 @@ class FindWater(_Base):
         self.addParameter(QgsProcessingParameterVectorLayer(
             "MAPPED", "Mapped water bodies (3DHP / NHD waterbodies, NWI; optional)", [SRC_POLYGON],
             optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "BUILT", "Buildings / streets in town (drops roofs, pavement, pools; optional)", [SRC_ANY],
+            optional=True))
         self._num("CELL", "Analysis cell size (m)", 1.0, 0.1)
         self._num("THRESHOLD", "Water when NDWI is at least (YOUR value; check it on a known pond)", 0.15, -1.0)
         self._num("NIR_FRAC", "and the near-infrared is at most this share of the land's (0 = no test)", 0.25, 0.0)
+        self._num("GREEN_FRAC", "and the green is at least this share of the land's (drops shadows in town; "
+                  "0 = no test)", 0.35, 0.0)
         self._num("MIN_AC", "Smallest water patch (acres; YOUR value)", 0.05, 0.0)
         self._num("MAX_AC", "Largest water patch (acres; 0 = no limit)", 0.0, 0.0)
         self._num("MIN_WIDTH", "Narrowest water patch (m; drops road and rail ditches)", 10.0, 0.0)
@@ -448,7 +457,9 @@ class FindWater(_Base):
                 max_ac=self.parameterAsDouble(params, "MAX_AC", context),
                 min_width_m=self.parameterAsDouble(params, "MIN_WIDTH", context),
                 nir_frac=self.parameterAsDouble(params, "NIR_FRAC", context),
+                green_frac=self.parameterAsDouble(params, "GREEN_FRAC", context),
                 mapped=_src(self, params, "MAPPED", context, False) or None,
+                built=_src(self, params, "BUILT", context, False) or None,
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))

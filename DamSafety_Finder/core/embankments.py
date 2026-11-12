@@ -195,19 +195,30 @@ def orient_down(z):
     return bool(np.median(v[:k]) < np.median(v[-k:]))
 
 
-def face_toe(z, e, toe_k, cell, face_deg, m=3):
+def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
     """(index of the toe, still falling at the end of the search) below a hump ending at e: the
-    face goes on while the ground falls faster than tan(face_deg) over m samples; the toe is the
-    lowest ground from e to where it stops (natural valley slopes are gentler). None when there
-    is no ground below the hump."""
+    face goes on while the ground falls faster than tan(face_deg) over m samples; where it
+    flattens, the walk carries on only if the face steepens again within bench_m (a bench on the
+    face, not the valley floor), so the toe is the outlet-channel ground at the foot of the fill,
+    not the top of a bench part-way down. The toe is the lowest ground from e to where it stops
+    (natural valley slopes are gentler, so it does not run on down the valley). None when there is
+    no ground below the hump."""
     end = min(len(z) - 1, e + toe_k)
     step = m * cell * math.tan(math.radians(face_deg))
+    bench = max(1, int(round(bench_m / cell)))
     k = e
     while k < end:
         k2 = min(end, k + m)
-        if not (np.isfinite(z[k]) and np.isfinite(z[k2])) or z[k] - z[k2] < step * (k2 - k) / m:
+        if not (np.isfinite(z[k]) and np.isfinite(z[k2])):
             break
-        k += 1
+        if z[k] - z[k2] >= step * (k2 - k) / m:
+            k += 1                                      # still on the steep face
+            continue
+        look = z[k:min(end, k + bench) + 1]             # flattened: a bench only if it drops again
+        if np.isfinite(look).any() and z[k] - np.nanmin(look) >= step:
+            k += 1
+            continue
+        break                                           # the valley floor / outlet channel: stop
     seg = z[e:k + 1]
     if not np.isfinite(seg).any():
         return None, False

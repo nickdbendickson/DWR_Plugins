@@ -39,7 +39,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -485,13 +485,18 @@ LINE_STREAM, LINE_DEM = "stream line", "DEM drainage"
 def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, bbox=None, cell=3.0,
                     z_feet=None, params=None, match_ft=500.0, unsure_factor=2.0, tile_m=5000.0,
                     road_buffer_m=6.0, hillshade=True, drainage_ac=0.0, drain_cell=10.0,
-                    ridges=False, dugouts=False, ridge_params=None, model=None, log=print,
+                    ridges=False, dugouts=False, dikes=True, dike_near_m=200.0,
+                    ridge_params=None, model=None, log=print,
                     progress=None, cancelled=None):
     """Fills across the stream lines in the DEM, checked against the known structures, and (with
     `hillshade`) a multi-direction hillshade of the area beside the GeoPackage for the review.
     drainage_ac > 0: also walk every draw of the DEM draining that many acres (core/terrain.py,
     traced at drain_cell metres), mapped or not. ridges / dugouts: also look for raised ridges
     (levees, dikes) and dug pits anywhere (core/ridges.py; layers 'ridges' and 'dugouts').
+    dikes (on by default): also look for a dike that holds water running BESIDE a stream or draw
+    (within dike_near_m), which no line crosses - a pond dam built along a channel, not across it.
+    These go into the 'ridges' layer and screening_dams. The whole-DEM ridge search (ridges) finds
+    them too, so the dike pass is skipped when ridges is on.
     model: a score model (core/score.py JSON) - each fill gets its score.
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
@@ -545,7 +550,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             return b[0] <= xx < b[2] and b[1] <= yy < b[3]
 
         dl, deep = [], None
-        if drainage_ac or ridges:
+        if drainage_ac or ridges or dikes:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
             if drainage_ac:
                 # routed over the DEM with narrow raised features opened away, so a draw runs
@@ -553,7 +558,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 rec, order, _f = tr.flow(tr.open_ridges(z10, abs(gt10[1]), rp.width_m))
                 area, _len = tr.accumulate(rec, order, z10.shape, abs(gt10[1]))
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
-            if ridges:
+            if ridges or dikes:
                 _r, _o, filled = tr.flow(z10)
                 d10 = tr.depth(z10, filled)
                 rr = np.clip(((gt[3] + (np.arange(z.shape[0]) + 0.5) * gt[5]) - gt10[3]) / gt10[5],
@@ -567,14 +572,24 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         found.extend(got)
         msg = "tile {}/{}: {} line(s){}, {} fill(s)".format(
             ti + 1, len(tiles), len(tl), " + {} DEM draw(s)".format(len(dl)) if drainage_ac else "", len(got))
+        wide = None
+        if rmask is not None:                  # a road embankment's base, not just its centreline
+            wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
         if ridges and not cancelled():
-            wide = None
-            if rmask is not None:              # a road embankment's base, not just its centreline
-                wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
             rg = rd.find_ridges(z, gt, depth=deep, road_mask=wide, params=rp, keep=keep,
                                 exclude=[(e.x, e.y) for e in got])
             ridge_rows.extend(rg)
             msg += ", {} ridge(s)".format(len(rg))
+        elif dikes and not cancelled() and (tl or dl):
+            near = np.zeros(z.shape, bool)     # a buffer around the stream lines and draws
+            for ln in tl + dl:
+                for r, c in em.line_cells(ln, gt, z.shape):
+                    near[r, c] = True
+            near = ndi.binary_dilation(near, iterations=max(1, int(round(dike_near_m / cell))))
+            dk = rd.find_ridges(z, gt, depth=deep, road_mask=wide, params=rp, keep=keep,
+                                exclude=[(e.x, e.y) for e in got], near_mask=near, water_only=True)
+            ridge_rows.extend(dk)
+            msg += ", {} channel-side dike(s)".format(len(dk))
         if dugouts and not cancelled():
             dg = rd.find_dugouts(z, gt, params=rp, keep=keep)
             dug_rows.extend(dg)
@@ -623,11 +638,12 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                            "lat": round(lat, 6), "lon": round(lon, 6)})
     write_points(out_gpkg, "spillways", SPILL_FIELDS, spills)
     extra = []
-    if ridges:
+    if ridges or dikes:
         extra = _ridge_rows(ridge_rows, kn, match_ft, unsure_factor, ll)
         write_points(out_gpkg, "ridges", RIDGE_FIELDS, extra)
         write_csv(os.path.splitext(out_gpkg)[0] + "_ridges.csv", RIDGE_FIELDS, extra)
-        log(_summary(extra, "raised ridge(s) off the stream lines"))
+        log(_summary(extra, "channel-side dike(s)" if dikes and not ridges
+                     else "raised ridge(s) off the stream lines"))
     dugs = []
     if dugouts:
         dugs = _dug_rows(dug_rows, kn, match_ft, unsure_factor, ll)
@@ -1107,9 +1123,25 @@ def _mapped_polys(src, box):
     return out
 
 
+def _built_mask(built, box, gt, shape, built_m, cell):
+    """Bool grid True on (and within built_m of) a buildings / pavement / roads layer - buildings
+    filled, roads as lines. None when no layer is given."""
+    if not built:
+        return None
+    polys = _mapped_polys(built, box)                  # polygon interiors (buildings, lots)
+    mask = _rasterize(polys, gt, shape) if polys else np.zeros(shape, bool)
+    for ln in read_lines(built, None):                 # road / rail centrelines, polygon outlines
+        if _meets(ln, box):
+            for r, c in em.line_cells(ln, gt, shape):
+                mask[r, c] = True
+    k = max(1, int(round(built_m / cell)))
+    return ndi.binary_dilation(mask, iterations=k)
+
+
 @_records_run("water")
 def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, threshold=0.15,
-              open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, mapped=None, tile_m=4000.0,
+              open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, green_frac=0.35,
+              built=None, built_m=5.0, mapped=None, tile_m=4000.0,
               persist=0.5, log=print, progress=None, cancelled=None, opener=None):
     """Open-water polygons from 4-band / colour-infrared imagery: a raster file (or VRT) or an
     ArcGIS ImageServer address (then bbox is required; tiles are cached beside the output).
@@ -1117,8 +1149,13 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
     water when it is water in at least `persist` of the images that cover it (a pond is wet most
     years, a flooded field or a pothole only in a wet one).
     `mapped`: a water-body layer (3DHP / NHD / NWI); each patch gets mapped = yes when at least
-    half of it lies on a mapped water body. Writes layer 'water' (polygons, EPSG:5070) and a CSV.
-    Returns {'rows', 'counts', 'gpkg', 'csv'}."""
+    half of it lies on a mapped water body.
+    `green_frac`: a cell dark in near-infrared is water only if its green is at least this much of
+    the land's median green - drops the shadows (behind buildings, trees, bins) that are dark in
+    every band and otherwise read as water in town. 0 turns the shadow test off.
+    `built`: a buildings / pavement / roads layer (lines or polygons); water patches on it, within
+    built_m, are dropped (roofs, streets and in-town pools). Writes layer 'water' (polygons,
+    EPSG:5070) and a CSV. Returns {'rows', 'counts', 'gpkg', 'csv'}."""
     progress = progress or _noop
     cancelled = cancelled or _noop
     srcs = list(image) if isinstance(image, (list, tuple)) else [(image, green_band, nir_band)]
@@ -1170,12 +1207,17 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
             bands, gt = read_bands(image, box, cell, (srcs[0][1], srcs[0][2]))
             idx = wt.ndwi(bands[srcs[0][1]], bands[srcs[0][2]])
             dark = wt.dark_in_nir(bands[srcs[0][2]], idx, nir_frac) if nir_frac else None
-            lab, n = wt.water_patches(idx, threshold, open_px, min_px, min_width_m / cell, dark)
+            bright = wt.bright_in_green(bands[srcs[0][1]], idx, green_frac) if green_frac else None
+            reject = _built_mask(built, box, gt, idx.shape, built_m, cell)
+            lab, n = wt.water_patches(idx, threshold, open_px, min_px, min_width_m / cell, dark,
+                                      bright=bright, reject=reject)
             frac = None
         else:
             idx, frac, gt = wt.persistence([read_bands(sx, box, cell, (gb, nb)) + (gb, nb) for sx, gb, nb in srcs],
-                                           threshold, nir_frac)
-            lab, n = wt.water_patches(frac, persist, open_px, min_px, min_width_m / cell, None)
+                                           threshold, nir_frac, green_frac)
+            reject = _built_mask(built, box, gt, frac.shape, built_m, cell)
+            lab, n = wt.water_patches(frac, persist, open_px, min_px, min_width_m / cell, None,
+                                      reject=reject)
         if n == 0:
             continue
         polys = _mapped_polys(mapped, box)
