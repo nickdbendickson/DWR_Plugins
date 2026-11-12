@@ -665,9 +665,27 @@ def best_aadt(candidates):
     return best[0], best[1], best[2]
 
 
+def _counted_aadt(aadt):
+    """Positive AADT, or None when the count is missing, blank, NaN, zero or negative.
+
+    Zero and negative are not traffic (the same rule as nd_hazard.aadt_value). A private
+    road with no count is Low. A public road with no count is not.
+    """
+    if aadt is None or isinstance(aadt, bool):
+        return None
+    try:
+        x = float(aadt)
+    except (TypeError, ValueError):
+        return None
+    if x != x or x <= 0:
+        return None
+    return x
+
+
 def nd_road_class(road_class, aadt):
     """ND REG_05.2026 5.2.1.2 for an overtopped road. Returns
     (class, basis, needs_judgment)."""
+    aadt = _counted_aadt(aadt)
     if road_class == ROAD_INTERSTATE:
         return ND_HIGH, "Interstate - probable loss of life", False
     if aadt is not None and aadt > ND_AADT_HIGH_ABOVE:
@@ -686,10 +704,14 @@ def nd_road_class(road_class, aadt):
         return ND_MEDIUM, "AADT {:,.0f} (500-2,000) - transportation disruption".format(
             aadt), False
     if road_class == ROAD_PRIVATE:
-        return ND_LOW, "private road", False
+        # A private road is Low unless a real count is 500 or more (already returned above).
+        # No count is not traffic: these roads are taken as under 500.
+        return ND_LOW, "private road - AADT under 500 assumed when none is given", False
     if aadt is not None:
         return ND_LOW, "AADT {:,.0f} < 500 - no probable loss of life".format(aadt), False
-    return ND_LOW, "no AADT found - verify traffic", True
+    # Public local / county / other road with no usable count. nd_hazard assumes
+    # unknown_aadt (Medium) and records a data gap. Publishing Low here under-classed the dam.
+    return ND_MEDIUM, "no AADT found - assumed Medium for a public road (verify traffic)", True
 
 
 def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect=None,
