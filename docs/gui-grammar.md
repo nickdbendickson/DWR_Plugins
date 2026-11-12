@@ -48,7 +48,7 @@ style.
 Map symbology, PDF and HTML reports, and charts keep their own palettes. Hazard-class colours
 belong to the product, not the window, so the colour rules don't apply to them.
 
-## Decided 2026-10-20 (Lumo)
+## Decided 2026-10-20 (Pierre)
 
 - Pills put the mark before the word (the implementation was right; this page had it backwards).
 - Setup's fallback wizard becomes one page, the suite data folder scan, and then continues into
