@@ -469,13 +469,14 @@ class Water(unittest.TestCase):
         self.assertEqual(cells[1], (lab == 1).sum())
 
 
-def write_las(path, x, y, cls, scale=0.01, offset=(0.0, 0.0, 0.0), fmt=0, rec_len=20,
+def write_las(path, x, y, cls, z=None, scale=0.01, offset=(0.0, 0.0, 0.0), fmt=0, rec_len=20,
               version=(1, 2)):
     """Write a minimal uncompressed LAS (point format 0 by default) for the reader tests."""
     import struct
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     cls = np.asarray(cls, np.uint8)
+    z = np.zeros(len(x), float) if z is None else np.asarray(z, float)
     n = len(x)
     header_size = 227 if version == (1, 2) else 375
     hdr = bytearray(header_size)
@@ -499,6 +500,7 @@ def write_las(path, x, y, cls, scale=0.01, offset=(0.0, 0.0, 0.0), fmt=0, rec_le
         rec = bytearray(rec_len)
         struct.pack_into("<i", rec, 0, int(round((x[i] - offset[0]) / scale)))
         struct.pack_into("<i", rec, 4, int(round((y[i] - offset[1]) / scale)))
+        struct.pack_into("<i", rec, 8, int(round((z[i] - offset[2]) / scale)))
         rec[class_off] = int(cls[i])
         body += rec
     with open(path, "wb") as fh:
@@ -568,6 +570,43 @@ class Lidar(unittest.TestCase):
         g2 = li.point_grid(x, y, cls, (9,), gt, (100, 100), min_pts=2)
         self.assertEqual(g2[90, 10], 1.0)                  # the two-point cell survives
         self.assertEqual(g2[80, 20], 0.0)                  # the one-point cell does not
+
+    def test_reads_z_when_asked(self):
+        from ..core import lidar as li
+        import tempfile, os
+        x = np.array([10.0, 20.0, 30.0])
+        y = np.array([10.0, 20.0, 30.0])
+        z = np.array([100.0, 200.0, 300.0])
+        cls = np.array([9, 9, 2], np.uint8)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "z.las")
+            write_las(p, x, y, cls, z=z)
+            ax, ay, az, acls, _h = li.read_points(p, with_z=True)
+            self.assertTrue(np.allclose(sorted(az), [100.0, 200.0, 300.0], atol=0.02))
+            wx, wy, wz, wcls, _h2 = li.read_points(p, {9}, with_z=True)
+            self.assertEqual(len(wz), 2)
+            self.assertTrue(np.allclose(sorted(wz), [100.0, 200.0], atol=0.02))
+
+    def test_rasterize_counts_count_and_mean_elevation(self):
+        from ..core import lidar as li
+        # three water points in one 1 m cell at z 100/102/104; one water point in another;
+        # a ground point that must not count
+        x = np.array([5.2, 5.4, 5.6, 8.5, 5.3])
+        y = np.array([5.2, 5.4, 5.6, 8.5, 5.3])
+        z = np.array([100.0, 102.0, 104.0, 50.0, 999.0])
+        cls = np.array([9, 9, 9, 9, 2], np.uint8)
+        gt = (0.0, 1.0, 0.0, 10.0, 0.0, -1.0)              # 10 x 10 m, 1 m cells, top-left origin
+        count, meanz = li.rasterize_counts(x, y, z, cls, (9,), gt, (10, 10))
+        # cell holding the three water points: row = 10 - 5 = 5 (y~5), col 5
+        self.assertEqual(count[4, 5], 3)
+        self.assertAlmostEqual(meanz[4, 5], 102.0, places=4)   # ground point ignored
+        # the single-water-point cell
+        self.assertEqual(count[1, 8], 1)
+        self.assertAlmostEqual(meanz[1, 8], 50.0, places=4)
+        # a cell with no water points: count 0, mean NaN
+        self.assertEqual(count[0, 0], 0)
+        self.assertTrue(np.isnan(meanz[0, 0]))
+        self.assertEqual(int(count.sum()), 4)                  # only the four class-9 points
 
     def test_laz_is_refused_by_the_pure_reader(self):
         from ..core import lidar as li
