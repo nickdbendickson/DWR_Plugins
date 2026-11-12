@@ -5,11 +5,11 @@ off the machine. They are kept apart: separate Ollama models, separate databases
 
 | Folder | Assistant | What it does | Ollama model | Data |
 |---|---|---|---|---|
-| [`lumo/`](lumo/) | **Lumo**, code triage | Audits plugin code (static pass + model pass), runs the plugin test suites, drives the plugin chain headless (`damchain`), explains failed runs | `lumo` | `~/local-ai/knowledge.db` |
+| [`pierre/`](pierre/) | **Pierre**, code triage | Audits plugin code (static pass + model pass), runs the plugin test suites, drives the plugin chain headless (`damchain`), explains failed runs | `pierre` | `~/local-ai/knowledge.db` |
 | [`research/`](research/) | **dam-research**, literature | Answers questions from your library of dam-safety / dam-design / flood-hazard publications, citing document and page; deep-research briefs with every quote checked against its page | `dam-research` | `~/DamResearch/research.db` |
 
 > **Both are assistants, not engineers.** A local model misreads code and papers often enough that
-> every Lumo finding must be confirmed against the live code with a failing test, and every
+> every Pierre finding must be confirmed against the live code with a failing test, and every
 > dam-research statement checked against the cited page of the source, before anything is
 > changed or relied on in a dam-safety decision.
 
@@ -18,14 +18,14 @@ plugin zip or CI job.
 
 ## Install
 
-1. **Lumo (installs Ollama too):**
+1. **Pierre (installs Ollama too):**
    ```zsh
-   cd damit_ai/lumo
-   zsh setup-local-lumo.sh                     # --small for a 16 GB Mac, --model TAG for any model
+   cd damit_ai/pierre
+   zsh setup-local-pierre.sh                     # --small for a 16 GB Mac, --model TAG for any model
    source ~/.zshrc
    ```
-   Commands: `lumo-start` (Ollama server, in its own tab), `lumo-chat`, `lumo-index`, `lumo-query`,
-   `lumo-audit`, `damchain ...`.
+   Commands: `pierre-start` (Ollama server, in its own tab), `pierre-chat`, `pierre-index`, `pierre-query`,
+   `pierre-audit`, `damchain ...`.
 
    **Repo audit:** `damchain audit --repo ~/path/to/DWR_Plugins` writes one report to
    `~/local-ai/reports/audit_<repo>_<time>.md` (and `.json`). It checks:
@@ -37,7 +37,7 @@ plugin zip or CI job.
       (never installed by the audit);
    3. network: every host the code names, written to `hosts_<repo>.txt` for IT; with
       `--allow-hosts FILE` any host not in the file is flagged;
-   4. `--lumo`: the local model reviews the diff against `origin/main`. Its findings are marked
+   4. `--pierre`: the local model reviews the diff against `origin/main`. Its findings are marked
       UNVERIFIED (triage only; confirm each with a failing test);
    5. golden runs: `damchain audit --golden-record --results ~/DamSafety/Dams --ids DWR-2801,DWR-4031`
       saves those dams' run_report.json numbers as a baseline, and after a plugin update rerun the
@@ -64,7 +64,7 @@ plugin zip or CI job.
 
 ## Offline folder (nothing downloaded by the installers)
 
-The `damit_ai-offline` download adds `damit_ai/offline/` next to `lumo/` and `research/`:
+The `damit_ai-offline` download adds `damit_ai/offline/` next to `pierre/` and `research/`:
 
 - `offline/ollama/Ollama-darwin.zip` + `SHA256SUMS`: Ollama for Mac, checked against Ollama's
   published hash. Both installers use it, after checking the hash, instead of downloading Ollama.
@@ -77,19 +77,19 @@ Models still come from Ollama's registry (`ollama pull`, 17 to 24 GB each). They
 
 ## Models by Mac
 
-| Mac | Lumo | dam-research |
+| Mac | Pierre | dam-research |
 |---|---|---|
 | Apple Silicon 48 GB+ | `qwen3:30b-a3b` | `qwen3.6:35b-a3b` (falls back to `qwen3:30b-a3b`) |
-| Apple Silicon 32 GB | `qwen3:30b-a3b` | `qwen3:30b-a3b`, sharing Lumo's download. `--model qwen3.6:27b` trades speed for quality |
+| Apple Silicon 32 GB | `qwen3:30b-a3b` | `qwen3:30b-a3b`, sharing Pierre's download. `--model qwen3.6:27b` trades speed for quality |
 | Apple Silicon 16-24 GB | `qwen3:14b` | `qwen3:14b` / `qwen3:8b` |
 | Intel Mac (CPU only) | `qwen3:30b-a3b` at 32 GB+, else `qwen3:8b` | `qwen3.6:35b-a3b` at 48 GB+, `qwen3:30b-a3b` at 32 GB |
 
-Embeddings: Lumo uses `nomic-embed-text`; dam-research uses `qwen3-embedding:0.6b`.
+Embeddings: Pierre uses `nomic-embed-text`; dam-research uses `qwen3-embedding:0.6b`.
 
 ## Status
 
-- `lumo/` is setup-local-lumo.sh v3.6 (bundled Ollama and packages, no web downloads) with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
-  suite_check 1.0, dam_chain 1.5 and repo_audit 1.0 (all written by the installer itself; `lumo-chat` shows the
+- `pierre/` is setup-local-pierre.sh v3.6 (bundled Ollama and packages, no web downloads) with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
+  suite_check 1.0, dam_chain 1.5 and repo_audit 1.0 (all written by the installer itself; `pierre-chat` shows the
   DaMiT banner). dam_chain 1.5 adds DamSafety Core to the DWR set and no longer reports the hidden
   self-test / run-chain tools as MISSING (`qgis_process list` leaves them out). `suite_check.py` and `dam_chain.py` drive the ND and DamSafety plugin sets (QGIS
   profiles `nd` and `damsafety`). The DamIT plugins are not wired into them yet.

@@ -24,11 +24,11 @@
 #                                            (ndbreach:chainbatch: Screening -> Runner -> Hazard)
 #   dam_chain.py research ask|research|search|ingest|chat|list ...
 #                                            the literature research assistant (damresearch, a
-#                                            separate model and library from lumo); same as typing
+#                                            separate model and library from pierre); same as typing
 #                                            damresearch ...  (v1.4)
-#   dam_chain.py audit [--repo R] [--zips Z] [--lumo] [--golden --results D] ...
+#   dam_chain.py audit [--repo R] [--zips Z] [--pierre] [--golden --results D] ...
 #                                            local repo audit: release/packaging, security patterns,
-#                                            network hosts, optional Lumo diff review, golden runs.
+#                                            network hosts, optional Pierre diff review, golden runs.
 #                                            Report in ~/local-ai/reports (repo_audit.py, v1.5)
 #   dam_chain.py crest --set nd|dwr          open the Crest desk wired to that set: its Report-step
 #                                            buttons (dam folder, screening, flood model) run that
@@ -46,9 +46,9 @@ BATCH_ROOT = os.path.expanduser(os.environ.get("DAMCHAIN_BATCH_ROOT", "~/local-a
 CREST_DIR = os.path.expanduser(os.environ.get("DAMCHAIN_CREST_DIR", "~/local-ai/crest-desktop"))
 
 # Local Ollama triage (shared convention with suite_check.py / audit_plugin.py): optional, advisory.
-LUMO_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-LUMO_MODEL = os.environ.get("LUMO_MODEL", "lumo")
-LUMO_NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+PIERRE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
+PIERRE_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+PIERRE_NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 SETS = {
     "nd": {"profile": "nd", "runner": "nd_breach_runner",
            "plugins": ["ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening",
@@ -257,14 +257,14 @@ def _q(s):
     return s if re.fullmatch(r"[\w@%+=:,./-]+", s) else "'" + s.replace("'", "'\\''") + "'"
 
 
-def _lumo_chat(prompt, timeout=1800):
+def _pierre_chat(prompt, timeout=1800):
     """Ask the local Ollama model once; return its text (thinking stripped). Raises on transport error."""
-    payload = {"model": LUMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+    payload = {"model": PIERRE_MODEL, "messages": [{"role": "user", "content": prompt}],
                "stream": False, "think": True,
                "options": {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
-                           "num_ctx": LUMO_NUM_CTX, "num_predict": 4096}}
+                           "num_ctx": PIERRE_NUM_CTX, "num_predict": 4096}}
     def _post(pl):
-        req = urllib.request.Request(LUMO_URL, data=json.dumps(pl).encode(),
+        req = urllib.request.Request(PIERRE_URL, data=json.dumps(pl).encode(),
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
@@ -295,17 +295,17 @@ def triage_failure(step_name, err, log_path, out_dir):
               "smallest next check or fix. Do not invent anything you cannot see in the log; say UNSURE "
               "when unsure.\n\nSTEP: %s\nERROR: %s\n\n=== LOG TAIL ===\n%s"
               % (step_name, err or "(none)", tail))
-    print("   triage (%s): asking %s ..." % (step_name, LUMO_MODEL), flush=True)
+    print("   triage (%s): asking %s ..." % (step_name, PIERRE_MODEL), flush=True)
     try:
-        ans = _lumo_chat(prompt)
+        ans = _pierre_chat(prompt)
     except Exception as e:                                                   # noqa
         ans = ("TRIAGE UNAVAILABLE: could not reach Ollama at %s (%s). Start Ollama and pull the "
-               "model, or set OLLAMA_URL / LUMO_MODEL." % (LUMO_URL, e))
+               "model, or set OLLAMA_URL / PIERRE_MODEL." % (PIERRE_URL, e))
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "TRIAGE.txt")
     block = ["", "=" * 72, "%s  STEP: %s" % (_stamp(), step_name),
              "error: %s" % (err or "(none)"), "log:   %s" % log_path,
-             "model: %s (advisory; the log is the fact)" % LUMO_MODEL, "-" * 72, ans]
+             "model: %s (advisory; the log is the fact)" % PIERRE_MODEL, "-" * 72, ans]
     with open(path, "a", encoding="utf-8") as fh:
         fh.write("\n".join(block) + "\n")
     print("   triage -> %s" % path, flush=True)
@@ -751,7 +751,7 @@ def research_passthrough(argv):
         sys.exit("damresearch is not installed. Run: zsh setup-dam-research.zsh (from the dam-research folder)")
     if not os.path.exists(py):
         py = sys.executable
-    os.execv(py, [py, tool] + argv)  # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args -- local CLI passthrough; argv is remaining damresearch flags, no shell
+    os.execv(py, [py, tool] + argv)  # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args -- local CLI re-exec of the user's own tool; paths from env with safe defaults
 
 
 def audit_passthrough(argv):
@@ -760,7 +760,7 @@ def audit_passthrough(argv):
     for tool in (os.path.join(here, "repo_audit.py"), os.path.expanduser("~/local-ai/repo_audit.py")):
         if os.path.isfile(tool):
             os.execv(sys.executable, [sys.executable, tool] + argv)
-    sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-lumo.sh")
+    sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-pierre.sh")
 
 
 def main():
@@ -822,7 +822,7 @@ def main():
     s.add_argument("--triage", action="store_true",
                    help="on a failed step, send the log tail to the local Ollama model and write "
                         "an advisory TRIAGE.txt next to the run log")
-    s.add_argument("--lumo-model", default="", help="Ollama model for --triage (default: $LUMO_MODEL or 'lumo')")
+    s.add_argument("--pierre-model", default="", help="Ollama model for --triage (default: $PIERRE_MODEL or 'pierre')")
     g = s.add_argument_group("nd set (ndhazard:suitechain per dam folder)")
     g.add_argument("--dams-folder", default="", help="folder of <dam_id>/dam.json folders")
     g.add_argument("--data-folder", default="", help="suite data folder / offline pack for Get data")
@@ -856,8 +856,8 @@ def main():
     g.add_argument("--runner-param", action="append", help="KEY=VALUE for the Runner (ndbreach:batch)")
 
     args = ap.parse_args()
-    if getattr(args, "lumo_model", ""):
-        globals()["LUMO_MODEL"] = args.lumo_model
+    if getattr(args, "pierre_model", ""):
+        globals()["PIERRE_MODEL"] = args.pierre_model
     if args.cmd == "setup":
         cmd_setup(args)
     elif args.cmd == "plugins":

@@ -762,7 +762,7 @@ Entries moved verbatim out of `DamSafety_Hazard/metadata.txt` `changelog=` on 20
       * One ellipsis character (U+2026) on the shared Dam suite home window's
         Browse… and plugin buttons (suite_home.py, identical in the three plugins).
     2.18.36 - 2026-10-18
-      * Lumo's Hazard screens review. The status line under the tabs no longer repeats
+      * Pierre's Hazard screens review. The status line under the tabs no longer repeats
         the Check inputs result ("Input check: N error(s), M warning(s)" / "Inputs need
         fixing ... see the red box"): the red box and the button badge show it once, and
         an empty status line is hidden.
@@ -970,7 +970,7 @@ Entries moved verbatim out of `DamSafety_Hazard/metadata.txt` `changelog=` on 20
     2.18.14 - 2026-10-15
       * Suite settings tab: a settings file that does not exist or will not load is refused and
         the box goes back to the loaded file; autosave never writes while the box and the grid
-        disagree, and every save problem is shown under the box (Lumo 2.7.1/2.7.3/2.7.5).
+        disagree, and every save problem is shown under the box (Pierre 2.7.1/2.7.3/2.7.5).
       * Dam suite home: dams found by folder, not Dam ID text; Dams folder remembered per
         computer (a project's own value still wins); column widths and sort order kept;
         new 'Copy diagnostics' button. README version synced, stale consolidation steps removed.

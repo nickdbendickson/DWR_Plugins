@@ -127,7 +127,7 @@ def load(path):
     try:
         with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
             # (file line number, row): warnings name the line in the file, counting the
-            # comment and blank lines the template has (Lumo v1.7)
+            # comment and blank lines the template has (Pierre v1.7)
             rd = csv.reader(fh)
             rows = [(rd.line_num, r) for r in rd
                     if r and not (r[0].strip().startswith("#") or not "".join(r).strip())]

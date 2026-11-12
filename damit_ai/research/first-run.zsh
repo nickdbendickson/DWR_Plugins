@@ -1,6 +1,6 @@
 #!/bin/zsh
 # first-run.zsh v1.0 - the first real run of dam-research on this Mac, in one command:
-#   1. install dam-research if it is not installed yet (needs Ollama: Lumo's installer or the app)
+#   1. install dam-research if it is not installed yet (needs Ollama: Pierre's installer or the app)
 #   2. download the reference library: the ASDSO / FEMA set and the hazard + design catalog
 #   3. index it (and OCR scanned pages when OCR is installed)
 #   4. score two models on the answer test (eval/questions.json) and pick the better one

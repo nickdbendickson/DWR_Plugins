@@ -314,7 +314,7 @@ def mosaic_key(tiles):
     that is reused only while the local DEM folder holds exactly these files (Grok audit
     2026-11-07 finding 3.2; as the ND copy's _common.mosaic_key)."""
     import hashlib
-    h = hashlib.sha1(usedforsecurity=False)
+    h = hashlib.sha1(usedforsecurity=False)  # cache key only, not for security
     for t in sorted(tiles):
         try:
             st = os.stat(t)

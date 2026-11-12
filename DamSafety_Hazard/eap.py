@@ -289,7 +289,7 @@ def write_arrival_bands(path, depth_path, arrival_path):
         band = None
         out = None
         if not n:
-            # Lumo v1.7: an all-NoData raster is not a product; no file, not listed
+            # Pierre v1.7: an all-NoData raster is not a product; no file, not listed
             log_message("EAP arrival bands: no flooded cell has an arrival time - no bands "
                         "raster written")
             try:
