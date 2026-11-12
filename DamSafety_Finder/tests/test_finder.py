@@ -361,6 +361,43 @@ class Runs(unittest.TestCase):
                                min_ac=0.02, min_width_m=3.0, log=lambda *_: None)
         self.assertEqual(len(res["rows"]), 0)
 
+    def test_build_water_mosaic_round_trip(self):
+        # two LAS tiles, each with a 40 m water block at a known z; build the mosaic, then read it
+        # back through run_water's WATER_RASTER path - the builder's output must feed the reader.
+        mdir = os.path.join(self.tmp, "mosaic")
+        tiles = []
+        for i, (cx, cy, zz) in enumerate([(X0 + 150, Y0 + 150, 300.0), (X0 + 450, Y0 + 150, 310.0)]):
+            # points at cell centres (+0.5) so each lands unambiguously in one 1 m cell
+            wx, wy = np.meshgrid(np.arange(cx - 19.5, cx + 20, 1.0), np.arange(cy - 19.5, cy + 20, 1.0))
+            gx = np.linspace(cx - 140, cx + 140, 60)
+            gy = np.full(60, cy - 140.0)
+            x = np.concatenate([wx.ravel(), gx])
+            y = np.concatenate([wy.ravel(), gy])
+            z = np.concatenate([np.full(wx.size, zz), np.full(60, 999.0)])
+            cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(60, 2, np.uint8)])
+            p = os.path.join(self.tmp, "m{}.las".format(i))
+            tc.write_las(p, x, y, cls, z=z)
+            tiles.append(p)
+        res = self.f.build_water_mosaic(tiles, mdir, cell=1.0, mosaic_epsg=5070, src_epsg=5070,
+                                        log=lambda *_: None)
+        self.assertEqual(res["n_wet_tiles"], 2)
+        self.assertTrue(os.path.exists(res["count_vrt"]))
+        self.assertTrue(os.path.exists(res["elev_vrt"]))
+        # the count mosaic holds the water cells (count 1 each)
+        cds = gdal.Open(res["count_vrt"])
+        ca = cds.GetRasterBand(1).ReadAsArray()
+        self.assertEqual(int((ca == 1).sum()), 2 * 40 * 40)   # both 40 x 40 blocks
+        # the elevation mosaic carries the mean water z (nodata -999999 off the water)
+        eds = gdal.Open(res["elev_vrt"])
+        ea = eds.GetRasterBand(1).ReadAsArray()
+        wet = ea[ea > -999998]
+        self.assertTrue(np.all((wet >= 299.9) & (wet <= 310.1)))
+        cds = eds = None
+        # the reader finds both ponds from the count mosaic
+        r2 = self.f.run_water(None, self.out, water_raster=res["count_vrt"], cell=1.0, min_ac=0.02,
+                              min_width_m=3.0, log=lambda *_: None)
+        self.assertEqual(len(r2["rows"]), 2)
+
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
         res = self.f.run_water(img, self.out, cell=1.0, mapped=self.pond_layer(), tile_m=100.0,
