@@ -108,7 +108,13 @@ def roads_part():
         check("{} AADT 8,501 -> High".format(rc), LN.nd_road_class(rc, 8501)[0] == ND_HIGH)
     check("local road AADT 300 -> Low (5.2.1.2(a))",
           LN.nd_road_class(LN.ROAD_OTHER, 300)[0] == ND_LOW)
-    check("private road -> Low", LN.nd_road_class(LN.ROAD_PRIVATE, None)[0] == ND_LOW)
+    check("private road with no AADT -> Low", LN.nd_road_class(LN.ROAD_PRIVATE, None)[0] == ND_LOW)
+    check("private road AADT 0 is not a count -> Low",
+          LN.nd_road_class(LN.ROAD_PRIVATE, 0)[0] == ND_LOW)
+    check("public road with no AADT -> Medium (Runner assumption)",
+          LN.nd_road_class(LN.ROAD_OTHER, None)[0] == ND_MEDIUM)
+    check("public road AADT 0 is not a count -> Medium",
+          LN.nd_road_class(LN.ROAD_OTHER, 0)[0] == ND_MEDIUM)
     # ND NG9-1-1 roads: SHIELD USHY / STHY (US 83 through a town is 'S WASHINGTON ST')
     lyr = QgsVectorLayer("LineString?crs=EPSG:5070", "ng911", "memory")
     lyr.dataProvider().addAttributes([QgsField("FULL_NAME", FT_STRING), QgsField("SHIELD", FT_STRING),
@@ -140,6 +146,12 @@ def roads_part():
     nd0 = CL.classify_nd([], [road("30TH ST SE", LN.ROAD_OTHER, 66.0)], [],
                          structs_evaluated=False)
     check("local road AADT 66 alone -> Low", nd0["cls"] == ND_LOW, nd0["cls"])
+    nd_none = CL.classify_nd([], [road("30TH ST SE", LN.ROAD_OTHER, None)], [],
+                             structs_evaluated=False)
+    check("public road with no AADT alone -> Medium", nd_none["cls"] == ND_MEDIUM, nd_none["cls"])
+    nd_priv = CL.classify_nd([], [road("field lane", LN.ROAD_PRIVATE, None)], [],
+                             structs_evaluated=False)
+    check("private road alone -> Low", nd_priv["cls"] == ND_LOW, nd_priv["cls"])
     row0 = next(c for c in nd0["criteria"] if c["section"] == "5.2.1.2(b)")
     check("5.2.1.2(b) row not met without highways", row0["result"] == "not met", row0)
 
@@ -156,10 +168,7 @@ def roads_part():
               (nh.us_state_highway_from_text(t), nh.interstate_from_text(t)))
     st = nh.Settings()
     for rc in (LN.ROAD_INTERSTATE, LN.ROAD_US, LN.ROAD_STATE, LN.ROAD_PRIVATE, LN.ROAD_OTHER):
-        for aadt in (None, 4, 300, 499, 500, 1500, 2000, 2001, 8501):
-            if aadt is None and rc == LN.ROAD_OTHER:
-                continue        # no AADT on a local road: Hazard asks to verify (Low), the
-                # Runner assumes its unknown_aadt (Medium) - a known, separate judgment item
+        for aadt in (None, 0, 4, 300, 499, 500, 1500, 2000, 2001, 8501):
             r = nh.Road("r", 1.0, aadt=aadt, interstate=rc == LN.ROAD_INTERSTATE,
                         private=rc == LN.ROAD_PRIVATE,
                         us_state=rc in (LN.ROAD_US, LN.ROAD_STATE))
