@@ -22,6 +22,8 @@ Under the US system nothing is tagged and every dialog is exactly QGIS's own. Th
 receives the value in the stored unit, so its keys (HEAD_FT ...), its log, "Copy as Python
 command", qgis_process and the settings workbook are unchanged.
 """
+import os
+
 from ..damsuite import display_units as DU
 
 try:
@@ -226,8 +228,45 @@ def tag_parameter(param, system_value=None):
         return False
 
 
+def si_copies_of(results, feedback=None):
+    """Core 1.3.0: under SI, the SI copies of the result tables a tool returned
+    (display_units.write_si_csvs_of: SI_units/<name>.csv with an SI column beside each US
+    one). Says so in the log. Never raises; returns the copies written."""
+    try:
+        made = DU.write_si_csvs_of(results)
+    except Exception:                                             # noqa: BLE001
+        return []
+    if made and feedback is not None:
+        try:
+            folders = sorted({os.path.dirname(p) for p in made})
+            feedback.pushInfo(
+                "SI units: {} table(s) copied with SI columns beside the US ones, in {}. The "
+                "original CSV files keep US units.".format(len(made), "; ".join(folders)))
+        except Exception:                                         # noqa: BLE001
+            pass
+    return made
+
+
+def _with_si_copies(fn):
+    """processAlgorithm followed by si_copies_of(its results)."""
+    def processAlgorithm(self, parameters, context, feedback):
+        results = fn(self, parameters, context, feedback)
+        si_copies_of(results, feedback)
+        return results
+    processAlgorithm.__doc__ = getattr(fn, "__doc__", None)
+    processAlgorithm._si_copies = True
+    return processAlgorithm
+
+
 class UnitParamsMixin(object):
-    """Tags each number parameter as it is added (see tag_parameter)."""
+    """Tags each number parameter as it is added (see tag_parameter), and (Core 1.3.0) writes
+    the SI copies of the CSV tables a tool returns when the display units are SI."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        fn = cls.__dict__.get("processAlgorithm")
+        if callable(fn) and not getattr(fn, "_si_copies", False):
+            cls.processAlgorithm = _with_si_copies(fn)
 
     def addParameter(self, definition, createOutput=True):
         tag_parameter(definition)
