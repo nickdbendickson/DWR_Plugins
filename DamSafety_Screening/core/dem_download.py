@@ -12,8 +12,34 @@ from . import dem_zunit as ZU, nd_counties, proj_offline as PO, terrain
 from .warp_opts import no_overviews, no_vshift
 
 
+# One LiDAR tile zip is tens of MB. A download or an archive far past that is not a tile:
+# stopped before it fills the disk (0.20.1, security audit pass 3; NDSUITE_ZIP_MAX_GB raises
+# both limits).
+MAX_TILE_DOWNLOAD_BYTES = 4 * 1024 ** 3
+MAX_TILE_UNPACKED_BYTES = 8 * 1024 ** 3
+
+
+class TileTooLarge(IOError):
+    """A tile download went past its size limit and was stopped (never retried)."""
+
+
+def _zipsafe():
+    """damsuite.zipsafe (DamSafety Core 1.5.0), or None with an older Core."""
+    try:
+        from ..damsuite import zipsafe
+        return zipsafe
+    except Exception:                                            # noqa - Core older than 1.5.0
+        return None
+
+
 def _safe_extract(zf, dest):
-    """Extract a zip into dest, refusing any entry that leaves dest."""
+    """Extract a zip into dest, refusing any entry that leaves dest and (0.20.1) an archive
+    that is too large to be a LiDAR tile: unpacked size, entry count, compression ratio and
+    free disk space are checked before anything is written. Raises ValueError."""
+    zs = _zipsafe()
+    if zs is not None:
+        zs.extract(zf, dest, MAX_TILE_UNPACKED_BYTES)
+        return
     root = os.path.realpath(dest)
     for member in zf.infolist():
         target = os.path.realpath(os.path.join(dest, member.filename))
@@ -21,6 +47,26 @@ def _safe_extract(zf, dest):
             raise ValueError("archive entry outside the destination: " + member.filename)
     for member in zf.infolist():
         zf.extract(member, dest)
+
+
+def _capped_write(f, what, limit=None):
+    """A write(bytes) for `f` that raises IOError once more than the tile limit has arrived
+    (a plain FTP or HTTP transfer has no other bound)."""
+    zs = _zipsafe()
+    cap = MAX_TILE_DOWNLOAD_BYTES if limit is None else limit
+    if zs is not None:
+        cap = zs.limit(cap)
+    state = {"n": 0}
+
+    def write(chunk):
+        state["n"] += len(chunk)
+        if state["n"] > cap:
+            raise TileTooLarge(
+                "{} is larger than {:,.1f} GB and was stopped: that is not a LiDAR tile. Set "
+                "NDSUITE_ZIP_MAX_GB to a larger number of GB if it really is that "
+                "large.".format(what, cap / 1024.0 ** 3))
+        return f.write(chunk)
+    return write
 
 # west, south, east, north in degrees: each county's outline box, padded so a 5 mi box around
 # any dam in the county is inside (0.12 deg >= 5 mi of longitude up to 52 N).
@@ -478,7 +524,7 @@ def _ftp_retr(ftp, remote, local):
     """RETR `remote` into `local`; a partial file is deleted when the transfer fails."""
     try:
         with open(local, "wb") as f:
-            ftp.retrbinary("RETR " + remote, f.write)
+            ftp.retrbinary("RETR " + remote, _capped_write(f, remote))
     except BaseException:
         try:
             os.remove(local)
@@ -581,8 +627,8 @@ def _open_index(cache_dir, feedback=None):
 
 
 def _https_get(url, local, retries=3, timeout=120):
-    """Download url to local through local.part, so a cut transfer is never kept."""
-    import shutil
+    """Download url to local through local.part, so a cut transfer is never kept. A body
+    past the tile size limit is stopped at once and not tried again (0.20.1)."""
     import time
     import urllib.request
     part = local + ".part"
@@ -591,9 +637,20 @@ def _https_get(url, local, retries=3, timeout=120):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "DamSafety_Screening"})
             with urllib.request.urlopen(req, timeout=timeout) as r, open(part, "wb") as f:
-                shutil.copyfileobj(r, f, 1 << 20)
+                write = _capped_write(f, url)
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    write(chunk)
             os.replace(part, local)
             return
+        except TileTooLarge:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            raise
         except Exception as e:                                  # noqa - retried, then reported
             err = e
             time.sleep(2 * (attempt + 1))

@@ -13,6 +13,7 @@ USER_AGENT = "ND-Data-Updater-QGIS/1.0"
 TIMEOUT = 60
 CHUNK = 1024 * 1024
 MAX_BYTES = 2 * 1024 * 1024 * 1024   # refuse a download larger than 2 GB
+MAX_GET_BYTES = 512 * 1024 * 1024    # an answer read into memory (get_bytes / get_json)
 
 
 def _raise_for(e, url):
@@ -47,9 +48,15 @@ class UrllibHttp:
         resp = self._open(url, "GET", headers)
         try:
             with resp:
-                return resp.read()
+                # Data 1.11.1: an answer held in memory is bounded (a download to a file
+                # already was, MAX_BYTES above)
+                raw = resp.read(MAX_GET_BYTES + 1)
         except (socket.timeout, ConnectionError, OSError) as e:
             _raise_for(e, url)
+        if len(raw) > MAX_GET_BYTES:
+            raise UpdateError(f"the answer from {url} is over the {MAX_GET_BYTES} byte limit "
+                              "for an answer read into memory")
+        return raw
 
     def get_json(self, url, params=None):
         import json
