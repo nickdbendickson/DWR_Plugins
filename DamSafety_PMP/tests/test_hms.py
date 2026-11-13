@@ -3,7 +3,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not _os.environ.get("ND_PMP_HMS_HOME") or not all(_os.path.exists(p) for p in ['medina_pmp/hyetographs', 'pothole_ws/pothole_network.json']):
     print("SKIP: needs ND_PMP_HMS_HOME (HEC-HMS install), medina_pmp/hyetographs and pothole_ws/")
     _sys.exit(77)
-import sys, json, glob, os, shutil
+import sys, json, shutil
 from core.hydro import HydroConfig, run_folder
 from core.hms import export_hms, run_hms
 case = sys.argv[1] if len(sys.argv) > 1 else "scs"

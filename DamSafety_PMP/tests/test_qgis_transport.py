@@ -27,7 +27,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.pop("NDSUITE_SETTINGS", None)
 
 pytest.importorskip("qgis.core")
-from qgis.core import QgsApplication, QgsNetworkAccessManager, QgsTask  # noqa: E402
+from qgis.core import QgsApplication, QgsNetworkAccessManager  # noqa: E402
 
 _APP = QgsApplication.instance()
 if _APP is None:

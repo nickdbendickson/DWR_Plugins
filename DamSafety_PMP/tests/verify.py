@@ -4,9 +4,9 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not _os.environ.get("ND_PMP_DATA_HOME"):
     print("SKIP: needs ND_PMP_DATA_HOME and run_core.py outputs (out_*/)")
     _sys.exit(77)
-import sys, glob, csv, json
+import glob, json
 import numpy as np
-from osgeo import ogr, osr, gdal
+from osgeo import ogr, gdal
 gdal.UseExceptions()
 from core.pmp import dad_lookup, py2round, read_dad
 H = _os.environ.get("ND_PMP_DATA_HOME", "")

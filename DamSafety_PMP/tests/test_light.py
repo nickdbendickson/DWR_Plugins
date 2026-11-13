@@ -1,7 +1,7 @@
 """Fast checks that need no AWA/SWC data, no HEC-HMS and no QGIS: hand calculations for the
 loss / unit-hydrograph code, the DAD lookup semantics, and the hydrograph CSV column contract
 that the DamSafety Runner's spillway adequacy tool reads (time_hr, flow_cfs)."""
-import os, sys, csv, tempfile
+import os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from core.hydro import scs_cn_excess, cn_amc3, scs_uh, HydroConfig, run_folder
