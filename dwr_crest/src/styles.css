@@ -404,7 +404,6 @@ tr.hl-low td:first-child { border-left: 4px solid var(--green); }
 @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
 .hydro { background: #FCFCFA; border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .footnote { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
-.hidden { display: none; }
 
 /* ---------- Style 3: the paper report (src/components/crest/PaperReport.tsx) ----------
    One sheet on screen and on paper: a second copy is portalled into .crest-print-root, which is the only thing

@@ -14,6 +14,8 @@ type DeskState = {
   add: () => void;
   /** Add a ready-made record (e.g. "New record from NID") and select it. */
   addDam: (dam: DamRecord) => void;
+  /** Set the desk to these dams (a desk file opened and merged, desk-file.ts) and select one. */
+  setDams: (dams: DamRecord[], activeId: string) => void;
   restore: () => void;
 };
 
@@ -151,6 +153,10 @@ export const useDesk = create<DeskState>()(
         set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" });
       },
       addDam: (dam) => set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" }),
+      setDams: (dams, activeId) => {
+        if (!dams.length) return;
+        set({ dams, activeId: dams.some((d) => d.id === activeId) ? activeId : dams[0].id, step: "setup" });
+      },
       restore: () => set({ dams: SAMPLE_DAMS, activeId: SAMPLE_DAMS[0].id, step: "setup" }),
     }),
     // v2 (2026-10-29): the ND00199 sample changed (912 ft / H 28 -> 1072.24 NAVD88 / H 27.50; round 2 moved it to 1071.09, migrated below) and the
@@ -243,6 +249,6 @@ export function migrateDesk(persisted: unknown, version: number): DeskState {
   return state;
 }
 
-export function activeDam(state: DeskState): DamRecord {
+export function activeDam(state: Pick<DeskState, "dams" | "activeId">): DamRecord {
   return state.dams.find((d) => d.id === state.activeId) ?? state.dams[0];
 }

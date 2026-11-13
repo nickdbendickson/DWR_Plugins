@@ -65,6 +65,25 @@ is unchanged from before the codes existed; no threshold moved.
 | W-H1 | NID height looks structural, not the breach head (see the NID picker). | warn |
 | W-H2 | H disagrees with crest minus breach bottom by more than the tolerance. | warn |
 
+## Saving and moving your work
+
+The desk's dams live in the browser you are using (or the desktop app's own storage), not on a server. Under the dam
+list:
+
+- **Save desk to file** writes every dam on the desk to one file, `crest-desk-<date>.json`: inputs, receptors, drawn
+  lines and areas, saved 911 / PLSS lookups, the terrain layer and any imported run's summary. This is the backup, and
+  the way to move a desk to another computer or between `Crest.html`, the desktop app and the web app.
+- **Open desk file or dam.json** reads that file back. *Add to this desk* never changes a dam already on the desk: a
+  dam that is already there and identical is left alone, and one with the same id but different content is added
+  beside it as "(from file)". *Replace this desk* makes the desk exactly the file's dams.
+- A **dam.json** from the Report step opens too. One written since 2026-11-13 carries the whole record
+  (`crest_record`, without the terrain layer) and comes back as it was. An older one, or the desktop's dam-folder
+  `dam.json`, holds the engineering inputs only: it opens as a new record with those inputs and a note that receptors,
+  drawn geometry and layers were not in the file.
+
+A file is read as data only: each record is rebuilt field by field, and a value of the wrong type is dropped with a
+note (`src/lib/crest/desk-file.ts`).
+
 ## Drawn area of interest (AOI)
 
 A drawn area limits the schematic flood. The valley is laid from the breach in the downstream direction; the reach

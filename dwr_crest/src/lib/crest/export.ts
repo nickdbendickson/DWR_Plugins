@@ -104,8 +104,18 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
           },
         }
       : {}),
+    // The whole desk record, so "Open desk file or dam.json" (desk-file.ts) brings this dam back exactly as it was:
+    // receptors, drawn geometry, saved lookups. The terrain layer is left out (it is megabytes; "Save desk to file"
+    // keeps it). The Runner and the Screening plugin ignore unknown keys.
+    crest_record: recordWithoutLayer(dam),
   };
   return JSON.stringify(obj, null, 2) + "\n";
+}
+
+function recordWithoutLayer(dam: DamRecord): DamRecord {
+  const rest = { ...dam };
+  delete rest.outline;
+  return rest;
 }
 
 /** WGS 84 / NAD 83 geographic to UTM (metres), zone from the longitude (ND: 13N or 14N). */

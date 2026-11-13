@@ -30,6 +30,20 @@
   uncaught error, a console error, a request to a host it does not know, or anything the policy blocks, and checks an
   injected inline script is refused. CI runs it (new `e2e` job), and the desktop Python tests now also run on
   Windows and macOS runners.
+- **Desk backup and restore.** The records lived only in browser storage: a cleared browser, another computer or a
+  full quota lost them, and a `dam.json` could not be read back. Under the dam list, **Save desk to file** writes every
+  dam whole (inputs, receptors, geometry, saved lookups, terrain layer) to `crest-desk-<date>.json`, and **Open desk
+  file or dam.json** reads it back: *Add to this desk* never overwrites (an identical dam is left alone, a changed one
+  is added as "(from file)"), *Replace this desk* swaps the desk for the file. The Report step's `dam.json` now also
+  carries the whole record under `crest_record` (the Runner and Screening ignore unknown keys), so it reopens exactly;
+  an older or desktop-folder `dam.json` reopens from its inputs with a note about what it did not hold. A file is
+  rebuilt field by field through a reader typed on every `DamRecord` key, so a new field cannot be left out of a
+  backup. The over-quota banner now points at Save desk to file. `src/lib/crest/desk-file.ts`,
+  `src/components/crest/DeskFiles.tsx`; tests `desk-file.test.ts`.
+- **"Restore samples" and the batch table's extra columns show again on a wide screen.** A stray `.hidden { display:
+  none }` in `styles.css` sat outside Tailwind's layers, so it beat `lg:block`, `sm:table-cell` and `md:table-cell`:
+  the sidebar's Restore samples button and two batch-table columns were hidden at every width. The rule is removed
+  (Tailwind's own `hidden` does the job).
 
 ## 2026-11-08
 
