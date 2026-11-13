@@ -48,6 +48,8 @@ jobs:
         run: python3 tools/test_ci_checks.py
       - name: gui_lint source rule self-test (no message-box checks in run handlers)
         run: python3 tools/test_gui_lint.py
+      - name: BLAS self-check self-test (the LTR leg's guard against a wrong matrix product)
+        run: python3 tools/test_blas_selfcheck.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
@@ -194,6 +196,17 @@ jobs:
       image: qgis/qgis:release-3_34
     env:
       QT_QPA_PLATFORM: offscreen       # every step but the xvfb GUI lint, which sets xcb
+      # The image's numpy multiplies matrices with Ubuntu 22.04's OpenBLAS 0.3.20, which picks
+      # its kernels by CPU when it loads. On an Intel CPU with AVX512_BF16 (Sapphire Rapids and
+      # later) it picks "Cooperlake", whose matrix-matrix routines return wrong numbers. This
+      # job failed 11 times in 174, on eleven commits across nine branches (all 4 runs on
+      # AWS-hosted runners, 7 of 40 in Azure centralus, none elsewhere), always the two reservoir-carve tests and
+      # the Finder score test, always with the same numbers; the library taken from this image
+      # gives those exact numbers on such a CPU, and the right ones with Haswell kernels.
+      # Haswell kernels are also what an AMD runner gets, and they run on every x64 runner.
+      # The setting is read once, when the library loads, so it is here for the whole job and
+      # never inside a step or a test. See tools/blas_selfcheck.py and docs/CI.md.
+      OPENBLAS_CORETYPE: Haswell
     steps:
       - uses: actions/checkout@v4
       - name: Provision the test tools (pip + apt, no conda)
@@ -208,6 +221,14 @@ jobs:
           python3 -c "import sys, numpy, scipy, pytest; print(sys.version); print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'pytest', pytest.__version__)"
           python3 -c "from qgis.core import Qgis; from qgis.PyQt.QtCore import QT_VERSION_STR; print('QGIS', Qgis.QGIS_VERSION, 'Qt', QT_VERSION_STR)"
           python3 -c "from osgeo import gdal; print('GDAL', gdal.__version__)"
+          # First what this runner's BLAS would do left to itself (for the record: it names the
+          # CPU and the kernels, and never fails), then as the job runs it. A wrong product
+          # there stops the job here, before a suite can fail for a reason that is not in the code.
+          # (The faulty kernels also write outside their arrays, so this first run may die
+          # rather than report: that is a warning, never a failure of the step.)
+          env -u OPENBLAS_CORETYPE python3 tools/blas_selfcheck.py --report-only \
+            || echo "::warning::blas_selfcheck could not finish with this runner's own OpenBLAS kernels (see the lines above)"
+          python3 tools/blas_selfcheck.py
       - name: Screening suite (mock-QGIS)
         run: python3 DamSafety_Screening/tests/run_all.py
       - name: Runner fast suite
