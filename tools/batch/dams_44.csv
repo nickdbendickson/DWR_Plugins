@@ -1,0 +1,45 @@
+dam_id,name,lat,lon,height_ft,storage_acft,dam_length_ft,dwr_structure_id,nid_id,existing_hazard_class,county,dwr_status,your_name
+DWR-2645,Pheasant Lake Dam,46.005457,-98.675056,29.6,4808.0,1400.0,2645,ND00032,Significant,Dickey,Intact,Pheasant Lake Dam
+DWR-2710,Raleigh Dam,46.34799,-101.36937,48.2,2068.0,860.0,2710,ND00098,Significant,Grant,Intact,Raleigh Dam
+DWR-2760,Sather Dam,47.67326,-103.80846,26.5,745.0,700.0,2760,ND00153,Significant,McKenzie,Intact,Sather Dam
+DWR-2631,Short Creek Dam 1,48.99495,-102.7878,38.0,2765.0,1018.0,2631,ND00018,Significant,Burke,Intact,Short Creek Dam 1
+DWR-2847,Siverton Dam,47.8024,-103.04492,15.0,100.0,280.0,2847,ND00248,Significant,McKenzie,Intact,Siverton Dam
+DWR-2653,Soukup Dam,48.29439,-97.98723,17.0,1116.1,375.0,2653,ND00040,Significant,Walsh,Intact,Soukop Dam
+DWR-2824,Square Butte Creek Dam 2,47.12754,-101.24412,33.8,2080.0,2400.0,2824,ND00223,Significant,Oliver,Intact,Square Butte Creek Dam 2
+DWR-2832,Square Butte Creek Dam 4,47.05166,-101.29141,43.0,6544.6,1396.0,2832,ND00231,Significant,Oliver,Intact,Square Butte Creek Dam 4
+DWR-4441,Square Butte Creek Dam 6,46.93852,-100.96289,76.2,8297.0,2100.0,4441,ND00794,Significant,Morton,Intact,Square Butte Creek Dam 6
+DWR-2801,Swan Buffalo Detention Dam 12,46.98337,-97.39113,27.5,1615.5,1700.0,2801,ND00199,Significant,Cass,Intact,Swan Buffalo Detention Dam 12
+DWR-2635,Swan Buffalo Detention Dam 5,46.88487,-97.42193,39.0,2019.7,1072.0,2635,ND00022,Significant,Cass,Intact,Swan Buffalo Detention Dam 5
+DWR-2662,Swan Buffalo Detention Dam 8,46.83059,-97.44293,31.5,3936.9,1275.0,2662,ND00049,Significant,Cass,Intact,Swan Buffalo Detention Dam 8
+DWR-2665,Tewaukon WS-T-1-A Dam,45.94063,-97.54308,40.3,2638.8,3370.0,2665,ND00052,Significant,Sargent,Intact,Tewaukon WS-T-1-A Dam
+DWR-2659,Tewaukon WS-T-7 Dam,46.00633,-97.42144,40.6,411.1,650.0,2659,ND00046,Significant,Sargent,Intact,Tewaukon WS-T-7
+DWR-10633,Upper Maple River Dam,47.246472,-97.731387,35.0,9953.0,4717.39,10633,ND01122,Significant,Steele,Intact,Upper Maple River Dam
+DWR-6111,Upper Turtle River Flood Ret. Dam 8,47.931483,-97.74518,34.8,1190.0,,6111,ND00390,Significant,Grand Forks,Intact,Upper Turtle River Flood Ret. 8
+DWR-2981,Upper Turtle River Flood Ret. Dam 1,48.10615,-97.81964,38.1,4835.0,6625.0,2981,ND00395,Significant,Grand Forks,Intact,Upper Turtle River Flood Ret. Dam 1
+DWR-2666,Weiler Dam,48.82783,-97.90801,39.0,3150.0,685.0,2666,ND00053,Significant,Pembina,Intact,Weiler Dam
+DWR-2809,Whitman Dam,48.18205,-98.05716,48.8,9364.0,1200.0,2809,ND00207,Significant,Nelson,Intact,Whitman Dam
+DWR-2691,Willow Creek Park River Det. Dam 1,48.70811,-97.77804,23.8,3219.0,8280.0,2691,ND00079,Significant,Pembina,Intact,Willow Cr-Park R Detdam#1
+DWR-3271,Rutz Dam,47.707915,-103.287139,22.0,23.0,,3271,ND10081,Low,McKenzie,Intact,Rutz Dam
+DWR-3161,Sanish Bay WPA Dam 1,47.97959,-102.5116,28.1,2861.0,,3161,ND00597,Low,Mountrail,Intact,Sanish Bay WPA 1
+DWR-2674,Sarnia Dam,48.15316,-98.08435,20.0,1610.0,500.0,2674,ND00061,Low,Nelson,Intact,Sarnia Dam
+DWR-5890,Schafer Dam; Wayne,46.50002,-101.31196,20.6,24.51,,5890,,Low,Grant,Intact,Schafer Dam; Wayne
+DWR-2896,Schlecht-Thom Dam,46.36352,-98.83041,31.0,284.0,1020.0,2896,ND00301,Low,LaMoure,Intact,Schlecht-Thom Dam
+DWR-2827,Schlenker (Lehr-Beglau) Dam,46.62531,-98.93107,24.0,174.3,2463.0,2827,ND00226,Low,LaMoure,Intact,Schlenker (Lehr-Beglau) Dam
+DWR-10553,Sediment Pond P-D15-03,47.382335,-101.742989,24.0,363.0,,10553,ND01099,Low,Mercer,Intact,Sediment Pond P-D15-03
+DWR-10554,Sediment Pond P-W32-02,47.331667,-101.795914,28.0,376.0,1215.0,10554,ND01100,Low,Mercer,Intact,Sediment Pond P-W32-02
+DWR-4560,Stegner Dam; William 1 ,46.25818,-103.62111,20.0,99.0,831.0,4560,ND00675,Low,Bowman,Intact,Stegner Dam; William 1
+DWR-2899,Stevens Dam; Joe,46.79269,-97.96932,25.6,154.0,669.0,2899,ND00304,Low,Barnes,Intact,Stevens Dam; Joe
+DWR-2851,Stroh Fish Dam; Elizabeth,47.23213,-102.90809,25.0,50.0,396.0,2851,ND00252,Low,Dunn,Intact,Stroh Fish Dam; Elizabeth
+DWR-4593,Syvrud Dam; M G,46.80325,-101.12541,26.0,48.0,204.0,4593,ND10524,Low,Morton,Breached,Syvrud Dam; M G
+DWR-6141,Taskers Coulee Dam,48.631461,-102.085054,30.0,297.8,,6141,ND01055,Low,Ward,Intact,Taskers Coulee Dam
+DWR-2658,Tewaukon WS T-2 Dam,45.97064,-97.44008,37.0,2013.3,2185.0,2658,ND00045,Low,Sargent,Intact,Tewaukon WS T-2
+DWR-3125,Twin Lakes Park Dam 2 (Lower),48.19946,-103.61742,20.0,108.2,220.0,3125,ND00559,Low,Williams,Intact,Twin Lakes Park Dam 2 (Lower)
+DWR-2976,Upper Turtle River Flood Ret. Dam 7,47.94598,-97.75069,29.6,1387.0,4440.0,2976,ND00389,Low,Grand Forks,Intact,Upper Turtle R.Fld.Ret. 7
+DWR-2974,Upper Turtle River Flood Ret. Dam 2,48.09171,-97.86301,59.0,1338.0,2625.0,2974,ND00387,Low,Grand Forks,Intact,Upper Turtle River Flood Ret. Dam 2
+DWR-2865,Van Osting Dam; William,47.24046,-101.12766,43.0,167.0,355.0,2865,ND00266,Low,Oliver,Intact,Van Osting Dam; William
+DWR-5817,Velva Sportsman Dam,47.9369,-100.97342,37.0,145.0,400.0,5817,ND00158,Low,Ward,Intact,Velva Sportsman Dam
+DWR-3034,Wachter Ranch Dam 11,47.0167,-101.03136,30.7,71.6,,3034,ND00456,Low,Oliver,Intact,Wachter Ranch Dam 11
+DWR-4979,Warsing Dam,47.838072,-99.117735,33.0,1264.7,640.0,4979,ND00002,Low,Eddy,Intact,Warsing Dam
+DWR-4031,Washek Dam; Gary,48.30256,-101.44042,20.7,6.9,,4031,ND30554,Low,Ward,Intact,Washek Dam; Gary
+DWR-8278,Wells Dam; Casey 1,46.094286,-101.549452,23.0,184.0,530.0,8278,ND01111,Low,Grant,Intact,Wells Dam; Casey 1
+DWR-2820,Wilson Dam,46.17594,-98.74717,24.5,828.2,1690.0,2820,ND00219,Low,Dickey,Intact,Wilson Dam

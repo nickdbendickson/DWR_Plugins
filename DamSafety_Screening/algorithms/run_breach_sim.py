@@ -331,6 +331,8 @@ def _write_us_rasters(outdir, dam_id, r):
 
 
 class RunBreachSim(UnitAlgorithm):
+    # Core 1.2.0: SCEN option IDs for the shared defaults file (sunny_day_start_pool)
+    SHARED_OPTION_IDS = {"SCEN": ["td", "sd"]}
     def name(self): return "runbreachsim"
     def displayName(self): return "7 - Run breach flood simulations"
     def group(self): return "Dam screening"

@@ -705,7 +705,11 @@ The path, the 20 m threshold and the cell size are written to the existing Sampl
 ## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.19.0)
 
 Nothing changes unless you choose it: a sunny-day run starts at the top of dam with a piping
-breach (ND 5.1.1).
+breach (ND 5.1.1). Those two presets come from the shared defaults file (*Plugins → Dam safety →
+Shared defaults…*, DamSafety Core 1.2.0): change "Sunny-day breach: starting pool" there to
+Normal pool and every run tool, the batch and the wizard open with Normal pool chosen. A single
+run can still be changed either way in its dialog; the run report and dam.json say which pool
+was used.
 
 | You want | Set |
 |---|---|

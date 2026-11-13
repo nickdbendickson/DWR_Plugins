@@ -52,6 +52,8 @@ class BreachHydrograph(UnitAlgorithm):
         "DAMS", "CURVES", "BPTS", "MODE", "SUNNY", "EXP", "OUTDIR", "OUT", "METHOD")
     PARAM_SOURCE = "PARAM_SOURCE"
     METHODS = list(bh.BREACH_METHODS)
+    # Core 1.2.0: option IDs for the shared defaults file (failure_mode, breach_method)
+    SHARED_OPTION_IDS = {"MODE": ["piping", "overtopping"], "METHOD": METHODS}
 
     def name(self): return "breachhydrograph"
     def displayName(self): return "5 - Breach parameters and hydrograph"

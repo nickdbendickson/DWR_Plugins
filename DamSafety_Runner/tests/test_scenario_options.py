@@ -289,3 +289,64 @@ def wizard_passes_the_scenario_choices_to_the_tool():
     assert any("auxiliary spillway needs both" in e for e in errs)
     errs, _ = wl.validate_page("model", dict(nb, tier=workflow.TIER_HECRAS, cell_m=10.0))
     assert any("HEC-RAS 2D" in e for e in errs)
+
+
+# -- the shared defaults file (Core 1.2.0) and the starting pool choice -------------------------
+@test
+def scenario_start_pool_starts_from_the_shared_defaults_file():
+    import types
+    from nd_breach_runner import wizard_logic as wl
+    from nd_breach_runner.damsuite import shared_defaults as SD
+    from nd_breach_runner.tests.test_shared_defaults_runner import _YourFile
+
+    bound = dict(SD.bindings_for("ndbreach", "rundam"))
+    assert "START_POOL" in bound, "the Runner's START_POOL is set from sunny_day_start_pool"
+    assert bound["START_POOL"]({"sunny_day_start_pool": "max_pool"}) == br.START_TOP
+    assert bound["START_POOL"]({"sunny_day_start_pool": "normal_pool"}) == br.START_NORMAL
+    assert bound["START_POOL"]({}) is None
+
+    def st(**k):
+        s = types.SimpleNamespace(scenario=workflow.SCENARIO_SUNNY, breach_method=br.METHOD_PIPING,
+                                  manning_n=0.06, flood=None)
+        s.__dict__.update(k)
+        return s
+
+    top, normal, stated = _dam(), _dam(), _dam()
+    br.set_start_pool(normal, br.START_NORMAL, 1090.0, 1100.0)
+    br.set_start_pool(stated, br.START_STATED, 1093.0, 1100.0)
+    with _YourFile(None):                                   # the suite file: maximum pool
+        assert wl.default_answers()["start_pool"] == br.START_TOP
+        warnings, log = [], []
+        e = workflow._assumptions(st(), "3.19.0", log.append, warnings, dam=top)
+        assert e["used"]["sunny_day_start_pool"] == "max_pool" and not e["differs"] and not warnings
+        e = workflow._assumptions(st(), "3.19.0", log.append, warnings, dam=normal)
+        assert e["used"]["sunny_day_start_pool"] == "normal_pool"
+        assert e["differs"]["sunny_day_start_pool"] == {"used": "normal_pool", "shared": "max_pool"}
+        assert not warnings and any("Normal pool" in line for line in log), log
+        log = []
+        e = workflow._assumptions(st(), "3.19.0", log.append, warnings, dam=stated)
+        assert e["used"]["sunny_day_start_pool"] is None and not e["differs"]
+        assert any("7.00 ft below the top of dam" in line for line in log), log
+        e = workflow._assumptions(st(scenario=workflow.SCENARIO_FLOOD_NO_BREACH, flood=None),
+                                  "3.19.0", [].append, [], dam=top)
+        assert "sunny_day_start_pool" not in e["used"] and e["used"]["breach_method"] is None
+    with _YourFile({"sunny_day_start_pool": "normal_pool"}):
+        assert wl.default_answers()["start_pool"] == br.START_NORMAL
+        warnings = []
+        e = workflow._assumptions(st(), "3.19.0", [].append, warnings, dam=normal)
+        assert not e["differs"] and not warnings, "the run followed the shared file"
+        e = workflow._assumptions(st(), "3.19.0", [].append, warnings, dam=top)
+        assert e["differs"]["sunny_day_start_pool"]["used"] == "max_pool"
+        assert len(warnings) == 1 and "started at the top of dam" in warnings[0], warnings
+
+
+@test
+def scenario_start_pool_option_ids_match_the_tools_options():
+    """apply_shared_defaults sets an enum only when the tool's SHARED_OPTION_IDS list has one ID
+    per option, in option order."""
+    from nd_breach_runner import algorithms as A
+    assert A._Base.SHARED_OPTION_IDS["START_POOL"] == [c[0] for c in A.START_POOL_CHOICES] == \
+        list(br.START_POOLS)
+    assert A.BatchAlgorithm.SHARED_OPTION_IDS["START_POOL"] == [br.START_TOP, br.START_NORMAL]
+    assert len(A.BATCH_START_POOLS) == 2
+    assert A.BatchAlgorithm.SHARED_OPTION_IDS["METHOD"] == A._Base.SHARED_OPTION_IDS["METHOD"]

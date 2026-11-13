@@ -25,7 +25,7 @@ def load_settings(text_or_path):
     window's defaults), or (0.13) from the suite settings file (.xlsx / .csv): its "window" rows
     are the window's choices and the file becomes the tools' defaults for this run. The window
     saves the same dict in the QGIS project (NDDamScreening/state)."""
-    s = dict(wf.DEFAULT_SETTINGS)
+    s = wf.default_settings()
     t = (text_or_path or "").strip()
     if not t:
         return s
