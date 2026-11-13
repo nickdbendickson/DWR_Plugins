@@ -44,6 +44,19 @@
   none }` in `styles.css` sat outside Tailwind's layers, so it beat `lg:block`, `sm:table-cell` and `md:table-cell`:
   the sidebar's Restore samples button and two batch-table columns were hidden at every width. The rule is removed
   (Tailwind's own `hidden` does the job).
+- **The browser batch runs again, and a large one can be left running.** Two things:
+  - *Fix.* Every browser batch died on its first finished row with "Illegal invocation": `BatchRowBuffer` kept
+    `setTimeout` / `clearTimeout` as properties of an object and called them as its methods, which a browser refuses
+    (Node does not, so the tests passed). Each lane produced one row and the run stopped with no message. The timers
+    are now called bare; `batch-store.test.ts` stands in for the browser's check.
+  - *Resumable at any size* (`src/lib/crest/batch-job.ts`). Above 300 structures the screen used to send you to the
+    command line. Now the selection being run is saved, so after Stop, a closed tab or a crash the screen reopens on
+    it with "N finished, M to go" and one Resume; rows are also written when the tab is hidden or closed, and closing
+    mid-run asks first. Six terrain / network failures in a row pause the batch instead of failing everything left;
+    it retries by itself after 1, 2, 5, 10, 15, 30 min or when the connection returns (*Stop retrying* ends that),
+    and those failed structures are retried, never kept. The screen is kept awake while it runs. Only the 300 most
+    recent records are held in memory; any other finished row's record is rebuilt on **Open in desk**, which also
+    makes Open in desk work after a reload. Tests: `batch-job.test.ts`.
 
 ## 2026-11-08
 

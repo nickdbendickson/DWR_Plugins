@@ -135,7 +135,13 @@ export class BatchRowBuffer {
     this.write = opts.write ?? putBatchRows;
     this.rows = opts.rows ?? FLUSH_ROWS;
     this.ms = opts.ms ?? FLUSH_MS;
-    this.timers = opts.timers ?? { set: setTimeout, clear: clearTimeout };
+    // Wrapped, not the bare functions: `this.timers.set(...)` calls its function with `this` = the timers object, and a
+    // browser's setTimeout throws "Illegal invocation" unless `this` is the window. Node does not mind, so the tests
+    // passed while every browser batch died on its first row (found 2026-11-13).
+    this.timers = opts.timers ?? {
+      set: ((fn: () => void, ms?: number) => setTimeout(fn, ms)) as typeof setTimeout,
+      clear: ((t: ReturnType<typeof setTimeout>) => clearTimeout(t)) as typeof clearTimeout,
+    };
   }
 
   add(row: BatchRow): void {

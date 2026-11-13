@@ -90,6 +90,32 @@ describe("BatchRowBuffer", () => {
   });
 });
 
+describe("BatchRowBuffer with the real timers", () => {
+  it("calls setTimeout / clearTimeout the way a browser accepts (not as methods of another object)", async () => {
+    // A browser's setTimeout throws "Illegal invocation" when called with `this` set to anything but the window.
+    // Node does not, so stand in for the browser: the default timers must call them bare.
+    const g = globalThis as unknown as { setTimeout: unknown; clearTimeout: unknown };
+    const real = { set: g.setTimeout, clear: g.clearTimeout };
+    const strict = (fn: (...a: unknown[]) => unknown) =>
+      function (this: unknown, ...a: unknown[]) {
+        if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+        return fn(...a);
+      };
+    g.setTimeout = strict(real.set as (...a: unknown[]) => unknown);
+    g.clearTimeout = strict(real.clear as (...a: unknown[]) => unknown);
+    try {
+      const writes: BatchRow[][] = [];
+      const buf = new BatchRowBuffer({ write: async (r) => void writes.push(r) });
+      buf.add(row("A")); // starts the FLUSH_MS timer
+      await buf.flush(); // clears it
+      assert.deepEqual(writes.map((w) => w.map((r) => r.id)), [["A"]]);
+    } finally {
+      g.setTimeout = real.set;
+      g.clearTimeout = real.clear;
+    }
+  });
+});
+
 describe("insertRow keeps the worklist order without a re-sort", () => {
   it("places each new row where sortRows would, and replaces a retried dam's row", () => {
     const rows = [

@@ -232,9 +232,18 @@ says which it did, and that the terrain layer is rebuilt on the Flood step in on
 - **Scale:** about 4–25 s a structure, mostly the 3DEP download, one structure per spare core at a time (at most four;
   the builds run in Web Workers, so the tab stays live). The estimate starts from that prior (8 s a small structure,
   25 s over 500 ac-ft) and, after three rows have run, uses the mean time of this run's rows per size class over what
-  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours. Only
-  the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a reload; the finished
-  records (for Open in desk, without their terrain layer) stay in memory.
+  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours.
+- **A batch of any size can be left running in the browser.** Rows are written to browser storage (IndexedDB) as they
+  finish, and again when the tab is hidden or closed. The selection being run is saved too, so after **Stop**, a
+  closed tab or a crash the Batch screen reopens on the same selection with a line saying how many are left, and
+  **Resume** carries on from there; closing the tab mid-run asks first. If the terrain service stops answering (six
+  structures in a row fail to reach it), the batch **pauses** instead of failing everything left, and tries again by
+  itself after 1, 2, 5, 10, 15 and 30 minutes or as soon as the connection is back; the structures that failed that
+  way are retried, never kept as results. *Stop retrying* ends the waits. The screen is kept awake while a batch runs
+  where the browser allows it. Only the 300 most recent finished records are kept in memory for **Open in desk**; any
+  other finished row is rebuilt from the inventories and the terrain when opened (a few seconds), including after a
+  reload. Above 300 structures the screen still shows the command line, which runs without a browser and can read a
+  local DEM.
 - **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
   `batch-out/batch.jsonl` (one fsynced line per structure; start it again to resume, and a last line cut short by a
   kill is dropped with a warning and that structure runs again, while a corrupt line anywhere else stops the run and
