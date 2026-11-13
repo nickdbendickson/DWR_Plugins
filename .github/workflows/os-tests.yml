@@ -69,10 +69,13 @@ jobs:
           environment-name: qgis
           create-args: >-
             python=3.12 qgis numpy scipy gdal pytest
+      # On Windows this writes a path file into the environment's site-packages. PYTHONPATH
+      # cannot do it: QGIS's activation script, run again by every step's shell, puts its own
+      # ":"-joined folders in front, and Windows Python splits on ";".
       - name: Make QGIS importable (conda-forge on Windows keeps it outside Python's folders)
         run: |
-          ls "$CONDA_PREFIX/etc/conda/activate.d" 2>/dev/null || true
           python tools/ci_qgis_env.py >> "$GITHUB_ENV"
+          python -c "import qgis.core; print('qgis from', qgis.__file__)"
       - name: Versions in this environment
         run: |
           python -c "import sys, platform, numpy, scipy; print(sys.version); print(platform.platform()); print('numpy', numpy.__version__, 'scipy', scipy.__version__)"

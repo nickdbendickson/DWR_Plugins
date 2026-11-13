@@ -332,6 +332,13 @@ def culvert_prep_limit_auto_applies_and_geometry_is_only_proposed():
         b2, _i = _read(out2)
         assert b2[253]["n"] == 2 and abs(b2[253]["line_len_ft"] - 225.9) < 0.05, b2[253]
         assert b2[253]["up"] == a[253]["up"] and "straightened" in b2[253]["notes"]
+        # the vertex count in the source note is read before the old line is replaced: reading
+        # the replaced geometry afterwards ended the process on Windows (os-tests.yml)
+        _g, ogr, _s = _gdal()
+        ds = ogr.Open(out2)
+        src = ds.GetLayerByName("runner_culverts").GetFeature(253).GetField("line_len_src")
+        ds = None
+        assert src.endswith("; 8 interior vertices dropped (culvert prep)"), src
         assert all(b2[f] == a[f] for f in a if f != 253), "apply_auto=False: accepted only"
         assert cp.sha256(st) == before
     finally:

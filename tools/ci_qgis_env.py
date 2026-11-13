@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Where this Python finds QGIS, as lines for GitHub Actions' environment file.
+"""Make QGIS importable in this Python on a GitHub Actions runner.
 
     python tools/ci_qgis_env.py >> "$GITHUB_ENV"
 
 On Linux and macOS conda-forge puts `qgis` where Python looks. On Windows it is under
-<environment>/Library/python, which Python does not search: every `import qgis` fails until
-PYTHONPATH names that folder. This prints PYTHONPATH (QGIS's Python folder and its plugins
-folder, for `processing`) and QGIS_PREFIX_PATH when `qgis` is not importable as it is, and
-nothing when it is. Exit status 1 when QGIS is not in this environment at all."""
+<environment>/Library/python, which Python does not search: every `import qgis` fails.
+
+When `qgis` is not importable this writes a path file (ci_qgis.pth) into this Python's
+site-packages that names QGIS's Python folder and its plugins folder (for `processing`), and
+prints QGIS_PREFIX_PATH for the environment file. When it is importable it does nothing.
+Exit status 1 when QGIS is not in this environment at all.
+
+Why a path file and not PYTHONPATH: each step's shell activates the environment again, and
+QGIS's own activation script puts its folders in front of PYTHONPATH joined with ":" (it is a
+shell script). Windows Python splits PYTHONPATH on ";", so the first folder of any value set
+here ended up glued to that text and was not found (the second run of os-tests.yml)."""
 import glob
 import importlib.util
 import os
 import sys
+import sysconfig
 
 
 def find(prefix):
@@ -23,10 +31,20 @@ def find(prefix):
     return hits[0] if hits else None
 
 
-def lines(pydir, old_path="", sep=os.pathsep):
+PTH_NAME = "ci_qgis.pth"
+
+
+def write_pth(pydir, site_dir):
+    """The path file: one folder per line. Returns its path."""
+    path = os.path.join(site_dir, PTH_NAME)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(pydir + "\n" + os.path.join(pydir, "plugins") + "\n")
+    return path
+
+
+def lines(pydir):
     """The environment lines for a QGIS Python folder such as <env>/Library/python."""
-    parts = [pydir, os.path.join(pydir, "plugins")] + ([old_path] if old_path else [])
-    return ["PYTHONPATH=" + sep.join(parts), "QGIS_PREFIX_PATH=" + os.path.dirname(pydir)]
+    return ["QGIS_PREFIX_PATH=" + os.path.dirname(pydir)]
 
 
 def main():
@@ -37,8 +55,9 @@ def main():
     if not pydir:
         sys.stderr.write("ci_qgis_env: no qgis package under {}\n".format(sys.prefix))
         return 1
-    sys.stderr.write("ci_qgis_env: qgis found in {}\n".format(pydir))
-    print("\n".join(lines(pydir, os.environ.get("PYTHONPATH", ""))))
+    pth = write_pth(pydir, sysconfig.get_paths()["purelib"])
+    sys.stderr.write("ci_qgis_env: qgis found in {}; wrote {}\n".format(pydir, pth))
+    print("\n".join(lines(pydir)))
     return 0
 
 
