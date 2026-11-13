@@ -5,12 +5,16 @@
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
  *     [--spread [--breach-path] [--no-basins] [--no-reach] [--settle N]] [--probes 300] [--wet-ft 0.1]
+ *     [--cell 5 [--max-px 6000]]
  *
  * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --breach-path makes it
  * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage;
  * --no-reach builds once on the corridor DEM instead of growing the terrain downstream on demand (reach.ts, what the
  * desk does). --settle sets the sweeps that let the spread's pools settle into one sheet (0 = as poured). --probes sets how many points on the model's wet cells compare depth, velocity and arrival. --wet-ft
  * scores both layers as wet at that depth instead of 0.1 ft (1 ft is where the 2-D models agree with each other).
+ * --cell builds on a terrain cell other than the desk's 10 m (with --spread and the reach; --max-px lifts the 3,000
+ * cells a side the desk allows). It is here to repeat the cell-size test in docs/accuracy-envelope.md; the desk
+ * always builds at 10 m.
  *
  * It fetches the same corridor DEM the terrain outline uses (grown downstream on demand for the spread), builds the
  * routed flood on it, and scores its depth grid (the harness's lonlat candidate) against the Runner rasters.
@@ -93,6 +97,8 @@ export async function main(argv, log = console.log) {
     const rb = await buildRoutedFloodReach(dam, result, {
       ...rfOpts,
       inputs: io.inputs,
+      cellM: o.cell != null ? Number(o.cell) : undefined,
+      maxPx: o["max-px"] != null ? Number(o["max-px"]) : undefined,
       onRound: (r) => log(r.round === 0 ? (r.stage === "fetch" ? `Fetching the DEM for ${dam.id} (${r.req.width}×${r.req.height} @ ${r.req.cellM} m)…` : "Building the routed flood…") : r.stage === "fetch" ? `  reach round ${r.round}: ${r.travellingAcFt.toFixed(0)} ac-ft still at the edge, growing the DEM ${r.stepKm.toFixed(1)} km downstream (${r.req.width}×${r.req.height} @ ${r.req.cellM} m)…` : `  reach round ${r.round}: rebuilding the routed flood…`),
     });
     if (!rb.routed.ok) throw new Error(rb.routed.reason);

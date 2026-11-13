@@ -80,6 +80,13 @@
   structure, and that the page reports no error other than the dropped connection the test caused. The network stub
   (`e2e/fake-network.mjs`) can now hold or drop terrain requests and hand any structure the ND00199 fixture terrain.
   Test-only: no change to the app or the bundles.
+- **Finer terrain cells tested, not adopted.** Two tests of whether 3DEP's 1 m lidar would help the desk, written up
+  in `docs/accuracy-envelope.md` ("Finer terrain cells"). The flood layer built at 5 m scores worse than at 10 m
+  against the Runner baselines on all three dams tried (CSI at 1 ft 0.765 to 0.554 on DWR-3034, 0.350 to 0.258 on
+  DWR-2865; DWR-4031's drainage trace stops after 0.3 km and the layer misses the reference). The crest read at 1 m
+  is 0.9 ft higher at the median than at 10 m (65 dams) and no closer to DWR's top of dam. The desk's terrain is
+  unchanged. For repeating the tests: `score-routed.mjs --cell <m> [--max-px N]` (`reach.ts` takes a `cellM`
+  option; nothing in the desk passes it) and `scripts/crest-read-cells.mjs`.
 
 ## 2026-11-08
 

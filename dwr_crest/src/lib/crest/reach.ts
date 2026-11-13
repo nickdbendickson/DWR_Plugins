@@ -219,6 +219,8 @@ export type ReachBuildOptions = RoutedFloodOptions & {
   build?: typeof buildRoutedFlood;
   /** Most cells on a side of the terrain (OUTLINE_MAX_PX by default; tests shrink it). */
   maxPx?: number;
+  /** Terrain cell asked for (m): OUTLINE_CELL_M by default. The cell still grows when the box passes maxPx cells. */
+  cellM?: number;
 };
 
 export type ReachBuild = {
@@ -235,13 +237,13 @@ export type ReachBuild = {
  * module note). The routed result carries a note on how the reach ended; the summary says the same in fields.
  */
 export async function buildRoutedFloodReach(dam: DamRecord, result: Analysis, opts: ReachBuildOptions): Promise<ReachBuild> {
-  const { inputs: inputs0, fetch: fetchOpt, maxRounds: maxRoundsOpt, onRound, build: buildOpt, maxPx: maxPxOpt, ...rfOpts } = opts;
+  const { inputs: inputs0, fetch: fetchOpt, maxRounds: maxRoundsOpt, onRound, build: buildOpt, maxPx: maxPxOpt, cellM: cellOpt, ...rfOpts } = opts;
   const fetchFn = fetchOpt ?? fetchDem;
   const build = buildOpt ?? buildRoutedFlood;
   const maxRounds = maxRoundsOpt ?? REACH_MAX_ROUNDS;
   const maxPx = maxPxOpt ?? OUTLINE_MAX_PX;
   let inputs = inputs0;
-  let req = demRequest(inputs, undefined, maxPx);
+  let req = demRequest(inputs, cellOpt, maxPx);
   const baseCellM = req.cellM;
   onRound?.({ round: 0, stage: "fetch", req, stepKm: 0, travellingAcFt: 0 });
   let grid = await fetchFn(req);

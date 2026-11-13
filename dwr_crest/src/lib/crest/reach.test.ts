@@ -285,6 +285,15 @@ describe("buildRoutedFloodReach: the loop and its guards (stand-in fetch and bui
     assert.ok(rb.request.cellM <= 1.5 * base.cellM + 1e-9, "never built on a terrain coarser than 1.5× the first");
   });
 
+  it("asks for the terrain cell it is given (the scorer's --cell), and for the 10 m default otherwise", async () => {
+    const s = scripted([{}, { fail: true }]);
+    const rb = await buildRoutedFloodReach(ND, RESULT, { inputs: INP, fetch: s.fetch, build: s.build, cellM: 5 });
+    assert.deepEqual(rb.request, demRequest(INP, 5));
+    assert.equal(rb.request.cellM, 5);
+    assert.equal(demRequest(INP).cellM, 10);
+    assert.ok(rb.request.width > 1.9 * demRequest(INP).width, "the same box at half the cell");
+  });
+
   it("a terrain service failure on a grown box keeps the previous round's layer", async () => {
     const s = scripted([{}, {}]);
     let n = 0;
