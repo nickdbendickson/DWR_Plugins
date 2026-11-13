@@ -73,14 +73,46 @@ SAMPLES["DWR-2801"] = Sample(
     box=(-111500.0, 2649500.0, -78500.0, 2671500.0),
     z_range_m=(230.0, 420.0),
     about=("near Absaraka in Cass County, on a flat plain where a breach flood spreads over "
-           "many square miles and keeps creeping for a day or more. That makes it slow to "
-           "model at the 10 m default cell. A 30 m cell has nine times fewer cells and runs "
-           "many times faster, which suits a first try."),
+           "many square miles and keeps creeping for a day or more. At the Runner's usual "
+           "settings (10 m cell, the clock lengthened while the flood moves) that takes hours "
+           "to model. The quick first try maps the first 6 hours on a 30 m cell in a few "
+           "minutes."),
     note=("sample dam shipped with the suite (ND DWR inventory values, area at the DWR "
           "maximum pool; point and top of dam from a LiDAR screening, 2026-10). A sample to "
           "learn the tools on, not a determination."))
 DEFAULT = "DWR-2801"
 FIRST_TRY_CELL_M = 30.0                        # the model cell a first try should use
+FIRST_TRY_HOURS = 6.0                          # the hours of flood a first try maps
+# What the quick first try sets in the Runner window, by the window's own field names. The
+# cell alone is not quick on this dam. Measured 2026-11-13 with the built-in engine on 4 cores,
+# through the Runner's command line: a 30 m run held to three model areas took about 7 minutes
+# and then started the automatic finer-grid run (1.8 million cells at 10 m); left to grow to
+# six areas and a clock lengthened to 123 h it was stopped unfinished after 90 minutes. With
+# these four values the same machine took 53 seconds (two model areas, the first 6 hours).
+FIRST_TRY = (("grid_m", FIRST_TRY_CELL_M),     # Grid size (m)
+             ("simh", FIRST_TRY_HOURS),        # Simulated time (h)
+             ("simmax", FIRST_TRY_HOURS),      # Longest simulated time (h): the clock is not lengthened
+             ("grid_refine", False))           # Finer grid automatically when the flood over-spreads
+FIRST_TRY_LABELS = {"grid_m": "Grid size (m)", "simh": "Simulated time (h)",
+                    "simmax": "Longest simulated time (h)",
+                    "grid_refine": "Finer grid automatically when the flood over-spreads"}
+# The Runner window's starting values (DamSafety_Runner/popup_logic.DEFAULT_SETTINGS): what to
+# set back when the window cannot say what it held before
+RUNNER_STARTS = {"grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "grid_refine": True}
+
+
+def _say(value):
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    return "{:g}".format(float(value))
+
+
+def first_try_lines(before=None):
+    """One line per value the quick first try changed: 'Grid size (m): 30 (was 10)'. `before`
+    is {field: what the window held}; a field it does not name gets the Runner's starting value."""
+    held = dict(RUNNER_STARTS, **(before or {}))
+    return ["{}: {} (was {})".format(FIRST_TRY_LABELS[k], _say(v), _say(held[k]))
+            for k, v in FIRST_TRY if held[k] != v]
 
 
 class SampleError(Exception):
