@@ -104,20 +104,29 @@ def predict_gbm(model, x):
     return f
 
 
-def bagging_pu(x, y, n_bags=10, seed=0, **kw):
+def bagging_pu(x, y, n_bags=10, seed=0, sw=None, trusted=None, **kw):
     """Bagged PU: each bag = all positives + a bootstrap of the unlabelled rows as large as the
-    positives x 5 (or all of them, when fewer). {'kind': 'finder-pu-gbm', 'models': [...]}."""
+    positives x 5 (or all of them, when fewer). trusted: rows that are reviewers' labels (dam or
+    not) - in every bag at their weight sw, never bootstrapped as unlabelled. With few rows a
+    bag's trees still split: min_leaf shrinks to a tenth of the rows a tree sees (20 at most).
+    {'kind': 'finder-pu-gbm', 'models': [...]}."""
     x = np.asarray(x, float)
     y = np.asarray(y, float)
+    sw = np.ones(len(y)) if sw is None else np.asarray(sw, float)
+    tr = np.zeros(len(y), bool) if trusted is None else np.asarray(trusted, bool)
     rng = np.random.default_rng(seed)
-    pos = np.flatnonzero(y > 0)
-    unl = np.flatnonzero(y == 0)
+    pos = np.flatnonzero((y > 0) & ~tr & (sw > 0))
+    unl = np.flatnonzero((y == 0) & ~tr & (sw > 0))
+    fix = np.flatnonzero(tr & (sw > 0))
     k = min(len(unl), 5 * len(pos))
+    n_rows = int(kw.get("subsample", 0.8) * (len(pos) + k + len(fix)))
+    if "min_leaf" not in kw:
+        kw["min_leaf"] = max(2, min(20, n_rows // 10))
     models = []
     for b in range(int(n_bags)):
-        pick = rng.choice(unl, k, replace=True)
-        idx = np.concatenate([pos, pick])
-        models.append(fit_gbm(x[idx], y[idx], seed=seed + b, **kw))
+        pick = rng.choice(unl, k, replace=True) if k else np.zeros(0, int)
+        idx = np.concatenate([pos, pick, fix]).astype(int)
+        models.append(fit_gbm(x[idx], y[idx], sw=sw[idx], seed=seed + b, **kw))
     return {"kind": "finder-pu-gbm", "models": models}
 
 

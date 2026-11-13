@@ -46,32 +46,41 @@ def add(folder, find_id, label, meta=None, chips=None, reviewer=""):
     return rec
 
 
-def load(folder):
-    """The latest record per (find_id, reviewer)."""
+def _records(folder):
+    """Every record in file order."""
     path = os.path.join(folder, "manifest.jsonl")
     if not os.path.exists(path):
         return []
-    latest = {}
+    out = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if not line:
-                continue
-            r = json.loads(line)
-            latest[(r.get("find_id"), r.get("reviewer", ""))] = r
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
+def load(folder):
+    """The latest record per (find_id, reviewer)."""
+    latest = {}
+    for r in _records(folder):
+        latest[(r.get("find_id"), r.get("reviewer", ""))] = r
     return list(latest.values())
 
 
 def stats(folder, ready_at=100):
     """{'cards', 'yes', 'no', 'unsure', 'offset', 'second_looks', 'by_county': {county: {label:
     n}}, 'ready' (enough confirmed dams to train and check an image model)}. Each card counts once,
-    by its first reviewer's mark (a blind second look is counted apart)."""
+    by its first reviewer's mark (the reviewer of its earliest record that is not a second look;
+    their latest mark, so a reviewer can correct themselves). A blind second look is counted
+    apart."""
     recs = load(folder)
-    first = {}
-    for r in recs:
-        if r.get("second_look"):
-            continue
-        first[r.get("find_id")] = r
+    who = {}
+    for r in _records(folder):
+        if not r.get("second_look"):
+            who.setdefault(r.get("find_id"), r.get("reviewer", ""))
+    first = {fid: r for r in recs for fid in [r.get("find_id")]
+             if not r.get("second_look") and who.get(fid) == r.get("reviewer", "")}
     out = {"cards": len(first), "yes": 0, "no": 0, "unsure": 0, "offset": 0,
            "second_looks": sum(1 for r in recs if r.get("second_look")), "by_county": {}}
     for r in first.values():

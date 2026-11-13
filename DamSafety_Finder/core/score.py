@@ -169,6 +169,20 @@ def _design(x, names, basis, rows=None):
     return np.hstack(out), on
 
 
+def _without_marked(rows, background, extra):
+    """rows (and background) less every row a reviewer marked: the mark replaces the row's own
+    label (listed or not) instead of joining it. Matched by identity or find_id."""
+    if not extra:
+        return list(rows), background
+    ids = {id(r) for r, _t, _w in extra}
+    fids = {r.get("find_id") for r, _t, _w in extra if r.get("find_id") not in (None, "")}
+    keep = [not (id(r) in ids or (r.get("find_id") not in (None, "") and r.get("find_id") in fids)) for r in rows]
+    rows = [r for r, k in zip(rows, keep) if k]
+    if background is not None:
+        background = [b for b, k in zip(background, keep) if k]
+    return rows, background
+
+
 def train(rows, positive_words=("dam",), l2=1.0, iters=50, note="", features=None, bags=False,
           bag_iters=2, background=None, extra=None, splines=False, groups=False, group_l2=None,
           learner="logistic", n_bags=10, seed=0):
@@ -182,9 +196,11 @@ def train(rows, positive_words=("dam",), l2=1.0, iters=50, note="", features=Non
       becomes (row, 1, w q) and (row, 0, w (1 - q)).
     splines / groups: the terrain-aware model (version 2). group_l2: a heavier penalty on the
       per-group copies (default 3 x l2) so they move only where the data say so.
+      A marked row's own entry in rows is dropped: the mark replaces its label.
     learner: 'logistic' or 'trees' (bagged PU boosted trees, version 3: the clean positives are
-      the fill nearest each listed point; marks with a target of 1 / 0 join as dams / fills,
-      unsure marks are left out; splines / groups do not apply)."""
+      the fill nearest each listed point; marks are in every bag at their weight, an unsure one
+      as both; splines / groups do not apply)."""
+    rows, background = _without_marked(rows, background, extra)
     if learner == "trees":
         return _train_trees(rows, positive_words, note, features, bags, background, extra, n_bags, seed)
     if learner != "logistic":
@@ -307,16 +323,26 @@ def _train_trees(rows, positive_words, note, features, bags, background, extra, 
         keep &= ~((y > 0) & ~np.isin(np.arange(len(y)), list(pos)))
     use = [rows[i] for i in np.flatnonzero(keep)]
     yu = y[keep]
-    ex = [(r, float(t)) for r, t, _w in (extra or []) if float(t) in (0.0, 1.0)]
+    wu = np.ones(len(yu))
+    tr = np.zeros(len(yu), bool)
+    ex = []
+    for r, t, wt in (extra or []):
+        t = float(t)
+        if 0.0 < t < 1.0:
+            ex += [(r, 1.0, wt * t), (r, 0.0, wt * (1.0 - t))]
+        else:
+            ex.append((r, t, wt))
     if ex:
-        use = use + [r for r, _t in ex]
-        yu = np.concatenate([yu, [t for _r, t in ex]])
-    npos, nneg = int((yu > 0).sum()), int((yu == 0).sum())
+        use = use + [r for r, _t, _w in ex]
+        yu = np.concatenate([yu, [t for _r, t, _w in ex]])
+        wu = np.concatenate([wu, [w for _r, _t, w in ex]])
+        tr = np.concatenate([tr, np.ones(len(ex), bool)])
+    npos, nneg = int(((yu > 0) & (wu > 0)).sum()), int(((yu == 0) & (wu > 0)).sum())
     if npos < 3 or nneg < 3:
         raise ValueError("need at least 3 listed dams and 3 other fills to learn from "
                          "({} listed, {} other)".format(npos, nneg))
     x = matrix(use, names)
-    gbm = ch.bagging_pu(x, yu, n_bags=n_bags, seed=seed)
+    gbm = ch.bagging_pu(x, yu, n_bags=n_bags, seed=seed, sw=wu, trusted=tr)
     for m in gbm["models"]:                      # a smaller file: 4 decimals are plenty
         for t in m["trees"]:
             _round_tree(t)
@@ -333,8 +359,8 @@ def _train_trees(rows, positive_words, note, features, bags, background, extra, 
              "group_positives": gpos}
     if bags:
         model["clean_positives"] = {"bags": nbags, "rounds": 0}
-    if ex:
-        model["trusted_labels"] = len(ex)
+    if extra:
+        model["trusted_labels"] = len(extra)
     return model
 
 
@@ -377,7 +403,7 @@ def score_detail(model, rows, min_group_positives=30):
     names = model["features"]
     lo = np.array(model.get("train_lo") or [-np.inf] * len(names))
     hi = np.array(model.get("train_hi") or [np.inf] * len(names))
-    gp = model.get("group_positives") or {}
+    gp = {k: v for k, v in (model.get("group_positives") or {}).items() if k}   # measured terrain only
     out = []
     for i, r in enumerate(rows):
         why = [n for j, n in enumerate(names) if x[i, j] < lo[j] or x[i, j] > hi[j]]

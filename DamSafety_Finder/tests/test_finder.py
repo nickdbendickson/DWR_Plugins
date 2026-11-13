@@ -329,18 +329,33 @@ class Runs(unittest.TestCase):
         # the 0.5 kinds, with reviewers' marks as trusted labels (self.out now holds the run above)
         self.f.write_points(self.out, "embankments", self.f.EMB_FIELDS, rows)
         marks = os.path.join(self.tmp, "marks.csv")
-        with open(marks, "w") as fh:
+        with open(marks, "w", encoding="utf-8-sig") as fh:          # a spreadsheet's BOM
             fh.write("find_id,mark\nFIND-0,no\nFIND-1,yes\nFIND-2,unsure\nFIND-9999,yes\n")
         for kind in ("0.5", "0.5-terrain", "0.5-trees"):
             r3 = self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, kind + ".gpkg"),
                                   kind=kind, marks=marks, log=lambda *_: None)
-            # the unknown id is left out; the trees take only yes / no
-            self.assertEqual(r3["model"]["trusted_labels"], 2 if kind == "0.5-trees" else 3)
+            # the unknown id is left out
+            self.assertEqual(r3["model"]["trusted_labels"], 3)
             self.assertIn("ag_head", r3["model"]["features"])
             self.assertGreater(r3["cv_auc"], 0.7)
         with self.assertRaises(RuntimeError):
             self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "x.gpkg"), kind="v9",
                              log=lambda *_: None)
+        # a marks file with no matching card says so; one without the columns, or missing, raises
+        said = []
+        none_ = os.path.join(self.tmp, "none.csv")
+        with open(none_, "w") as fh:
+            fh.write("find_id,mark\nFIND-9999,yes\n")
+        self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "n.gpkg"), kind="0.5",
+                         marks=none_, log=said.append)
+        self.assertTrue(any("none of the 1 mark" in m for m in said))
+        bad = os.path.join(self.tmp, "bad.csv")
+        with open(bad, "w") as fh:
+            fh.write("id,verdict\nFIND-1,yes\n")
+        for m in (bad, os.path.join(self.tmp, "nowhere.csv")):
+            with self.assertRaises(RuntimeError):
+                self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "b.gpkg"),
+                                 kind="0.5", marks=m, log=lambda *_: None)
 
     # -------------------------------------------------------------------------------- water --
     def write_image(self, path, epsg=5070):
@@ -572,7 +587,10 @@ class Runs(unittest.TestCase):
         self.assertGreaterEqual(d["bld_1mi"], 1)
         self.assertGreaterEqual(d["roads_1mi"], 1)
         self.assertGreater(d["conseq"], 0)
-        self.assertEqual(ev["counts"]["nwi_h"], 1)
+        # the dam, and the dry embankment below it whose pool (about 100 m round) reaches the
+        # polygon's edge; the road fill further down does not
+        self.assertEqual(ev["counts"]["nwi_h"], 2)
+        self.assertEqual([r["nwi_h"] for r in ev["rows"] if r["kind"] == "road fill"], ["no"])
         back = self.f.read_rows(out + "|layername=evidence")
         self.assertEqual(len(back), len(ev["rows"]))
         self.assertIn("wet_years", back[0])
@@ -581,6 +599,153 @@ class Runs(unittest.TestCase):
                                                     {"year": 2020, "src": "svc", "nir": 1, "green": 3}])
         with self.assertRaises(ValueError):
             self.f.parse_images("2018 | x | red=1")
+        # the ND GIS Hub colour-infrared years are NIR, green, blue: green is band 2, no red
+        from .. import brand
+        for d in self.f.parse_images(brand.EVIDENCE_IMAGES):
+            if "_CIR" in d["src"]:
+                self.assertEqual((d["nir"], d["green"], d.get("red")), (1, 2, None))
+        for _lab, src, g, n in brand.IMAGE_SERVICES:
+            if "_CIR" in src:
+                self.assertEqual((g, n), (2, 1))
+
+    def evid_fills(self, rows):
+        path = os.path.join(self.tmp, "fills.gpkg")
+        self.f.write_points(path, "embankments", [("find_id", "str"), ("kind", "str"), ("area_ac", "float"),
+                                                  ("storage_af", "float"), ("note", "str"), ("height_ft", "float")],
+                            rows)
+        return path + "|layername=embankments"
+
+    def test_review_batch_reviewed_file_must_exist(self):
+        fills = self.evid_fills([{"x": X0 + 100.0 * i, "y": Y0, "find_id": "FIND-{:08X}".format(i), "kind": "dam",
+                                  "area_ac": 1.0, "height_ft": float(i)} for i in range(30)])
+        out = os.path.join(self.tmp, "rb.gpkg")
+        with self.assertRaises(RuntimeError):
+            self.f.run_review_batch(fills, out, n=10, reviewed=os.path.join(self.tmp, "nowhere.txt"),
+                                    log=lambda *_: None)
+        said = []
+        res = self.f.run_review_batch(fills, out, n=10, reviewed=["FIND-00000000"], per_tile_cap=10,
+                                      log=said.append)
+        self.assertEqual(len(res["rows"]), 10)
+        # one 5 km tile, at most 3 near the cut: a short batch, and it says so
+        res = self.f.run_review_batch(fills, out, n=10, log=said.append)
+        self.assertEqual(len(res["rows"]), 9)
+        self.assertTrue(any("the batch has 9 card(s), not 10" in m for m in said))
+        self.assertNotIn("FIND-00000000", [r["find_id"] for r in res["rows"] if r["stratum"] != "random"])
+
+    def test_evidence_lidar_needs_coverage(self):
+        # a return-count tile 6 returns a cell over x0..x0+400 (0 stored as nodata, as the
+        # mosaic builder writes it): a fill 5 km away has no LiDAR evidence, and a fill whose pool
+        # straddles the tile edge is read on its covered cells only (dry land, nothing empty)
+        tif = os.path.join(self.tmp, "points_count_t.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 400, 400, 1, gdal.GDT_Int32)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + 400.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetNoDataValue(0)
+        ds.GetRasterBand(1).WriteArray(np.full((400, 400), 6, np.int32))
+        ds = None
+        vrt = os.path.join(self.tmp, "point_count.vrt")
+        gdal.BuildVRT(vrt, [tif])
+        wide = os.path.join(self.tmp, "wide.vrt")                    # a VRT wider than its tiles
+        gdal.BuildVRT(wide, [tif], outputBounds=(X0 - 2000.0, Y0 - 2000.0, X0 + 6000.0, Y0 + 2000.0))
+        fills = self.evid_fills([
+            {"x": X0 + 5400.0, "y": Y0 + 200.0, "find_id": "FAR", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 380.0, "y": Y0 + 200.0, "find_id": "EDGE", "kind": "dam", "area_ac": 1.0}])
+        for src in (vrt, wide):
+            ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lc.gpkg"), lidar_points=src, log=lambda *_: None)
+            got = {r["find_id"]: r for r in ev["rows"]}
+            for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+                self.assertIsNone(got["FAR"].get(k), (src, k))
+            self.assertEqual(got["EDGE"]["lidar_pool_empty"], 0.0)
+            self.assertEqual(got["EDGE"]["lidar_ring_empty"], 0.0)
+
+    def test_evidence_two_services_one_year(self):
+        # the CIR and the 4-band of one year: each its own tiles, and water in either counts
+        from unittest import mock
+        import urllib.parse
+        asked = []
+
+        def image(url, bands):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+            w, h = (int(v) for v in q["size"][0].split(","))
+            mem = "/vsimem/svc_{}.tif".format(len(asked))
+            ds = gdal.GetDriverByName("GTiff").Create(mem, w, h, len(bands), gdal.GDT_Byte)
+            ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+            ds.SetProjection(srs(5070).ExportToWkt())
+            for k, v in enumerate(bands):
+                ds.GetRasterBand(k + 1).WriteArray(np.full((h, w), v, np.uint8))
+            ds = None
+            f = gdal.VSIFOpenL(mem, "rb")
+            gdal.VSIFSeekL(f, 0, 2)
+            n = gdal.VSIFTellL(f)
+            gdal.VSIFSeekL(f, 0, 0)
+            data = gdal.VSIFReadL(1, n, f)
+            gdal.VSIFCloseL(f)
+            gdal.Unlink(mem)
+            return data
+
+        class Resp:
+            def __init__(self, data):
+                self.data = data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return self.data
+
+        def fake(url, timeout=None):
+            asked.append(url)
+            if "/cir/" in url:
+                return Resp(image(url, (20, 90, 60)))               # NIR, green, blue: water
+            return Resp(image(url, (60, 90, 50, 20)))               # R, G, B, NIR: water
+        imgs = "2018 | https://svc.test/cir/ImageServer | nir=1 green=2\n" \
+               "2018 | https://svc.test/four/ImageServer | red=1 green=2 blue=3 nir=4"
+        fills = self.evid_fills([{"x": X0 + 200.0, "y": Y0 + 200.0, "find_id": "F1", "kind": "dam", "area_ac": 1.0}])
+        with mock.patch("urllib.request.urlopen", fake):
+            ev = self.f.run_evidence(fills, os.path.join(self.tmp, "svc.gpkg"), images=imgs, log=lambda *_: None)
+        self.assertTrue(any("/cir/" in u for u in asked) and any("/four/" in u for u in asked))
+        r = ev["rows"][0]
+        self.assertEqual((r["img_years"], r["wet_years"]), (1, 1))
+
+    def test_evidence_permit_bare_and_fields(self):
+        # permit_check needs only the storage; a later image with no data keeps the bare share;
+        # a field blank in row 1 keeps its number type; a polygon edge 20 m off counts as near
+        a = os.path.join(self.tmp, "a.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(a, 400, 400, 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + 400.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        yy, xx = np.mgrid[0:400, 0:400]
+        bare = np.hypot(xx + 0.5 - 200.0, yy + 0.5 - 200.0) < 40.0      # bright bare ground at F1, grass round it
+        for b, v, g in ((1, 200, 60), (2, 190, 90), (3, 180, 50), (4, 205, 160)):
+            ds.GetRasterBand(b).WriteArray(np.where(bare, v, g).astype(np.uint8))
+        ds = None
+        b_ = os.path.join(self.tmp, "b.tif")                              # 2020: somewhere else
+        ds = gdal.GetDriverByName("GTiff").Create(b_, 50, 50, 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 + 9000.0, 1.0, 0.0, Y0 + 9050.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds = None
+        imgs = [{"year": 2018, "src": a, "red": 1, "green": 2, "blue": 3, "nir": 4},
+                {"year": 2020, "src": b_, "red": 1, "green": 2, "blue": 3, "nir": 4}]
+        q = write_layer(self.vec, "quarry", [("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=X0 - 200.0, b=X0 + 200.0, c=Y0 + 220.0, d=Y0 + 620.0), {})], epsg=5070)
+        fills = self.evid_fills([
+            {"x": X0 + 200.0, "y": Y0 + 200.0, "find_id": "F1", "kind": "dam", "area_ac": 0.5, "storage_af": 40.0},
+            {"x": X0 + 100.0, "y": Y0 + 100.0, "find_id": "F2", "kind": "dam", "area_ac": 0.5, "storage_af": 3.0,
+             "height_ft": 7.5}])
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "pb.gpkg"), images=imgs, quarries=q,
+                                 log=lambda *_: None)
+        got = {r["find_id"]: r for r in ev["rows"]}
+        self.assertEqual((got["F1"]["permit_check"], got["F2"]["permit_check"]), ("yes", "no"))
+        self.assertEqual(ev["counts"]["permit_check"], 1)
+        self.assertGreater(got["F1"]["bare_share"], 0.5)
+        self.assertEqual(got["F1"]["in_quarry"], "yes")                   # 20 m below the south edge
+        self.assertEqual(dict(self.f._fields_of(ev["rows"]))["height_ft"], "float")
+        back = self.f.read_rows(os.path.join(self.tmp, "pb.gpkg") + "|layername=evidence")
+        self.assertIsInstance([r for r in back if r["find_id"] == "F2"][0]["height_ft"], float)
 
 
 if __name__ == "__main__":

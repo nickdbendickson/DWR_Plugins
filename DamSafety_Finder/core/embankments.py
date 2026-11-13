@@ -183,23 +183,36 @@ def _need_scipy():
         raise RuntimeError("scipy is required for the embankment finder")
 
 
-def line_cells(xy, gt, shape):
+def line_cells(xy, gt, shape, with_dist=False):
     """Grid cells (row, col) along a polyline, in order, each once (consecutive duplicates
-    dropped), sampled every half cell. `gt` is a GDAL geotransform with no rotation."""
+    dropped), sampled every half cell. `gt` is a GDAL geotransform with no rotation. with_dist:
+    also the distance along the line (m) of each cell - the middle of the stretch of line inside
+    it. The samples are one cell apart across the grid and up to 1.41 cells apart on the skew, so
+    a profile's index times the cell size is not metres: use these distances."""
     cell = abs(gt[1])
-    out = []
+    out, spans = [], []
     last = None
+    acc = 0.0
     pts = [(float(x), float(y)) for x, y in xy]
     for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
-        n = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / (cell * 0.5))))
+        seg = math.hypot(x1 - x0, y1 - y0)
+        n = max(1, int(math.ceil(seg / (cell * 0.5))))
         for k in range(n + 1):
             t = k / n
             x, y = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
             c = int(math.floor((x - gt[0]) / gt[1]))
             r = int(math.floor((y - gt[3]) / gt[5]))
-            if 0 <= r < shape[0] and 0 <= c < shape[1] and (r, c) != last:
+            if not (0 <= r < shape[0] and 0 <= c < shape[1]):
+                continue
+            if (r, c) != last:
                 out.append((r, c))
+                spans.append([acc + t * seg, acc + t * seg])
                 last = (r, c)
+            else:
+                spans[-1][1] = acc + t * seg
+        acc += seg
+    if with_dist:
+        return out, [0.5 * (a + b) for a, b in spans]
     return out
 
 
@@ -255,8 +268,9 @@ def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
     no ground below the hump."""
     end = min(len(z) - 1, e + toe_k)
     step = m * cell * math.tan(math.radians(face_deg))
-    bench = max(1, int(round(bench_m / cell)))
+    bench = max(m + 1, int(round(bench_m / cell)))
     k = e
+    cut = False
     while k < end:
         k2 = min(end, k + m)
         if not (np.isfinite(z[k]) and np.isfinite(z[k2])):
@@ -264,15 +278,23 @@ def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
         if z[k] - z[k2] >= step * (k2 - k) / m:
             k += 1                                      # still on the steep face
             continue
-        look = z[k:min(end, k + bench) + 1]             # flattened: a bench only if it drops again
-        if np.isfinite(look).any() and z[k] - np.nanmin(look) >= step:
-            k += 1
+        # flattened: a bench only if the ground falls as steeply as a face again within bench_m
+        # (a slope test - a valley floor of a few per cent falls a lot over bench_m too, but never
+        # as steeply as a fill's face)
+        again = None
+        for j in range(k + 1, min(end, k + bench) - m + 1):
+            if np.isfinite(z[j]) and np.isfinite(z[j + m]) and z[j] - z[j + m] >= step:
+                again = j
+                break
+        if again is not None:
+            k = again
             continue
+        cut = k + bench > end                           # the look-ahead ran into the search end
         break                                           # the valley floor / outlet channel: stop
     seg = z[e:k + 1]
     if not np.isfinite(seg).any():
         return None, False
-    return e + int(np.nanargmin(seg)), bool(k >= end)
+    return e + int(np.nanargmin(seg)), bool(k >= end or cut)
 
 
 def _window(dem, r, c, half):
@@ -450,7 +472,7 @@ def upstream_slope(z, ku, n, cell):
     return max(0.0, float(z[a] - z[ku]) / ((ku - a) * cell))
 
 
-def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0):
+def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0, tol_m=0.15, beyond_m=60.0):
     """(original ground at the crest index kc, its rise per metre going upstream, how it was
     found) of a downstream-ordered profile z whose hump starts at ks and has its toe at kd and
     spill level `spill`. At the crest: a straight line from where the pool's water line meets the
@@ -460,11 +482,23 @@ def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0):
     crest-to-toe distance. The rise carried on upstream is the smaller of that line's and the
     valley's own fall below the toe (the pool can end on another fill upstream, which is not
     ground). Never reads the pool surface: both ends are ground the water does not cover.
+    The fall below the toe is fitted only up to the next hump (another fill or a road below this
+    one is not the valley); a pool end whose ground drops back below the water line within
+    beyond_m further up is the face of another fill, not the valley side, and is not used.
     (NaN, 0, "") when neither can be had."""
     toe = float(z[kd])
     fall = None
     n = max(3, int(round(down_m / cell)))
     seg = z[kd:min(len(z), kd + n + 1)]
+    run, stop = np.inf, len(seg)
+    for i, v in enumerate(seg):
+        if not np.isfinite(v):
+            continue
+        if v > run + tol_m:                             # the next hump starts: stop the fit
+            stop = i
+            break
+        run = min(run, v)
+    seg = seg[:stop]
     f = np.isfinite(seg)
     if f.sum() >= 3:
         xs = np.flatnonzero(f) * cell
@@ -476,6 +510,10 @@ def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0):
         if z[k] >= spill:
             kp = k
             break
+    if kp is not None:
+        far = z[max(0, kp - max(2, int(round(beyond_m / cell)))):kp]
+        if np.isfinite(far).any() and np.nanmin(far) < spill - tol_m:
+            kp = None                                   # another fill's face, not the valley side
     if kp is not None and kd > kp:
         rise = (float(z[kp]) - toe) / ((kd - kp) * cell)
         orig = toe + rise * (kd - kc) * cell
@@ -539,21 +577,43 @@ def spoil_mounds(rel, fill, pool, cell, near_m=40.0, min_m=0.5, min_cells=3):
     return int((sizes >= min_cells).sum())
 
 
-def fill_profile(z, s, kc, kd, crest, up, toe, cell, top_tol=0.15):
+def fill_profile(z, s, kc, kd, crest, up, toe, cell, top_tol=0.15, d=None):
     """(flat top width m, side-slope sum H per V) of the fill on the stream profile: the run of
     samples round the crest within top_tol of it, and the upstream face (hump start to crest,
     over crest - upstream level) plus the downstream face (crest to toe, over crest - toe). A
-    line crossing the fill on the skew reads both wider / flatter than square across."""
-    a = kc
-    while a - 1 >= s and np.isfinite(z[a - 1]) and z[a - 1] >= crest - top_tol:
-        a -= 1
-    b = kc
-    while b + 1 < kd and np.isfinite(z[b + 1]) and z[b + 1] >= crest - top_tol:
-        b += 1
-    top = (b - a + 1) * cell
-    up_h = max(crest - up, 0.1)
-    dn_h = max(crest - toe, 0.1)
-    return top, (max(a - s, 0) * cell) / up_h + (max(kd - b, 0) * cell) / dn_h
+    line crossing the fill on the skew reads both wider / flatter than square across. d: the
+    distance along the line of each sample (line_cells with_dist); without it, index x cell."""
+    # positions are interpolated where the profile crosses each level, so the answer does not
+    # depend on where the samples happen to fall on the face; each face's slope is read over its
+    # middle half (25 % to 75 % of its height), clear of the rounded top and the toe
+    def cross(level, step, stop):
+        j = kc
+        while j != stop:
+            a_, b_ = z[j], z[j + step]
+            if not (np.isfinite(a_) and np.isfinite(b_)):
+                return None
+            if a_ >= level >= b_ and a_ != b_:
+                return j + step * (a_ - level) / (a_ - b_)
+            j += step
+        return None
+
+    def run(i, j):                                      # metres between fractional indices
+        if d is None:
+            return abs(j - i) * cell
+        k = np.arange(len(d))
+        return abs(float(np.interp(j, k, d)) - float(np.interp(i, k, d)))
+
+    lo, hi = max(s - 1, 0), kd
+    ta, tb = cross(crest - top_tol, -1, lo), cross(crest - top_tol, 1, hi)
+    top = run(ta, tb) if ta is not None and tb is not None else float("nan")
+    hu, hd = crest - up, crest - toe
+    side = float("nan")
+    if hu > 0.2 and hd > 0.2:
+        u75, u25 = cross(up + 0.75 * hu, -1, lo), cross(up + 0.25 * hu, -1, lo)
+        d75, d25 = cross(toe + 0.75 * hd, 1, hi), cross(toe + 0.25 * hd, 1, hi)
+        if None not in (u75, u25, d75, d25):
+            side = run(u25, u75) / (0.5 * hu) + run(d75, d25) / (0.5 * hd)
+    return top, side
 
 
 def terrain_round(dem, r, c, cell, half_m=600.0):
@@ -599,9 +659,10 @@ def one_per_pool(cands, cell=3.0, level_tol=0.15):
 
     for g in groups.values():
         g.sort(key=near)
-        g[0].same_pool += len(g) - 1
-        if len(g) > 1:
-            g[0].notes.append("{} other hump(s) on this pool dropped (one fill per pool)".format(len(g) - 1))
+        if len(g) > 1:                                  # a second pass (across tiles) adds up
+            g[0].same_pool += sum(1 + e.same_pool for e in g[1:])
+            g[0].notes = [t for t in g[0].notes if not t.endswith("(one fill per pool)")]
+            g[0].notes.append("{} other hump(s) on this pool dropped (one fill per pool)".format(g[0].same_pool))
         out.append(g[0])
     return out
 
@@ -619,8 +680,6 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
     dem = np.asarray(dem, float).copy()
     dem[dem <= -9998.0] = np.nan
     cell = abs(gt[1])
-    max_len = max(1, int(round(p.max_len_m / cell)))
-    toe_k = max(1, int(round(p.toe_search_m / cell)))
     half = max(4, int(round(p.window_m / cell)))
     found = []
     for li, xy in enumerate(lines):
@@ -628,18 +687,24 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             break
         if len(xy) < 2:
             continue
-        cells = line_cells(xy, gt, dem.shape)
+        cells, dist = line_cells(xy, gt, dem.shape, with_dist=True)
         if len(cells) < 5:
             continue
+        # metres between profile samples on this line (1 to 1.41 cells, by its angle to the grid)
+        cl = (dist[-1] - dist[0]) / (len(cells) - 1)
+        cl = cl if cl > 0 else cell
+        max_len = max(1, int(round(p.max_len_m / cl)))
+        toe_k = max(1, int(round(p.toe_search_m / cl)))
         z = np.array([dem[r, c] for r, c in cells])
         if orient_down(z):
-            cells, z = cells[::-1], z[::-1]
+            cells, z, dist = cells[::-1], z[::-1], dist[::-1]
+        dist = np.asarray(dist, float)
         for s, e in humps(z, p.tol_m, max_len):
             k_crest = s + int(np.nanargmax(z[s:e]))
             crest = float(z[k_crest])
             ku = s - 1
             up = float(z[ku])
-            kd, face_open = face_toe(z, e, toe_k, cell, p.face_deg)
+            kd, face_open = face_toe(z, e, toe_k, cl, p.face_deg)
             if kd is None:
                 continue
             toe = float(z[kd])
@@ -660,7 +725,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             if height < p.min_height_m:
                 continue
             head = up - toe
-            valley = upstream_slope(z, ku, toe_k, cell) * (kd - ku) * cell
+            valley = upstream_slope(z, ku, toe_k, cl) * (kd - ku) * cl
             pm = pool_mask(win, u, spill)
             storage = float((spill - win[pm]).sum() * cell * cell)
             parea = float(pm.sum() * cell * cell)
@@ -736,7 +801,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             if pm.any():
                 pr_, pc_ = np.nonzero(pm)
                 pool_xy = cell_xy(gt, float(pr_.mean()) + r0, float(pc_.mean()) + c0)
-            orig, rise, _how = original_ground(z, s, k_crest, kd, spill, cell, p.toe_search_m)
+            orig, rise, _how = original_ground(z, s, k_crest, kd, spill, cl, p.toe_search_m)
             ag = spill - orig if math.isfinite(orig) else float("nan")
             below = below_grade(win, pm, spill, (rc[0] - r0, rc[1] - c0), orig, rise, cell)
             if math.isfinite(ag) and ag < 3.0 * FT and holds:
@@ -748,14 +813,20 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                 rect, elong, wall = pool_shape(win, pm, cell)
             else:
                 rect, elong, wall = float("nan"), float("nan"), float("nan")
-            sub = pm[fr0 - r0:fr0 - r0 + rel.shape[0], fc0 - c0:fc0 - c0 + rel.shape[1]]
-            mounds = spoil_mounds(rel, fmask, sub, cell, p.spoil_m) if sub.shape == rel.shape else 0
-            top_w, side = fill_profile(z, s, k_crest, kd, crest, up, toe, cell)
+            # the pool (analysis window) and the raised fill (its own window) on their overlap
+            R0, R1 = max(r0, fr0), min(r0 + pm.shape[0], fr0 + rel.shape[0])
+            C0, C1 = max(c0, fc0), min(c0 + pm.shape[1], fc0 + rel.shape[1])
+            mounds = 0
+            if R1 > R0 and C1 > C0:
+                mounds = spoil_mounds(rel[R0 - fr0:R1 - fr0, C0 - fc0:C1 - fc0],
+                                      fmask[R0 - fr0:R1 - fr0, C0 - fc0:C1 - fc0],
+                                      pm[R0 - r0:R1 - r0, C0 - c0:C1 - c0], cell, p.spoil_m)
+            top_w, side = fill_profile(z, s, k_crest, kd, crest, up, toe, cl, d=dist)
             relief, slope = terrain_round(dem, rc[0], rc[1], cell, p.terrain_m)
             drain = float(drain_area(x, y)) if drain_area is not None else float("nan")
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
-                up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cell, storage_m3=storage,
+                up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cl, storage_m3=storage,
                 pool_area_m2=parea, pool=pool, open_pool=open_pool,
                 confidence="low" if low else "medium",
                 line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku]),

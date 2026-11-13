@@ -192,8 +192,8 @@ def ht_share(labels, incl_prob, z=Z95):
     a known chance incl_prob of being picked (a random control, a top-k slice taken with chance 1,
     a near-cut-off slice ...): the Horvitz-Thompson estimate. The cards that share one chance form
     a stratum (a top slice taken whole has no sampling error; a random sample of the rest has it
-    all); each sampled stratum's error uses the Agresti-Coull share (k + z^2/2) / (n + z^2), so a
-    random control with no dams in it still gives an honest upper bound instead of 0 +/- 0.
+    all); each sampled stratum's interval sits on its Agresti-Coull share (k + z^2/2) / (n + z^2), so
+    a random control with no dams in it still gives an honest upper bound instead of 0 +/- 0.
     {'share', 'lo', 'hi', 'n_list' (estimated list size), 'dams' (estimated real dams in the
     list)}."""
     y = np.asarray(labels, float).ravel()
@@ -206,6 +206,7 @@ def ht_share(labels, incl_prob, z=Z95):
     n_hat, d_hat = float(w.sum()), float((w * y).sum())
     r = d_hat / n_hat
     var = 0.0
+    centre = float(y[pi >= 1.0].sum())                 # the bounds sit on the Agresti-Coull shares
     for p in set(np.round(pi, 9).tolist()):
         if p >= 1.0:
             continue                                   # taken whole: no sampling error
@@ -214,13 +215,16 @@ def ht_share(labels, incl_prob, z=Z95):
         big_n = n_h / p
         nt = n_h + z * z
         pt = (y[m].sum() + z * z / 2.0) / nt
+        centre += big_n * pt
         var += big_n * big_n * (1.0 - n_h / big_n) * pt * (1.0 - pt) / nt
     se = math.sqrt(var) / n_hat
-    lo = max(float((y[pi >= 1.0]).sum()) / n_hat, r - z * se)
-    return {"share": r, "lo": max(0.0, lo), "hi": min(1.0, r + z * se), "n_list": n_hat, "dams": d_hat}
+    c = centre / n_hat
+    lo = max(float((y[pi >= 1.0]).sum()) / n_hat, c - z * se)
+    return {"share": r, "lo": max(0.0, min(lo, r)), "hi": min(1.0, max(c + z * se, r)), "n_list": n_hat,
+            "dams": d_hat}
 
 
-def platt(scores, labels, l2=1e-3, iters=50):
+def platt(scores, labels, l2=1e-3, iters=100):
     """(a, b) of P(dam) = 1 / (1 + exp(-(a * score + b))): a two-number calibration fitted to
     reviewed cards (use the random-control cards: the top-k cards over-represent dams). With
     Platt's smoothed targets, so a handful of cards does not give 0 or 1."""
@@ -228,14 +232,29 @@ def platt(scores, labels, l2=1e-3, iters=50):
     m, n = y.sum(), len(y) - y.sum()
     t = np.where(y > 0, (m + 1.0) / (m + 2.0), 1.0 / (n + 2.0))
     x = np.c_[s, np.ones(len(s))]
-    w = np.array([1.0, math.log((n + 1.0) / (m + 1.0)) * -1.0])
+
+    def loss(w):
+        f = x @ w
+        return float(np.sum(np.logaddexp(0.0, f) - t * f) + 0.5 * l2 * (w @ w))
+    # start flat at the base rate, Newton steps halved until the loss falls (Lin, Lin & Weng 2007):
+    # full steps diverge on scores far outside 0-1
+    w = np.array([0.0, -math.log((n + 1.0) / (m + 1.0))])
+    f0 = loss(w)
     for _ in range(iters):
         p = 1.0 / (1.0 + np.exp(-np.clip(x @ w, -30, 30)))
         g = x.T @ (p - t) + l2 * w
         h = (x * (p * (1 - p))[:, None]).T @ x + l2 * np.eye(2)
         st = np.linalg.solve(h, g)
-        w -= st
-        if np.abs(st).max() < 1e-10:
+        step = 1.0
+        while step > 1e-8:
+            f1 = loss(w - step * st)
+            if f1 <= f0 + 1e-4 * step * float(g @ -st):
+                break
+            step *= 0.5
+        if step <= 1e-8:
+            break
+        w, f0 = w - step * st, f1
+        if np.abs(step * st).max() < 1e-10:
             break
     return float(w[0]), float(w[1])
 

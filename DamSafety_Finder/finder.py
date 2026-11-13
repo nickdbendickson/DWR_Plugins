@@ -1777,8 +1777,9 @@ _IMG_KEYS = ("green", "nir", "red", "blue")
 def parse_images(text):
     """Imagery for the water history, one per line: 'YEAR | source | green=G nir=N [red=R blue=B]'
     (source = a raster file or an ArcGIS ImageServer address). Returns [{year, src, green, nir,
-    red, blue}]. Colour-infrared NAIP is nir=1 red=2 green=3; 4-band NAIP is red=1 green=2 blue=3
-    nir=4."""
+    red, blue}]. Check a service's band order (its keyProperties): the ND GIS Hub colour-infrared
+    years are NIR, green, blue (nir=1 green=2), not the classic NIR, red, green; 4-band NAIP is
+    red=1 green=2 blue=3 nir=4."""
     out = []
     for line in str(text or "").splitlines():
         line = line.strip()
@@ -1818,6 +1819,55 @@ def _read_grid(src, ext, cell, alg="near"):
     return a, out.GetGeoTransform()
 
 
+_COVER = {}
+
+
+def _coverage(src, ext, cell):
+    """Bool grid (as _read_grid lays it out over ext) of the cells a raster has data for: inside
+    one of a VRT's source tiles (from the VRT's layout), or inside the raster. A count raster
+    stores 0 as nodata (or has none, and a VRT fills its gaps with 0), so the values alone
+    cannot tell a cell with no returns from a cell no survey reached."""
+    key = str(src)
+    if key not in _COVER:
+        ds = _checked(gdal.Open(key), "opening {}".format(src))
+        gt = ds.GetGeoTransform()
+        boxes = []
+        if ds.GetDriver().ShortName == "VRT":
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(ds.GetMetadata("xml:VRT")[0])
+            band = root.find("VRTRasterBand")
+            for el in (band if band is not None else []):
+                dr = el.find("DstRect")
+                if dr is None:
+                    continue
+                xo, yo, xs, ys = (float(dr.get(k)) for k in ("xOff", "yOff", "xSize", "ySize"))
+                xa, xb = gt[0] + xo * gt[1], gt[0] + (xo + xs) * gt[1]
+                ya, yb = gt[3] + yo * gt[5], gt[3] + (yo + ys) * gt[5]
+                boxes.append((min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb)))
+        if not boxes:
+            xa, xb = gt[0], gt[0] + ds.RasterXSize * gt[1]
+            ya, yb = gt[3], gt[3] + ds.RasterYSize * gt[5]
+            boxes = [(min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))]
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(ds.GetProjection() or _srs(WORK_EPSG).ExportToWkt())
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        _COVER[key] = (np.array(boxes, float), osr.CoordinateTransformation(_srs(WORK_EPSG), srs))
+        ds = None
+    boxes, ct = _COVER[key]
+    n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
+    n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
+    cxs = ext[0] + (np.arange(n_x) + 0.5) * cell
+    cys = ext[1] + n_y * cell - (np.arange(n_y) + 0.5) * cell
+    gx, gy = np.meshgrid(cxs, cys)
+    pts = np.array(ct.TransformPoints(np.c_[gx.ravel(), gy.ravel()].tolist()))[:, :2]
+    inside = np.zeros(len(pts), bool)
+    near = (boxes[:, 2] >= pts[:, 0].min()) & (boxes[:, 0] <= pts[:, 0].max()) & \
+           (boxes[:, 3] >= pts[:, 1].min()) & (boxes[:, 1] <= pts[:, 1].max())
+    for b in boxes[near]:
+        inside |= (pts[:, 0] >= b[0]) & (pts[:, 0] <= b[2]) & (pts[:, 1] >= b[1]) & (pts[:, 1] <= b[3])
+    return inside.reshape(n_y, n_x)
+
+
 def _polys_with(src, box, field=None):
     """[(rings, value of `field` (or ''), envelope)] of the polygons of a layer meeting box."""
     if not src:
@@ -1847,6 +1897,22 @@ def _polys_with(src, box, field=None):
     return out
 
 
+def _fields_of(rows, skip=(), first=()):
+    """[(name, type)] of every key the rows carry (after `first`), each typed by its first value
+    that is not None: a field blank in row 1 is not written as text."""
+    fields = list(first)
+    have = set(skip) | {k for k, _t in fields}
+    for r in rows:
+        for k in r:
+            if k in have:
+                continue
+            have.add(k)
+            v = next((q[k] for q in rows if q.get(k) is not None), None)
+            fields.append((k, "float" if isinstance(v, float) else
+                           ("int" if isinstance(v, int) and not isinstance(v, bool) else "str")))
+    return fields
+
+
 def _poly_at(polys, x, y, near_m=0.0):
     """The value of the polygon holding (x, y); else of the nearest one whose box is within
     near_m; None when none."""
@@ -1856,7 +1922,7 @@ def _poly_at(polys, x, y, near_m=0.0):
             if ls.point_in_polygon(x, y, rings):
                 return val
             if near_m > 0:
-                d = min(math.hypot(px - x, py - y) for px, py in rings[0])
+                d = ls.dist_to_polygon(x, y, rings)
                 if d <= near_m and (bd is None or d < bd):
                     best, bd = val, d
     return best
@@ -1931,21 +1997,30 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
         seen = {}
         for im in imgs:
             bands = [im[k] for k in _IMG_KEYS if k in im]
+            yr = im["year"]
             try:
                 src = im["src"]
                 if is_service(src):
-                    src = fetch_imageserver(src, box, image_cell, os.path.join(cache, str(im["year"])),
-                                            log=lambda *a: None)
+                    # one cache folder per year AND service: two services of one year (CIR and
+                    # 4-band) must not read each other's tiles
+                    tag = "{}_{:08x}".format(yr, zlib.crc32(str(src).encode()) & 0xFFFFFFFF)
+                    src = fetch_imageserver(src, box, image_cell, os.path.join(cache, tag), log=lambda *a: None)
                 b, gt = read_bands(src, box, image_cell, bands)
             except Exception as e:                          # a gap in the service, a dead tile
-                log("{} {}: no image ({})".format(r.get("find_id"), im["year"], e))
-                seen[im["year"]] = None
+                log("{} {}: no image ({})".format(r.get("find_id"), yr, e))
+                seen.setdefault(yr, None)
                 continue
             m = ev.disk(b[im["nir"]].shape, gt, cx, cy, rad)
-            seen[im["year"]], _sh = ev.wet(ev.ndwi(b[im["green"]], b[im["nir"]]), m, ndwi_threshold)
+            w, _sh = ev.wet(ev.ndwi(b[im["green"]], b[im["nir"]]), m, ndwi_threshold)
+            if w is not None and not seen.get(yr):         # one year, two images: water in either
+                seen[yr] = bool(w)
+            else:
+                seen.setdefault(yr, None)
             if "red" in im and "blue" in im:
-                r["bare_share"] = round(ev.bare_share(b[im["red"]], b[im["green"]], b[im["blue"]],
-                                                      b[im["nir"]], ev.disk(m.shape, gt, cx, cy, rad + 20.0)), 3)
+                v = ev.bare_share(b[im["red"]], b[im["green"]], b[im["blue"]], b[im["nir"]],
+                                  ev.disk(m.shape, gt, cx, cy, rad + 20.0))
+                if math.isfinite(v):                        # an image with no data here keeps the last
+                    r["bare_share"] = round(v, 3)
         if imgs:
             h = ev.water_history(seen)
             r.update({"img_years": h["years"], "wet_years": h["wet_years"],
@@ -1975,29 +2050,30 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
                 log("{}: no land cover ({})".format(r.get("find_id"), e))
         if lidar_points:
             try:
-                pc, gp = _read_grid(lidar_points, (cx - rad - 30.0, cy - rad - 30.0, cx + rad + 30.0, cy + rad + 30.0), 1.0)
-                pc[np.isnan(pc)] = 0.0                      # a count raster stores 0 as nodata
+                lbox = (cx - rad - 30.0, cy - rad - 30.0, cx + rad + 30.0, cy + rad + 30.0)
+                pc, gp = _read_grid(lidar_points, lbox, 1.0)
+                cov = _coverage(lidar_points, lbox, 1.0)
+                pc[np.isnan(pc) & cov] = 0.0                # a count raster stores 0 as nodata
+                pc[~cov] = np.nan                           # no survey here: no evidence, not 'empty'
                 wc = None
                 if lidar_water:
-                    wc, _g = _read_grid(lidar_water, (cx - rad - 30.0, cy - rad - 30.0, cx + rad + 30.0, cy + rad + 30.0), 1.0)
-                    wc[np.isnan(wc)] = 0.0
+                    wc, _g = _read_grid(lidar_water, lbox, 1.0)
+                    wc[np.isnan(wc)] = 0.0                  # the water mosaic skips dry tiles
+                    wc[~cov] = np.nan
                 d = ev.dropout(pc, ev.disk(pc.shape, gp, cx, cy, rad), ev.ring(pc.shape, gp, cx, cy, rad + 5.0, rad + 25.0), wc)
                 r.update({"lidar_pool_empty": _rnd(d["pool_empty"], 3), "lidar_ring_empty": _rnd(d["ring_empty"], 3),
                           "lidar_contrast": _rnd(d["contrast"], 3), "lidar_class9": _rnd(d["class9"], 3)})
             except Exception as e:
                 log("{}: no LiDAR counts ({})".format(r.get("find_id"), e))
+        try:
+            st = float(r.get("storage_af"))
+            r["permit_check"] = "yes" if st > ev.PERMIT_AF else "no"
+        except (TypeError, ValueError):
+            pass
         progress(80.0 * (i + 1) / len(rows))
     if dem and (buildings or roads) and not cancelled():
         _consequences(rows, dem, z_feet, buildings, roads, reach_m, flow_cell, log, cancelled)
-    fields = []
-    have = set()
-    for r in rows:
-        for k, v in r.items():
-            if k in ("x", "y") or k in have or k in dict(EVID_FIELDS):
-                continue
-            have.add(k)
-            fields.append((k, "float" if isinstance(v, float) else ("int" if isinstance(v, int) and not isinstance(v, bool) else "str")))
-    fields += EVID_FIELDS
+    fields = _fields_of(rows, skip={"x", "y"} | set(dict(EVID_FIELDS))) + EVID_FIELDS
     out_csv = os.path.splitext(out_gpkg)[0] + "_evidence.csv"
     write_points(out_gpkg, "evidence", fields, rows)
     write_csv(out_csv, fields, rows)
@@ -2089,10 +2165,14 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
         for r in rows:
             r["score"] = float(r.get("height_ft") or 0.0) / 100.0
     done = set()
-    if isinstance(reviewed, str) and os.path.exists(reviewed):
-        with open(reviewed, encoding="utf-8") as fh:
+    if isinstance(reviewed, str) and reviewed.strip():
+        if not os.path.exists(reviewed):            # not a list of ids: a path that is not there
+            raise RuntimeError("the reviewed-cards file {} does not exist".format(reviewed))
+        with open(reviewed, encoding="utf-8-sig") as fh:
             done = {m.group(0) for m in re.finditer(r"FIND-[0-9A-F]{8}", fh.read())}
-    elif reviewed:
+        if not done:
+            log("{} holds no card ids (FIND-XXXXXXXX): nothing is left out as reviewed".format(reviewed))
+    elif reviewed and not isinstance(reviewed, str):
         done = set(reviewed)
     got = rv.pick_batch(rows, n, random_frac, top_frac, second_frac, tile_m=tile_m, per_tile_cap=per_tile_cap,
                         seed=seed, reviewed=done)
@@ -2100,20 +2180,16 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
     for r in got:
         r["list_n"] = len(rows)
     # the batch fields first, then everything else the fills carry (a sheet shows them)
-    fields = list(REVIEW_FIELDS)
-    have = {k for k, _t in fields} | {"x", "y"}
-    for r in got:
-        for k in r:
-            if k not in have:
-                have.add(k)
-                v = next((q[k] for q in got if q.get(k) is not None), None)
-                fields.append((k, "float" if isinstance(v, float) else
-                               ("int" if isinstance(v, int) and not isinstance(v, bool) else "str")))
+    fields = _fields_of(got, skip={"x", "y"}, first=REVIEW_FIELDS)
     out_csv = os.path.splitext(out_gpkg)[0] + "_review_batch.csv"
     write_points(out_gpkg, "review_batch", fields, got)
     write_csv(out_csv, fields, got)
     counts = {k: sum(1 for r in got if r["stratum"] == k) for k in ("random", "top", "near")}
     counts["second"] = sum(1 for r in got if r["second"] == "yes")
+    want = min(int(n), len(rows))
+    if len(got) < want:
+        log("warning: the batch has {} card(s), not {}: too few unreviewed candidates near the cut "
+            "(or a per-tile cap of {} too tight for this area)".format(len(got), want, per_tile_cap))
     log("review batch: {} card(s) of {} candidate(s) - {} random control, {} top-ranked, {} near the cut; "
         "{} for a second reviewer".format(len(got), len(rows), counts["random"], counts["top"], counts["near"],
                                           counts["second"]))
@@ -2241,10 +2317,18 @@ def _marks_of(src):
                 with open(os.path.join(src, f), encoding="utf-8") as fh:
                     out[f[:-5]] = json.load(fh)
         return out
-    with open(src, newline="", encoding="utf-8") as fh:
-        for r in csv.DictReader(fh):
-            if r.get("find_id"):
-                out[r["find_id"]] = {"mark": (r.get("mark") or "").strip().lower()}
+    if not os.path.exists(src):
+        raise RuntimeError("the marks file {} does not exist".format(src))
+    with open(src, newline="", encoding="utf-8-sig") as fh:      # -sig: a spreadsheet's BOM
+        rd_ = csv.DictReader(fh)
+        cols = {c.strip().lower(): c for c in (rd_.fieldnames or [])}
+        if "find_id" not in cols or "mark" not in cols:
+            raise RuntimeError("the marks file {} needs find_id and mark columns (it has {})".format(
+                src, ", ".join(rd_.fieldnames or []) or "none"))
+        for r in rd_:
+            fid = (r.get(cols["find_id"]) or "").strip()
+            if fid:
+                out[fid] = {"mark": (r.get(cols["mark"]) or "").strip().lower()}
     return out
 
 
@@ -2256,9 +2340,11 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
     (a model JSON), score with it instead of learning. kind: 'v1' (the 11 measurements),
     '0.5' (every 0.5 measurement, one fill per listed dam) or '0.5-terrain' (also hinge terms and
     flat / rolling / cut copies) or '0.5-trees' (bagged PU boosted trees on the 0.5
-    measurements; won 6 of 7 held-out regions against the logistic). marks: reviewers' marks (a folder of <find_id>.json or a CSV of
-    find_id, mark) - yes / no / unsure of fills in these layers become trusted labels at weight
-    marks_weight; learn them per region (a prairie model, a breaks model), not statewide.
+    measurements). marks: reviewers' marks (a folder of <find_id>.json or a CSV of find_id, mark)
+    - yes / no / unsure of fills in these layers become trusted labels at weight marks_weight
+    (an unsure one as half a dam, half not; a mark replaces the fill's own listed / unlisted
+    label; with trees the marks join every bag at that weight); learn them per region (a prairie
+    model, a breaks model), not statewide.
     Writes 'scored_fills' and the model JSON (model_out, default beside the GeoPackage). Returns
     {'rows', 'model', 'auc', 'cv_auc', ...}."""
     from .core import score as sc
@@ -2290,6 +2376,11 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
             v = (m or {}).get("mark")
             if fid in by and v in ("yes", "no", "unsure"):
                 extra.append((by[fid], {"yes": 1.0, "no": 0.0, "unsure": 0.5}[v], float(marks_weight)))
+        if mk and not extra:
+            log("warning: none of the {} mark(s) in {} is a yes / no / unsure on a fill in these layers: "
+                "trained without them".format(len(mk), marks))
+        elif mk:
+            log("{} of {} mark(s) matched a fill in these layers".format(len(extra), len(mk)))
         if extra:
             opts["extra"] = extra
         note = "trained on {} fill(s) from {} layer(s), kind {}{}".format(

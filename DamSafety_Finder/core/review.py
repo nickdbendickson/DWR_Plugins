@@ -20,14 +20,56 @@ of being picked, so the answers are unbiased (evaluate.ht_share):
 Marks: yes / no / unsure / offset (a real dam just off the point - a candidate-placement miss,
 not a ranking error). marks_to_labels turns them into training labels.
 """
+import hashlib
 import math
-import zlib
 
 import numpy as np
 
 
 def _hash01(key, seed):
-    return (zlib.crc32("{}|{}".format(seed, key).encode()) & 0xFFFFFFFF) / 4294967296.0
+    """A uniform number in [0, 1) from a card id and a seed. blake2b, not crc32: crc32 is affine,
+    so two seeds would pick nearly the same 'random' cards."""
+    d = hashlib.blake2b("{}|{}".format(seed, key).encode(), digest_size=8).digest()
+    return int.from_bytes(d, "big") / 18446744073709551616.0
+
+
+def _tile(r, tile_m):
+    return (int(float(r["x"]) // tile_m), int(float(r["y"]) // tile_m))
+
+
+def _take(pool, n_near, tiles, cap):
+    """Walk pool in order, take up to n_near cards, at most cap from one tile."""
+    used, got = {}, []
+    for i in pool:
+        if len(got) >= n_near:
+            break
+        t = tiles[i]
+        if used.get(t, 0) >= cap:
+            continue
+        used[t] = used.get(t, 0) + 1
+        got.append(i)
+    return got
+
+
+def _near_chance(pool, n_near, tiles, cap, seed, replays=2000):
+    """{card: chance a uniformly shuffled walk of pool (n_near cards, at most cap a tile) takes it}.
+    Exact when the cap cannot bite (no tile holds more than cap pool cards); otherwise counted
+    over replays with their own random stream."""
+    pool = list(pool)
+    if not pool or n_near <= 0:
+        return {i: 0.0 for i in pool}
+    per = {}
+    for i in pool:
+        per[tiles[i]] = per.get(tiles[i], 0) + 1
+    if max(per.values()) <= cap:
+        p = min(1.0, n_near / float(len(pool)))
+        return {i: p for i in pool}
+    rng = np.random.default_rng([int(_hash01("replay", seed) * 2 ** 32), len(pool)])
+    hits = dict.fromkeys(pool, 0)
+    for _ in range(replays):
+        for i in _take([pool[j] for j in rng.permutation(len(pool))], n_near, tiles, cap):
+            hits[i] += 1
+    return {i: hits[i] / float(replays) for i in pool}
 
 
 def pick_batch(rows, n=90, random_frac=0.18, top_frac=0.37, second_frac=0.12, score_key="score",
@@ -35,10 +77,14 @@ def pick_batch(rows, n=90, random_frac=0.18, top_frac=0.37, second_frac=0.12, sc
     """Pick a review batch from candidate rows (dicts with find_id, x, y and a score).
     committee: optional list of score arrays (one per model) - the near-the-cut slice then takes
     the cards they disagree on most. reviewed: find_ids already marked (left out of the top and
-    near slices; the random control keeps them, so it stays the same set).
+    near slices; the random control keeps them, so it stays the same set). per_tile_cap limits
+    the near-the-cut cards from one tile (the random and top cards do not count against it).
     Returns the picked rows (copies) with 'stratum' (random / top / near), 'rank' (by score, 1 =
-    highest), 'incl_prob' (the card's chance of being in a batch drawn this way) and 'second'
-    ('yes' for a second reviewer), shuffled, numbered 'n' from 1."""
+    highest), 'incl_prob' (the card's chance of being in a batch drawn this way: the random
+    control's n_rand / N, plus, for a card the near slice could take, (1 - n_rand / N) times its
+    chance of being taken given the random control drawn, with the tile cap counted; 1 for the
+    top slice and for a committee's deterministic picks) and 'second' ('yes' for a second
+    reviewer), shuffled, numbered 'n' from 1."""
     rows = list(rows)
     N = len(rows)
     if N == 0:
@@ -51,60 +97,61 @@ def pick_batch(rows, n=90, random_frac=0.18, top_frac=0.37, second_frac=0.12, sc
     rank = np.empty(N, int)
     rank[order] = np.arange(1, N + 1)
     done = set(reviewed)
+    is_done = [r.get("find_id") in done for r in rows]
     n_rand = int(round(n * random_frac))
     n_top = int(round(n * top_frac))
     n_near = n - n_rand - n_top
     # random control: the n_rand smallest hashes of the id (stable across score versions)
     h = np.array([_hash01(r.get("find_id"), seed) for r in rows])
-    rand_idx = list(np.argsort(h)[:n_rand])
-    picked = {int(i): "random" for i in rand_idx}
+    rand_idx = [int(i) for i in np.argsort(h)[:n_rand]]
+    picked = {i: "random" for i in rand_idx}
     # top slice: highest-scored not reviewed / not picked
     top_idx = []
     for i in order:
         if len(top_idx) >= n_top:
             break
-        if int(i) in picked or rows[i].get("find_id") in done:
+        if int(i) in picked or is_done[i]:
             continue
         top_idx.append(int(i))
         picked[int(i)] = "top"
+    top_max = int(rank[top_idx].max()) if top_idx else 0
     k = max(n_top, 1)
-    lo_rank = max(rank[top_idx].max() if top_idx else 0, k) + 1
+    lo_rank = max(top_max, k) + 1
     hi_rank = 3 * lo_rank
-    band = [int(i) for i in order if lo_rank <= rank[i] <= hi_rank and int(i) not in picked
-            and rows[i].get("find_id") not in done]
+    in_band = [lo_rank <= rank[i] <= hi_rank and not is_done[i] for i in range(N)]
+    band = [int(i) for i in order if in_band[i] and int(i) not in picked]
+    rand_band = [i for i in rand_idx if in_band[i]]
+    tiles = {i: _tile(rows[i], tile_m) for i in band + rand_band}
     if committee is not None and len(committee) >= 2:
         cr = np.vstack([np.argsort(np.argsort(-np.asarray(c, float))) for c in committee])
         spread = cr.std(axis=0)
-        band.sort(key=lambda i: -spread[i])
+
+        def walk(pool):
+            return _take(sorted(pool, key=lambda i: (-spread[i], rank[i])), n_near, tiles, per_tile_cap)
+        near_idx = walk(band)
+        # deterministic given the random control: a card is taken or it is not. A random-control
+        # card in the band would have been taken had the hash left it out?
+        chance = {i: 1.0 if i in set(near_idx) else 0.0 for i in band}
+        for i in rand_band:
+            chance[i] = 1.0 if i in set(walk(band + [i])) else 0.0
     else:
-        band = [band[j] for j in rng.permutation(len(band))]
-    tiles = {}
-    for r in picked:
-        key = (int(rows[r]["x"] // tile_m), int(rows[r]["y"] // tile_m))
-        tiles[key] = tiles.get(key, 0) + 1
-    near_idx = []
-    for i in band:
-        if len(near_idx) >= n_near:
-            break
-        key = (int(rows[i]["x"] // tile_m), int(rows[i]["y"] // tile_m))
-        if tiles.get(key, 0) >= per_tile_cap:
-            continue
-        tiles[key] = tiles.get(key, 0) + 1
-        near_idx.append(i)
+        near_idx = _take([band[j] for j in rng.permutation(len(band))], n_near, tiles, per_tile_cap)
+        chance = _near_chance(band, n_near, tiles, per_tile_cap, seed)
+        for i in rand_band:
+            chance[i] = _near_chance(band + [i], n_near, tiles, per_tile_cap, seed)[i]
+    for i in near_idx:
         picked[i] = "near"
     p_rand = n_rand / float(N)
-    band_size = max(1, sum(1 for i in range(N) if lo_rank <= rank[i] <= hi_rank and rows[i].get("find_id") not in done))
-    p_band = min(1.0, len(near_idx) / float(band_size))
     out = []
     for i, st in picked.items():
         r = dict(rows[i])
-        if rank[i] <= (rank[top_idx].max() if top_idx else 0) and rows[i].get("find_id") not in done:
+        if rank[i] <= top_max and not is_done[i]:
             pi = 1.0
-        elif lo_rank <= rank[i] <= hi_rank:
-            pi = 1.0 - (1.0 - p_rand) * (1.0 - p_band)
+        elif i in chance:
+            pi = p_rand + (1.0 - p_rand) * chance[i]
         else:
             pi = p_rand
-        r.update({"stratum": st, "rank": int(rank[i]), "incl_prob": round(pi, 6)})
+        r.update({"stratum": st, "rank": int(rank[i]), "incl_prob": round(max(pi, 1e-6), 6)})
         out.append(r)
     perm = rng.permutation(len(out))
     out = [out[j] for j in perm]
