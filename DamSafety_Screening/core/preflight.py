@@ -234,7 +234,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
     """The preflight list for a work folder, the window's settings and the steps that would run
     (default: the chain plan). Never raises; a check that cannot be made says so."""
     env = env or Env()
-    S = dict(wf.DEFAULT_SETTINGS)
+    S = wf.default_settings()
     S.update(settings or {})
     out = []
     if steps is None:
