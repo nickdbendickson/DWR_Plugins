@@ -195,6 +195,10 @@ class FindEmbankments(_Base):
         self._num("DRAIN_AC", "Also walk every draw of the DEM draining at least (acres; 0 = only the "
                   "stream lines; YOUR value)", 10.0, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
+            "POOLS", "Also walk a short line out of every pond too small for the draws (finds the fill "
+            "of a pond with little drainage; on only with the draws)", True))
+        self._num("POOL_MAX_AC", "... ponds draining at most (acres; 0 = no limit; YOUR value)", 50.0, 0.0)
+        self.addParameter(QgsProcessingParameterBoolean(
             "DIKES", "Also find dikes that hold water beside a stream (dams built along a channel)", True))
         self.addParameter(QgsProcessingParameterBoolean(
             "DUGOUTS", "Also look for dug pits (dugouts) anywhere in the DEM", True))
@@ -234,6 +238,9 @@ class FindEmbankments(_Base):
                 drainage_ac=self.parameterAsDouble(params, "DRAIN_AC", context),
                 dugouts=self.parameterAsBool(params, "DUGOUTS", context),
                 dikes=self.parameterAsBool(params, "DIKES", context),
+                pool_lines=self.parameterAsBool(params, "POOLS", context) and bool(
+                    self.parameterAsDouble(params, "DRAIN_AC", context)),
+                pool_max_drain_ac=self.parameterAsDouble(params, "POOL_MAX_AC", context) or None,
                 ridges=self.parameterAsBool(params, "RIDGES", context),
                 model=self.parameterAsFile(params, "MODEL", context) or None,
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)

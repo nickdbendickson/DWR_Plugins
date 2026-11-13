@@ -717,7 +717,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         def keep(xx, yy, b=core_box):
             return b[0] <= xx < b[2] and b[1] <= yy < b[3]
 
-        dl, deep, darea, pls, pex = [], None, None, [], []
+        dl, deep, darea, pls, pex, pdr = [], None, None, [], [], []
         if drainage_ac or ridges or dikes or contrib or pool_lines:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
             if drainage_ac or contrib or pool_lines:
@@ -729,7 +729,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             if drainage_ac:
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
             if pool_lines and not cancelled():
-                pls, pex = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
+                pls, pex, pdr = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
                                        pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                                        pool_opts or {})
             if ridges or dikes:
@@ -742,7 +742,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 deep = d10[np.ix_(rr, cc)]
         lim = {len(tl) + len(dl) + i: x + pool_reach_m for i, x in enumerate(pex)} if pls else None
         rules = dict(min_area_m2=p.min_pool_m2, skip_road=True,
-                     max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None)
+                     max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
+                     line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
+                     pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)})
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
                       drain_area=darea, line_lim=lim, pool_rules=rules)
         for e in got:
@@ -882,17 +884,19 @@ def _rnd(v, nd):
 
 
 def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=None):
-    """(lines, exits) of one tile: the pools of the DEM z (grid gt) over the core box plus margin_m
-    (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec` (grid
-    gt10, the draws' receivers); exits = the distance along each line at which it leaves its pool.
-    A pool whose seed already drains max_area (area: the routed contributing area on gt10) gets
-    no line: the draws walk it."""
+    """(lines, exits, drains) of one tile: the pools of the DEM z (grid gt) over the core box plus
+    margin_m (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec`
+    (grid gt10, the draws' receivers); exits = the distance along each line at which it leaves its
+    pool; drains = the ground draining into the line's pool (m2): the routed area (area, on gt10)
+    of every pool cell whose water leaves the pool - flat routing can split a pool's water over
+    many outlet cells, so no one cell on the line holds it all. A pool whose seed already drains
+    max_area gets no line: the draws walk it."""
     c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
     c1 = min(z.shape[1], int(math.ceil((core_box[2] + margin_m - gt[0]) / gt[1])))
     r0 = max(0, int((core_box[3] + margin_m - gt[3]) / gt[5]))
     r1 = min(z.shape[0], int(math.ceil((core_box[1] - margin_m - gt[3]) / gt[5])))
     if r1 <= r0 or c1 <= c0:
-        return [], []
+        return [], [], []
     sub = z[r0:r1, c0:c1]
     gs = (gt[0] + c0 * gt[1], gt[1], 0.0, gt[3] + r0 * gt[5], 0.0, gt[5])
     seeds, mask = tr.pool_seeds(sub, gs, **(opts or {}))
@@ -914,7 +918,34 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
         ok = (R >= 0) & (R < shape10[0]) & (C >= 0) & (C < shape10[1])
         pool10[R[ok], C[ok]] = True
     seeds.sort(key=lambda sd: -sd[2])            # a seed sharing a cell with a bigger pool's is dropped
-    return tr.pool_lines(seeds, rec, gt10, shape10, pool=pool10)
+    lines, exits = tr.pool_lines(seeds, rec, gt10, shape10, pool=pool10)
+    lab, nl = ndi.label(pool10, structure=np.ones((3, 3), bool))
+    catch = np.zeros(nl + 1)
+    if nl:
+        L = lab.ravel()
+        idx = np.flatnonzero(L)
+        j = np.asarray(rec).ravel()[idx].astype(np.int64)
+        leaves = (j < 0) | (L[np.maximum(j, 0)] != L[idx])
+        catch = np.bincount(L[idx[leaves]], weights=np.asarray(area, float).ravel()[idx[leaves]],
+                            minlength=nl + 1)
+    drains = []
+    for ln in lines:
+        r, c = rc10(*ln[0])
+        k = lab[r, c] if 0 <= r < shape10[0] and 0 <= c < shape10[1] else 0
+        drains.append(float(catch[k]) if k else 0.0)
+    return lines, exits, drains
+
+
+def _line_area(line, area, gt):
+    """The contributing area (m2) of `area` (grid gt) at each point of `line` (a pool line: the
+    centres of the cells of its own routing path)."""
+    h, w = area.shape
+    out = []
+    for x, y in line:
+        c = int(math.floor((x - gt[0]) / gt[1]))
+        r = int(math.floor((y - gt[3]) / gt[5]))
+        out.append(float(area[r, c]) if 0 <= r < h and 0 <= c < w else float("nan"))
+    return out
 
 
 def _area_at(area, gt, snap=2):

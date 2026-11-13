@@ -306,6 +306,25 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in both["rows"]), ["dam", "dry embankment", "road fill"])
         self.assertTrue(all(r["line_source"] == "DEM drainage" for r in both["rows"]))
 
+    def test_a_pond_beside_a_big_draw_keeps_its_own_drainage(self):
+        # a hillside pond (2.3 ac of water) whose west berm stands 16 m from the valley's draw (80 ac),
+        # which runs beside it and never crosses it: only its pool line finds it, and the 50 ac cap
+        # reads the pool line's own path and the ground draining into the pool, not the draw beside it
+        dem, y = tc.valley()
+        x = np.mgrid[0:tc.N, 0:tc.N][1]
+        lvl = tc.bed(165) + 1.0
+        dem = np.where((y >= 150) & (y <= 180) & (x >= 207) & (x <= 240), lvl, dem)
+        berm = ((y >= 148) & (y <= 182) & (x >= 205) & (x <= 206)) | \
+            ((((y >= 148) & (y <= 149)) | ((y >= 181) & (y <= 182))) & (x >= 205) & (x <= 240))
+        dem = np.where(berm, np.maximum(dem, lvl + 1.2), dem)
+        path = os.path.join(self.tmp, "dem_hillside.tif")
+        write_dem(path, dem)
+        res = self.f.run_embankments(path, None, self.out, drainage_ac=20.0, hillshade=False, log=lambda *_: None)
+        self.assertEqual([(r["kind"], r["line_source"]) for r in res["rows"]], [("dam", "DEM pool outlet")])
+        d = res["rows"][0]["drain_ac"]
+        self.assertGreater(d, 31 * 34 * 9.0 / 4046.86)                 # at least the pond itself
+        self.assertLess(d, 50.0)
+
     def test_ridges_and_dugouts_layers(self):
         res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, ridges=True,
                                      dugouts=True, hillshade=False, log=lambda *_: None)

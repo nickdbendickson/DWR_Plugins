@@ -176,46 +176,88 @@ def depth(dem, filled):
 # and on below it, so the fill that holds the pool is profiled whatever drains to it.
 
 
-def flat_pools(dem, cell, tol_m=0.15, min_m2=300.0, ring_tol_m=0.10, max_lower=0.10):
+def flat_pools(dem, cell, tol_m=0.15, min_m2=300.0, ring_tol_m=0.10, max_lower=0.25, level_m=0.03,
+               level_ring_m=0.02, level_share=0.9):
     """(label grid, [label, ...]) of the flat water surfaces of a DEM: connected (8-way) cells
-    whose 3x3 neighbourhood spans at most tol_m, at least min_m2 in all, and whose 1-cell ring is
-    (almost) all higher: at most max_lower of the ring more than ring_tol_m below the flat's median
-    (a field or a terrace bench has lower ground along one side)."""
+    whose 3x3 neighbourhood spans at most tol_m, at least min_m2 in all, level (at least
+    level_share of them within tol_m of their median) and whose rim is (almost) all higher: at
+    most max_lower of it more than ring_tol_m below the median (a field or a terrace bench has
+    lower ground along one side). The rim is read two cells out from the flat: the 3x3 test leaves
+    a flat's own edge cells out, and those are at its level.
+    A low slope is not a level: ground under about 2.5 % passes the 3x3 test, so a brim-full pond
+    in a swale with gentle sides joins its shores in one flat, which is not level or whose rim
+    reads lower than its median. Such a flat is tried again on its most
+    common level (1 cm bins; a water surface is one level): the cells within level_m of it, each
+    piece of at least min_m2 that stays off the grid edge and no-data, rim tested against that
+    level with level_ring_m (a sloping strip has a lower side)."""
     from scipy import ndimage as ndi
     z = np.asarray(dem, float)
     fin = np.isfinite(z)
+    k3 = np.ones((3, 3), bool)
     mx = ndi.maximum_filter(np.where(fin, z, 1e9), size=3)
     mn = ndi.minimum_filter(np.where(fin, z, -1e9), size=3)
-    lab, n = ndi.label(fin & (mx - mn <= tol_m), structure=np.ones((3, 3), bool))
+    lab, n = ndi.label(fin & (mx - mn <= tol_m), structure=k3)
     if not n:
         return lab, []
     cnt = np.bincount(lab.ravel(), minlength=n + 1)
+    H, W = z.shape
+
+    def rim_ok(m, sub, lev, tol):
+        inner = ndi.binary_dilation(m, structure=k3)
+        ring = ndi.binary_dilation(inner, structure=k3) & ~inner & np.isfinite(sub)
+        return bool(ring.any()) and float((sub[ring] < lev - tol).mean()) <= max_lower
+
+    out = np.zeros(z.shape, np.int32)
     keep = []
     for k, sl in enumerate(ndi.find_objects(lab), start=1):
         if sl is None or cnt[k] * cell * cell < min_m2:
             continue
-        r0, r1 = max(0, sl[0].start - 1), min(z.shape[0], sl[0].stop + 1)
-        c0, c1 = max(0, sl[1].start - 1), min(z.shape[1], sl[1].stop + 1)
+        r0, r1 = max(0, sl[0].start - 2), min(H, sl[0].stop + 2)
+        c0, c1 = max(0, sl[1].start - 2), min(W, sl[1].stop + 2)
         m = lab[r0:r1, c0:c1] == k
         sub = z[r0:r1, c0:c1]
-        lev = float(np.median(sub[m]))
-        ring = ndi.binary_dilation(m, structure=np.ones((3, 3), bool)) & ~m & np.isfinite(sub)
-        if ring.any() and float((sub[ring] < lev - ring_tol_m).mean()) <= max_lower:
-            keep.append(k)
-    return lab, keep
+        v = sub[m]
+        med = float(np.median(v))
+        if float((np.abs(v - med) <= tol_m).mean()) >= level_share and rim_ok(m, sub, med, ring_tol_m):
+            keep.append(len(keep) + 1)
+            out[r0:r1, c0:c1][m] = keep[-1]
+            continue
+        b = np.floor((v - v.min()) / 0.01).astype(int)
+        lev = float(v.min()) + 0.01 * (int(np.argmax(np.bincount(b))) + 0.5)
+        pl, npc = ndi.label(m & (np.abs(sub - lev) <= level_m), structure=k3)
+        if not npc:
+            continue
+        pc = np.bincount(pl.ravel(), minlength=npc + 1)
+        for j, psl in enumerate(ndi.find_objects(pl), start=1):
+            if psl is None or pc[j] * cell * cell < min_m2:
+                continue
+            a0, a1 = psl[0].start + r0 - 3, psl[0].stop + r0 + 3        # grid rows / cols round it
+            b0, b1 = psl[1].start + c0 - 3, psl[1].stop + c0 + 3
+            if a0 < 0 or b0 < 0 or a1 > H or b1 > W:
+                continue                                # at the grid edge: its rim is not all there
+            pz = z[a0:a1, b0:b1]
+            pm = np.zeros(pz.shape, bool)
+            pm[3:-3, 3:-3] = pl[psl] == j
+            if (ndi.binary_dilation(pm, structure=k3, iterations=2) & ~np.isfinite(pz)).any():
+                continue                                # beside no-data: nor here
+            if rim_ok(pm, pz, lev, level_ring_m):
+                keep.append(len(keep) + 1)
+                out[a0:a1, b0:b1][pm] = keep[-1]
+    return out, keep
 
 
-def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=300.0, dep_min_m=0.15, dep_min_m2=100.0):
+def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=300.0, dep_min_m=0.15, dep_min_m2=100.0,
+               ring_tol_m=0.10, max_lower=0.25):
     """(seeds [(x, y, area m2, kind)], pool mask) of the pools of a DEM (grid gt): the most interior
     cell of every flat water surface (flat_pools; kind 'flat') and the deepest cell of every closed
     depression at least dep_min_m deep over at least dep_min_m2 (cells more than 2 cm below their
     spill level; kind 'depression'). dep: depth below the spill level (depth() of flow()), computed
-    when None."""
+    when None. ring_tol_m, max_lower: flat_pools' rim test."""
     from scipy import ndimage as ndi
     z = np.asarray(dem, float)
     cell = abs(gt[1])
     seeds = []
-    lab, keep = flat_pools(z, cell, flat_tol_m, flat_min_m2)
+    lab, keep = flat_pools(z, cell, flat_tol_m, flat_min_m2, ring_tol_m, max_lower)
     mask = np.isin(lab, keep) if keep else np.zeros(z.shape, bool)
     objs = ndi.find_objects(lab)
     for k in keep:
