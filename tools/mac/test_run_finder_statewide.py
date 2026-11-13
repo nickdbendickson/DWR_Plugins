@@ -307,7 +307,7 @@ class Seams(unittest.TestCase):
         f.write_points(g, "ridges", f.RIDGE_FIELDS, [])
         rfs.write_json(os.path.join(self.d, "tiles", tid, "done.json"),
                        {"id": tid, "key": {"k": 1}, "fills": len(rows), "seconds": 1.0, "peak_rss_mb": 1.0,
-                        "edge_m": [[r["find_id"], None] for r in rows]})
+                        "finder": f.VERSION, "edge_m": [[r["find_id"], None] for r in rows]})
         return [r["find_id"] for r in rows]
 
     def test_rules_across_a_seam(self):

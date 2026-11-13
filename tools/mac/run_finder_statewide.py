@@ -5,7 +5,7 @@ North Dakota, from the statewide 1 m terrain VRT, tile by tile, resumable.
     bash run_finder_statewide.sh --dry-run        # what would run, how long, how much disk; writes nothing
     bash run_finder_statewide.sh --limit 4        # a trial: the first 4 tiles, then the merge
     bash run_finder_statewide.sh                  # the whole state (run it again to go on after a stop)
-    bash run_finder_statewide.sh --merge-only     # merge what is finished so far
+    bash run_finder_statewide.sh --merge-only     # merge what is finished so far (the terrain drive is not needed)
 
 It reads the terrain VRT and the ND data pack and writes ONLY into --out (default ~/ND_Finder_Statewide).
 It never writes, moves or deletes anything in the suite data folder, the pack, the terrain folder or
@@ -29,8 +29,17 @@ HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does, Finder 0
     The 3 km of terrain a tile needs beyond its edge comes from the VRT, not from a neighbour's run.
   * What a single statewide call does after its squares - the two rules above, across squares - is
     done here in the merge, across tile seams, by calling the engine's own one_per_pool and dedupe
-    on the fills that lie close to a fill of another tile. (They read the values the tiles wrote,
-    which are rounded to 0.1 ft; a tie can fall the other way, the fill is the same embankment.)
+    on the fills that lie close to a fill of another tile. Two cases can come out otherwise than
+    in one statewide call; neither was met in the test ground (no fill at all was removed across
+    a seam there):
+      - the rules read the values the tiles wrote, which are rounded to 0.1 ft, so an exact tie
+        can fall the other way (the fill is the same embankment);
+      - a chain of three fills, each within 60 m of the next (or on one pool), that crosses a
+        seam: every tile has already applied the rules to its own fills, and the merge applies
+        them again to what the tiles kept. A fill a tile dropped in favour of its neighbour does
+        not come back when that neighbour is then dropped in favour of a fill across the seam;
+        one statewide call, looking at all three at once, could have kept it. So at such a chain
+        the merge can keep one fill fewer. It never keeps two fills within 60 m of each other.
   * One difference from a single call is left: stream lines that lie wholly outside a tile are not
     read for that tile. A line that does not enter the tile has no crest point in it, so the fills
     are not affected; only the side layer of channel-side dikes ('ridges') can miss a dike within
@@ -47,7 +56,7 @@ TWO THINGS THE ENGINE DOES NOT DO YET, HANDLED HERE
     gets in_state = yes / no, and tiles wholly outside the state are not run. The outline is, in
     this order: --state-outline FILE (any polygon file), the pack's county boundaries
     (boundaries/ND_counties.gpkg) when the pack has them, else a simple built-in outline (see
-    BUILTIN_ND below). "--state-outline none" switches the test off.
+    BUILTIN_SOUTH and BUILTIN_EAST below). "--state-outline none" switches the test off.
   * A fill within about 150 m of missing terrain is a false dam (NoData acts as a wall): every fill
     gets edge_ft (the distance to the nearest missing terrain within 200 m, read from the DEM at
     full resolution; holes smaller than 100 m2 are ignored) and at_data_edge = yes when that is
@@ -63,7 +72,8 @@ WHAT IT WRITES (all in --out)
   ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates, highest score first
   ND_finder_summary.txt            counts, tiles run / skipped / failed, versions, settings, checksums
   ND_finder_review_batch.gpkg/.csv only with --review-batch N: a review batch drawn from the candidates
-  logs/run_<time>.log              one log per run; failed/<tile>.log for a tile that failed
+  logs/run_<time>.log              one log per run; failed/<tile>.log for a tile that failed (it goes
+                                   when the tile finishes in a later try, so what is there still fails)
 
 Python 3.9 or later. No QGIS imports.
 """
@@ -120,8 +130,14 @@ EXTRA_FIELDS = [("tile", "str"), ("edge_ft", "float"), ("at_data_edge", "str"), 
 # Measured 2026-11-13 on the 4-core cloud test box (see RUN-FINDER-STATEWIDE.md): processor time
 # of a 10 km tile full of terrain (9 tiles over 300 km2 of terrain took 780 CPU-seconds), the peak
 # memory of one tile process, and the size of the results. The Mac has not been timed; a run times
-# its own tiles, and the dry run uses those once 3 tiles are finished in --out.
+# its own tiles, and the dry run uses those once EST_MIN_FULL tiles FULL of terrain are finished in
+# --out. A tile at the edge of the terrain is much quicker (measured: 8 to 35 s for a tile with
+# under 5 % terrain, 155 to 250 s for a full one), so every estimate counts a tile by its share
+# of terrain (tile_cost) and never takes the plain mean of the finished tiles.
 EST_SEC_PER_TILE = 270.0                # per 100 km2 of terrain, one core
+EST_TILE_START_SEC = 20.0               # what a tile costs before any terrain: the process, the extracts
+FULL_SHARE = 0.85                       # a tile is "full of terrain" from this share of its square up
+EST_MIN_FULL = 3                        # so many finished full tiles make this computer's own figure
 EST_PEAK_GB = 1.3                       # one tile process (measured 1.2 GB)
 EST_TILE_MB = 0.105                     # a tile folder with no fills
 EST_TILE_KB_PER_FILL = 1.8              # ... plus this per fill
@@ -129,13 +145,27 @@ EST_MERGED_KB_PER_FILL = 2.0            # the merged GeoPackage and the ranked C
 EST_FILLS_PER_KM2 = 2.5                 # 14,400 fills on 66 test tiles of 88 km2
 GDAL_CACHE_MB = "512"                   # per tile process (GDAL's own default is 5 % of the RAM)
 
-# The built-in fallback outline of North Dakota (lon, lat; NAD83 / WGS84). West, south and north
-# are straight lines just outside the surveyed borders (104.0505 W, 45.9350 N, 49.0006 N); the east
-# side is the Bois de Sioux River and the Red River of the North, taken from the pack's own 3DHP
-# flowlines (USGS, public domain) and simplified to about 400 m. It is used with a 600 m allowance
-# (--state-buffer-m), so it never drops a fill that is in North Dakota; within about 1 km of the
-# border it can keep one that is not. Give --state-outline for an exact test.
-BUILTIN_W, BUILTIN_S, BUILTIN_N = -104.0505, 45.9350, 49.0006
+# The built-in fallback outline of North Dakota (lon, lat; NAD83 / WGS84). West and north are
+# straight lines just outside the surveyed borders (104.0505 W, 49.0006 N). The south border is not
+# one parallel: as surveyed it runs from about 45.9452 N at the Montana corner down to about
+# 45.9351 N east of 98 W (the southernmost roads of the pack's ND_roads_NG911, by quarter degree
+# of longitude), so the south side is the line BUILTIN_SOUTH, about 50 m south of the southernmost
+# North Dakota road of each quarter degree (one straight line at 45.9350 N kept a strip of South
+# Dakota 1.1 km deep in the south-west). The east side is the Bois de Sioux River and the Red
+# River of the North, taken from the pack's own 3DHP flowlines (USGS, public domain) and
+# simplified to about 400 m. The outline is used with a 600 m allowance (--state-buffer-m), so it
+# never drops a fill that is in North Dakota; within about 1 km of the border it can keep one that
+# is not. Give --state-outline for an exact test.
+BUILTIN_W, BUILTIN_N = -104.0505, 49.0006
+BUILTIN_SOUTH = (
+    (-104.0505, 45.9447), (-103.75, 45.9447), (-103.50, 45.9445), (-103.25, 45.9443), (-103.00, 45.9443),
+    (-102.75, 45.9445), (-102.50, 45.9443), (-102.25, 45.9439), (-102.00, 45.9435), (-101.75, 45.9433),
+    (-101.50, 45.9433), (-101.25, 45.9433), (-101.00, 45.9431), (-100.75, 45.9413), (-100.50, 45.9413),
+    (-100.25, 45.9413), (-100.00, 45.9403), (-99.75, 45.9399), (-99.50, 45.9392), (-99.25, 45.9377),
+    (-99.00, 45.9377), (-98.75, 45.9365), (-98.50, 45.9356), (-98.25, 45.9353), (-98.00, 45.9350),
+    (-97.75, 45.9346), (-97.50, 45.9345), (-97.25, 45.9345), (-97.00, 45.9347), (-96.75, 45.9347),
+    (-96.5612, 45.9347),
+)
 BUILTIN_BUFFER_M = 600.0
 BUILTIN_EAST = (
     (-96.5612, 45.9415), (-96.5708, 45.9641), (-96.5779, 46.0273), (-96.5591, 46.0585), (-96.5544, 46.0841),
@@ -601,8 +631,8 @@ def builtin_outline():
     """The built-in outline of North Dakota in EPSG:5070 (see BUILTIN_ND at the top)."""
     _g, ogr, _s = gdal_mods()
     east = list(BUILTIN_EAST)
-    ring = [(BUILTIN_W, BUILTIN_S), (east[0][0], BUILTIN_S)] + east + [(east[-1][0], BUILTIN_N),
-                                                                      (BUILTIN_W, BUILTIN_N), (BUILTIN_W, BUILTIN_S)]
+    south = list(BUILTIN_SOUTH)                             # west to east; it ends under the first east point
+    ring = south + east + [(east[-1][0], BUILTIN_N), (BUILTIN_W, BUILTIN_N), south[0]]
     r = ogr.Geometry(ogr.wkbLinearRing)
     for x, y in ring:
         r.AddPoint_2D(x, y)
@@ -733,6 +763,7 @@ class Dem:
         self.box_5070 = box_to(self.box_dem, self.from_dem, 64)
         self.rects = self._source_rects()
         self.np = np
+        self.read_error = ""
 
     def _source_rects(self):
         """Pixel boxes (x0, y0, x1, y1) of the VRT's source files, read from the VRT text (no
@@ -788,23 +819,80 @@ class Dem:
             ok &= a != self.nodata
         return ok
 
-    def has_data(self, win):
-        """True when the window holds any terrain. With overviews (a VRT of USGS tiles has them)
-        this reads a 64 x 64 sample from an overview. Without, 25 single cells are read first and
-        only an all-empty answer is checked with the 64 x 64 sample (which then reads the window's
-        full-resolution blocks: slow, but only for the empty tiles under a source file)."""
+    def _read(self, *args, **kw):
+        """band.ReadAsArray, with GDAL's own error lines kept off the screen. None when the read
+        fails (a source file of the VRT is missing, the drive is gone); read_error then says why."""
+        gdal, _o, _s = gdal_mods()
+        gdal.PushErrorHandler("CPLQuietErrorHandler")
+        try:
+            gdal.ErrorReset()
+            try:
+                a = self.band.ReadAsArray(*args, **kw)
+            except RuntimeError as e:                       # GDAL with its exceptions switched on
+                a = None
+                self.read_error = str(e).strip()
+            if a is not None and gdal.GetLastErrorType() >= gdal.CE_Failure:
+                a = None                                    # an answer GDAL itself called an error
+            if a is None:
+                self.read_error = ((gdal.GetLastErrorMsg() or "").strip() or self.read_error
+                                   or "the read failed")
+        finally:
+            gdal.PopErrorHandler()
+        return a
+
+    def terrain(self, win, box5070=None):
+        """(has, share) for a pixel window: has = True / False, or None when the terrain there
+        cannot be read now; share = the part (0 to 1) that holds terrain. With box5070 (the tile the
+        window was cut for) the share is that of the tile's own square - the window is the square's
+        box in the raster's CRS cut to the raster, so a tile half off the raster is half empty
+        though its window is full. The share is for the time estimate only; has decides whether a
+        tile runs.
+        With overviews (a VRT of USGS tiles has them) this reads a 64 x 64 sample from an overview.
+        Without, 25 single cells are read first and only an all-empty answer is checked with the
+        64 x 64 sample (which then reads the window's full-resolution blocks: slow, but only for
+        the empty tiles under a source file); the share is then the coarser 'so many of 25'."""
+        np = self.np
         xo, yo, xs, ys = win
+        if box5070 is None:
+            cut = 1.0
+        else:
+            b = box_to(box5070, self.to_dem)
+            cut = min(1.0, xs * ys / max(1.0, (b[2] - b[0]) * (b[3] - b[1]) / abs(self.gt[1] * self.gt[5])))
         if not self.overviews:
+            hits = 0
             for i in range(5):
                 for j in range(5):
-                    a = self.band.ReadAsArray(xo + min(xs - 1, int((i + 0.5) * xs / 5)),
-                                              yo + min(ys - 1, int((j + 0.5) * ys / 5)), 1, 1)
-                    if a is not None and self.valid(a).any():
-                        return True
-        a = self.band.ReadAsArray(xo, yo, xs, ys, buf_xsize=max(1, min(xs, 64)), buf_ysize=max(1, min(ys, 64)))
+                    a = self._read(xo + min(xs - 1, int((i + 0.5) * xs / 5)),
+                                   yo + min(ys - 1, int((j + 0.5) * ys / 5)), 1, 1)
+                    if a is None:
+                        return None, 0.0
+                    hits += bool(self.valid(a).any())
+            if hits:
+                return True, cut * hits / 25.0
+        bw, bh = max(1, min(xs, 64)), max(1, min(ys, 64))
+        a = self._read(xo, yo, xs, ys, buf_xsize=bw, buf_ysize=bh)
         if a is None:
-            return True                                     # not readable now: let the tile run and say so
-        return bool(self.valid(a).any())
+            return None, 0.0
+        ok = self.valid(a)
+        if not ok.any():
+            return False, 0.0
+        if box5070 is None:
+            return True, float(ok.mean())
+        n = 24                                              # a grid of points in the tile's own square
+        x0, y0, x1, y1 = box5070
+        pts = [(x0 + (i + 0.5) * (x1 - x0) / n, y0 + (j + 0.5) * (y1 - y0) / n) for i in range(n) for j in range(n)]
+        tp = np.asarray([q[:2] for q in self.to_dem.TransformPoints(pts)], float)
+        ci = np.floor(((tp[:, 0] - self.gt[0]) / self.gt[1] - xo) * bw / float(xs)).astype(int)
+        ri = np.floor(((tp[:, 1] - self.gt[3]) / self.gt[5] - yo) * bh / float(ys)).astype(int)
+        inw = (ci >= 0) & (ci < bw) & (ri >= 0) & (ri < bh)
+        share = float(np.count_nonzero(ok[ri[inw], ci[inw]])) / len(pts)
+        return True, min(1.0, max(share, 1.0 / len(pts)))
+
+    def has_data(self, win):
+        """True when the window holds any terrain (and when it cannot be read now: the tile then
+        runs, and its log says what is wrong)."""
+        has, _share = self.terrain(win)
+        return True if has is None else has
 
     def edge_m(self, x, y):
         """Metres from the point (EPSG:5070) to the nearest missing terrain (a NoData cell, or the
@@ -872,8 +960,43 @@ def settings_key(engine_version, a, dem):
     return {"script": SCRIPT_VERSION.split(".")[0], "finder": engine_version, "tile_km": int(a.tile_km),
             "call": dict(CALL), "engine_tile_m": ENGINE_TILE_M, "edge_search_m": EDGE_SEARCH_M,
             "edge_speck_m2": EDGE_SPECK_M2,
-            "dem": {"name": os.path.basename(dem.path), "nx": dem.nx, "ny": dem.ny,
-                    "grid": [round(v, 6) for v in dem.gt], "epsg": str(dem.epsg)}}
+            "dem": None if dem is None else {"name": os.path.basename(dem.path), "nx": dem.nx, "ny": dem.ny,
+                                             "grid": [round(v, 6) for v in dem.gt], "epsg": str(dem.epsg)}}
+
+
+def key_without_terrain(out, engine_version, a):
+    """--merge-only with the terrain drive not connected: the settings key of the finished tiles in
+    out that were made with THIS Finder version, tile size and call (everything of the key but the
+    terrain), so that they can be merged without reading the terrain raster again. They must all
+    come from one terrain raster; with two the drive is needed to tell which is the current one."""
+    want = settings_key(engine_version, a, None)
+    want.pop("dem")
+    dems = collections.OrderedDict()
+    base = os.path.join(out, "tiles")
+    n_other = 0
+    for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+        m = read_json(os.path.join(base, name, "done.json"))
+        k = (m or {}).get("key")
+        if not isinstance(k, dict):
+            continue
+        rest = dict(k)
+        d = rest.pop("dem", None)
+        if rest == want and d:
+            dems.setdefault(json.dumps(d, sort_keys=True), [d, 0])[1] += 1
+        else:
+            n_other += 1
+    if not dems:
+        raise UserError("{} holds no finished tile made with this Finder ({}) and tile size ({} km){}; there "
+                        "is nothing --merge-only could merge without the terrain file".format(
+                            out, engine_version, a.tile_km,
+                            " ({} were made with other settings)".format(n_other) if n_other else ""))
+    if len(dems) > 1:
+        raise UserError("the finished tiles in {} come from {} different terrain rasters ({}). Connect the "
+                        "terrain drive, so that the script can tell which is the current one.".format(
+                            out, len(dems), "; ".join("{} tile(s) from {}".format(n_, d_.get("name"))
+                                                      for d_, n_ in dems.values())))
+    d, n_ = list(dems.values())[0]
+    return dict(want, dem=d), n_
 
 
 def tile_dir(out, tid):
@@ -902,18 +1025,50 @@ def redo_since(a, out, start=False):
     return since
 
 
+def tile_cost(share, sec_full):
+    """The seconds one tile is expected to take, from its share of terrain (0 to 1; None = not
+    known, counted as full) and the seconds of a tile full of terrain: a tile with a sliver of
+    terrain still starts a process and cuts its extracts (EST_TILE_START_SEC), the rest grows with
+    the terrain."""
+    if share is None:
+        return float(sec_full)
+    base = min(EST_TILE_START_SEC, float(sec_full))
+    return base + min(1.0, max(0.0, float(share))) * (float(sec_full) - base)
+
+
+def full_tile_seconds(done):
+    """(seconds of a tile full of terrain, how many finished full tiles that is the mean of) from
+    [(seconds, share)] of the finished tiles. Only tiles FULL of terrain count (share >=
+    FULL_SHARE): the mean of all finished tiles is pulled far down by the quick edge tiles. With
+    fewer than EST_MIN_FULL of them the seconds are EST_SEC_PER_TILE: the cloud test box's figure,
+    not this computer's."""
+    full = [float(sec) for sec, share in done if sec and share is not None and share >= FULL_SHARE]
+    if len(full) >= EST_MIN_FULL:
+        return sum(full) / len(full), len(full)
+    return EST_SEC_PER_TILE, len(full)
+
+
+def time_for(shares, sec_full, workers):
+    """Seconds to run tiles with these terrain shares, `workers` at a time."""
+    costs = [tile_cost(sh, sec_full) for sh in shares]
+    return max(sum(costs) / float(max(1, workers)), max(costs)) if costs else 0.0
+
+
 def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
-    """[(Tile, state)] for the lattice tiles over the terrain raster that the selection keeps.
-    state: done / other (finished with other settings) / outside (the state outline) / nosource (no
-    source file of the VRT there) / nodata (source files, but no terrain) / todo."""
+    """([(Tile, state)], {tile id: share of terrain or None}) for the lattice tiles over the terrain
+    raster that the selection keeps. state: done / other (finished with other settings) / outside
+    (the state outline) / nosource (no source file of the VRT there) / nodata (source files, but no
+    terrain) / unreadable (the terrain there cannot be read now; dem.read_error says why) / todo."""
     tile_m = a.tile_km * 1000.0
     tiles = lattice(dem.box_5070, tile_m)
     cache_path = os.path.join(out, "plan_cache.json")
     stamp = "{}|{}|{}".format(dem.path, os.path.getsize(dem.path), int(os.path.getmtime(dem.path)))
     cache = read_json(cache_path) or {}
     if cache.get("stamp") != stamp:
-        cache = {"stamp": stamp, "terrain": {}}
-    changed, plan, looked, t0 = False, [], 0, time.time()
+        cache = {"stamp": stamp, "share": {}}
+    elif "share" not in cache:                              # a cache of script 1.0: yes / no, no shares
+        cache = {"stamp": stamp, "share": {k: 0.0 for k, v in (cache.get("terrain") or {}).items() if v is False}}
+    changed, plan, shares, looked, t0 = False, [], {}, 0, time.time()
     for t in tiles:
         g = None
         if select is not None:
@@ -923,6 +1078,7 @@ def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
         m = marker(out, t.id) if os.path.isdir(out) else None
         if m is not None and (since is None or float(m.get("finished_epoch") or 0) >= since):
             plan.append((t, "done" if m.get("key") == key else "other"))
+            shares[t.id] = m["terrain_share"] if m.get("terrain_share") is not None else cache["share"].get(t.id)
             continue
         if outline is not None and not outline.Intersects(g or box_geom(t.box)):
             plan.append((t, "outside"))
@@ -931,18 +1087,24 @@ def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
         if win is None or not dem.has_source(win):
             plan.append((t, "nosource"))
             continue
-        got = cache["terrain"].get(t.id)
+        got = cache["share"].get(t.id)
         if got is None:
-            got = bool(dem.has_data(win))
-            cache["terrain"][t.id] = got
-            changed = True
+            has, share = dem.terrain(win, t.box)
             looked += 1
             if looked % 200 == 0:
                 log("  looked for terrain in {} tiles ({})".format(looked, dur(time.time() - t0)))
-        plan.append((t, "todo" if got else "nodata"))
+            if has is None:                                 # not readable now: not remembered, and said
+                plan.append((t, "unreadable"))
+                shares[t.id] = None
+                continue
+            got = round(share, 4) if has else 0.0
+            cache["share"][t.id] = got
+            changed = True
+        shares[t.id] = got
+        plan.append((t, "todo" if got > 0 else "nodata"))
     if changed and cache_ok:
         write_json(cache_path, cache)
-    return plan
+    return plan, shares
 
 
 # ---------------------------------------------------------------------------------- one tile --
@@ -986,6 +1148,17 @@ def extract(finder, src, dst, box5070):
     out = None
     ds = None
     return len(feats)
+
+
+def edge_distances(rows, dem):
+    """([[find_id, metres to the nearest missing terrain or None]], where the figures come from).
+    A Finder that measures it itself (0.7.0 on: every row carries edge_ft) is taken at its word;
+    for an older one (0.6.x: no such field) it is measured here on the DEM, within EDGE_SEARCH_M."""
+    if rows and all("edge_ft" in r for r in rows):
+        return ([[r["find_id"], None if r["edge_ft"] is None else round(float(r["edge_ft"]) * FT, 1)] for r in rows],
+                "edge_ft as the Finder measured it")
+    return ([[r["find_id"], dem.edge_m(r["x"], r["y"])] for r in rows],
+            "measured by this script on the DEM, within {:.0f} m".format(EDGE_SEARCH_M))
 
 
 def run_tile(job):
@@ -1043,11 +1216,12 @@ def _run_tile(job, finder, work, parent, t0):
         say("stopped: the run that started this tile is gone")
         return 3
     rows = res["rows"]
-    edge = [[r["find_id"], dem.edge_m(r["x"], r["y"])] for r in rows]
-    say("{} fill(s), {} within {:.0f} m of missing terrain".format(
-        len(rows), sum(1 for _i, d in edge if d is not None), EDGE_SEARCH_M))
+    edge, edge_from = edge_distances(rows, dem)
+    say("{} fill(s), {} near missing terrain ({})".format(
+        len(rows), sum(1 for _i, d in edge if d is not None), edge_from))
     shutil.rmtree(inp, ignore_errors=True)                  # the extracts and the window are not results
     done = {"id": tid, "box": list(box), "key": job["key"], "fills": len(rows),
+            "terrain_share": job.get("terrain_share"), "edge_from": edge_from,
             "status": res["counts"]["status"], "kinds": res["counts"]["kinds"], "ridges": len(res["ridges"]),
             "edge_m": edge, "seconds": round(time.time() - t0, 1), "cpu_seconds": cpu_seconds(),
             "peak_rss_mb": peak_rss_mb(),
@@ -1072,8 +1246,8 @@ def _run_tile(job, finder, work, parent, t0):
 
 
 # ----------------------------------------------------------------------------- running tiles --
-def spawn(t, job_base, out):
-    job = dict(job_base, id=t.id, box=list(t.box))
+def spawn(t, job_base, out, share=None):
+    job = dict(job_base, id=t.id, box=list(t.box), terrain_share=share)
     logp = os.path.join(out, "work", t.id + ".log")
     fh = open(logp, "w", encoding="utf-8")
     env = dict(os.environ)
@@ -1094,6 +1268,51 @@ def tail(path, n=12):
             return [ln.rstrip("\n") for ln in fh.readlines()[-n:]]
     except OSError:
         return []
+
+
+FAIL_MARK = "TILE FAILED: "                 # the last line of the log of a tile that raised an error
+
+
+def why_failed(rc, logp, timed_out=""):
+    """One line on why a tile process did not finish: its own error line when it raised one, else
+    how the process ended (a signal, an exit code) - never just the last line of its log, which
+    for a killed process is whatever it happened to be doing."""
+    if timed_out:
+        return "stopped after {} (--tile-timeout-min)".format(timed_out)
+    last = ([ln for ln in tail(logp, 3) if ln.strip()] or [""])[-1].strip()
+    if last.startswith(FAIL_MARK):
+        return last[len(FAIL_MARK):]
+    if rc is not None and rc < 0:
+        try:
+            name = signal.Signals(-rc).name
+        except ValueError:
+            name = "signal {}".format(-rc)
+        return "its process was ended from outside by {} (signal {}){}; the tile itself reported no error".format(
+            name, -rc, " - killed: by hand, or by the system when memory ran out" if -rc == 9 else "")
+    if rc == 3:
+        return "stopped: the run that started it had gone"
+    if rc == 0:
+        return "its process ended without leaving a finished tile (no done.json)"
+    return "its process ended with exit code {} and no error line{}".format(
+        rc, "; the last line of its log: " + last[:200] if last else "")
+
+
+def clear_failed(out, tid=None):
+    """Take away failed/<tile>.log of a tile that has finished since (all of them with tid None),
+    and the failed folder when it is empty: what is left there is what still fails."""
+    d = os.path.join(out, "failed")
+    if not os.path.isdir(d):
+        return
+    for name in ([tid + ".log"] if tid else sorted(os.listdir(d))):
+        if name.endswith(".log") and marker(out, name[:-4]) is not None:
+            try:
+                os.remove(os.path.join(d, name))
+            except OSError:
+                pass
+    try:
+        os.rmdir(d)                                         # only when nothing is left in it
+    except OSError:
+        pass
 
 
 def run_tiles(todo, a, out, job_base, counts, log):
@@ -1126,19 +1345,26 @@ def run_tiles(todo, a, out, job_base, counts, log):
                 p.wait()
             fh.close()
 
+    shares, sec_full = counts.get("shares") or {}, counts["sec_per_tile"]
+
     def line():
+        # time left: the time so far, scaled by what is left against what has run - each tile
+        # counted by its share of terrain, because the tiles at the edge of the terrain (the first
+        # ones of a run) are many times quicker than a full one
         n_done = done_before + len(ran)
-        left = len(queue) + len(running)
+        left_ids = [t_.id for t_ in queue] + list(running)
+        left = len(left_ids)
+        cost_ran = sum(tile_cost(shares.get(q), sec_full) for q in ran)
         if not left:
             est = "none left"
-        elif ran:
-            per = (time.time() - start) / len(ran)
-            eta = per * left
+        elif cost_ran >= 2.0 * sec_full:
+            eta = (time.time() - start) * sum(tile_cost(shares.get(q), sec_full) for q in left_ids) / cost_ran
             when = (datetime.datetime.now() + datetime.timedelta(seconds=eta)).strftime("%a %H:%M")
             est = "about {} left (to {})".format(dur(eta), when)
         else:
-            est = "about {} left (a first guess)".format(
-                dur(counts["sec_per_tile"] * max(left / float(max(1, a.workers)), 1.0)))
+            est = "about {} left (a first guess{})".format(
+                dur(time_for([shares.get(q) for q in left_ids], sec_full, a.workers)),
+                "" if counts.get("measured") else ", not yet this computer's own figure")
         log("  tiles {}/{} done, {} running, {} failed - {:,} fills so far - {} elapsed, {}".format(
             n_done, total, min(a.workers, left), len(failed), fills, dur(time.time() - start), est))
 
@@ -1146,18 +1372,20 @@ def run_tiles(todo, a, out, job_base, counts, log):
         while queue or running:
             while queue and len(running) < a.workers:
                 t = queue.popleft()
-                p, fh, logp = spawn(t, job_base, out)
+                p, fh, logp = spawn(t, job_base, out, shares.get(t.id))
                 running[t.id] = (p, fh, logp, t, time.time())
             time.sleep(0.5)
             for tid, (p, fh, logp, t, t0) in list(running.items()):
                 rc = p.poll()
+                timed_out = ""
                 if rc is None:
                     if timeout and time.time() - t0 > timeout:
                         p.kill()
                         p.wait()
                         rc = -9
+                        timed_out = dur(time.time() - t0)
                         with open(logp, "a", encoding="utf-8") as lf:
-                            lf.write("stopped after {} (--tile-timeout-min)\n".format(dur(time.time() - t0)))
+                            lf.write("stopped after {} (--tile-timeout-min)\n".format(timed_out))
                     else:
                         continue
                 fh.close()
@@ -1166,10 +1394,9 @@ def run_tiles(todo, a, out, job_base, counts, log):
                 if m is not None:
                     try:
                         os.replace(logp, os.path.join(tile_dir(out, tid), tid + ".log"))
-                        if tid in tried:                    # it failed once and then ran: its failure log goes
-                            os.remove(os.path.join(out, "failed", tid + ".log"))
                     except OSError:
                         pass
+                    clear_failed(out, tid)                  # it failed before (this run or an earlier one) and now ran
                     ran.append(tid)
                     fills += int(m.get("fills") or 0)
                     in_a_row = 0
@@ -1183,7 +1410,12 @@ def run_tiles(todo, a, out, job_base, counts, log):
                     os.replace(logp, keep)
                 except OSError:
                     pass
-                why = (tail(keep, 1) or ["exit code {}".format(rc)])[0]
+                why = why_failed(rc, keep, timed_out)
+                try:
+                    with open(keep, "a", encoding="utf-8") as lf:
+                        lf.write("{}  why this tile counts as failed: {}\n".format(now(), why))
+                except OSError:
+                    pass
                 in_a_row += 1
                 if tid not in tried:
                     tried.add(tid)
@@ -1250,7 +1482,9 @@ def take_lock(out):
 
 # -------------------------------------------------------------------------------------- merge --
 def finished_tiles(out, key):
-    """([(id, marker)] of the tiles finished with these settings, sorted; [ids finished with others])."""
+    """([(id, marker)] of the tiles finished with these settings, sorted; [(id, marker)] of the tiles
+    finished with others). The settings key holds the Finder version, so tiles made by two Finder
+    versions are never in the first list together."""
     good, other = [], []
     base = os.path.join(out, "tiles")
     for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
@@ -1258,7 +1492,13 @@ def finished_tiles(out, key):
         if m is None:
             continue
         (good if m.get("key") == key else other).append((name, m))
-    return good, [n for n, _m in other]
+    return good, other
+
+
+def other_versions(other):
+    """'Finder 0.6.0: 3 tile(s)' for the tiles left out of a merge, by the Finder that made them."""
+    c = collections.Counter(str((m.get("key") or {}).get("finder") or m.get("finder") or "?") for _n, m in other)
+    return ", ".join("Finder {}: {} tile(s)".format(v, k) for v, k in sorted(c.items()))
 
 
 def field_names(lyr):
@@ -1399,8 +1639,21 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     tiles, other = finished_tiles(out, key)
     if not tiles:
         raise UserError("no finished tile in {} to merge{}".format(
-            out, " ({} were made with other settings: --redo runs them again)".format(len(other)) if other else ""))
-    log("Merging {} finished tile(s) from {}".format(len(tiles), os.path.join(out, "tiles")))
+            out, " ({} were made with other settings - {} - and are not merged by this Finder, {}: --redo "
+                 "runs them again)".format(len(other), other_versions(other), finder.VERSION) if other else ""))
+    # One merged result holds the fills of ONE Finder version. The settings key sees to that (it
+    # holds the version); this is the same rule said once more against a done.json changed by hand.
+    made_by = sorted(set(str(m.get("finder") or (m.get("key") or {}).get("finder")) for _t, m in tiles))
+    if made_by != [str(finder.VERSION)]:
+        raise UserError("the finished tiles in {} were made by Finder {} and this is Finder {}: tiles of "
+                        "different Finder versions are never merged into one result. Run them again with "
+                        "--redo, or merge with the Finder that made them.".format(
+                            out, " and ".join(made_by), finder.VERSION))
+    log("Merging {} finished tile(s) from {} (all made by Finder {})".format(
+        len(tiles), os.path.join(out, "tiles"), finder.VERSION))
+    if other:
+        log("  {} finished tile(s) made with other settings are NOT merged ({})".format(
+            len(other), other_versions(other)))
     drop, same_new, n_all = cross_tile_rules(finder, tiles, out, log)
     model = None
     if not a.no_score:
@@ -1602,7 +1855,7 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     for k_, v in plan_note.items():
         info[k_] = v
     if other:
-        info["tiles_left_out_other_settings"] = len(other)
+        info["tiles_left_out_other_settings"] = "{} ({})".format(len(other), other_versions(other))
     info["fills_read"] = n_all
     info["fills_removed_across_seams"] = len(drop)
     info["fills"] = stat["all"]
@@ -1680,7 +1933,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     if plan_note.get("failed_ids"):
         L.append("  failed: {}".format(plan_note["failed_ids"]))
     if other:
-        L.append("  left out, made with other settings: {}".format(len(other)))
+        L.append("  left out, made with other settings (another Finder version, tile size or terrain file): {} "
+                 "({})".format(len(other), other_versions(other)))
     L.append("  tile time: {} in all ({} of processor time), mean {}, longest {}; highest memory of one tile "
              "{:.0f} MB".format(dur(sum(secs)), dur(sum(cpus)), dur(sum(secs) / len(secs)), dur(max(secs)), peak))
     L.append("")
@@ -1776,7 +2030,7 @@ def main(argv=None):
             traceback.print_exc()
             sys.stdout.flush()
             e = sys.exc_info()[1]
-            print("{}: {}".format(type(e).__name__, e), flush=True)
+            print("{}{}: {}".format(FAIL_MARK, type(e).__name__, " ".join(str(e).split())), flush=True)
             return 1
     try:
         return run(a)
@@ -1823,8 +2077,22 @@ def run(a):
     model_path = real(a.model) if a.model else os.path.join(plugins, ENGINE, "models", MODEL_NAME)
     if not a.no_score and not os.path.isfile(model_path):
         raise UserError("the score model {} was not found (give --model FILE, or --no-score)".format(model_path))
-    dem = Dem(dem_path)
-    key = settings_key(finder.VERSION, a, dem)
+    dem, dem_why = None, ""
+    try:
+        dem = Dem(dem_path)
+    except UserError as e:
+        # --merge-only reads no terrain (the tiles hold all it needs), so it also works with the
+        # terrain drive unplugged: the settings are then those of the finished tiles
+        if not a.merge_only or quiet:
+            raise
+        dem_why = str(e)
+    if dem is not None:
+        key = settings_key(finder.VERSION, a, dem)
+    else:
+        try:
+            key, _n = key_without_terrain(out, finder.VERSION, a)
+        except UserError as e:
+            raise UserError("{} And: {}".format(dem_why, e)) from None
     log = Log()
     lock = None
     if not quiet:
@@ -1833,17 +2101,59 @@ def run(a):
         log = Log(os.path.join(out, "logs", "run_{}.log".format(datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))))
     try:
         return run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder,
-                          model_path, key)
+                          model_path, key, dem_why)
     finally:
         log.close()
         if lock and (read_json(lock) or {}).get("pid") == os.getpid():
             os.remove(lock)
 
 
-def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder, model_path, key):
+def review_batch(a, finder, out, log):
+    """--review-batch N: the plugin's own review batch, drawn from the ranked candidates."""
+    rb = os.path.join(out, "ND_finder_review_batch.gpkg")
+    if os.path.exists(rb):
+        os.remove(rb)
+    try:
+        res = finder.run_review_batch(os.path.join(out, OUT_GPKG) + "|layername=candidates", rb,
+                                      n=a.review_batch, log=log)
+        os.replace(res["csv"], os.path.join(out, "ND_finder_review_batch.csv"))
+        log("review batch: {} and ND_finder_review_batch.csv".format(rb))
+    except RuntimeError as e:
+        log("review batch not made: {}".format(e))
+
+
+def merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why):
+    """--merge-only while the terrain file cannot be opened (the drive is not connected): the
+    finished tiles hold everything a merge needs, so they are merged as they are. No plan is made
+    (that reads the terrain), so the summary has no count of the tiles still to run."""
+    d = key.get("dem") or {}
+    log("  terrain  NOT READ: {}".format(dem_why))
+    log("           --merge-only goes on without it and merges the finished tiles made from {} ({:,} x {:,} "
+        "cells, EPSG:{}).".format(d.get("name"), int(d.get("nx") or 0), int(d.get("ny") or 0), d.get("epsg")))
+    log("  pack     {}  (read only)".format(pack))
+    log("  out      {}".format(out))
+    outline, outline_what = state_outline(a, pack)
+    log("  state    {}".format(outline_what))
+    clean_work(out)
+    os.makedirs(os.path.join(out, "work"), exist_ok=True)
+    note = collections.OrderedDict()
+    note["selection"] = ("not planned: the terrain file was not there, so the tiles still to run were not "
+                         "counted (--merge-only merges every finished tile)")
+    log("")
+    merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log)
+    clean_work(out)
+    if a.review_batch > 0:
+        review_batch(a, finder, out, log)
+    return 0
+
+
+def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder, model_path, key,
+               dem_why=""):
     gdal, _o, _s = gdal_mods()
     log("run_finder_statewide {} - {}".format(SCRIPT_VERSION, now()))
     log("  Finder   {} from {} ({})".format(finder.VERSION, os.path.join(plugins, ENGINE), plugins_from))
+    if dem is None:
+        return merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why)
     log("  terrain  {}  ({:,} x {:,} cells of {:g} m, EPSG:{}, {} source file(s) listed, {} overview level(s))".format(
         dem_path, dem.nx, dem.ny, abs(dem.gt[1]), dem.epsg, "?" if dem.rects is None else len(dem.rects),
         dem.overviews))
@@ -1869,25 +2179,38 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
     log("  area     {} - whole {} km tiles".format(sel_what, a.tile_km))
     if not quiet:
         clean_work(out)
+        clear_failed(out)
         os.makedirs(os.path.join(out, "work"), exist_ok=True)
         os.makedirs(os.path.join(out, "tiles"), exist_ok=True)
     log("Planning the tiles (looking for terrain) ...")
     since = redo_since(a, out, start=not quiet and not a.merge_only) if os.path.isdir(out) \
         else (time.time() if a.redo else None)
-    plan = make_plan(a, dem, out, key, outline, select, log, cache_ok=not quiet, since=since)
+    plan, shares = make_plan(a, dem, out, key, outline, select, log, cache_ok=not quiet, since=since)
     n = collections.Counter(s for _t, s in plan)
-    todo = [t for t, s in plan if s == "todo"]
+    # a tile whose terrain cannot be read now is still to run: it fails, and its log says why
+    todo = [t for t, s in plan if s in ("todo", "unreadable")]
     if a.redo:
         log("  --redo: tiles finished before {} run again (each old result is replaced when its new one is in)".format(
             datetime.datetime.fromtimestamp(since).strftime("%Y-%m-%d %H:%M:%S")))
     with_terrain = n["todo"] + n["done"] + n["other"]
-    log("  {} tile(s) of {} km in the selection: {} with terrain ({} finished, {} to run), {} without terrain "
+    log("  {} tile(s) of {} km in the selection: {} with terrain ({} finished, {} to run), {}{} without terrain "
         "(skipped), {} outside the state outline (skipped)".format(
-            len(plan), a.tile_km, with_terrain, n["done"], n["todo"], n["nodata"] + n["nosource"], n["outside"]))
+            len(plan), a.tile_km, with_terrain, n["done"], n["todo"],
+            "{} whose terrain COULD NOT BE READ, ".format(n["unreadable"]) if n["unreadable"] else "",
+            n["nodata"] + n["nosource"], n["outside"]))
+    if n["unreadable"]:
+        log("  WARNING: {} tile(s) lie under a terrain file of the VRT, but the terrain there could not be read "
+            "just now: {}".format(n["unreadable"], dem.read_error or "the read failed"))
+        log("           Is the drive connected, and are the terrain files where the VRT says? Such a tile is "
+            "counted as still to run; it fails until its terrain can be read.")
+        if not n["todo"] and not quiet and not a.merge_only:
+            raise UserError("the terrain of none of the {} tile(s) still to run can be read ({}). Nothing was "
+                            "run{}.".format(n["unreadable"], dem.read_error or "the read failed",
+                                            "; --merge-only merges the finished tiles" if n["done"] else ""))
     if n["other"]:
         log("  {} finished tile(s) were made with other settings (another Finder version, tile size or terrain "
-            "file): they are left as they are, NOT run and NOT merged. --redo runs them again with the "
-            "settings of this run.".format(n["other"]))
+            "file): they are left as they are, NOT run and NOT merged - one result never mixes Finder versions. "
+            "--redo runs them again with the settings of this run.".format(n["other"]))
     if a.list:
         ll = transformer(srs_of(WORK_EPSG), srs_of(4326))
         words = {"todo": "to run", "done": "finished", "other": "finished with other settings",
@@ -1898,13 +2221,13 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
             m = marker(out, t.id) if s == "done" else None
             log("{:<20}{:>11.4f}{:>10.4f}  {}{}".format(t.id, lon, lat, words[s],
                                                         " - {} fill(s)".format(m.get("fills")) if m else ""))
-    # what a tile costs: this folder's own finished tiles when there are 3, else the cloud-box numbers
-    done_m = [marker(out, t.id) for t, s in plan if s == "done"]
-    done_m = [m for m in done_m if m]
-    secs = [float(m.get("seconds") or 0) for m in done_m if m.get("seconds")]
-    measured = len(secs) >= 3
-    sec_per = sum(secs) / len(secs) if measured else EST_SEC_PER_TILE
-    fills_done = sum(int(m.get("fills") or 0) for m in done_m)
+    # what a tile full of terrain costs: this folder's own finished FULL tiles when there are 3,
+    # else the cloud-box number; every tile is then counted by its share of terrain
+    done_m = [(t, marker(out, t.id)) for t, s in plan if s == "done"]
+    done_m = [(t, m) for t, m in done_m if m]
+    sec_per, n_full = full_tile_seconds([(m.get("seconds"), shares.get(t.id)) for t, m in done_m])
+    measured = n_full >= EST_MIN_FULL
+    fills_done = sum(int(m.get("fills") or 0) for _t, m in done_m)
     if a.limit and a.limit > 0 and not a.merge_only:
         todo_now = todo[:a.limit]
     else:
@@ -1913,16 +2236,24 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
         w = max(1, a.workers)
         log("")
         log("Estimate for the {} tile(s) still to run, {} at a time:".format(len(todo), w))
-        log("  time    {} ({} per tile: {})".format(
-            "about " + dur(sec_per * max(len(todo) / float(w), 1.0)) if todo else "nothing left to run", dur(sec_per),
-            "the mean of the {} tiles finished in this folder".format(len(secs)) if measured else
-            "processor time of a tile full of terrain on the cloud test box, NOT timed on this computer; "
-            "tiles at the edge of the terrain are quicker; the first finished tiles give this computer's own "
-            "figure"))
+        todo_shares = [shares.get(t.id) for t in todo]
+        worth = sum(tile_cost(sh, sec_per) for sh in todo_shares) / sec_per
+        log("  time    {} (a tile full of terrain taken as {}: {}; a tile with less terrain is counted by its "
+            "share, so the {} tile(s) count as {:.1f} full ones)".format(
+                "about " + dur(time_for(todo_shares, sec_per, w)) if todo else "nothing left to run", dur(sec_per),
+                "the mean of the {} finished tiles in this folder that are full of terrain".format(n_full)
+                if measured else
+                "processor time on the cloud test box, NOT timed on this computer - this computer's own figure "
+                "is used once {} tiles full of terrain are finished here ({} so far)".format(EST_MIN_FULL, n_full),
+                len(todo), worth))
+        if n["unreadable"] and todo:
+            log("          (the {} tile(s) whose terrain could not be read are counted as full)".format(
+                n["unreadable"]))
         ram = ram_gb()
         log("  memory  about {:.1f} GB per tile at its peak (1.2 GB measured on the test box), so about {:.0f} GB "
             "for {} at a time{}".format(EST_PEAK_GB, math.ceil(EST_PEAK_GB * w), w,
                                         "; this computer has {:.0f} GB".format(ram) if ram else ""))
+        with_terrain += n["unreadable"]
         area = with_terrain * a.tile_km ** 2
         nf = area * EST_FILLS_PER_KM2
         mb_tiles = with_terrain * EST_TILE_MB + nf * EST_TILE_KB_PER_FILL / 1024.0
@@ -1945,7 +2276,7 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
             len(todo_now), a.workers))
         job_base = {"out": out, "dem": dem_path, "plugins": plugins, "inputs": dict(inputs), "key": key}
         counts = {"total": n["done"] + len(todo_now), "done": n["done"], "fills": fills_done,
-                  "sec_per_tile": sec_per}
+                  "sec_per_tile": sec_per, "shares": shares, "measured": measured}
         old_term = signal.getsignal(signal.SIGTERM)
 
         def on_term(_s, _f):
@@ -1993,16 +2324,7 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
         a.review_batch = 0
     clean_work(out)
     if a.review_batch > 0:
-        rb = os.path.join(out, "ND_finder_review_batch.gpkg")
-        if os.path.exists(rb):
-            os.remove(rb)
-        try:
-            res = finder.run_review_batch(os.path.join(out, OUT_GPKG) + "|layername=candidates", rb,
-                                          n=a.review_batch, log=log)
-            os.replace(res["csv"], os.path.join(out, "ND_finder_review_batch.csv"))
-            log("review batch: {} and ND_finder_review_batch.csv".format(rb))
-        except RuntimeError as e:
-            log("review batch not made: {}".format(e))
+        review_batch(a, finder, out, log)
     if bad:
         log("")
         log("{} tile(s) FAILED{}: {}. Their logs are in {}. Run the same command again to try them again.".format(
