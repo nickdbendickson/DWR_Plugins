@@ -44,6 +44,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from batch_common import chain_status, find_damchain, get_clp, need_data, say, start_watcher   # noqa: E402
+from get_offline_pack import ensure_pack                                     # noqa: E402
 
 SEED_COLS = ["dam_id", "name", "lat", "lon", "height_ft", "storage_acft", "dam_length_ft",
              "dwr_structure_id", "nid_id", "existing_hazard_class"]
@@ -219,6 +220,10 @@ def main():
     ap.add_argument("--data", default="",
                     help="nd_dams_dugouts.csv (default: next to this script or in the county-batch "
                          "folder; it is not in the repository). anuga mode reads the .gpkg beside it")
+    ap.add_argument("--no-get-pack", action="store_true",
+                    help="lisflood mode: when there is no offline pack, do not build one first for "
+                         "the counties' area (Screening then stops at its check unless your DWR "
+                         "files are in the data folder's dwr/)")
     ap.add_argument("--list", action="store_true", help="print counts per county and stop")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -258,8 +263,11 @@ def main():
             inventory.append(get_clp(os.path.join(data, "culverts")))
         elif os.path.exists(clp):
             inventory.append(clp)
-    elif not args.dry_run and not os.path.isdir(os.path.join(args.data_folder, "ND_Dam_Suite_Pack")):
-        say("WARNING: no offline pack at %s/ND_Dam_Suite_Pack (Screening needs it)" % args.data_folder)
+    else:
+        chosen = {c.lower() for c in counties}
+        ids = {s.strip() for s in args.only.split(",") if s.strip()}
+        area = [r for r in rows if r["county"].lower() in chosen and (not ids or r["dam_id"] in ids)]
+        ensure_pack(args.data_folder, area, say=say, get=not args.no_get_pack, dry_run=args.dry_run)
     failed = 0
     for county in counties:
         kinds = ("dams", "dugouts") if args.kind == "both" else (args.kind,)
