@@ -53,9 +53,20 @@ else
     RUN+=(--no-capture-output)
   fi
   RUN+=(python)
-  if ! "${RUN[@]}" -c 'from osgeo import gdal; import numpy, scipy' >/dev/null 2>&1; then
-    echo "ERROR: the Python of the '$ENV_NAME' env cannot import GDAL, numpy and scipy." >&2
+  # Try it once. When it fails, show what the tool itself said: "not a conda environment" (the
+  # env has another name: set DS_QGIS_ENV) is another fault than "No module named osgeo".
+  PROBE_ERR=""
+  if ! PROBE_ERR="$("${RUN[@]}" -c 'from osgeo import gdal; import numpy, scipy' 2>&1 >/dev/null)"; then
+    echo "ERROR: could not start the Python of the '$ENV_NAME' env with GDAL, numpy and scipy." >&2
     echo "       Tried: ${RUN[*]} -c 'from osgeo import gdal; import numpy, scipy'" >&2
+    if [[ -n "$PROBE_ERR" ]]; then
+      echo "       It answered:" >&2
+      printf '%s\n' "$PROBE_ERR" | tail -n 12 | sed 's/^/         /' >&2
+    else
+      echo "       It gave no message." >&2
+    fi
+    echo "       If the QGIS env has another name, set DS_QGIS_ENV to it ('$(basename "$TOOL") env list' shows" >&2
+    echo "       the envs); or set FINDER_PYTHON to a Python that has GDAL, numpy and scipy." >&2
     exit 1
   fi
 fi
