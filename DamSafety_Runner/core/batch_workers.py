@@ -1,4 +1,4 @@
-"""Runner 3.19.0: several dams of a batch at the same time.
+"""Runner 3.20.0: several dams of a batch at the same time.
 
 A batch runs one dam after another, and LISFLOOD-FP gains little from more threads on one dam
 (its OpenMP scaling is poor on these grids). Running the dams side by side, each in its own

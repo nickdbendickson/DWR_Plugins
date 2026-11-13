@@ -2026,7 +2026,7 @@ class _Report(object):
         self.warnings = [str(w) for w in (self.rep.get("warnings") or [])]
         scen = self.rep.get("scenario") or self.summary.get("scenario")
         self.flood_mode = scen in ("flood", "flood_no_breach")
-        self.no_breach = scen == "flood_no_breach"      # 3.18.0: PMF routed, no failure
+        self.no_breach = scen == "flood_no_breach"      # 3.19.0: PMF routed, no failure
         self.scenario_text = ("Flood inflow (PMF) through the spillways and over the crest, "
                               "NO breach" if self.no_breach else
                               "Flood inflow (PMF), with and without the breach"

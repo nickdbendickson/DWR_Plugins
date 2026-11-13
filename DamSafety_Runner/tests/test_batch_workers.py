@@ -1,4 +1,4 @@
-"""3.19.0: a batch runs several dams at the same time, each in its own child process
+"""3.20.0: a batch runs several dams at the same time, each in its own child process
 (core/batch_workers.py; `WORKERS` on ndbreach:batch, `--workers` on `ndbreach_cli.py batch`).
 
 * The children are the same tool for ONE dam; the parent merges their one-row summaries in
