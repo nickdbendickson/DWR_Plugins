@@ -86,7 +86,7 @@ SERIES_FIELDS = ["Upstream", "Downstream", "Depth_ft", "First_Arrival_hr", "Velo
 DAM_FIELDS = ["Dam", "Folder", "Location", "Location_Source", "Depth_Raster", "Arrival_Raster",
               "Velocity_Raster", "ND", "TM11", "Snapshot_Date", "Snapshot_Version", "Status",
               "Floods", "Flooded_By"]
-# Pierre 2.29.1: two classifications this far apart (or by different plugin versions) are flagged
+# Heim 2.29.1: two classifications this far apart (or by different plugin versions) are flagged
 VINTAGE_MAX_DAYS = 365
 
 _RANK = {"low": 1, "medium": 2, "significant": 2, "high": 3}
