@@ -36,7 +36,7 @@ from .ui_fit import fit_window
 TITLE = "Dam suite home"
 SCOPE = "NDDamSuite"
 ENTRY = "home_dams_folder"
-# v2.18.13 / 2.31.1 (Pierre 1.6/1.7): the Dams folder is a per-computer setting; a project that
+# v2.18.13 / 2.31.1 (Heim 1.6/1.7): the Dams folder is a per-computer setting; a project that
 # already stores one (older releases) keeps it as an override, so existing projects open as before
 DAMS_KEY = SCOPE + "/" + ENTRY
 HEADER_KEY = SCOPE + "/home_table_header"
