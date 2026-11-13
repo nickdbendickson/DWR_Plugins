@@ -87,11 +87,12 @@ def water_history(seen):
 def bare_share(red, green, blue, nir, mask, ndvi_max=0.15):
     """Share of the masked cells that are bright bare ground: no vegetation (NDVI under ndvi_max)
     and brighter than the median of the whole image window (pits, quarries, fresh spoil; open
-    water is dark and is not counted)."""
+    water is dark and is not counted). NaN when the image holds under half the disk (as wet():
+    a sliver at the edge of an image is no reading)."""
     rgb = (np.asarray(red, float) + np.asarray(green, float) + np.asarray(blue, float)) / 3.0
     v = ndvi(red, nir)
     ok = mask & np.isfinite(v) & np.isfinite(rgb)
-    if ok.sum() < 4:
+    if ok.sum() < max(4, 0.5 * int(np.sum(mask))):
         return float("nan")
     bright = rgb > np.nanmedian(rgb)
     return float(((v < ndvi_max) & bright)[ok].mean())

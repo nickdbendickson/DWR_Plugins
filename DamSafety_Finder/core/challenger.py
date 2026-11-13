@@ -106,7 +106,7 @@ def predict_gbm(model, x):
 
 def bagging_pu(x, y, n_bags=10, seed=0, sw=None, trusted=None, **kw):
     """Bagged PU: each bag = all positives + a bootstrap of the unlabelled rows as large as the
-    positives x 5 (or all of them, when fewer). trusted: rows that are reviewers' labels (dam or
+    positives (reviewers' 'yes' marks included) x 5 (or all of them, when fewer). trusted: rows that are reviewers' labels (dam or
     not) - in every bag at their weight sw, never bootstrapped as unlabelled. With few rows a
     bag's trees still split: min_leaf shrinks to a tenth of the rows a tree sees (20 at most).
     {'kind': 'finder-pu-gbm', 'models': [...]}."""
@@ -118,7 +118,8 @@ def bagging_pu(x, y, n_bags=10, seed=0, sw=None, trusted=None, **kw):
     pos = np.flatnonzero((y > 0) & ~tr & (sw > 0))
     unl = np.flatnonzero((y == 0) & ~tr & (sw > 0))
     fix = np.flatnonzero(tr & (sw > 0))
-    k = min(len(unl), 5 * len(pos))
+    # the background is 5 x every positive in a bag, reviewers' 'yes' marks included
+    k = min(len(unl), 5 * (len(pos) + int(((y > 0) & tr & (sw > 0)).sum())))
     n_rows = int(kw.get("subsample", 0.8) * (len(pos) + k + len(fix)))
     if "min_leaf" not in kw:
         kw["min_leaf"] = max(2, min(20, n_rows // 10))
@@ -126,6 +127,9 @@ def bagging_pu(x, y, n_bags=10, seed=0, sw=None, trusted=None, **kw):
     for b in range(int(n_bags)):
         pick = rng.choice(unl, k, replace=True) if k else np.zeros(0, int)
         idx = np.concatenate([pos, pick, fix]).astype(int)
+        if not (y[idx] == 0).any() or not (y[idx] > 0).any():
+            raise ValueError("a bag holds no {}: the trees would give every fill the same score".format(
+                "fill marked or taken as not a dam" if (y[idx] > 0).any() else "dam"))
         models.append(fit_gbm(x[idx], y[idx], sw=sw[idx], seed=seed + b, **kw))
     return {"kind": "finder-pu-gbm", "models": models}
 

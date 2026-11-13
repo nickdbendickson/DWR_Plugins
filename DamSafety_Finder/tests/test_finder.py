@@ -594,6 +594,20 @@ class Runs(unittest.TestCase):
         back = self.f.read_rows(out + "|layername=evidence")
         self.assertEqual(len(back), len(ev["rows"]))
         self.assertIn("wet_years", back[0])
+        # the permit check is from the storage alone: blank when the storage is unknown, and the
+        # consequence pass does not overwrite it
+        fl = self.evid_fills([{"x": x, "y": row_y(200), "find_id": "NOSTORE", "kind": "dam", "area_ac": 1.0},
+                              {"x": x, "y": row_y(210), "find_id": "BIG", "kind": "dam", "area_ac": 1.0,
+                               "storage_af": 40.0}])
+        ev2 = self.f.run_evidence(fl, os.path.join(self.tmp, "ev2.gpkg"), dem=self.dem, roads=self.roads,
+                                  log=lambda *_: None)
+        got = {r["find_id"]: r for r in ev2["rows"]}
+        self.assertIsNone(got["NOSTORE"].get("permit_check"))
+        self.assertEqual(got["BIG"]["permit_check"], "yes")
+        self.assertIn("conseq", got["NOSTORE"])
+        # a numeric field blank in every row is still written as a number
+        self.assertIn(("storage_af", "float"), self.f._fields_of([{"find_id": "A", "storage_af": None}]))
+        self.assertIn(("nwi_h", "str"), self.f._fields_of([{"nwi_h": None}]))
         txt = "2018 | /x/img.tif | green=3 nir=1 red=2\n# a comment\n2020|svc|nir=1, green=3"
         self.assertEqual(self.f.parse_images(txt), [{"year": 2018, "src": "/x/img.tif", "green": 3, "nir": 1, "red": 2},
                                                     {"year": 2020, "src": "svc", "nir": 1, "green": 3}])
@@ -623,14 +637,23 @@ class Runs(unittest.TestCase):
             self.f.run_review_batch(fills, out, n=10, reviewed=os.path.join(self.tmp, "nowhere.txt"),
                                     log=lambda *_: None)
         said = []
-        res = self.f.run_review_batch(fills, out, n=10, reviewed=["FIND-00000000"], per_tile_cap=10,
-                                      log=said.append)
+        top = "FIND-0000001D"                           # height 29: rank 1
+        res = self.f.run_review_batch(fills, out, n=10, per_tile_cap=10, log=said.append)
+        self.assertIn(top, [r["find_id"] for r in res["rows"]])     # so the checks below can fail
+        # a reviewed card is left out of the batch (a list, then a marks file)
+        res = self.f.run_review_batch(fills, out, n=10, reviewed=[top], per_tile_cap=10, log=said.append)
         self.assertEqual(len(res["rows"]), 10)
+        self.assertNotIn(top, [r["find_id"] for r in res["rows"]])
+        self.assertTrue(all(r["pool_n"] == 29 for r in res["rows"]))
+        path = os.path.join(self.tmp, "reviewed.csv")
+        with open(path, "w", encoding="utf-8-sig") as fh:
+            fh.write("find_id,mark\n{},yes\n".format(top))
+        res = self.f.run_review_batch(fills, out, n=10, reviewed=path, per_tile_cap=10, log=said.append)
+        self.assertNotIn(top, [r["find_id"] for r in res["rows"]])
         # one 5 km tile, at most 3 near the cut: a short batch, and it says so
         res = self.f.run_review_batch(fills, out, n=10, log=said.append)
         self.assertEqual(len(res["rows"]), 9)
         self.assertTrue(any("the batch has 9 card(s), not 10" in m for m in said))
-        self.assertNotIn("FIND-00000000", [r["find_id"] for r in res["rows"] if r["stratum"] != "random"])
 
     def test_evidence_lidar_needs_coverage(self):
         # a return-count tile 6 returns a cell over x0..x0+400 (0 stored as nodata, as the
@@ -657,6 +680,65 @@ class Runs(unittest.TestCase):
                 self.assertIsNone(got["FAR"].get(k), (src, k))
             self.assertEqual(got["EDGE"]["lidar_pool_empty"], 0.0)
             self.assertEqual(got["EDGE"]["lidar_ring_empty"], 0.0)
+
+    def count_tile(self, name, x0, y0, arr):
+        """A return-count GeoTIFF (EPSG:5070, 1 m, 0 = nodata) with its top-left at (x0, y0 + rows)."""
+        tif = os.path.join(self.tmp, name)
+        ds = gdal.GetDriverByName("GTiff").Create(tif, arr.shape[1], arr.shape[0], 1, gdal.GDT_Int32)
+        ds.SetGeoTransform((x0, 1.0, 0.0, y0 + arr.shape[0], 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetNoDataValue(0)
+        ds.GetRasterBand(1).WriteArray(arr.astype(np.int32))
+        ds = None
+        return tif
+
+    def lidar_of(self, fills, src):
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lc.gpkg"), lidar_points=src, log=lambda *_: None)
+        return {r["find_id"]: r for r in ev["rows"]}
+
+    def test_evidence_lidar_partial_tile_and_pond(self):
+        # a tile cut by a diagonal project edge (returns where x + y < 420 m, the rest nodata in
+        # the tile's box), with a pond void (no returns) inside the survey: a pool in the empty
+        # corner has no evidence, a pool 20 m inside the edge reads dry, and the pond reads empty
+        yy, xx = np.mgrid[0:600, 0:600]
+        x, y = xx + 0.5, 600 - yy - 0.5
+        a = np.where(x + y < 420.0, 6, 0)
+        a[(x - 120.0) ** 2 + (y - 120.0) ** 2 < 30.0 ** 2] = 0          # the pond
+        vrt = os.path.join(self.tmp, "cut.vrt")
+        gdal.BuildVRT(vrt, [self.count_tile("cut.tif", X0, Y0, a)])
+        fills = self.evid_fills([
+            {"x": X0 + 450.0, "y": Y0 + 450.0, "find_id": "CORNER", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 196.0, "y": Y0 + 196.0, "find_id": "EDGE", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 120.0, "y": Y0 + 120.0, "find_id": "POND", "kind": "dam", "area_ac": 0.7}])
+        got = self.lidar_of(fills, vrt)
+        for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+            self.assertIsNone(got["CORNER"].get(k), k)
+        self.assertEqual(got["EDGE"]["lidar_pool_empty"], 0.0)
+        self.assertEqual(got["EDGE"]["lidar_ring_empty"], 0.0)
+        self.assertGreater(got["POND"]["lidar_pool_empty"], 0.9)
+        self.assertLess(got["POND"]["lidar_ring_empty"], 0.2)
+
+    def test_evidence_lidar_nested_vrt_and_a_rebuilt_one(self):
+        # a VRT of a per-project VRT keeps the gap between the project's tiles; and a VRT
+        # rebuilt at the same path between two runs is read afresh
+        ta = self.count_tile("na.tif", X0, Y0, np.full((400, 400), 6))
+        tb = self.count_tile("nb.tif", X0 + 1000.0, Y0, np.full((400, 400), 6))
+        inner = os.path.join(self.tmp, "proj", "point_count.vrt")
+        os.makedirs(os.path.dirname(inner))
+        gdal.BuildVRT(inner, [ta, tb])
+        outer = os.path.join(self.tmp, "state.vrt")
+        gdal.BuildVRT(outer, [inner])
+        fills = self.evid_fills([
+            {"x": X0 + 700.0, "y": Y0 + 200.0, "find_id": "GAP", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 1200.0, "y": Y0 + 200.0, "find_id": "IN", "kind": "dam", "area_ac": 1.0}])
+        got = self.lidar_of(fills, outer)
+        self.assertIsNone(got["GAP"].get("lidar_pool_empty"))
+        self.assertEqual(got["IN"]["lidar_pool_empty"], 0.0)
+        one = os.path.join(self.tmp, "redo.vrt")
+        gdal.BuildVRT(one, [ta])
+        self.assertIsNone(self.lidar_of(fills, one)["IN"].get("lidar_pool_empty"))
+        gdal.BuildVRT(one, [ta, tb])                    # the same path, now over both tiles
+        self.assertEqual(self.lidar_of(fills, one)["IN"]["lidar_pool_empty"], 0.0)
 
     def test_evidence_two_services_one_year(self):
         # the CIR and the 4-band of one year: each its own tiles, and water in either counts

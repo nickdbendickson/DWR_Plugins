@@ -190,10 +190,12 @@ def listed_recall(dams, cands, match_m, z=Z95):
 def ht_share(labels, incl_prob, z=Z95):
     """Share of real dams in a whole candidate list, from a reviewed sample in which each card had
     a known chance incl_prob of being picked (a random control, a top-k slice taken with chance 1,
-    a near-cut-off slice ...): the Horvitz-Thompson estimate. The cards that share one chance form
-    a stratum (a top slice taken whole has no sampling error; a random sample of the rest has it
-    all); each sampled stratum's interval sits on its Agresti-Coull share (k + z^2/2) / (n + z^2), so
-    a random control with no dams in it still gives an honest upper bound instead of 0 +/- 0.
+    a near-cut-off slice ...): the Horvitz-Thompson estimate. The cards with about one chance
+    (within a quarter) form a stratum (a top slice taken whole has no sampling error; a random
+    sample of the rest has it all); each sampled stratum's interval sits on its Agresti-Coull
+    share (k + z^2/2) / (n + z^2), so a random control with no dams in it still gives an honest
+    upper bound instead of 0 +/- 0. For a later review round, pass the cards reviewed before
+    with their marks at incl_prob 1 (review.pick_batch samples only the cards not yet reviewed).
     {'share', 'lo', 'hi', 'n_list' (estimated list size), 'dams' (estimated real dams in the
     list)}."""
     y = np.asarray(labels, float).ravel()
@@ -207,12 +209,18 @@ def ht_share(labels, incl_prob, z=Z95):
     r = d_hat / n_hat
     var = 0.0
     centre = float(y[pi >= 1.0].sum())                 # the bounds sit on the Agresti-Coull shares
-    for p in set(np.round(pi, 9).tolist()):
-        if p >= 1.0:
-            continue                                   # taken whole: no sampling error
-        m = np.round(pi, 9) == p
+    # strata: the cards taken whole (no sampling error), then chances pooled where they differ by
+    # less than a quarter (pick_batch's near-the-cut chances differ by tile and by Monte Carlo
+    # noise; one stratum per distinct value would pile the Agresti-Coull pseudo-counts up per card)
+    grp, g, start = np.full(len(pi), -1), -1, None
+    for p in np.unique(pi[pi < 1.0]):
+        if start is None or p > 1.25 * start:
+            g, start = g + 1, p
+        grp[pi == p] = g
+    for hh in range(g + 1):
+        m = grp == hh
         n_h = int(m.sum())
-        big_n = n_h / p
+        big_n = float(w[m].sum())
         nt = n_h + z * z
         pt = (y[m].sum() + z * z / 2.0) / nt
         centre += big_n * pt

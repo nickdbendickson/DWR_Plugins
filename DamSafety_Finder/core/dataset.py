@@ -61,10 +61,11 @@ def _records(folder):
 
 
 def load(folder):
-    """The latest record per (find_id, reviewer)."""
+    """The latest record per (find_id, reviewer, second look or not): a reviewer's blind second
+    look does not replace their first mark."""
     latest = {}
     for r in _records(folder):
-        latest[(r.get("find_id"), r.get("reviewer", ""))] = r
+        latest[(r.get("find_id"), r.get("reviewer", ""), bool(r.get("second_look")))] = r
     return list(latest.values())
 
 
@@ -74,15 +75,15 @@ def stats(folder, ready_at=100):
     by its first reviewer's mark (the reviewer of its earliest record that is not a second look;
     their latest mark, so a reviewer can correct themselves). A blind second look is counted
     apart."""
-    recs = load(folder)
-    who = {}
+    who, first, seconds = {}, {}, set()
     for r in _records(folder):
-        if not r.get("second_look"):
-            who.setdefault(r.get("find_id"), r.get("reviewer", ""))
-    first = {fid: r for r in recs for fid in [r.get("find_id")]
-             if not r.get("second_look") and who.get(fid) == r.get("reviewer", "")}
+        fid, rv = r.get("find_id"), r.get("reviewer", "")
+        if r.get("second_look"):
+            seconds.add((fid, rv))
+        elif who.setdefault(fid, rv) == rv:
+            first[fid] = r                              # the first reviewer's latest first look
     out = {"cards": len(first), "yes": 0, "no": 0, "unsure": 0, "offset": 0,
-           "second_looks": sum(1 for r in recs if r.get("second_look")), "by_county": {}}
+           "second_looks": len(seconds), "by_county": {}}
     for r in first.values():
         lab = r.get("label")
         if lab in out:

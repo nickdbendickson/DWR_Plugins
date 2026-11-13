@@ -1819,41 +1819,63 @@ def _read_grid(src, ext, cell, alg="near"):
     return a, out.GetGeoTransform()
 
 
-_COVER = {}
+def _data_px(path, depth=0):
+    """[(x0, y0, x1, y1)] pixel boxes of a raster that hold data: the whole raster, or for a VRT
+    each source's DstRect - and for a source that is itself a VRT, its own sources' boxes mapped
+    through SrcRect -> DstRect (a VRT of per-project VRTs keeps the gaps between tiles)."""
+    ds = _checked(gdal.Open(str(path)), "opening {}".format(path))
+    whole = [(0.0, 0.0, float(ds.RasterXSize), float(ds.RasterYSize))]
+    if ds.GetDriver().ShortName != "VRT" or depth > 8:
+        return whole
+    import xml.etree.ElementTree as ET
+    band = ET.fromstring(ds.GetMetadata("xml:VRT")[0]).find("VRTRasterBand")
+    base, out = os.path.dirname(os.path.abspath(str(path))), []
+    for el in (band if band is not None else []):
+        dr = el.find("DstRect")
+        if dr is None:
+            continue
+        dx, dy, dw, dh = (float(dr.get(k)) for k in ("xOff", "yOff", "xSize", "ySize"))
+        sr, fn = el.find("SrcRect"), el.find("SourceFilename")
+        name = (fn.text or "") if fn is not None else ""
+        if sr is None or not name.lower().endswith(".vrt"):
+            out.append((dx, dy, dx + dw, dy + dh))
+            continue
+        if fn.get("relativeToVRT") == "1":
+            name = os.path.join(base, name)
+        sx, sy, sw, sh = (float(sr.get(k)) for k in ("xOff", "yOff", "xSize", "ySize"))
+        if sw <= 0 or sh <= 0:
+            continue
+        fx, fy = dw / sw, dh / sh
+        for x0, y0, x1, y1 in _data_px(name, depth + 1):
+            x0, y0, x1, y1 = max(x0, sx), max(y0, sy), min(x1, sx + sw), min(y1, sy + sh)
+            if x0 < x1 and y0 < y1:
+                out.append((dx + (x0 - sx) * fx, dy + (y0 - sy) * fy, dx + (x1 - sx) * fx, dy + (y1 - sy) * fy))
+    return out or ([] if len(band if band is not None else []) else whole)
 
 
-def _coverage(src, ext, cell):
+def _coverage(src, ext, cell, cache=None):
     """Bool grid (as _read_grid lays it out over ext) of the cells a raster has data for: inside
-    one of a VRT's source tiles (from the VRT's layout), or inside the raster. A count raster
-    stores 0 as nodata (or has none, and a VRT fills its gaps with 0), so the values alone
-    cannot tell a cell with no returns from a cell no survey reached."""
+    one of a VRT's source tiles (from the VRT's layout, nested VRTs followed), or inside the
+    raster. A count raster stores 0 as nodata (or has none, and a VRT fills its gaps with 0), so
+    the values alone cannot tell a cell with no returns from a cell no survey reached. cache: a
+    dict kept for one run (the layout is parsed once per source, and a rebuilt VRT is re-read
+    on the next run)."""
+    cache = {} if cache is None else cache
     key = str(src)
-    if key not in _COVER:
+    if key not in cache:
         ds = _checked(gdal.Open(key), "opening {}".format(src))
         gt = ds.GetGeoTransform()
         boxes = []
-        if ds.GetDriver().ShortName == "VRT":
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(ds.GetMetadata("xml:VRT")[0])
-            band = root.find("VRTRasterBand")
-            for el in (band if band is not None else []):
-                dr = el.find("DstRect")
-                if dr is None:
-                    continue
-                xo, yo, xs, ys = (float(dr.get(k)) for k in ("xOff", "yOff", "xSize", "ySize"))
-                xa, xb = gt[0] + xo * gt[1], gt[0] + (xo + xs) * gt[1]
-                ya, yb = gt[3] + yo * gt[5], gt[3] + (yo + ys) * gt[5]
-                boxes.append((min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb)))
-        if not boxes:
-            xa, xb = gt[0], gt[0] + ds.RasterXSize * gt[1]
-            ya, yb = gt[3], gt[3] + ds.RasterYSize * gt[5]
-            boxes = [(min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))]
+        for x0, y0, x1, y1 in _data_px(key):
+            xa, xb = gt[0] + x0 * gt[1], gt[0] + x1 * gt[1]
+            ya, yb = gt[3] + y0 * gt[5], gt[3] + y1 * gt[5]
+            boxes.append((min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb)))
         srs = osr.SpatialReference()
         srs.ImportFromWkt(ds.GetProjection() or _srs(WORK_EPSG).ExportToWkt())
         srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        _COVER[key] = (np.array(boxes, float), osr.CoordinateTransformation(_srs(WORK_EPSG), srs))
+        cache[key] = (np.array(boxes, float).reshape(-1, 4), osr.CoordinateTransformation(_srs(WORK_EPSG), srs))
         ds = None
-    boxes, ct = _COVER[key]
+    boxes, ct = cache[key]
     n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
     n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
     cxs = ext[0] + (np.arange(n_x) + 0.5) * cell
@@ -1866,6 +1888,29 @@ def _coverage(src, ext, cell):
     for b in boxes[near]:
         inside |= (pts[:, 0] >= b[0]) & (pts[:, 0] <= b[2]) & (pts[:, 1] >= b[1]) & (pts[:, 1] <= b[3])
     return inside.reshape(n_y, n_x)
+
+
+def _surveyed(src, box, reach, shape, cache=None):
+    """Bool grid (1 m, as _read_grid lays it out over box) of the cells a LiDAR survey covered:
+    inside a source tile AND inside a closing (radius `reach`) of the cells that hold returns.
+    A tile's box also holds its nodata margin, the unsurveyed part of a tile cut by a project
+    edge and the slivers of a tile warped from another UTM zone; the closing fills any void up
+    to `reach` across (a pond the pool and ring could hold stays surveyed-but-empty) and leaves
+    those out. Read over a window 2 x reach wider, so the closing is exact on box."""
+    g = int(math.ceil(2.0 * reach))
+    wbox = (box[0] - g, box[1] - g, box[2] + g, box[3] + g)
+    pw, _gw = _read_grid(src, wbox, 1.0)
+    occ = np.isfinite(pw) & (pw > 0) & _coverage(src, wbox, 1.0, cache)
+    if not occ.any():
+        return np.zeros(shape, bool)
+    dil = ndi.distance_transform_edt(~occ) <= reach
+    foot = ndi.distance_transform_edt(np.pad(dil, 1))[1:-1, 1:-1] > reach
+    foot = foot[g:g + shape[0], g:g + shape[1]]
+    if foot.shape != tuple(shape):                      # a rounding cell at the edge
+        f2 = np.zeros(shape, bool)
+        f2[:foot.shape[0], :foot.shape[1]] = foot[:shape[0], :shape[1]]
+        foot = f2
+    return _coverage(src, box, 1.0, cache) & foot
 
 
 def _polys_with(src, box, field=None):
@@ -1897,9 +1942,19 @@ def _polys_with(src, box, field=None):
     return out
 
 
+def _declared_type(k):
+    """The type a field of the Finder's own layers is declared with ('str' when none is)."""
+    for fl in ("EMB_FIELDS", "EVID_FIELDS", "REVIEW_FIELDS"):
+        t = dict(globals().get(fl, ())).get(k)
+        if t:
+            return t
+    return "str"
+
+
 def _fields_of(rows, skip=(), first=()):
     """[(name, type)] of every key the rows carry (after `first`), each typed by its first value
-    that is not None: a field blank in row 1 is not written as text."""
+    that is not None (a field blank in row 1 is not written as text), or by its declared type
+    when no row has a value (a numeric field all blank this run stays numeric)."""
     fields = list(first)
     have = set(skip) | {k for k, _t in fields}
     for r in rows:
@@ -1908,6 +1963,9 @@ def _fields_of(rows, skip=(), first=()):
                 continue
             have.add(k)
             v = next((q[k] for q in rows if q.get(k) is not None), None)
+            if v is None:                               # blank in every row: the declared type
+                fields.append((k, _declared_type(k)))
+                continue
             fields.append((k, "float" if isinstance(v, float) else
                            ("int" if isinstance(v, int) and not isinstance(v, bool) else "str")))
     return fields
@@ -1979,6 +2037,7 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
     s_p = _polys_with(soils, ext, soil_field) if soils else []
     log("{} fill(s); {} image year(s), {} NWI polygon(s), {} quarry polygon(s), {} soil polygon(s)".format(
         len(rows), len(imgs), len(nwi_p), len(q_p), len(s_p)))
+    cover = {}                                          # LiDAR layouts, parsed once this run
     for i, r in enumerate(rows):
         if cancelled():
             break
@@ -2052,7 +2111,7 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
             try:
                 lbox = (cx - rad - 30.0, cy - rad - 30.0, cx + rad + 30.0, cy + rad + 30.0)
                 pc, gp = _read_grid(lidar_points, lbox, 1.0)
-                cov = _coverage(lidar_points, lbox, 1.0)
+                cov = _surveyed(lidar_points, lbox, rad + 25.0, pc.shape, cover)
                 pc[np.isnan(pc) & cov] = 0.0                # a count raster stores 0 as nodata
                 pc[~cov] = np.nan                           # no survey here: no evidence, not 'empty'
                 wc = None
@@ -2136,7 +2195,7 @@ def _consequences(rows, dem, z_feet, buildings, roads, reach_m, flow_cell, log, 
             except (TypeError, ValueError):
                 saf = float("nan")
             c_ = ev.consequence(bd, rd_, saf)
-            c_["permit_check"] = "yes" if c_["permit_check"] else "no"
+            c_.pop("permit_check", None)                # set from the storage alone, in run_evidence
             r.update(c_)
 
 
@@ -2144,7 +2203,7 @@ def _consequences(rows, dem, z_feet, buildings, roads, reach_m, flow_cell, log, 
 REVIEW_FIELDS = [("n", "int"), ("find_id", "str"), ("stratum", "str"), ("rank", "int"), ("incl_prob", "float"),
                  ("second", "str"), ("kind", "str"), ("status", "str"), ("score", "float"), ("height_ft", "float"),
                  ("storage_af", "float"), ("area_ac", "float"), ("lat", "float"), ("lon", "float"),
-                 ("list_n", "int")]
+                 ("list_n", "int"), ("pool_n", "int")]
 
 
 @_records_run("review")
@@ -2186,7 +2245,7 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
     write_csv(out_csv, fields, got)
     counts = {k: sum(1 for r in got if r["stratum"] == k) for k in ("random", "top", "near")}
     counts["second"] = sum(1 for r in got if r["second"] == "yes")
-    want = min(int(n), len(rows))
+    want = min(int(n), len(rows) - sum(1 for r in rows if r.get("find_id") in done))
     if len(got) < want:
         log("warning: the batch has {} card(s), not {}: too few unreviewed candidates near the cut "
             "(or a per-tile cap of {} too tight for this area)".format(len(got), want, per_tile_cap))

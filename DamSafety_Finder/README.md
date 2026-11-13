@@ -229,20 +229,26 @@ For each fill of an `embankments` layer, every source optional:
   mosaic* writes with `POINTS`; `lidar_water`: its class-9 count): water swallows the pulses, so a
   pond too small to be flattened or classed shows as empty cells. `lidar_pool_empty`,
   `lidar_ring_empty`, `lidar_contrast`, `lidar_class9`; blank where no survey covers the pool
-  (a gap between tiles is not "empty").
+  (a gap between tiles, the empty corner of a tile cut by a project edge or a VRT of
+  per-project VRTs is not "empty": a cell counts as surveyed inside a tile and within reach of
+  returns, so a pond void inside the survey still reads empty).
 * **What is below** (with a DEM and buildings / roads): buildings and road crossings down the flow
   path within 1, 3 and 5 miles, and `conseq`, a second sort for the review. `permit_check` = yes
   when the storage is over 12.5 acre-feet (an ND water permit), for every fill.
 
 ## Review batches and honest numbers (`ndfind:review_batch`, `core/review.py`, `core/evaluate.py`)
 
-A review batch is the Finder's experiment: the marks are the only ground truth. Each batch holds a
-**random control** (about 18 %, picked by a hash of the card id, so the same cards stay in it from
-one model version to the next), the **top-ranked** unreviewed cards (about 37 %) and cards **near
-the cut** (ranks k to 3k, at most `CAP` from one 5 km tile), and flags about 12 % for a blind
-second reviewer. Every card carries `incl_prob`, the chance it had of being picked (the tile cap
-counted), so `evaluate.ht_share` turns a batch's marks into the share of real dams in the whole
-list with an honest interval (a control with no dams still gives an upper bound, not 0 +/- 0).
+A review batch is the Finder's experiment: the marks are the only ground truth. A batch samples
+the cards not yet reviewed (give it the earlier marks file as `REVIEWED`). It holds a **random
+control** (about 18 %: the unreviewed cards with the smallest hash of the card id for the `SEED`,
+so the control stays put from one model version to the next, and a later round with the same
+seed takes the next-smallest hashes), the **top-ranked** unreviewed cards (about 37 %) and cards
+**near the cut** (ranks k to 3k, at most `CAP` from one 5 km tile), and flags about 12 % for a
+blind second reviewer. Every card carries `incl_prob`, the chance it had of being picked from the
+unreviewed pool (`pool_n` cards; the tile cap counted), so `evaluate.ht_share` turns a batch's
+marks into the share of real dams among the unreviewed cards with an honest interval (a control
+with no dams still gives an upper bound, not 0 +/- 0). For the whole list, add the cards marked in
+earlier rounds at `incl_prob` 1: they are a census of what has been looked at.
 A review sheet (an aerial and a hillshade chip per card; yes / no / unsure / offset, where offset is
 a real dam just off the point) gives the marks the score tool's `MARKS` takes, and
 `core/dataset.py` files every reviewed card with its chips (a training set for an image model once

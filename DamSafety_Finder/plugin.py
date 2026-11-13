@@ -828,7 +828,7 @@ class ReviewBatch(_Base):
         self.addParameter(QgsProcessingParameterFile(
             "REVIEWED", "Cards already reviewed (any text / CSV file holding their FIND- ids; optional)",
             extension="", optional=True))
-        self.addParameter(QgsProcessingParameterNumber("SEED", "Random seed (keep it to keep the control set)",
+        self.addParameter(QgsProcessingParameterNumber("SEED", "Random seed (keep it: the control stays put, and a later round takes the next cards)",
                                                        INTEGER, 0, minValue=0))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))

@@ -169,14 +169,30 @@ def _design(x, names, basis, rows=None):
     return np.hstack(out), on
 
 
-def _without_marked(rows, background, extra):
+def _without_marked(rows, background, extra, positive_words=("dam",), bags=False):
     """rows (and background) less every row a reviewer marked: the mark replaces the row's own
-    label (listed or not) instead of joining it. Matched by identity or find_id."""
+    label (listed or not) instead of joining it. Matched by identity or find_id. With bags, a
+    'yes' or 'unsure' on a listed fill stands for its listed dam: the bag's other listed fills
+    are left out too (else the next of them would become a second positive for the same dam);
+    a 'no' leaves the rest of the bag in, so the next fill is promoted."""
     if not extra:
         return list(rows), background
     ids = {id(r) for r, _t, _w in extra}
     fids = {r.get("find_id") for r, _t, _w in extra if r.get("find_id") not in (None, "")}
-    keep = [not (id(r) in ids or (r.get("find_id") not in (None, "") and r.get("find_id") in fids)) for r in rows]
+    pos_ids = {id(r) for r, t, _w in extra if float(t) > 0.0}
+    pos_f = {r.get("find_id") for r, t, _w in extra if float(t) > 0.0 and r.get("find_id") not in (None, "")}
+
+    def marked(r):
+        return id(r) in ids or (r.get("find_id") not in (None, "") and r.get("find_id") in fids)
+
+    def bag(r):
+        return (r.get("known_layer"), r.get("known_id"))
+    y = labels(rows, positive_words)
+    held = set()
+    if bags:
+        held = {bag(r) for r, yy in zip(rows, y) if yy > 0 and r.get("known_id") not in (None, "")
+                and (id(r) in pos_ids or (r.get("find_id") not in (None, "") and r.get("find_id") in pos_f))}
+    keep = [not (marked(r) or (yy > 0 and bag(r) in held)) for r, yy in zip(rows, y)]
     rows = [r for r, k in zip(rows, keep) if k]
     if background is not None:
         background = [b for b, k in zip(background, keep) if k]
@@ -200,7 +216,7 @@ def train(rows, positive_words=("dam",), l2=1.0, iters=50, note="", features=Non
     learner: 'logistic' or 'trees' (bagged PU boosted trees, version 3: the clean positives are
       the fill nearest each listed point; marks are in every bag at their weight, an unsure one
       as both; splines / groups do not apply)."""
-    rows, background = _without_marked(rows, background, extra)
+    rows, background = _without_marked(rows, background, extra, positive_words, bags)
     if learner == "trees":
         return _train_trees(rows, positive_words, note, features, bags, background, extra, n_bags, seed)
     if learner != "logistic":
@@ -403,14 +419,17 @@ def score_detail(model, rows, min_group_positives=30):
     names = model["features"]
     lo = np.array(model.get("train_lo") or [-np.inf] * len(names))
     hi = np.array(model.get("train_hi") or [np.inf] * len(names))
-    gp = {k: v for k, v in (model.get("group_positives") or {}).items() if k}   # measured terrain only
+    gall = model.get("group_positives") or {}
+    unk = int(gall.get("", 0))                      # listed dams whose terrain was not measured
+    gp = {k: v for k, v in gall.items() if k}       # measured terrain only
     out = []
     for i, r in enumerate(rows):
         why = [n for j, n in enumerate(names) if x[i, j] < lo[j] or x[i, j] > hi[j]]
         msg = "outside the training range: " + ", ".join(why) if why else ""
         g = terrain_group(r)
-        if gp and g and gp.get(g, 0) < min_group_positives:
-            msg = (msg + "; " if msg else "") + "{} terrain: only {} listed dam(s) to learn from".format(g, gp.get(g, 0))
+        if gp and g and gp.get(g, 0) + unk < min_group_positives:   # the unmeasured ones may be in g
+            msg = (msg + "; " if msg else "") + "{} terrain: only {} listed dam(s) to learn from".format(
+                g, gp.get(g, 0) + unk)
         out.append((float(s[i]), msg))
     return out
 
