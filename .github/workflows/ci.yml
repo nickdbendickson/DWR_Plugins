@@ -50,8 +50,12 @@ jobs:
         run: python3 tools/test_gui_lint.py
       - name: BLAS self-check self-test (the LTR leg's guard against a wrong matrix product)
         run: python3 tools/test_blas_selfcheck.py
+      - name: Batch scripts against a stand-in dam_chain (QGIS-free)
+        run: python3 -W error -m unittest discover -v -s tools/batch/tests
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
+      - name: Shared defaults file (Core 1.2.0, QGIS-free)
+        run: python3 DamSafety_Core/tests/test_shared_defaults.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
         run: python3 -W error -m unittest discover -v -s damit_ai/heim/tests
       - name: Vor - catalog, add a document, where the library lives (no Ollama, no QGIS)

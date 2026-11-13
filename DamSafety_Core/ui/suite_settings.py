@@ -247,8 +247,21 @@ class SettingsGrid(QWidget):
         for b in (self.reset_tab_btn, self.reset_all_btn, self.load_btn, self.save_btn, self.save_as_btn):
             row.addWidget(b)
         row.addStretch(1)
+        # Core 1.2.0: the suite-wide starting values every plugin shares (one file, one window)
+        self.shared_btn = QPushButton("Shared defaults\u2026")
+        self.shared_btn.setToolTip("Starting pool, failure mode, breach equation, Manning's n and "
+                                   "the PMF volume rule: one file every DamSafety tool and Crest "
+                                   "start from.")
+        self.shared_btn.clicked.connect(lambda _c=False: self.open_shared_defaults())
+        row.addWidget(self.shared_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+
+    def open_shared_defaults(self):
+        """The Shared defaults window (ui/shared_defaults_dialog.py)."""
+        from . import shared_defaults_dialog
+        if shared_defaults_dialog.show(self):
+            self._status("Shared defaults saved: reopen a tool to start from the new values.")
 
     # ------------------------------------------------------------------- fill --
     def fill(self):

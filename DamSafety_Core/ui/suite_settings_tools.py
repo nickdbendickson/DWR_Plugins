@@ -16,6 +16,7 @@ Each plugin gives: its suite key (ndscreen / ndbreach / ndhazard), a `group_of(t
 the Processing toolbox.
 """
 from ..damsuite import settings as DS
+from ..damsuite import shared_defaults as SD
 
 
 def _get(obj, name, default=None):
@@ -153,6 +154,57 @@ def set_default(alg, name, value):
     return False
 
 
+def _param(alg, name):
+    for p in definitions(alg):
+        if _get(p, "name", "") == name:
+            return p
+    return None
+
+
+def apply_shared_defaults(alg, plugin, tool=None, defaults=None):
+    """Core 1.2.0: set the shared defaults file's values (damsuite.shared_defaults) as the
+    defaults of the parameters it binds for this tool. Runs BEFORE the settings workbook, so a
+    workbook row for the same parameter still wins (and the dialog wins over both). Returns
+    ([(key, value)] applied, [(key, problem)] refused). An enum is set only when the tool class
+    lists its option IDs in SHARED_OPTION_IDS (and the list matches the options)."""
+    tool = tool or tool_name(alg)
+    binds = SD.bindings_for(plugin, tool)
+    if not binds:
+        return [], []
+    d = defaults if defaults is not None else SD.load()
+    applied, bad = [], []
+    ids_of = getattr(alg, "SHARED_OPTION_IDS", None) or {}
+    for key, fn in binds:
+        p = _param(alg, key)
+        if p is None:
+            continue
+        try:
+            v = fn(d.values)
+        except Exception as e:                                   # noqa - never stop a tool
+            bad.append((key, "{}: {}".format(type(e).__name__, e)))
+            continue
+        if v is None:
+            continue
+        kind = DS.kind_of(_type_name(p))
+        if kind == "enum":
+            ids = list(ids_of.get(key) or ())
+            opts = list(_get(p, "options", None) or [])
+            if not ids or len(ids) != len(opts):
+                continue                      # not this tool's kind of list: leave it alone
+            if v not in ids:
+                bad.append((key, "the shared value {!r} is not an option of this tool".format(v)))
+                continue
+            v = ids.index(v)
+        elif kind == "number":
+            lo, hi = _bound(_get(p, "minimum", None)), _bound(_get(p, "maximum", None))
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                bad.append((key, "the shared value {} is outside this tool's range".format(v)))
+                continue
+        if set_default(alg, key, v):
+            applied.append((key, v))
+    return applied, bad
+
+
 def apply_file_defaults(alg, plugin, group_of, tool=None, settings=None):
     """Set the current settings file's values as `alg`'s parameter defaults. Returns
     ([(key, value)] applied, [(key, problem)] refused); nothing when there is no file."""
@@ -224,6 +276,12 @@ def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None, hidden=
         cls.initAlgorithm(self, config)
         self._nd_problem = ""
         try:
+            self._nd_shared, self._nd_shared_refused = apply_shared_defaults(self, plugin)
+        except Exception as e:                                   # noqa - never stop a tool
+            self._nd_shared, self._nd_shared_refused = [], []
+            _log_warning("{}: the shared defaults file was not applied ({}: {})".format(
+                _safe_tool_name(self), type(e).__name__, e))
+        try:
             self._nd_applied, self._nd_refused = apply_file_defaults(self, plugin, group_of)
         except Exception as e:                                   # noqa - never stop a tool
             self._nd_applied, self._nd_refused = [], []
@@ -272,10 +330,17 @@ def original(alg_or_cls):
     return getattr(c, "_nd_original", None) or c
 
 
-def fresh(alg_or_cls):
-    """A fresh instance of the original class with its own defaults (no file applied)."""
+def fresh(alg_or_cls, plugin=None):
+    """A fresh instance of the original class with its own defaults (no settings workbook
+    applied). With `plugin` (Core 1.2.0) the shared defaults file is applied, so the settings
+    grid's starting values are the shared ones."""
     inst = original(alg_or_cls)()
     inst.initAlgorithm()
+    if plugin:
+        try:
+            apply_shared_defaults(inst, plugin)
+        except Exception:                                        # noqa
+            pass
     return inst
 
 
@@ -285,7 +350,7 @@ def full_catalog(classes, plugin, group_of, tab_order=(), skip=()):
     out = []
     for c in classes:
         try:
-            inst = fresh(c)
+            inst = fresh(c, plugin)
         except Exception:                                        # noqa - a tool that needs more than the test double
             continue
         tool = tool_name(inst)

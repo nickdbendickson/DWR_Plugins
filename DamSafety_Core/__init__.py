@@ -5,8 +5,10 @@
     ui/         the shared window files (tokens, widgets, suite settings, home, styles)
     alias.py    `<Plugin>.damsuite` -> `DamSafety_Core.damsuite` (one module object per module)
 
-The other plugins list this one in plugin_dependencies. It adds one About entry under the
-suite menu and nothing else; importing it has no side effects.
+    defaults.json  the shared defaults every tool starts from (damsuite/shared_defaults.py)
+
+The other plugins list this one in plugin_dependencies. It adds an About entry and a Shared
+defaults entry under the suite menu and nothing else; importing it has no side effects.
 """
 
 
@@ -25,6 +27,7 @@ class CorePlugin(object):
     def __init__(self, iface):
         self.iface = iface
         self.action = None
+        self.defaults_action = None
 
     def initGui(self):
         try:
@@ -39,16 +42,35 @@ class CorePlugin(object):
             self.action.setObjectName("DamSafetyCoreAboutAction")
             self.action.triggered.connect(self.about)
             self.iface.addPluginToMenu(MENU, self.action)
+            # 1.2.0: the shared defaults every DamSafety tool (and Crest) starts from
+            self.defaults_action = QAction(icon, "Shared defaults…", self.iface.mainWindow())
+            self.defaults_action.setObjectName("DamSafetySharedDefaultsAction")
+            self.defaults_action.triggered.connect(self.shared_defaults)
+            self.iface.addPluginToMenu(MENU, self.defaults_action)
         except Exception:                               # noqa: BLE001 - a library never blocks QGIS
             self.action = None
 
     def unload(self):
+        for a in (self.action, self.defaults_action):
+            try:
+                if a is not None:
+                    self.iface.removePluginMenu(MENU, a)
+            except Exception:                           # noqa: BLE001
+                pass
+        self.action = self.defaults_action = None
+
+    def shared_defaults(self):
+        """Plugins > Dam safety > Shared defaults… (ui/shared_defaults_dialog.py)."""
         try:
-            if self.action is not None:
-                self.iface.removePluginMenu(MENU, self.action)
-        except Exception:                               # noqa: BLE001
-            pass
-        self.action = None
+            from .ui import shared_defaults_dialog
+            shared_defaults_dialog.show(self.iface.mainWindow())
+        except Exception as e:                          # noqa: BLE001
+            try:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.warning(self.iface.mainWindow(), "Shared defaults",
+                                    "The Shared defaults window could not open: {}".format(e))
+            except Exception:                           # noqa: BLE001
+                pass
 
     def about(self):
         """Version, what is aliased onto this plugin, and the damsuite self-check."""

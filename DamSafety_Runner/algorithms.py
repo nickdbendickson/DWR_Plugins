@@ -349,6 +349,10 @@ except Exception:                                                 # noqa - Core 
 
 
 class _Base(_UnitParams, QgsProcessingAlgorithm):
+    # Core 1.2.0: the option IDs of the enums the shared defaults file sets (damsuite
+    # shared_defaults.BINDINGS; suite_settings_tools.apply_shared_defaults)
+    SHARED_OPTION_IDS = {"METHOD": [m[0] for m in METHODS]}
+
     def group(self):
         return "Dam breach modelling"
 
