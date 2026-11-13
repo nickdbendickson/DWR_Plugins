@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run_finder_statewide.py 1.0 - the DamSafety Finder's "fills across streams and draws" over all of
+"""run_finder_statewide.py 1.1 - the DamSafety Finder's "fills across streams and draws" over all of
 North Dakota, from the statewide 1 m terrain VRT, tile by tile, resumable.
 
     bash run_finder_statewide.sh --dry-run        # what would run, how long, how much disk; writes nothing
@@ -50,7 +50,25 @@ HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does, Finder 0
     4 km of the tile, in the pack's own order, with their ids), and the terrain through a window VRT
     of the big VRT (the tile plus 3.6 km). Both hold exactly what the engine would have read.
 
-TWO THINGS THE ENGINE DOES NOT DO YET, HANDLED HERE
+FINDER 0.7.0 AND LATER (the script works with both; it looks at what the Finder it finds offers)
+
+  * 0.7.0 lays its 5 km squares on a fixed lattice in EPSG:5070 (corners at whole multiples of
+    5 km) and its resampled DEM cells on a fixed 30 m lattice, whatever box a run is given. The
+    tiles of this script are on that same lattice already, so nothing changes in how the state is
+    cut; the terrain window of a tile (tile + 3 km + 600 m) covers the up to 30 m by which 0.7.0
+    grows a square's window.
+  * find_id: up to 0.6.x the crest point of a fill - and the id, a hash of it - moved by a few
+    metres with the corner of the run's box, so the ids of two runs over different boxes did not
+    match. From 0.7.0 on a fill has the same id in every run. Marks made on a run of an older
+    Finder are matched to the fills of a new run by location (lat / lon), not by id. The summary
+    says which Finder version the run used and which of the two holds.
+  * One merged result holds the fills of ONE Finder version: the version is part of the settings
+    a tile is known by (done.json), tiles made by another version are kept but neither run again
+    nor merged (--redo runs them again), and the merge refuses a mix.
+  * edge_ft (below): when the Finder's rows already carry it (planned for 0.7.0) its figure is
+    used; otherwise this script measures it.
+
+THINGS THE ENGINE DOES NOT DO (YET), HANDLED HERE
 
   * Fills outside North Dakota (the terrain covers a rim of the neighbouring states): every fill
     gets in_state = yes / no, and tiles wholly outside the state are not run. The outline is, in
@@ -61,6 +79,11 @@ TWO THINGS THE ENGINE DOES NOT DO YET, HANDLED HERE
     gets edge_ft (the distance to the nearest missing terrain within 200 m, read from the DEM at
     full resolution; holes smaller than 100 m2 are ignored) and at_data_edge = yes when that is
     within --edge-m (150 m). Such fills stay in the raw layer and are left out of the ranked list.
+  * Ground where a fill is not a dam whatever its shape (of 90 pond-line candidates marked by
+    hand on 2026-11-13, 8 were coal-mine spoil and 8 were in the Sheyenne sand hills): the script
+    holds no map of such ground. The hook for one is --exclude-polygons FILE (any polygon file):
+    a fill inside a polygon keeps its row in the raw layer with excluded = yes and is left out of
+    the ranked lists. Without the option every fill has excluded = no.
 
 WHAT IT WRITES (all in --out)
 
@@ -70,7 +93,12 @@ WHAT IT WRITES (all in --out)
   ND_finder_fills.gpkg             every fill ('embankments', scored), the ranked candidates
                                    ('candidates'), the spill points, the channel-side dikes, run_info
   ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates, highest score first
-  ND_finder_summary.txt            counts, tiles run / skipped / failed, versions, settings, checksums
+                                   (every one: about 300,000 rows for the state)
+  ND_finder_candidates_top.csv     the short list a person can open: the top 2,000 of them (--top N)
+                                   with lat, lon, score, kind, height, storage, tile and a link to
+                                   the satellite picture
+  ND_finder_summary.txt            counts (also: how many candidates score 0.5 or more), the Finder
+                                   version, tiles run / skipped / failed, settings, checksums
   ND_finder_review_batch.gpkg/.csv only with --review-batch N: a review batch drawn from the candidates
   logs/run_<time>.log              one log per run; failed/<tile>.log for a tile that failed (it goes
                                    when the tile finishes in a later try, so what is there still fails)
@@ -99,7 +127,7 @@ import xml.etree.ElementTree as ET
 sys.dont_write_bytecode = True          # never leave .pyc files in the plugins folder
 warnings.filterwarnings("ignore", category=FutureWarning)   # GDAL's note about its exception mode (not switched)
 
-SCRIPT_VERSION = "1.0"
+SCRIPT_VERSION = "1.1"
 DEFAULT_DEM = "/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt"
 DEFAULT_OUT = os.path.join("~", "ND_Finder_Statewide")
 ENGINE = "DamSafety_Finder"
@@ -124,9 +152,16 @@ EDGE_SPECK_M2 = 100.0                   # a hole in the terrain smaller than thi
 FT = 0.3048
 OUT_GPKG = "ND_finder_fills.gpkg"
 OUT_CSV = "ND_finder_candidates_ranked.csv"
+OUT_TOP = "ND_finder_candidates_top.csv"
 OUT_SUMMARY = "ND_finder_summary.txt"
+# The fields this script adds to the engine's. One the engine already writes is not added twice
+# (edge_ft from Finder 0.7.0 on).
 EXTRA_FIELDS = [("tile", "str"), ("edge_ft", "float"), ("at_data_edge", "str"), ("in_state", "str"),
-                ("id_clash", "str")]
+                ("excluded", "str"), ("id_clash", "str")]
+TOP_DEFAULT = 2000                      # rows of the short list (--top)
+TOP_COLUMNS = ["rank", "score", "kind", "status", "height_ft", "storage_af", "lat", "lon", "tile", "find_id",
+               "link"]
+SCORE_CUT = 0.5                         # the summary counts the candidates at or above this score
 # Measured 2026-11-13 on the 4-core cloud test box (see RUN-FINDER-STATEWIDE.md): processor time
 # of a 10 km tile full of terrain (9 tiles over 300 km2 of terrain took 780 CPU-seconds), the peak
 # memory of one tile process, and the size of the results. The Mac has not been timed; a run times
@@ -1495,6 +1530,41 @@ def finished_tiles(out, key):
     return good, other
 
 
+def map_link(lat, lon):
+    """A Google Maps link that opens the satellite picture centred on the point (the documented
+    'Maps URLs' form; nothing is sent anywhere until a person clicks it)."""
+    return "https://www.google.com/maps/@?api=1&map_action=map&center={:.6f}%2C{:.6f}&zoom=17&basemap=satellite".format(
+        float(lat), float(lon))
+
+
+def ids_are_stable(finder):
+    """True when this Finder gives a fill the same find_id in every run: 0.7.0 and later lay the
+    5 km squares and the cells of the resampled DEM on a fixed lattice. Up to 0.6.x both started
+    at the corner of the run's box, so the crest point - and the id made from it - moved by a few
+    metres with the box."""
+    try:
+        ver = tuple(int(t) for t in str(finder.VERSION).split(".")[:2])
+    except ValueError:
+        ver = (0, 0)
+    return ver >= (0, 7) or hasattr(finder, "lattice_squares")
+
+
+def exclude_areas(a):
+    """--exclude-polygons FILE: (the union of its polygons in EPSG:5070 or None, what it is). The
+    hook for ground where a fill is not a dam whatever its shape (coal-mine spoil, the sand hills):
+    this script holds no such areas itself; a fill inside one keeps its row in 'embankments' with
+    excluded = yes and is left out of the ranked lists."""
+    choice = (getattr(a, "exclude_polygons", "") or "").strip()
+    if not choice:
+        return None, "none"
+    if not os.path.exists(os.path.expanduser(choice)):
+        raise UserError("--exclude-polygons {}: no such file".format(choice))
+    geom = polygons_of(real(choice))
+    if geom is None:
+        raise UserError("--exclude-polygons {} holds no polygons".format(choice))
+    return geom, "{} ({:,.0f} km2)".format(real(choice), geom.GetArea() / 1e6)
+
+
 def other_versions(other):
     """'Finder 0.6.0: 3 tile(s)' for the tiles left out of a merge, by the Finder that made them."""
     c = collections.Counter(str((m.get("key") or {}).get("finder") or m.get("finder") or "?") for _n, m in other)
@@ -1629,10 +1699,11 @@ def cross_tile_rules(finder, tiles, out, log):
     return drop, same_new, n
 
 
-def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_note, model_path, log):
+def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_note, model_path, log, exclude=None):
     """One GeoPackage of every fill of the finished tiles, scored, with the ranked candidates, the
-    ranked CSV and the summary. Tile by tile: the rows of one tile are in memory at a time; the
-    seam rules and the ranking keep a few numbers per fill."""
+    ranked CSV, the short list (the top a.top rows with a map link) and the summary. Tile by tile:
+    the rows of one tile are in memory at a time; the seam rules and the ranking keep a few numbers
+    per fill. exclude: (polygon, what it is) from exclude_areas, or None."""
     import numpy as np
     gdal, ogr, _s = gdal_mods()
     t0 = time.time()
@@ -1661,8 +1732,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
         sc = import_module(ENGINE + ".core.score")
         model = sc.load(model_path)
     rings = rings_of(outline) if outline is not None else None
+    ex_geom, ex_what = exclude if exclude else (None, "none")
+    ex_rings = rings_of(ex_geom) if ex_geom is not None else None
     edge_lim = float(a.edge_m)
-    fields = [f for f in finder.EMB_FIELDS] + EXTRA_FIELDS
+    engine_names = set(n_ for n_, _t in finder.EMB_FIELDS)
+    fields = [f for f in finder.EMB_FIELDS] + [f for f in EXTRA_FIELDS if f[0] not in engine_names]
     kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
     conv = {"str": str, "float": float, "int": int}
     final = os.path.join(out, OUT_GPKG)
@@ -1709,8 +1783,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
         if len(edge) != len(rows) or any(e[0] != r["find_id"] for e, r in zip(edge, rows)):
             raise RuntimeError("tile {}: done.json does not match its GeoPackage; run it again "
                                "(delete {})".format(tid, tile_dir(out, tid)))
+        # the distance to missing terrain: the Finder's own edge_ft when this tile's rows carry it
+        # (0.7.0 on), else what this script measured for the tile (done.json)
+        engine_edge = "edge_ft" in names
         for r, e in zip(rows, edge):
-            r["_edge"] = e[1]
+            r["_edge"] = (None if r.get("edge_ft") is None else float(r["edge_ft"]) * FT) if engine_edge else e[1]
         rows = [r for r in rows if (k, r["_j"]) not in drop]
         gone = set()
         if len(rows) != len(edge):
@@ -1719,12 +1796,16 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
         if rows:
             ins = points_in_rings([r["x"] for r in rows], [r["y"] for r in rows], rings) if rings is not None \
                 else np.ones(len(rows), bool)
+            exs = points_in_rings([r["x"] for r in rows], [r["y"] for r in rows], ex_rings) if ex_rings is not None \
+                else np.zeros(len(rows), bool)
             det = sc.score_detail(model, rows) if model is not None else None
             for i, r in enumerate(rows):
                 r["tile"] = tid
-                r["edge_ft"] = None if r["_edge"] is None else round(r["_edge"] / FT, 0)
+                if not engine_edge:
+                    r["edge_ft"] = None if r["_edge"] is None else round(r["_edge"] / FT, 0)
                 r["at_data_edge"] = "yes" if r["_edge"] is not None and r["_edge"] <= edge_lim else "no"
                 r["in_state"] = "yes" if ins[i] else "no"
+                r["excluded"] = "yes" if exs[i] else "no"
                 if det is not None:
                     r["score"] = round(float(det[i][0]), 3)
                     r["score_note"] = det[i][1]
@@ -1753,10 +1834,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 else:
                     seen[r["find_id"]] = fid
                 written += 1
-                use = r["in_state"] == "yes" and r["at_data_edge"] == "no"
+                use = r["in_state"] == "yes" and r["at_data_edge"] == "no" and r["excluded"] == "no"
                 stat["all"] += 1
                 stat["out_of_state"] += r["in_state"] == "no"
                 stat["at_edge"] += r["at_data_edge"] == "yes"
+                stat["excluded"] += r["excluded"] == "yes"
                 if use:
                     by_status[r["status"]] += 1
                     by_kind[r["kind"]] += 1
@@ -1790,11 +1872,12 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 f.SetField(i_clash, "yes")
                 lyr.SetFeature(f)
         ds.CommitTransaction()
-    # the ranked candidates: unlisted, dam or dry embankment, in the state, not at the data edge
+    # the ranked candidates: unlisted, dam or dry embankment, in the state, not at the data edge,
+    # not in an --exclude-polygons area
     kd = finder.em
     order = "score DESC, height_ft DESC, find_id, tile" if model is not None else "height_ft DESC, find_id, tile"
     sql = ("SELECT fid FROM embankments WHERE status <> 'listed' AND kind IN ('{}', '{}') AND in_state = 'yes' "
-           "AND at_data_edge = 'no' ORDER BY {}".format(kd.K_DAM, kd.K_DRY, order))
+           "AND at_data_edge = 'no' AND excluded = 'no' ORDER BY {}".format(kd.K_DAM, kd.K_DRY, order))
     res = ds.ExecuteSQL(sql)
     if res is None:
         raise RuntimeError("ranking the candidates failed: {}".format(gdal.GetLastErrorMsg()))
@@ -1812,10 +1895,15 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
              "drain_ac", "length_ft", "known_id", "known_layer", "known_ft", "score_note", "tile"]
     cols = first + [n for n, _t in cfields if n not in first]
     csv_part = os.path.join(out, "work", "ranked_{}.csv".format(os.getpid()))
-    top = []
-    with open(csv_part, "w", newline="", encoding="utf-8") as fh:
+    top_part = os.path.join(out, "work", "top_{}.csv".format(os.getpid()))
+    n_top = max(0, int(getattr(a, "top", TOP_DEFAULT) or 0))
+    top, n_cut, n_short = [], 0, 0
+    with open(csv_part, "w", newline="", encoding="utf-8") as fh, \
+            open(top_part, "w", newline="", encoding="utf-8") as th:
         w = csv.writer(fh)
         w.writerow(cols)
+        tw = csv.writer(th)                                # the short list: the same rows, fewer columns, a map link
+        tw.writerow(TOP_COLUMNS)
         ds.StartTransaction()
         for rank, fid in enumerate(ranked, 1):
             f = lyr.GetFeature(fid)
@@ -1826,6 +1914,12 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
             vals = as_dict(f, emb_names)
             vals["rank"] = rank
             w.writerow(["" if vals.get(c) is None else vals.get(c) for c in cols])
+            if vals.get("score") is not None and vals["score"] >= SCORE_CUT:
+                n_cut += 1
+            if rank <= n_top:
+                vals["link"] = map_link(vals["lat"], vals["lon"])
+                tw.writerow(["" if vals.get(c) is None else vals.get(c) for c in TOP_COLUMNS])
+                n_short += 1
             if rank <= 10:
                 top.append(vals)
             if rank % 20000 == 0:
@@ -1838,6 +1932,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["made"] = now()
     info["script"] = "run_finder_statewide.py {}".format(SCRIPT_VERSION)
     info["finder_version"] = finder.VERSION
+    info["find_ids"] = ("stable: this Finder gives a fill the same id in every run" if ids_are_stable(finder) else
+                        "NOT stable between runs with this Finder (stable from Finder 0.7.0 on): match marks made "
+                        "on another run to these fills by location, not by id")
     info["gdal"] = gdal.__version__
     info["numpy"] = np.__version__
     import scipy
@@ -1861,7 +1958,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["fills"] = stat["all"]
     info["fills_outside_state"] = stat["out_of_state"]
     info["fills_at_data_edge"] = stat["at_edge"]
+    info["exclude_polygons"] = ex_what
+    info["fills_excluded"] = stat["excluded"]
     info["candidates_ranked"] = len(ranked)
+    info["candidates_score_{}_or_more".format(SCORE_CUT)] = n_cut if model is not None else "not scored"
+    info["short_list_rows"] = n_short
     info["find_id_clashes"] = len(clash)
     info["tile_seconds_total"] = round(sum(secs))
     info["tile_seconds_mean"] = round(sum(secs) / len(secs), 1)
@@ -1887,9 +1988,22 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     ds = None
     os.replace(part, final)
     os.replace(csv_part, os.path.join(out, OUT_CSV))
+    if n_top:
+        os.replace(top_part, os.path.join(out, OUT_TOP))
+    else:                                                   # --top 0: no short list, and no stale one
+        os.remove(top_part)
+        if os.path.exists(os.path.join(out, OUT_TOP)):
+            os.remove(os.path.join(out, OUT_TOP))
     # the summary text
     L = []
     L.append("ND Finder statewide run - summary ({})".format(info["made"]))
+    L.append("Finder version {} (every merged tile was made by it; one result never mixes Finder versions)".format(
+        finder.VERSION))
+    L.append("find_id: {}".format(
+        "a fill has the same id in every run of this Finder (0.7.0 or later)." if ids_are_stable(finder) else
+        "with this Finder the id of a fill changes with the box of a run. Match marks made on another run "
+        "to these fills by location (lat / lon), not by id. From Finder 0.7.0 on the ids are the same in "
+        "every run."))
     L.append("")
     if plan_note.get("tiles_still_to_run") or plan_note.get("tiles_failed_this_run"):
         L.append("PARTIAL RESULT: {} tile(s) still to run, {} failed in this run. Run the same command again."
@@ -1898,7 +2012,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("Fills found (all tiles merged, duplicates across tile seams removed): {:,}".format(stat["all"]))
     L.append("  outside North Dakota (in_state = no):            {:,}".format(stat["out_of_state"]))
     L.append("  within {:.0f} m of missing terrain (at_data_edge):   {:,}".format(edge_lim, stat["at_edge"]))
-    L.append("  in the state and not at the data edge:           {:,}".format(sum(by_status.values())))
+    if ex_geom is not None:
+        L.append("  inside an --exclude-polygons area (excluded):    {:,}".format(stat["excluded"]))
+        L.append("  in the state, not at the data edge, not excluded: {:,}".format(sum(by_status.values())))
+    else:
+        L.append("  in the state and not at the data edge:           {:,}".format(sum(by_status.values())))
     L.append("")
     L.append("Of those, by status (against the DWR, NID and SARP lists, 1000 ft) and kind:")
     sts = ["new", "unsure", "listed"]
@@ -1908,10 +2026,15 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                                                                + [by_kind[kind]])))
     L.append("  {:<42}{:>9,}{:>9,}{:>9,}{:>9,}".format("all", *([by_status[s] for s in sts] + [sum(by_status.values())])))
     L.append("")
-    L.append("Ranked candidates (not listed; dam or dry embankment; in the state; not at the data edge): {:,}"
-             .format(len(ranked)))
+    L.append("Ranked candidates (not listed; dam or dry embankment; in the state; not at the data edge{}): {:,}"
+             .format("; not in an excluded area" if ex_geom is not None else "", len(ranked)))
     L.append("  ranked by {}".format("the score of {}".format(os.path.basename(model_path)) if model is not None
                                      else "height (--no-score)"))
+    if model is not None:
+        L.append("  with a score of {} or more: {:,}".format(SCORE_CUT, n_cut))
+    if n_top:
+        L.append("  the short list ({}): the top {:,} of them, each with a link to the satellite picture".format(
+            OUT_TOP, n_short))
     for v in top:
         L.append("  {:>3}  {}  score {}  {:<15} {:<7} {:>6} ft  {:.5f}, {:.5f}".format(
             v["rank"], v["find_id"], "-" if v.get("score") is None else "{:.3f}".format(v["score"]), v["kind"],
@@ -1940,7 +2063,7 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("")
     L.append("Versions and settings")
     for k_ in ("script", "finder_version", "gdal", "numpy", "scipy", "python", "terrain", "tile_km", "call",
-               "state_outline", "edge_m", "score_model", "selection"):
+               "state_outline", "exclude_polygons", "edge_m", "score_model", "selection"):
         if k_ in info:
             L.append("  {}: {}".format(k_, info[k_]))
     if sums:
@@ -1952,7 +2075,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("Files")
     L.append("  {}  (layers: embankments = every fill; candidates = the ranked list; spillways; ridges; "
              "run_info)".format(final))
-    L.append("  {}".format(os.path.join(out, OUT_CSV)))
+    L.append("  {}  (every ranked candidate)".format(os.path.join(out, OUT_CSV)))
+    if n_top:
+        L.append("  {}  (the short list: open this one first)".format(os.path.join(out, OUT_TOP)))
     L.append("")
     with open(os.path.join(out, OUT_SUMMARY), "w", encoding="utf-8") as fh:
         fh.write("\n".join(L))
@@ -1989,6 +2114,12 @@ def parser():
     ap.add_argument("--review-batch", type=int, default=0, metavar="N",
                     help="after the merge, draw a review batch of N cards from the ranked candidates "
                          "(finder.run_review_batch with its defaults) into ND_finder_review_batch.gpkg / .csv")
+    ap.add_argument("--top", type=int, default=TOP_DEFAULT, metavar="N",
+                    help="rows of the short list {}: the N highest-ranked candidates with a map link "
+                         "[{}; 0 = no short list]".format(OUT_TOP, TOP_DEFAULT))
+    ap.add_argument("--exclude-polygons", default="", metavar="FILE",
+                    help="a polygon file of ground to leave out of the ranked lists (mine spoil, sand hills ...): "
+                         "a fill inside any polygon stays in the embankments layer with excluded = yes [none]")
     ap.add_argument("--model", default="", help="the score model JSON [the plugin's models/{}]".format(MODEL_NAME))
     ap.add_argument("--state-outline", default="", help="a polygon file of North Dakota; 'none' = no test "
                                                         "[the pack's counties, else the built-in simple outline]")
@@ -2051,6 +2182,8 @@ def run(a):
         raise UserError("give --bbox or --county, not both")
     if a.redo and a.merge_only:
         raise UserError("give --redo or --merge-only, not both")
+    if a.top < 0:
+        raise UserError("--top must be 0 (no short list) or more")
     try:
         gdal, _o, _s = gdal_mods()
         import numpy                                                    # noqa - checked here, used later
@@ -2077,6 +2210,7 @@ def run(a):
     model_path = real(a.model) if a.model else os.path.join(plugins, ENGINE, "models", MODEL_NAME)
     if not a.no_score and not os.path.isfile(model_path):
         raise UserError("the score model {} was not found (give --model FILE, or --no-score)".format(model_path))
+    exclude = exclude_areas(a)
     dem, dem_why = None, ""
     try:
         dem = Dem(dem_path)
@@ -2101,7 +2235,7 @@ def run(a):
         log = Log(os.path.join(out, "logs", "run_{}.log".format(datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))))
     try:
         return run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder,
-                          model_path, key, dem_why)
+                          model_path, key, dem_why, exclude)
     finally:
         log.close()
         if lock and (read_json(lock) or {}).get("pid") == os.getpid():
@@ -2122,7 +2256,7 @@ def review_batch(a, finder, out, log):
         log("review batch not made: {}".format(e))
 
 
-def merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why):
+def merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why, exclude=None):
     """--merge-only while the terrain file cannot be opened (the drive is not connected): the
     finished tiles hold everything a merge needs, so they are merged as they are. No plan is made
     (that reads the terrain), so the summary has no count of the tiles still to run."""
@@ -2140,7 +2274,9 @@ def merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_pat
     note["selection"] = ("not planned: the terrain file was not there, so the tiles still to run were not "
                          "counted (--merge-only merges every finished tile)")
     log("")
-    merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log)
+    if exclude and exclude[0] is not None:
+        log("  exclude  {}".format(exclude[1]))
+    merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log, exclude)
     clean_work(out)
     if a.review_batch > 0:
         review_batch(a, finder, out, log)
@@ -2148,12 +2284,12 @@ def merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_pat
 
 
 def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder, model_path, key,
-               dem_why=""):
+               dem_why="", exclude=None):
     gdal, _o, _s = gdal_mods()
     log("run_finder_statewide {} - {}".format(SCRIPT_VERSION, now()))
     log("  Finder   {} from {} ({})".format(finder.VERSION, os.path.join(plugins, ENGINE), plugins_from))
     if dem is None:
-        return merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why)
+        return merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why, exclude)
     log("  terrain  {}  ({:,} x {:,} cells of {:g} m, EPSG:{}, {} source file(s) listed, {} overview level(s))".format(
         dem_path, dem.nx, dem.ny, abs(dem.gt[1]), dem.epsg, "?" if dem.rects is None else len(dem.rects),
         dem.overviews))
@@ -2169,6 +2305,9 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
         log("  WARNING: the terrain cells are {:g} m; the Finder was tested on 1 m LiDAR".format(abs(dem.gt[1])))
     outline, outline_what = state_outline(a, pack)
     log("  state    {}".format(outline_what))
+    if exclude and exclude[0] is not None:
+        log("  exclude  {} - fills inside stay in 'embankments' (excluded = yes), out of the ranked lists".format(
+            exclude[1]))
     select, sel_what = None, "the whole terrain raster"
     if a.bbox:
         b = parse_bbox(a.bbox)
@@ -2316,7 +2455,7 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
     log("")
     bad = bool(result["failed"] or result["gave_up"])
     try:
-        merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log)
+        merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log, exclude)
     except UserError as e:
         if not bad:
             raise
