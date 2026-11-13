@@ -2353,13 +2353,16 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
     if a.list:
         ll = transformer(srs_of(WORK_EPSG), srs_of(4326))
         words = {"todo": "to run", "done": "finished", "other": "finished with other settings",
-                 "nodata": "no terrain", "nosource": "no terrain (no source file)", "outside": "outside the state"}
+                 "nodata": "no terrain", "nosource": "no terrain (no source file)", "outside": "outside the state",
+                 "unreadable": "to run - its terrain COULD NOT BE READ just now"}
         log("{:<20}{:>11}{:>10}  {}".format("tile", "lon", "lat", "state"))
         for t, s in plan:
             lon, lat = ll.TransformPoint(0.5 * (t.box[0] + t.box[2]), 0.5 * (t.box[1] + t.box[3]))[:2]
             m = marker(out, t.id) if s == "done" else None
-            log("{:<20}{:>11.4f}{:>10.4f}  {}{}".format(t.id, lon, lat, words[s],
-                                                        " - {} fill(s)".format(m.get("fills")) if m else ""))
+            log("{:<20}{:>11.4f}{:>10.4f}  {}{}{}".format(
+                t.id, lon, lat, words[s], " - {} fill(s)".format(m.get("fills")) if m else "",
+                " - {:.0f} % terrain".format(100.0 * shares[t.id]) if s == "todo" and shares.get(t.id) is not None
+                else ""))
     # what a tile full of terrain costs: this folder's own finished FULL tiles when there are 3,
     # else the cloud-box number; every tile is then counted by its share of terrain
     done_m = [(t, marker(out, t.id)) for t, s in plan if s == "done"]

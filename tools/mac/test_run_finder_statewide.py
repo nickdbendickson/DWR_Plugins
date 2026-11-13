@@ -861,6 +861,22 @@ class WholeRun(unittest.TestCase):
         self.assertIn("--exclude-polygons", se)
         self.assertFalse(os.path.exists(self.out))
 
+    def test_terrain_file_gone_is_said_and_stops_a_run_before_it_starts(self):
+        vrt = self._dem()
+        os.remove(os.path.join(os.path.dirname(vrt), "a.tif"))             # the VRT is there, its tile is not
+        for opt in ("--dry-run", "--list"):
+            rc, so, _se = self._main(["--dem", vrt, "--out", self.out, opt, "--state-outline", "none"])
+            self.assertEqual(rc, 0, so)
+            self.assertIn("0 with terrain (0 finished, 0 to run), ", so)
+            self.assertIn("whose terrain COULD NOT BE READ", so)
+            self.assertIn("a.tif", so)                        # GDAL's reason, once
+        self.assertFalse(os.path.exists(self.out))
+        rc, _so, se = self._main(["--dem", vrt, "--out", self.out, "--state-outline", "none"])
+        self.assertEqual(rc, 2)                               # a real run: stopped before any tile is tried
+        self.assertIn("can be read", se)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "run.lock")))
+        self.assertEqual(os.listdir(os.path.join(self.out, "tiles")), [])
+
     def test_merge_only_with_the_terrain_drive_unplugged(self):
         seams = Seams("test_rules_across_a_seam")
         seams.finder, seams.d = self.finder, self.out
