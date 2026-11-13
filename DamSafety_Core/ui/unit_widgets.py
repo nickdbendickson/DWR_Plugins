@@ -22,6 +22,7 @@ Under the US system nothing is tagged and every dialog is exactly QGIS's own. Th
 receives the value in the stored unit, so its keys (HEAD_FT ...), its log, "Copy as Python
 command", qgis_process and the settings workbook are unchanged.
 """
+import functools
 import os
 
 from ..damsuite import display_units as DU
@@ -248,12 +249,13 @@ def si_copies_of(results, feedback=None):
 
 
 def _with_si_copies(fn):
-    """processAlgorithm followed by si_copies_of(its results)."""
+    """processAlgorithm followed by si_copies_of(its results). functools.wraps keeps the
+    tool's own name, doc and source (inspect.getsource still shows the tool's code)."""
+    @functools.wraps(fn)
     def processAlgorithm(self, parameters, context, feedback):
         results = fn(self, parameters, context, feedback)
         si_copies_of(results, feedback)
         return results
-    processAlgorithm.__doc__ = getattr(fn, "__doc__", None)
     processAlgorithm._si_copies = True
     return processAlgorithm
 
