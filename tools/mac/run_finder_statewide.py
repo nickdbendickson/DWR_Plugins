@@ -2000,7 +2000,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("Finder version {} (every merged tile was made by it; one result never mixes Finder versions)".format(
         finder.VERSION))
     L.append("find_id: {}".format(
-        "a fill has the same id in every run of this Finder (0.7.0 or later)." if ids_are_stable(finder) else
+        "a fill has the same id in every run with this Finder (it works on the fixed lattice, as every Finder "
+        "from 0.7.0 on)." if ids_are_stable(finder) else
         "with this Finder the id of a fill changes with the box of a run. Match marks made on another run "
         "to these fills by location (lat / lon), not by id. From Finder 0.7.0 on the ids are the same in "
         "every run."))
