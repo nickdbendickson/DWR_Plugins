@@ -773,7 +773,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
 
     def settings(self):
         """The window's choices as the dict core/workflow.py takes."""
-        s = dict(wf.DEFAULT_SETTINGS)
+        s = wf.default_settings()
         s["work"] = self.work_edit.text().strip()
         s["package"] = self.package_edit.text().strip()
         for k in self._EDITS:
@@ -847,7 +847,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
             pass
 
     def _load_state(self):
-        s = dict(wf.DEFAULT_SETTINGS)
+        s = wf.default_settings()
         try:
             from qgis.core import QgsProject
             text, ok = QgsProject.instance().readEntry(SCOPE, ENTRY, "")
