@@ -702,6 +702,126 @@ When a structure, road or rail receptor sits on a NoData cell next to water, the
 
 The path, the 20 m threshold and the cell size are written to the existing Sampling / Notes fields (no new CSV columns). The same rule is used in Hazard, the Screening/Runner `nd_hazard` sampler, Runner receptor summaries, and Hazard Lite.
 
+## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.19.0)
+
+Nothing changes unless you choose it: a sunny-day run starts at the top of dam with a piping
+breach (ND 5.1.1). Those two presets come from the shared defaults file (*Plugins → Dam safety →
+Shared defaults…*, DamSafety Core 1.2.0): change "Sunny-day breach: starting pool" there to
+Normal pool and every run tool, the batch and the wizard open with Normal pool chosen. A single
+run can still be changed either way in its dialog; the run report and dam.json say which pool
+was used.
+
+| You want | Set |
+|---|---|
+| Sunny day from the normal pool | Scenario = Sunny day; 'Sunny day: the pool when the breach starts' = Normal pool; Normal pool elevation; Top of dam elevation |
+| Sunny day from another elevation | the same, with 'An elevation I state' and 'Sunny day: starting pool elevation' |
+| An overtopping breach | Breach = an overtopping method. With no inflow the pool cannot be above the crest, so for a real overtopping failure use the flood scenario |
+| PMF with a breach | Scenario = Flood; inflow CSV; spillway rating and/or normal pool; when the dam fails (highest pool, a time, a pool elevation) |
+| PMF with no breach | Scenario = Flood, NO breach; the same inflow and spillway inputs |
+| An auxiliary spillway in either flood scenario | Auxiliary spillway crest elevation and crest length (weir coefficient 2.6 unless you state one) |
+
+- The stated pool is kept as its depth below the top of dam, so both elevations must be on
+  the same datum and the top of dam must be given (a DEM-estimated crest is refused).
+- A sunny-day run from a lower pool uses the storage at that pool in the breach equations and
+  says in the report that it is not the ND 5.1.1 case.
+- The no-breach flood is the routed outflow, put into the model at the toe of the dam. Its
+  summary says the dam does not fail, so the Hazard model check warns before classifying
+  from it. Compare it with the breach run for the incremental effect; the Flood scenario
+  already does that comparison in one run.
+- Batch: 'Sunny day: the pool when the breach starts' offers the top of dam or the normal
+  pool field; a dam with no normal pool or no top of dam fails with a message instead of
+  running from the top of dam.
+
+## Running several dams at the same time (Runner 3.20.0)
+
+One dam gains little from more model threads, so the way to shorten a long batch is to run dams side by side.
+
+**In QGIS.** Open *Run breach models for a layer of dams (batch)* and set **Dams run at the same time** above 1. Each dam then runs in its own background worker, and the cores are shared equally between the workers. Four cores and two workers gives each dam two threads. Set **Threads** yourself if you want a fixed count for each dam. The results are the same as running one dam after another, and `Batch_Breach_Runs.csv` lists the dams in the layer's order.
+
+**Without QGIS.** `ndbreach_cli.py batch DAMS.csv CONFIG.json --workers 3`.
+
+**How many.** Start with half the number of cores. Each worker holds its own grid in memory, so use fewer if the computer starts to swap.
+
+**What you need for the QGIS workers.**
+
+- The dams layer, the DEM and every other layer must be files. A temporary layer has to be saved first.
+- `qgis_process` must be found. It ships with QGIS; set the environment variable `NDBREACH_QGIS_PROCESS` to its full path if the log says it was not found.
+- The workers open the same QGIS profile as your session, so they see the same plugins and settings. A suite setting that only the open project overrides is not seen by a worker, so the batch then runs one dam after another.
+
+When workers cannot be used the log says why in one line and the batch runs one dam after another, exactly as before. The output **How the dams were run** (`MODE`) records which it was.
+
+**Where to look when a dam fails.** Its row says so, as before. When the worker itself stopped (a crash, the time limit), the row's message names the worker's log in `<Dams folder>/_batch_workers/`. **Workers: stop a dam's worker after this many minutes** sets a time limit for each dam; the default is no limit.
+
+The batch chain (Screening to Runner to HEC-RAS to Hazard) still takes one dam at a time.
+
+## Try the sample dam (Core 1.3.0, Data 1.11.0, Runner 3.20.1)
+
+The quickest way to see the suite work is to run it on the dam it ships with.
+
+1. Open *Plugins → Dam safety → Dam suite home…* and click **Try the sample dam…**. The empty Runner window points there too.
+2. If no Dams folder is chosen yet, the window offers the default one.
+3. The sample is copied from the offline pack. If the pack has none, the window asks first and then downloads the terrain from the USGS (about 29 MB, a minute or two). Clicking the button again cancels the download, and the next try goes on from the parts it already has.
+4. The window asks whether you want a **quick first try: 30 m cell, first 6 hours**. Say yes the first time. The breach Runner then opens with the Dams folder, the dam and its terrain filled in, and a message lists the four settings it changed.
+5. Run the breach model, then classify it in DamSafety Hazard, as for any dam.
+
+**The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes.
+
+**What the quick first try sets**, in the Runner window:
+
+| Setting | Quick first try | The window starts with | Why |
+|---|---|---|---|
+| Grid size (m) | 30 | 10 | Nine times fewer cells. |
+| Simulated time (h) | 6 | 12 | The breach peaks in the first hour. |
+| Longest simulated time (h) | 6 | 96 | Without this the clock is lengthened while the flood still moves, and on this plain it moves for days. |
+| Finer grid automatically when the flood over-spreads | off | on | Without this a 30 m run that over-spreads is run again at 10 m. |
+
+The cell alone does not make the run quick. Measured on a 4-core Linux machine with the built-in engine, through the Runner's command line: **53 seconds** with the four values (two model areas, the first 6 hours). With only the cell changed, two trials: held to three model areas, the 30 m run took about 7 minutes and then started the 10 m run of 1.8 million cells; left to grow to six areas and a 123-hour clock, it was stopped unfinished after 90 minutes. A slower computer takes longer, a real LISFLOOD-FP less. Not measured: a run started from the window on a Mac or on Windows.
+
+The quick run's report says *the flood is still advancing after 6 h, the duration cap*, and that a 30 m cell is coarse for a flat plain. Both are true and expected: the map shows the first 6 hours on a coarse grid. It is for learning the tools.
+
+**Set them back.** The four values are for a quick look at the sample only. The Runner window remembers them, so set them back before you model a dam for real. The message that opens with the Runner lists each one with the value the window held before. The grid-size section above gives the reasons for 10 m.
+
+**What is written.** `<Dams folder>/DWR-2801/` gets `dam.json`, the terrain `DWR-2801_10m_5070.tif` (EPSG:5070, elevations in metres, from the USGS 3D Elevation Program), `sample.json` and `README.txt`. If the folder already holds a dam record or that terrain file, yours is kept. Nothing is written into the offline pack.
+
+**In the offline pack.** A full *Build offline pack…* (DamSafety Data 1.11.0) writes the sample to `ND_Dam_Suite_Pack/sample_dam/DWR-2801/` as its last step. To add it to a pack built earlier, run `python3 -m DamSafety_Data.pack_build --out <folder> --sample-only`. A pack that *Build offline pack…* did not make is never written into; the button downloads the terrain instead.
+
+**Without a pack** the Runner has no DWR dam line for the sample, so it places the breach inflow at the lowest ground near the dam point and says so in its log. With the pack it uses the dam line.
+
+A run of the sample is for learning the tools. It is not a hazard determination for this dam.
+
+## A class that rests on velocity (Hazard 2.25.0)
+
+A structure's hazard zone is read from its peak depth and its **peak** velocity. Depth is steady from one solver or grid to the next. Peak velocity is not: it can come from one fast cell at a building corner, and it differs between solvers and cell sizes. So a class can rest on a number that is the least certain one in the model.
+
+Hazard now checks this for every run and tells you when it matters. It does **not** change the class.
+
+**For each structure** it also works out:
+
+- the 95th-percentile velocity of the structure's wet cells, and the zone with that velocity;
+- the zone on depth alone (velocity taken as zero).
+
+A structure that is in the high-danger or the judgment zone only because of velocity gets a line in its Notes, for example:
+
+> zone rests on velocity: JUDGMENT at the peak velocity (12.0 ft/s), LOW at the 95th-percentile velocity of its cells (1.0 ft/s); LOW on depth alone - peak velocity varies between solvers and grids; verify
+
+The `Habitable_Structures` layer has two new fields for this: `Vel_P95_fps` (the 95th-percentile velocity) and `Zone_On_Velocity` (`Yes` for a flagged structure). Filter on `"Zone_On_Velocity" = 'Yes'` to see them on the map.
+
+**For the dam** it computes the ND and TM 11 classes again on each of the two bases, with roads and rail as run:
+
+| What you see | What it means |
+|---|---|
+| Judgment item **The class rests on velocity: ND ... / TM 11 ... as run; with ...: ...** and a `WARNING` in the log | The ND or the TM 11 class would be lower with the 95th-percentile velocity, or on depth alone. The item names the structures. |
+| A line "N structure(s) are in a more severe zone only because of velocity ...; the ND and TM 11 classes are the same ..." | Some structures hinge on velocity, but the class holds either way. |
+| Nothing | No counted structure's zone depends on velocity. |
+
+**What to do when the class rests on velocity.** Look at the named structures in `Structure_Sample_Points` and `Structure_Sampled_Cells`. Is the peak one cell, or the flow across the whole footprint? Then check the velocity there another way: a second solver, a finer cell, or a Runner sensitivity run. Keep the class as run unless that check supports a lower one.
+
+Notes:
+
+- In North Dakota a house that is flooded at all makes the dam Medium, so the ND class rarely moves on this check. The TM 11 class counts lives in jeopardy by zone, so it is the one that usually does.
+- The check is skipped for 1-D runs, which have no velocity field, and where the velocity is unknown at every wet cell.
+- The Runner's run summary gives the 95th and 99th-percentile velocity of the whole flood beside the maximum (`Velocity_P95_fps`, `Velocity_P99_fps`) for the same reason: the single highest cell is the least repeatable number.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:

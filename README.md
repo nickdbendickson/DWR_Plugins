@@ -15,15 +15,33 @@ They install separately and work together through a shared suite data folder.
 | DamSafety Hazard Lite | `DamSafety_HazardLite` | One Processing tool: hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters. Screening aid. |
 | DamSafety Finder | `DamSafety_Finder` | Finds structures that are not on the lists: fills across streams in the LiDAR (dams, dry dams, road fills), ponds and dugouts in a water-body layer, and road / rail stream crossings (culverts). Each is marked listed, unsure or new against the DWR, NID and bridge / culvert layers you give; the not-listed dams and ponds are also written for Screening tool 1. Screening aid. |
 
-Install order: **Setup → Data → Runner → Hazard**. Screening, PMP, Hazard Lite and Finder are optional
-and can be added at any time. Each plugin checks the versions of the others it works with at
+Install order: **Core → Setup → Data → Runner → Hazard**. DamSafety Core (`DamSafety_Core`) holds the
+code the others share and must be installed first. Screening, PMP, Hazard Lite and Finder are
+optional and can be added at any time. Each plugin checks the versions of the others it works with at
 start-up (`shared/damsuite/versions.py`) and says what it needs.
 
 ## Installing
 
-Three routes; all give the same plugin folders.
+**No release has been tagged yet**, so there is nothing to download from the QGIS plugin
+repository or from GitHub Releases (routes 3 and 4 below). Until the first `v*` tag, use route 1
+or 2. All routes give the same plugin folders.
 
-**1. QGIS plugin repository (recommended: updates show up in the Plugin Manager).**
+**1. Build the zips from a checkout (works today, any OS with git and Python 3).**
+
+    git clone <the URL of this repository>
+    cd <the folder it made>
+    python3 tools/build_release.py --out dist
+
+`dist/` then holds one `DamSafety_<Plugin>_<version>.zip` per plugin and `SHA256SUMS`. In QGIS:
+*Plugins → Manage and Install Plugins… → Install from ZIP*, one zip at a time, **DamSafety Core
+first**, then the order above. These zips carry no LISFLOOD-FP binary: build it once as described
+under *First run*, step 3 (or use the Mac installer, which builds it).
+
+**2. Mac installer.** `tools/mac/` is a self-contained package for an Apple Silicon Mac: conda
+QGIS 3.34 in its own profile, ANUGA, LISFLOOD-FP built on the Mac from the official 8.3 source
+with the Runner's patch, and the plugin zips (`tools/mac/README_MAC.md`).
+
+**3. QGIS plugin repository (after the first release: updates then show up in the Plugin Manager).**
 In QGIS: *Plugins → Manage and Install Plugins… → Settings → Add…*, name it `DamSafety` and give
 the URL
 
@@ -34,17 +52,13 @@ experimental), then install the plugins from the *All* / *Not installed* list in
 The index is written by the release workflow (`.github/workflows/release.yml`) at every `v*` tag
 and points at the zips of that GitHub Release. It exists once the first release has run and the
 repository owner has turned GitHub Pages on, once: *Settings → Pages → Build and deployment →
-Deploy from a branch → `gh-pages` / root* (docs/CI.md, "Release").
+Deploy from a branch → `gh-pages` / root* (docs/CI.md, "Release"). Until then the URL answers
+"not found".
 
-**2. Install from ZIP.** Download `DamSafety_<Plugin>_<version>.zip` for each plugin from
-[GitHub Releases](https://github.com/nickdbendickson/dAmIt_Plugins/releases) (check the file
-against `SHA256SUMS`), then *Plugins → Manage and Install Plugins… → Install from ZIP*, one zip at
-a time, in the order above. A zip built from a checkout (`python3 tools/build_release.py --out dist`)
-installs the same way but carries no LISFLOOD-FP binary.
-
-**3. Mac installer.** `tools/mac/` is a self-contained package for an Apple Silicon Mac: conda
-QGIS 3.34 in its own profile, ANUGA, LISFLOOD-FP built on the Mac from the official 8.3 source
-with the Runner's patch, and the plugin zips (`tools/mac/README_MAC.md`).
+**4. Release zips (after the first release).** Download `DamSafety_<Plugin>_<version>.zip` for
+each plugin from [GitHub Releases](https://github.com/nickdbendickson/dAmIt_Plugins/releases)
+(check the file against `SHA256SUMS`), then *Install from ZIP* as in route 1. The Runner zip of a
+release carries the patched LISFLOOD-FP binary for Windows, Linux x64 and Apple Silicon.
 
 ## First run
 
@@ -57,9 +71,11 @@ with the Runner's patch, and the plugin zips (`tools/mac/README_MAC.md`).
    (structures, roads, railroads, lifelines, hydro, DWR dams and dugouts, counties, HIFLD, ND DEQ,
    barriers, NLCD land cover) into a folder you pick and keeps it up to date; or copy a pack you
    were given. `docs/USER_GUIDE.md` has the pack formats and the pack check.
+   **New to the suite?** Open *Plugins → Dam safety → Dam suite home…* and click *Try the
+   sample dam…*: it sets up one real dam with its terrain and opens the breach Runner on it.
 3. **LISFLOOD-FP** (the Runner's flood engine; a build with the arrival-depth patch is required,
    an unpatched one is refused).
-   - *Windows, Linux x64, macOS Apple Silicon:* the Runner zip of a GitHub Release carries a
+   - *Windows, Linux x64, macOS Apple Silicon (once a release is tagged):* the Runner zip of a GitHub Release carries a
      patched LISFLOOD-FP 8.3 under `DamSafety_Runner/bin/<platform>/`; the Runner finds it on its
      own when nothing else is set. The same binaries are attached to the release on their own.
    - *Linux (build it yourself):* `cmake`, `g++`, `python3`
@@ -96,5 +112,6 @@ with the Runner's patch, and the plugin zips (`tools/mac/README_MAC.md`).
 - Each plugin folder has its own README with the tool-by-tool detail.
 
 Repository: https://github.com/nickdbendickson/dAmIt_Plugins (issues:
-https://github.com/nickdbendickson/dAmIt_Plugins/issues). LISFLOOD-FP is GPL-2.0 (University of
-Bristol); the release ships the patched source it was built from.
+https://github.com/nickdbendickson/dAmIt_Plugins/issues). LISFLOOD-FP 8.3 is GPL-3.0 (University of
+Bristol; the `LICENSE` file in the 8.3 source is the GNU GPL version 3, although the Zenodo
+record's licence tag reads GPL-2.0); the release ships the patched source it was built from.

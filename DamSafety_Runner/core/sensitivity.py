@@ -319,6 +319,7 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
     out.folder = os.path.join(out_folder, "Sensitivity")
     os.makedirs(out.folder, exist_ok=True)
 
+    workflow.require_breach(st, "The sensitivity analysis")          # 3.19.0
     # the base run: the same domain everywhere else comes from it
     base_st = copy.copy(st)
     base_st.grid_refine = False          # 3.15.0: every run of this tool keeps its own cell

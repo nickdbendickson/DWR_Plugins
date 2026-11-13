@@ -34,6 +34,7 @@ from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
 from .core import vdatum_run as vdrun
 from .core import dwr_slope
+from .core import batch_workers as bworkers           # 3.20.0: several dams at a time
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
@@ -64,7 +65,16 @@ EAP_MAP_CHOICES = [(c, prodmod.EAP_LABELS[c]) for c in prodmod.EAP_CHOICES]
 SCENARIOS = [(workflow.SCENARIO_SUNNY, "Sunny day: no inflow, breach at the top of dam "
                                         "(ND 5.1.1)"),
              (workflow.SCENARIO_FLOOD, "Flood: PMF inflow, with the breach and without it "
-                                       "(incremental damage, ND 6.4)")]
+                                       "(incremental damage, ND 6.4)"),
+             # 3.19.0, appended (indices 0-1 unchanged)
+             (workflow.SCENARIO_FLOOD_NO_BREACH,
+              "Flood, NO breach: PMF inflow through the spillways and outlets and over the "
+              "crest; the dam stands")]
+# 3.19.0: where the pool stands when a sunny-day breach starts. Top of dam is ND 5.1.1 and the
+# default; the others are the engineer's choice and say so in the report.
+START_POOL_CHOICES = [(brmod.START_TOP, "Top of dam (ND 5.1.1; the default)"),
+                      (brmod.START_NORMAL, "Normal pool (give the normal pool elevation)"),
+                      (brmod.START_STATED, "An elevation I state (give it below)")]
 TRIGGERS = [(floodmod.TRIGGER_PEAK, "at the highest pool level"),
             (floodmod.TRIGGER_TIME, "at a set time (hours after the inflow starts)"),
             (floodmod.TRIGGER_WSE, "when the pool reaches an elevation (ft)")]
@@ -351,7 +361,8 @@ except Exception:                                                 # noqa - Core 
 class _Base(_UnitParams, QgsProcessingAlgorithm):
     # Core 1.2.0: the option IDs of the enums the shared defaults file sets (damsuite
     # shared_defaults.BINDINGS; suite_settings_tools.apply_shared_defaults)
-    SHARED_OPTION_IDS = {"METHOD": [m[0] for m in METHODS]}
+    SHARED_OPTION_IDS = {"METHOD": [m[0] for m in METHODS],
+                         "START_POOL": [c[0] for c in START_POOL_CHOICES]}     # 3.19.0
 
     def group(self):
         return "Dam breach modelling"
@@ -477,13 +488,21 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
     def add_scenario_params(self, per_dam=True):
         self.addParameter(QgsProcessingParameterEnum(
             "SCENARIO", "Scenario", [s[1] for s in SCENARIOS], defaultValue=0))
+        self.addParameter(QgsProcessingParameterEnum(
+            "START_POOL", "Sunny day: the pool when the breach starts",
+            [c[1] for c in START_POOL_CHOICES], defaultValue=0))
+        if per_dam:
+            self._num("START_WSE_FT", "Sunny day: starting pool elevation (ft; datum as the top "
+                      "of dam), for 'An elevation I state'", optional=True)
         self._file("INFLOW_CSV", "Flood scenario: PMF inflow hydrograph CSV (time hr, "
                    "discharge cfs)", "csv")
         self._file("SPILLWAY_CSV", "Flood scenario: spillway rating CSV (elevation ft, "
                    "discharge cfs; empty = no spillway)", "csv")
         if per_dam:
-            self._num("NORMAL_POOL_FT", "Flood scenario: normal pool elevation (ft; datum as the top of dam)",
+            self._num("NORMAL_POOL_FT", "Normal pool elevation (ft; datum as the top of dam): "
+                      "the flood scenarios start there, and a sunny day from the normal pool",
                       optional=True)
+        self.add_aux_params()
         self.addParameter(QgsProcessingParameterEnum(
             "TRIGGER", "Flood scenario: the dam fails", [t[1] for t in TRIGGERS],
             defaultValue=0))
@@ -507,6 +526,39 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    advanced=True)
         self._text("SPILLWAY_GATE", "Flood scenario: gate on the spillway rating, hours:fraction "
                    "pairs like '0:1, 6:0.5' (steps)", advanced=True)
+
+    def add_aux_params(self):
+        """3.19.0: an auxiliary (emergency) spillway as a weir, for the flood scenarios."""
+        self._num("AUX_CREST_FT", "Flood scenario: auxiliary spillway crest elevation (ft; "
+                  "datum as the top of dam; empty = none)", optional=True)
+        self._num("AUX_LENGTH_FT", "Flood scenario: auxiliary spillway crest length (ft)",
+                  optional=True, minimum=0)
+        self._num("AUX_C", "Flood scenario: auxiliary spillway weir coefficient C in "
+                  "Q = C L H^1.5 (US units; starting value 2.6 is the engineer's)",
+                  floodmod.AUX_C_US, minimum=0.1, maximum=4.5, advanced=True)
+
+    def start_pool(self, parameters, context, dam, top_ft, pool_ft=None, log=None):
+        """3.19.0: set the dam's sunny-day starting pool from START_POOL. top_ft is the top of
+        dam the user gave (the pool is held as its depth below it); pool_ft the normal pool
+        when the caller has it from a field."""
+        if self.parameterDefinition("START_POOL") is None:
+            return
+        kind = START_POOL_CHOICES[min(len(START_POOL_CHOICES) - 1, self.parameterAsEnum(
+            parameters, "START_POOL", context))][0]
+        if kind == brmod.START_TOP:
+            return
+        if kind == brmod.START_NORMAL:
+            wse = pool_ft if pool_ft is not None else (
+                self._opt(parameters, "NORMAL_POOL_FT", context)
+                if self.parameterDefinition("NORMAL_POOL_FT") is not None else None)
+        else:
+            wse = self._opt(parameters, "START_WSE_FT", context) \
+                if self.parameterDefinition("START_WSE_FT") is not None else None
+        brmod.set_start_pool(dam, kind, wse, top_ft)
+        if log:
+            log("Sunny day starts {:.2f} ft below the top of dam ({}), not at the top of dam "
+                "(ND 5.1.1).".format(dam.start_below_top_ft,
+                                     brmod.START_POOL_TEXT[kind]))
 
     def add_feature_params(self):
         """Things in the flow path: receptors, structures, DEM conditioning, gauges."""
@@ -874,8 +926,11 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                                              "'LISFLOOD-FP only' or set up HEC-RAS (see help).")
         dur = g("DURATION_HR")
         sim_max = g("DURATION_MAX_HR") if self.parameterDefinition("DURATION_MAX_HR") is not None else 0.0
-        scen = SCENARIOS[min(1, self.parameterAsEnum(parameters, "SCENARIO", context))][0] \
+        scen = SCENARIOS[min(len(SCENARIOS) - 1,
+                             self.parameterAsEnum(parameters, "SCENARIO", context))][0] \
             if self.parameterDefinition("SCENARIO") is not None else workflow.SCENARIO_SUNNY
+        if workflow.no_breach_tier_problem(scen, tier):      # 3.19.0
+            raise QgsProcessingException(workflow.no_breach_tier_problem(scen, tier))
         st = workflow.RunSettings(
             tier=tier, breach_method=method or METHODS[self.parameterAsEnum(
                 parameters, "METHOD", context)][0],
@@ -1022,6 +1077,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             fi.outlets = outmod.parse_outlets(self._str(parameters, "OUTLETS", context))
             fi.spillway_schedule = outmod.parse_schedule(
                 self._str(parameters, "SPILLWAY_GATE", context))
+        if self.parameterDefinition("AUX_CREST_FT") is not None:      # 3.19.0
+            fi.set_aux_weir(self._opt(parameters, "AUX_CREST_FT", context),
+                            self._opt(parameters, "AUX_LENGTH_FT", context),
+                            self._opt(parameters, "AUX_C", context))
         return fi
 
     def gis(self, parameters, context, sample_point_crs, sample_point):
@@ -1793,9 +1852,12 @@ class RunDamAlgorithm(_Base):
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
             feedback.pushInfo(n)
         try:
-            if st.scenario == workflow.SCENARIO_FLOOD:
+            if st.scenario in workflow.FLOOD_SCENARIOS:
                 st.flood = self.flood_inputs(parameters, context, dam,
                                              nd_data.dam_input_files(folder))
+            else:                                            # 3.19.0: sunny-day starting pool
+                self.start_pool(parameters, context, dam, dam.top_of_dam_ft,
+                                log=feedback.pushInfo)
         except brmod.BreachInputError as e:
             raise QgsProcessingException(str(e))
         xy = (dam_xy.x(), dam_xy.y()) if hasattr(dam_xy, "x") else dam_xy
@@ -1841,7 +1903,7 @@ class RunDamAlgorithm(_Base):
                     feedback.pushInfo(
                         "Top of dam not given: {:.1f} ft, the highest DEM point within "
                         "30 m of the dam point.".format(dam.top_of_dam_ft))
-            if st.scenario == workflow.SCENARIO_FLOOD:
+            if st.scenario in workflow.FLOOD_SCENARIOS:
                 hy, _nb, _fr = workflow._flood_hydrographs(dam, st, [])
             else:
                 hy = brmod.make_hydrograph(dam, st.breach_method, st.overrides,
@@ -2042,7 +2104,11 @@ def _batch_metrics(s):
             ("Flooded_ge_1ft_Masked_ac", "flooded_acres_ge_1ft_masked"))
     return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
-                   "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
+                   "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day",
+                   SCENARIOS[2][1]]            # 3.19.0, appended (indices 0-2 unchanged)
+# 3.19.0: the batch has no per-dam elevation to state, so the choice is the rule or the field
+BATCH_START_POOLS = [START_POOL_CHOICES[0],
+                     (brmod.START_NORMAL, "Normal pool (the normal pool elevation field)")]
 # 3.12.0: the source datum of the dam elevations (core/vdatum_run.py; damsuite/vdatum.py)
 ELEV_DATUMS = (("auto", "Auto: as stated in dam.json / the inventory (NGVD29 when not stated, "
                         "with a warning; a local datum such as a 100 ft top is detected and "
@@ -2099,7 +2165,65 @@ def batch_flag(dam_id, feat=None):
     return None
 
 
+WORKER_FILE_PROVIDERS = ("ogr", "gdal")
+
+
+def worker_layer_source(v, context):
+    """(text a qgis_process worker can open, '') or (None, why it cannot). 3.20.0."""
+    src = getattr(v, "source", None)
+    if src is not None and not callable(src):          # QgsProcessingFeatureSourceDefinition
+        sv = getattr(src, "staticValue", None)
+        v = sv() if callable(sv) else src
+    lyr = v if callable(getattr(v, "source", None)) else None
+    if lyr is None:
+        text = str(v or "").strip()
+        if not text:
+            return "", ""
+        try:
+            from qgis.core import QgsProcessingUtils
+            lyr = QgsProcessingUtils.mapLayerFromString(text, context, False)
+        except Exception:                                         # noqa: BLE001
+            lyr = None
+        if lyr is None:
+            return text, ""                              # a path: the worker opens it
+    try:
+        prov = str(lyr.providerType() or "")
+    except Exception:                                             # noqa: BLE001
+        prov = ""
+    if prov == "memory":
+        return None, "is a temporary layer: save it to a file first"
+    if prov == "delimitedtext":
+        return "delimitedtext://" + str(lyr.source()), ""
+    if prov and prov not in WORKER_FILE_PROVIDERS:
+        return None, "comes from '{}', and the workers need a file layer".format(prov)
+    return str(lyr.source()), ""
+
+
+def project_only_settings():
+    """Suite settings this project overrides (a worker has no project, so it would use the
+    computer's value instead)."""
+    try:
+        from .damsuite import suite_config as sc
+        return sorted(k for k in getattr(sc, "ENV", {})
+                      if k not in ("lisflood_exe", "anuga_python")      # handed over as values
+                      and sc.source(k) == "project")
+    except Exception:                                             # noqa: BLE001
+        return []
+
+
+def qgis_settings_dir():
+    try:
+        from qgis.core import QgsApplication
+        return QgsApplication.qgisSettingsDirPath()
+    except Exception:                                             # noqa: BLE001
+        return ""
+
+
 class BatchAlgorithm(_Base):
+    # 3.19.0: the batch's START_POOL has two options (no elevation to state per dam)
+    SHARED_OPTION_IDS = dict(_Base.SHARED_OPTION_IDS,
+                             START_POOL=[c[0] for c in BATCH_START_POOLS])
+
     def name(self):
         return "batch"
 
@@ -2124,7 +2248,15 @@ class BatchAlgorithm(_Base):
                 "Structure_Flag and Hazard_Of_Record (ALLOW_FLAGGED_STRUCTURE=1 in the "
                 "environment runs it anyway). With 'classify afterwards' the ND hazard batch "
                 "classification is run on the dams folder and its result is merged into "
-                "Batch_Breach_Runs.csv.")
+                "Batch_Breach_Runs.csv.\n\n"
+                "'Dams run at the same time' above 1 runs that many dams side by side, each in "
+                "its own qgis_process worker with an equal share of the cores (or your own "
+                "Threads value each). One dam gains little from more threads, so this is "
+                "what shortens a long batch. Each worker's log and one-row summary are kept "
+                "in <Dams folder>/_batch_workers/. It needs qgis_process (set "
+                "NDBREACH_QGIS_PROCESS to its full path if it is not found) and layers that "
+                "are files; when workers cannot be used the log says why and the dams run "
+                "one after another.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource("DAMS", "Dams (points)",
@@ -2136,6 +2268,9 @@ class BatchAlgorithm(_Base):
             "METHOD", "Breach (ND 5.1.1(d))", [m[1] for m in METHODS], defaultValue=0))
         self.addParameter(QgsProcessingParameterEnum(
             "SCENARIO", "Scenario", BATCH_SCENARIOS, defaultValue=0))
+        self.addParameter(QgsProcessingParameterEnum(
+            "START_POOL", "Sunny day: the pool when the breach starts",
+            [c[1] for c in BATCH_START_POOLS], defaultValue=0))
         self._file("INFLOW_CSV", "Flood scenario: PMF inflow CSV for dams without their own "
                    "inputs/pmf_inflow.csv", "csv")
         self._file("SPILLWAY_CSV", "Flood scenario: spillway rating CSV for dams without their "
@@ -2146,12 +2281,22 @@ class BatchAlgorithm(_Base):
         self._num("TRIGGER_VALUE", "Flood scenario: failure time (hr) or pool elevation (ft)",
                   optional=True)
         self._bool("BASELINE", "Flood scenario: also run without the breach", True)
+        self.add_aux_params()
         self._text("INCR_FT", "Incremental depth thresholds (ft; starting values 1, 2, 3 are "
                    "the engineer's)", "1, 2, 3", advanced=True)
         self.add_datum_param()
         self.add_feature_params()
         self.add_model_params()
         self._bool("SKIP_DONE", "Skip dams whose folder already holds a finished run", True)
+        self._num("WORKERS", "Dams run at the same time (1 = one after another; more = each "
+                  "dam in its own worker process, the cores shared between them)", 1,
+                  minimum=1, maximum=bworkers.MAX_WORKERS, integer=True)        # 3.20.0
+        self._num("WORKER_TIMEOUT_MIN", "Workers: stop a dam's worker after this many minutes "
+                  "(0 = no limit)", 0, minimum=0, advanced=True)
+        self._text("ONLY_IDS", "Only these dam IDs (comma separated; empty = every dam; the "
+                   "workers use it)", advanced=True)
+        self._text("SUMMARY_FILE", "Write the summary to this CSV instead of "
+                   "Batch_Breach_Runs.csv (the workers use it)", advanced=True)
         self._bool("CLASSIFY", "Classify afterwards with the ND hazard plugin's batch tool "
                    "and merge the result", False)
         self._text("CLASS_ALG", "Classification batch algorithm ID (empty = ndhazard:batch)",
@@ -2160,6 +2305,7 @@ class BatchAlgorithm(_Base):
                    advanced=True)
         self.addOutput(QgsProcessingOutputFile("SUMMARY", "Batch_Breach_Runs.csv"))
         self.addOutput(QgsProcessingOutputString("COUNTS", "Counts"))
+        self.addOutput(QgsProcessingOutputString("MODE", "How the dams were run"))
 
     def _mapping(self, parameters, context, src_layer, feedback):
         names = qio.field_names(src_layer)
@@ -2178,6 +2324,116 @@ class BatchAlgorithm(_Base):
             feedback.pushInfo("Fields matched by name: " + "; ".join(
                 "{} -> {}".format(k, fld[k]) for k in used))
         return fld
+
+    # -- 3.20.0: several dams at the same time (core/batch_workers.py) ------------------
+    WORKER_OWN = ("ONLY_IDS", "SUMMARY_FILE", "WORKERS", "WORKER_TIMEOUT_MIN", "CLASSIFY",
+                  "CLASS_ALG", "CLASS_MAP", "THREADS", "LISFLOOD_EXE", "ANUGA_PYTHON")
+
+    def worker_params(self, parameters, context):
+        """This run's parameters as plain values a qgis_process worker can read: layers as
+        their data sources, a CRS as its code. Raises WorkersUnavailable when a value cannot
+        be handed over (a temporary layer, a database layer, a project-only setting)."""
+        from .core import run_params
+        out = {}
+        for d in self.parameterDefinitions():
+            name = d.name()
+            v = parameters.get(name)
+            if name in self.WORKER_OWN or v is None or v == "":
+                continue
+            try:
+                kind = d.type()
+            except Exception:                                     # noqa: BLE001
+                kind = ""
+            if kind in LAYER_PARAM_TYPES or callable(getattr(v, "providerType", None)):
+                text, problem = worker_layer_source(v, context)
+                if problem:
+                    desc = getattr(d, "description", "")
+                    desc = str(desc() if callable(desc) else desc)
+                    raise bworkers.WorkersUnavailable("the layer '{}' {}".format(
+                        desc.split(":")[0].split("(")[0].strip() or name, problem))
+                if text:
+                    out[name] = text
+            elif kind == "crs":
+                crs = self.parameterAsCrs(parameters, name, context)
+                if crs is not None and crs.isValid():
+                    out[name] = crs.authid() or crs.toWkt()
+            else:
+                out[name] = run_params.jsonable(v)
+        keys = project_only_settings()
+        if keys:
+            raise bworkers.WorkersUnavailable(
+                "this project overrides the suite setting(s) {}, which a worker process "
+                "would not see".format(", ".join(keys)))
+        exe = self.find_lisflood(parameters, context)
+        from .core import lisflood as lfmod
+        out["LISFLOOD_EXE"] = "builtin" if exe == lfmod.BUILTIN_EXE else (exe or "")
+        out["ANUGA_PYTHON"] = self.find_anuga(parameters, context) or ""
+        out.update({"WORKERS": 1, "CLASSIFY": False})
+        return out
+
+    def run_queue(self, parameters, context, feedback, parent, queue, workers, run_one):
+        """Run the queued dams in worker processes; returns the text that says how they were
+        run. When workers cannot be used the reason is logged and the dams run here, one
+        after another, exactly as with WORKERS = 1."""
+        def here(why):
+            if why:
+                feedback.reportError("Workers are not used: {}. The dams run one after "
+                                     "another.".format(why), fatalError=False)
+            for job in queue:
+                if feedback.isCanceled() or run_one(*job):
+                    break
+            return "one dam after another in this session" + (
+                " (workers were asked for, but {})".format(why) if why else "")
+        if len(queue) < 2:
+            return here("")
+        try:
+            exe, why = bworkers.find_qgis_process()
+            if not exe:
+                raise bworkers.WorkersUnavailable(why)
+            params = self.worker_params(parameters, context)
+            threads = int(self.parameterAsDouble(parameters, "THREADS", context) or 0) \
+                or int(_setting(SET_THREADS, 0) or 0)
+            used, each, text = bworkers.plan(workers, len(queue), threads)
+            work = bworkers.work_folder(parent)
+            env, note = bworkers.profile_env(os.environ, qgis_settings_dir(), work)
+            env.setdefault("PYTHONUNBUFFERED", "1")
+            alg_id = "{}:{}".format(PROVIDER_ID, self.name())
+            feedback.pushInfo("Workers: checking that qgis_process can run {}…".format(
+                alg_id))
+            bworkers.probe(exe, alg_id, env)
+        except bworkers.WorkersUnavailable as e:
+            return here(str(e))
+        params["THREADS"] = each
+        if note:
+            feedback.pushInfo("Workers: " + note)
+        feedback.pushInfo("Workers: {}; logs in {}".format(text, work))
+        jobs, files = [], {}
+        for i, _feat, dam_id, _folder, _row, _fb in queue:
+            out_csv, log = bworkers.job_paths(work, i + 1, _safe_name(dam_id))
+            for stale in (out_csv,):
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+            files[i] = (out_csv, log)
+            jobs.append({"key": i, "name": dam_id, "log": log,
+                         "cmd": [exe, "run", alg_id, "-"],
+                         "stdin": bworkers.stdin_json(dict(params, ONLY_IDS=dam_id,
+                                                           SUMMARY_FILE=out_csv))})
+        limit = self.parameterAsDouble(parameters, "WORKER_TIMEOUT_MIN", context) \
+            if parameters.get("WORKER_TIMEOUT_MIN") not in (None, "") else 0
+        results = bworkers.run_children(
+            jobs, used, log=feedback.pushInfo, progress=feedback.setProgress,
+            cancelled=feedback.isCanceled, timeout_s=60.0 * (limit or 0), env=env)
+        for i, _feat, dam_id, _folder, row, _fb in queue:
+            if i not in results:
+                continue                                  # cancelled before its turn
+            bworkers.fill_row(row, BATCH_FIELDS, results[i], *files[i])
+            if row["Status"] == "failed":
+                feedback.reportError("{}: {}".format(dam_id, row["Message"]), fatalError=False)
+            for w in [x for x in str(row.get("Warnings") or "").split(" | ") if x]:
+                feedback.reportError("{}: {}".format(dam_id, w), fatalError=False)
+        return "in worker processes, " + text
 
     def processAlgorithm(self, parameters, context, feedback):
         src_layer = self.parameterAsSource(parameters, "DAMS", context)
@@ -2206,6 +2462,12 @@ class BatchAlgorithm(_Base):
         feats = list(src_layer.getFeatures())
         n = max(1, len(feats))
         rows = []
+        only = set(x.strip() for x in self._str(parameters, "ONLY_IDS", context).split(",")
+                   if x.strip())                         # 3.20.0
+        workers = 1 if only else bworkers.clamp_workers(
+            self.parameterAsInt(parameters, "WORKERS", context)
+            if parameters.get("WORKERS") not in (None, "") else 1)
+        queue, seen = [], set()
 
         def val(feat, key):
             name = fld.get(key)
@@ -2220,36 +2482,9 @@ class BatchAlgorithm(_Base):
                             return got
             return None
 
-        for i, feat in enumerate(feats):
-            if feedback.isCanceled():
-                break
-            dam_id = str(feat[fld["F_ID"]]).strip() if fld["F_ID"] else str(feat.id())
-            folder = os.path.join(parent, _safe_name(dam_id))
-            row = dict.fromkeys(BATCH_FIELDS, "")
-            row.update({"Dam": dam_id, "Folder": folder})
-            fb = _Feedback(feedback, 100.0 * i / n, 100.0 * (i + 1) / n)
-            flag = batch_flag(dam_id, feat)            # 3.10.23: a flagged structure is skipped
-            if flag and not sflags.allowed():
-                row.update({"Status": "flagged", "Message": sflags.refusal(
-                    flag, "breach run", dam_id, "the environment variable {}=1".format(
-                        sflags.ENV_ALLOW))[:500],
-                    "Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
-                        flag.get("hazard"), flag.get("hazard_source"))})
-                feedback.pushInfo("{}: skipped, flagged structure: {}".format(
-                    dam_id, sflags.note(flag)))
-                rows.append(row)
-                continue
-            if flag:
-                row.update({"Structure_Flag": sflags.note(flag) + " (run allowed)",
-                            "Hazard_Of_Record": "{} ({})".format(flag.get("hazard"),
-                                                                 flag.get("hazard_source"))})
-            if skip and workflow.run_finished(folder) \
-                    and (base_st.tier != workflow.TIER_HECRAS or hecras_done(folder)):
-                row.update({"Status": "skipped", "Message": "already run (finished)" + (
-                    " and _hecras/hecras_stage.json" if base_st.tier == workflow.TIER_HECRAS
-                    else "")})
-                rows.append(row)
-                continue
+        def run_one(i, feat, dam_id, folder, row, fb):
+            """One dam in this session; True when the run was cancelled. 3.20.0: the body of
+            the loop, so the dams a worker run could not take are run here afterwards."""
             feedback.pushInfo("=== {} ({}/{})".format(dam_id, i + 1, len(feats)))
             t0 = time.time()
             try:
@@ -2286,8 +2521,16 @@ class BatchAlgorithm(_Base):
                     feedback.pushInfo("{}: {}".format(dam_id, n_))
                 files = nd_data.dam_input_files(folder)
                 st = copy.copy(base_st)
-                flood = scen_i == 1 or (scen_i == 2 and "pmf_inflow" in files)
-                st.scenario = workflow.SCENARIO_FLOOD if flood else workflow.SCENARIO_SUNNY
+                flood = scen_i in (1, 3) or (scen_i == 2 and "pmf_inflow" in files)
+                st.scenario = (workflow.SCENARIO_FLOOD_NO_BREACH if scen_i == 3 else
+                               workflow.SCENARIO_FLOOD if flood else workflow.SCENARIO_SUNNY)
+                if workflow.no_breach_tier_problem(st.scenario, st.tier):
+                    raise brmod.BreachInputError(
+                        workflow.no_breach_tier_problem(st.scenario, st.tier))
+                if not flood:                                # 3.19.0: sunny-day starting pool
+                    self.start_pool(parameters, context, dam, vals["TOP_FT"],
+                                    pool_ft=val(feat, "F_POOL"),
+                                    log=lambda m, i=dam_id: feedback.pushInfo("{}: {}".format(i, m)))
                 if files.get("breach"):
                     st.user_hydrograph = files["breach"]
                 if st.breach_method == brmod.METHOD_USER and not st.user_hydrograph:
@@ -2332,7 +2575,7 @@ class BatchAlgorithm(_Base):
                     except HecRasTierError as e:
                         raise QgsProcessingException(str(e))
                 s = res.summary
-                if not s.get("breach_occurs", True):
+                if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
                     row.update({"Status": "no breach", "Message": "the dam does not fail in "
                                                                   "this flood"})
                 else:
@@ -2348,12 +2591,14 @@ class BatchAlgorithm(_Base):
                                 "Runs": s["lisflood_runs"],
                                 "Domain_mi": "{} x {}".format(*s["domain_mi"]),
                                 "Warnings": " | ".join(res.warnings)})
+                    if s.get("no_breach_scenario"):          # 3.19.0
+                        row["Message"] = ("no breach modelled: the flood is the routed PMF "
+                                          "outflow; Peak_Breach_cfs is its peak")
                 for w in res.warnings:
                     feedback.reportError("{}: {}".format(dam_id, w), fatalError=False)
             except Cancelled:
                 row.update({"Status": "cancelled"})
-                rows.append(row)
-                break
+                return True
             except (ModelError, brmod.BreachInputError, QgsProcessingException) as e:
                 row.update({"Status": "failed", "Message": str(e)[:500]})
                 feedback.reportError("{}: {}".format(dam_id, e), fatalError=False)
@@ -2362,8 +2607,59 @@ class BatchAlgorithm(_Base):
                 feedback.reportError("{}: {}".format(dam_id, traceback.format_exc()),
                                      fatalError=False)
             row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+            return False
+
+        for i, feat in enumerate(feats):
+            if feedback.isCanceled():
+                break
+            dam_id = str(feat[fld["F_ID"]]).strip() if fld["F_ID"] else str(feat.id())
+            folder = os.path.join(parent, _safe_name(dam_id))
+            if only and dam_id not in only:              # 3.20.0: a worker's one dam
+                continue
+            row = dict.fromkeys(BATCH_FIELDS, "")
+            row.update({"Dam": dam_id, "Folder": folder})
+            fb = _Feedback(feedback, 100.0 * i / n, 100.0 * (i + 1) / n)
+            flag = batch_flag(dam_id, feat)            # 3.10.23: a flagged structure is skipped
+            if flag and not sflags.allowed():
+                row.update({"Status": "flagged", "Message": sflags.refusal(
+                    flag, "breach run", dam_id, "the environment variable {}=1".format(
+                        sflags.ENV_ALLOW))[:500],
+                    "Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
+                        flag.get("hazard"), flag.get("hazard_source"))})
+                feedback.pushInfo("{}: skipped, flagged structure: {}".format(
+                    dam_id, sflags.note(flag)))
+                rows.append(row)
+                continue
+            if flag:
+                row.update({"Structure_Flag": sflags.note(flag) + " (run allowed)",
+                            "Hazard_Of_Record": "{} ({})".format(flag.get("hazard"),
+                                                                 flag.get("hazard_source"))})
+            if skip and workflow.run_finished(folder) \
+                    and (base_st.tier != workflow.TIER_HECRAS or hecras_done(folder)):
+                row.update({"Status": "skipped", "Message": "already run (finished)" + (
+                    " and _hecras/hecras_stage.json" if base_st.tier == workflow.TIER_HECRAS
+                    else "")})
+                rows.append(row)
+                continue
+            if workers > 1 and folder in seen:           # 3.20.0: two workers, one folder
+                row.update({"Status": "skipped", "Message": "the same dam ID as an earlier "
+                                                            "row of the layer"})
+                rows.append(row)
+                continue
+            seen.add(folder)
             rows.append(row)
-        path = os.path.join(parent, "Batch_Breach_Runs.csv")
+            if workers > 1:                              # run after the list is known
+                queue.append((i, feat, dam_id, folder, row, fb))
+            elif run_one(i, feat, dam_id, folder, row, fb):
+                break
+        mode = "one dam after another in this session"
+        if queue:
+            mode = self.run_queue(parameters, context, feedback, parent, queue, workers,
+                                  run_one)
+        rows = [r for r in rows if r["Status"]]          # cancelled before its turn: no row
+        feedback.pushInfo("Dams were run: " + mode)
+        path = self._str(parameters, "SUMMARY_FILE", context) or \
+            os.path.join(parent, "Batch_Breach_Runs.csv")
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
             w.writeheader()
@@ -2394,7 +2690,7 @@ class BatchAlgorithm(_Base):
                 feedback.reportError("Classification: {}".format(e), fatalError=False)
             except Exception as e:
                 feedback.reportError("Classification failed: {}".format(e), fatalError=False)
-        return {"SUMMARY": path, "COUNTS": msg}
+        return {"SUMMARY": path, "COUNTS": msg, "MODE": mode}
 
 
 class CascadeAlgorithm(_Base):
@@ -2535,6 +2831,8 @@ class HydrographAlgorithm(_Base):
         self._num("AREA_AC", "Surface area at the top of dam (ac)", optional=True, minimum=0)
         self._num("PMF_FT", "Maximum reservoir level in the PMF (ft)", optional=True)
         self._num("BOTTOM_FT", "Breach bottom elevation (ft)", optional=True)
+        self._num("START_WSE_FT", "Starting pool elevation (ft; empty = top of dam, ND 5.1.1)",
+                  optional=True)                             # 3.19.0
         self.add_breach_params(per_dam=True)
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUTPUT", "Hydrograph CSV", "CSV files (*.csv)"))
@@ -2557,6 +2855,8 @@ class HydrographAlgorithm(_Base):
             vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
         method = METHODS[self.parameterAsEnum(parameters, "METHOD", context)][0]
         try:
+            if o("START_WSE_FT") is not None:                # 3.19.0
+                brmod.set_start_pool(dam, brmod.START_STATED, o("START_WSE_FT"))
             hy = brmod.make_hydrograph(dam, method, ov,
                                        self.parameterAsFile(parameters, "USER_CSV", context))
         except brmod.BreachInputError as e:

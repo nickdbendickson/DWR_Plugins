@@ -10,6 +10,11 @@ plugin that does it, and buttons that open that plugin's window with the dam fil
 window has a field for it (the Runner: Dams folder + dam ID; Screening: the Dams folder; ND Dam
 Hazard: the dam folder).
 
+Core 1.3.0: "Try the sample dam" puts the suite's sample dam (damsuite.sample_dam) in the Dams
+folder, from the offline pack when the pack has it and from the USGS elevation service when it
+does not, and opens the Runner with the dam and its terrain filled in. It is the one thing in
+this window that writes a file.
+
 Logic is damsuite.suite_home (pure Python, tested); this file holds only the widgets. Built
 offscreen in headless QGIS 3.34; not yet exercised by hand in an interactive QGIS.
 """
@@ -22,6 +27,8 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem, QFileDialog, QMessageBox,
 )
 
+from ..damsuite import sample_dam as SD
+from ..damsuite import suite_config as SC
 from ..damsuite import suite_home as SH
 from ..damsuite import versions as VS
 from .ui_fit import fit_window
@@ -36,6 +43,7 @@ HEADER_KEY = SCOPE + "/home_table_header"
 FOLDER_ROLE = getattr(Qt, "UserRole", 256)
 RECENT_ERRORS = []          # the last few problems shown to the user, for "Copy diagnostics"
 MAX_ERRORS = 20
+SAMPLE_BUTTON = "Try the sample dam\u2026"
 
 
 def note_error(text):
@@ -112,7 +120,8 @@ class SuiteHomeDialog(QDialog):
         info = QLabel(
             "Every dam folder of the Dams folder with its dam.json state and the next action the suite "
             "suggests. Classes are DamSafety Hazard's (the Runner's / Screening's previews are not counted). "
-            "Nothing here changes a file.")
+            "Nothing here changes a file, except \"Try the sample dam\", which adds the sample dam's "
+            "folder to the Dams folder.")
         info.setWordWrap(True)
         lay.addWidget(info)
         row = QHBoxLayout()
@@ -163,6 +172,15 @@ class SuiteHomeDialog(QDialog):
         lay.addLayout(row)
         # a second row: six buttons on one line are cut off below about 1400 px
         plugins = QHBoxLayout()
+        self._sample_job = None
+        self._sample_timer = None
+        self.sample_btn = QPushButton(SAMPLE_BUTTON)
+        self.sample_btn.setToolTip(
+            "New here? This puts a ready-made dam (its record and 10 m terrain) in the Dams "
+            "folder and opens the breach Runner with it filled in. From the offline pack when "
+            "the pack has it; otherwise the terrain is downloaded from the USGS.")
+        self.sample_btn.clicked.connect(lambda _c=False: self.try_sample())
+        plugins.addWidget(self.sample_btn)
         plugins.addStretch(1)
         for key in ("ndhazard", "ndbreach", "ndscreen"):
             btn = QPushButton(VS.LABELS.get(key, key) + "\u2026")
@@ -225,7 +243,10 @@ class SuiteHomeDialog(QDialog):
         dams = self.dams_edit.text().strip()
         self.rows = SH.scan(dams) if dams and os.path.isdir(dams) else []
         s = SH.summary(self.rows)
-        self.summary_label.setText(SH.summary_text(s) if dams else "Choose the Dams folder.")
+        text = SH.summary_text(s) if dams else "Choose the Dams folder."
+        if dams and not self.rows:                # an empty Dams folder: where a new user starts
+            text += " New here? Click \"{}\" below.".format(SAMPLE_BUTTON.rstrip("\u2026"))
+        self.summary_label.setText(text)
         try:
             self.table.setSortingEnabled(False)
         except Exception:                                        # noqa
@@ -386,6 +407,152 @@ class SuiteHomeDialog(QDialog):
                 return plug
         return None
 
+    # ------------------------------------------------------------ sample dam --
+    def _ask(self, text, yes="Yes", no="No"):
+        """A two-button question; True for the first button. (A method so a test can answer.)"""
+        box = QMessageBox(self)
+        box.setWindowTitle(TITLE)
+        box.setText(text)
+        roles = getattr(QMessageBox, "ButtonRole", QMessageBox)   # Qt6 / Qt5
+        first = box.addButton(yes, roles.AcceptRole)
+        box.addButton(no, roles.RejectRole)
+        box.exec_() if hasattr(box, "exec_") else box.exec()
+        return box.clickedButton() is first
+
+    def _tell(self, text):
+        QMessageBox.information(self, TITLE, text)
+
+    def try_sample(self):
+        """Put the sample dam in the Dams folder and open the Runner on it. While its terrain
+        downloads, the same button cancels the download. Returns "opened", "downloading",
+        "cancelling" or "" (nothing done)."""
+        if self._sample_job is not None:
+            self._sample_job.cancel()
+            self.sample_btn.setText("Cancelling the download\u2026")
+            self.sample_btn.setEnabled(False)
+            return "cancelling"
+        try:
+            sm = SD.get()
+        except SD.SampleError as e:
+            self._tell(str(e))
+            return ""
+        dams = self.dams_edit.text().strip()
+        if not dams:
+            dams = SC.safe_dams_folder()
+            if not self._ask("No Dams folder is chosen yet. Use {} ?\n\nThe Dams folder holds one "
+                             "folder per dam; the sample dam goes there.".format(dams),
+                             "Use this folder", "Cancel"):
+                return ""
+            self.dams_edit.setText(dams)
+            self._save()
+        if SC.in_suite_pack(dams):
+            self._tell("The Dams folder is inside the offline pack, which the suite never writes "
+                       "to. Choose another Dams folder first.")
+            return ""
+        try:
+            os.makedirs(dams, exist_ok=True)
+        except OSError as e:
+            note_error("Sample dam: {}".format(e))
+            self._tell("The Dams folder {} cannot be made ({}).".format(dams, e))
+            return ""
+        have = SD.installed(dams)
+        if have:
+            return self._sample_ready(have, "It is already in the Dams folder.")
+        source = SD.find(*SD.pack_roots())
+        if source:
+            try:
+                done = SD.install(source, dams)
+            except SD.SampleError as e:
+                note_error("Sample dam: {}".format(e))
+                self._tell("The sample dam could not be set up: {}.".format(e))
+                return ""
+            return self._sample_ready(done["folder"], "Copied from the offline pack.")
+        if not self._ask(
+                "The sample dam is {} ({}), {}\n\nIts terrain is not in an offline pack on this "
+                "computer, so it has to be downloaded from the USGS elevation service: about "
+                "{} MB, usually a minute or two. It is written to {}.".format(
+                    sm.name, sm.dam_id, sm.about, SD.download_mb(),
+                    os.path.join(dams, sm.dam_id)),
+                "Download", "Cancel"):
+            return ""
+        self._sample_job = SD.Job(folder=os.path.join(dams, sm.dam_id)).start()
+        self.sample_btn.setText("Downloading the sample dam\u2026 (click to cancel)")
+        # imported here, not at the top: the home window must still load where QTimer is missing
+        from qgis.PyQt.QtCore import QTimer
+        self._sample_timer = QTimer(self)
+        self._sample_timer.timeout.connect(self._sample_poll)
+        self._sample_timer.start(400)
+        return "downloading"
+
+    def _sample_poll(self):
+        """Called by the timer while the terrain downloads; finishes the button's job when the
+        download ends. Returns what try_sample would ("" while it still runs)."""
+        job = self._sample_job
+        if job is None:
+            return ""
+        if not job.done:
+            if job.messages and not job.cancelled:
+                self.summary_label.setText(job.messages[-1] + "\u2026")
+            return ""
+        self._sample_job = None
+        if self._sample_timer is not None:
+            self._sample_timer.stop()
+            self._sample_timer = None
+        self.sample_btn.setText(SAMPLE_BUTTON)
+        self.sample_btn.setEnabled(True)
+        if job.error:
+            self.refresh()
+            if job.cancelled:
+                self._tell("The sample dam's download was cancelled. The parts already "
+                           "downloaded are kept: the button goes on from there.")
+            else:
+                note_error("Sample dam: {}".format(job.error))
+                self._tell("The sample dam was not set up: {}".format(job.error))
+            return ""
+        return self._sample_ready(job.folder, "Its terrain was downloaded from the USGS.")
+
+    def _sample_ready(self, folder, how):
+        sm = SD.get()
+        self.refresh()
+        self._select_folder(folder)
+        quick = self._ask(
+            "The sample dam, {} ({}), is in\n{}\n{}\n\nThe breach Runner opens next with the "
+            "dam and its terrain filled in. This dam is {}\n\nIt is a sample to learn the tools "
+            "on. A run of it is not a hazard determination for this dam.".format(
+                sm.name, sm.dam_id, folder, how, sm.about),
+            "Quick first try: {:g} m cell, first {:g} hours".format(SD.FIRST_TRY_CELL_M,
+                                                                     SD.FIRST_TRY_HOURS),
+            "Keep the Runner's settings")
+        row = {"folder": folder, "dem": os.path.join(folder, SD.dem_name())}
+        if quick:
+            row["first_try"] = dict(SD.FIRST_TRY)
+        opened = self.open_plugin("ndbreach", row)
+        if opened and quick:
+            changed = SD.first_try_lines(row.get("first_try_before"))
+            missing = [SD.FIRST_TRY_LABELS[k] for k in row.get("first_try_missing") or []]
+            self._tell(
+                "For a quick look at the sample, these settings of the Runner window were "
+                "changed:\n\n{}\n\nThe run maps the first {:g} hours of the flood and takes a "
+                "few minutes. Its report will say the flood is still advancing: that is "
+                "expected, the flood on this plain moves for days.\n\nThe Runner window "
+                "remembers these values. Set them back before you model a dam for real.{}".format(
+                    "\n".join("  " + ln for ln in changed) or "  (none: they were set already)",
+                    SD.FIRST_TRY_HOURS,
+                    "\n\nThis Runner window has no field for: {}. Without it the run is not "
+                    "quick.".format(", ".join(missing)) if missing else ""))
+        return "opened" if opened else ""
+
+    def _select_folder(self, folder):
+        try:
+            for i in range(self.table.rowCount()):
+                item = self.table.item(i, 0)
+                if item is not None and item.data(FOLDER_ROLE) == folder:
+                    self.table.setCurrentCell(i, 0)
+                    return True
+        except Exception:                                        # noqa
+            pass
+        return False
+
     def open_plugin(self, key, row=None):
         """Open plugin `key`'s window, pointed at the dam of `row` when it has a field for it.
         Returns True when the window opened."""
@@ -420,6 +587,35 @@ def point_window_at(dialog, key, dams_folder, row):
             if hasattr(dialog, "dam_edit"):
                 dialog.dam_edit.setText(os.path.basename(os.path.normpath(row["folder"])))
                 done.append("dam_id")
+            dem = row.get("dem") or ""
+            if dem and hasattr(dialog, "dem_combo"):       # the sample dam's terrain file
+                i = dialog.dem_combo.findData(dem)
+                if i < 0:
+                    dialog.dem_combo.addItem(os.path.basename(dem), dem)
+                    i = dialog.dem_combo.count() - 1
+                dialog.dem_combo.setCurrentIndex(i)
+                done.append("dem")
+            if row.get("grid_m") and hasattr(dialog, "grid_m"):
+                dialog.grid_m.setValue(float(row["grid_m"]))
+                done.append("grid_m")
+            if row.get("first_try"):
+                # the sample dam's quick first try: every value that makes it quick, and what
+                # the window held before, so the user can be told what to set back
+                before, missing = {}, []
+                for name, value in row["first_try"].items():
+                    w = getattr(dialog, name, None)
+                    try:
+                        if isinstance(value, bool):
+                            before[name] = bool(w.isChecked())
+                            w.setChecked(value)
+                        else:
+                            before[name] = float(w.value())
+                            w.setValue(float(value))
+                        done.append(name)
+                    except Exception:                            # noqa: an older Runner window
+                        before.pop(name, None)
+                        missing.append(name)
+                row["first_try_before"], row["first_try_missing"] = before, missing
         elif key == "ndscreen":
             if hasattr(dialog, "dams_folder"):
                 dialog.dams_folder.setText(dams_folder)

@@ -63,6 +63,7 @@ from .linear import checked_to_layer
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
     lone_point_judgment, ms_rule_judgment, nd_class_without_judgment,
+    velocity_hinge_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -2025,6 +2026,19 @@ def _classify_and_write(run, cfg, state):
                              structs_evaluated=inputs.get("structs_on", True))
         except Exception as e:                  # noqa - never fails the result
             run.log("300 ft no-building rule check: {}".format(e))
+        try:                                    # 2.25.0: a class that rests on velocity
+            vh = velocity_hinge_judgment(nd, tm11, s_class, r_view, l_view,
+                                         near_ft=cfg["near_ft"],
+                                         borderline_higher=cfg["borderline_higher"],
+                                         judgment_as_probable=nd_judge, tm11_judgment=judge,
+                                         one_d=one_d, roads_evaluated=inputs["roads_on"],
+                                         rail_evaluated=inputs["rail_on"],
+                                         structs_evaluated=inputs.get("structs_on", True))
+            if vh:
+                run.log(">>> {}: {}: {}".format(
+                    "WARNING" if nd["velocity_hinge"].get("rests") else "NOTE", sc.name, vh))
+        except Exception as e:                  # noqa - never fails the result
+            run.log("velocity check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
                     # M06: record the flooded-habitable count now, while s_view still holds this
                     # scenario's outcomes (comparison_rows runs after restore() rewrites them).

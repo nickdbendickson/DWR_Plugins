@@ -6,7 +6,7 @@
     python3 ndbreach_cli.py hydrograph config.json     breach hydrograph only
     python3 ndbreach_cli.py estimate config.json       time a test flood, estimate the run
     python3 ndbreach_cli.py run config.json            one dam, the same outputs as in QGIS
-    python3 ndbreach_cli.py batch dams.csv config.json a table of dams, one at a time
+    python3 ndbreach_cli.py batch dams.csv config.json a table of dams (--workers N: N at a time)
     python3 ndbreach_cli.py selftest                   what works on this computer
     python3 ndbreach_cli.py culvert-precheck --dam-folder DIR --out OUT
                                                        culvert inverts vs the fine ground
@@ -35,8 +35,10 @@ relative to the file. Keys that start with an underscore are ignored, null means
              breach.DamData (dam_height_ft, storage_top_acft, top_of_dam_ft, ...); the short
              names id, height_ft, storage_acft, top_ft, area_ac, pmf_ft, bottom_ft also work
   breach     method, user_csv, overrides (BreachOverrides fields: avg_width_ft, ...)
-  scenario   type (sunny|flood|per_dam), inflow_csv, spillway_csv, normal_pool_ft, trigger,
-             trigger_value, baseline_csv, baseline, incr_thresholds_ft
+  scenario   type (sunny|flood|flood_no_breach|per_dam), inflow_csv, spillway_csv,
+             normal_pool_ft, trigger, trigger_value, baseline_csv, baseline, incr_thresholds_ft;
+             start_pool (top|normal|stated) + start_wse_ft for a sunny day that does not start
+             at the top of dam; aux_crest_ft, aux_length_ft, aux_c: auxiliary spillway weir
   layers     GeoJSON files: receptor_points/roads/rail, structures (culverts, bridges, notches),
              channels, ponds, refine_lines, gauges, and their options; vector_crs
   manning    n, raster, nlcd, nlcd_n
@@ -119,6 +121,7 @@ try:
     gdal_io = importlib.import_module(PKG + ".core.gdal_io")
     grid_mod = importlib.import_module(PKG + ".core.grid")
     units = importlib.import_module(PKG + ".core.units")
+    bworkers = importlib.import_module(PKG + ".core.batch_workers")      # 3.20.0
     sflags = importlib.import_module(PKG + ".damsuite.structure_flags")
 except Exception as _e:              # pragma: no cover
     _fail_import(_e)
@@ -180,7 +183,8 @@ DAM_ALIASES = {"id": "dam_id", "height_ft": "dam_height_ft", "storage_acft": "st
 TIER_ALIASES = {"both": workflow.TIER_BOTH, "anuga": workflow.TIER_BOTH,
                 "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD,
                 "hecras": workflow.TIER_HECRAS}
-SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam")
+SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam",
+                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.19.0, appended
 READERS = ("auto", "gdal", "asc")
 
 # --------------------------------------------------------------------------------------
@@ -237,7 +241,11 @@ SECTIONS = {
                  "spillway_csv": ("path",), "normal_pool_ft": ("num", None, None),
                  "trigger": ("enum", floodmod.TRIGGERS), "trigger_value": ("num", None, None),
                  "baseline_csv": ("path",), "baseline": ("bool",),
-                 "incr_thresholds_ft": ("nums",)},
+                 "incr_thresholds_ft": ("nums",),
+                 # 3.19.0: sunny-day starting pool and the auxiliary spillway weir
+                 "start_pool": ("enum", brmod.START_POOLS), "start_wse_ft": ("num", None, None),
+                 "aux_crest_ft": ("num", None, None), "aux_length_ft": ("num", 0.0, None),
+                 "aux_c": ("num", 0.1, 4.5)},
     "layers": {"receptor_points": ("path",), "receptor_roads": ("path",),
                "receptor_rail": ("path",), "lookahead_mi": ("num", 0.1, None),
                "structures": ("path",), "structure_fields": ("dict",),
@@ -439,12 +447,19 @@ TEMPLATE = {
                  + ", ".join(OVERRIDE_KEYS) + ".",
         "method": brmod.METHOD_PIPING, "user_csv": None, "overrides": {}},
     "scenario": {
-        "_help": "sunny: no inflow. flood: PMF inflow with and without the breach. per_dam "
+        "_help": "sunny: no inflow. flood: PMF inflow with and without the breach. "
+                 "flood_no_breach: PMF inflow through the spillways and outlets and over the "
+                 "crest, the dam stands. per_dam "
                  "(batch): flood where the dam's folder has inputs/pmf_inflow.csv. "
-                 "trigger: peak|time|wse.",
+                 "trigger: peak|time|wse. start_pool (sunny): top (ND 5.1.1, the default) | "
+                 "normal (normal_pool_ft) | stated (start_wse_ft); needs dam.top_of_dam_ft. "
+                 "aux_crest_ft + aux_length_ft (+ aux_c, default 2.6): an auxiliary spillway "
+                 "weir for the flood scenarios.",
         "type": "sunny", "inflow_csv": None, "spillway_csv": None, "normal_pool_ft": None,
         "trigger": "peak", "trigger_value": None, "baseline_csv": None, "baseline": True,
-        "incr_thresholds_ft": [1.0, 2.0, 3.0]},
+        "incr_thresholds_ft": [1.0, 2.0, 3.0],
+        "start_pool": "top", "start_wse_ft": None,
+        "aux_crest_ft": None, "aux_length_ft": None, "aux_c": None},
     "layers": {
         "_help": "GeoJSON files (points, lines or polygons) in the DEM's CRS, or with a crs "
                  "member / vector_crs 'EPSG:xxxx' (needs GDAL). structure_fields maps S_KIND, "
@@ -1149,9 +1164,11 @@ def build_flood(cfg, dam, files, pool_ft=None):
     for what, p in (("inflow", inflow), ("spillway rating", spill), ("baseline outflow", base)):
         if p and not os.path.isfile(p):
             raise CliError("the {} CSV does not exist: {}".format(what, p))
-    return floodmod.FloodInputs.from_files(
+    fi = floodmod.FloodInputs.from_files(
         inflow, spill or None, normal_pool_ft=pool, crest_length_ft=dam.crest_length_ft,
         trigger=trig, trigger_value=val, baseline_csv=base or None)
+    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.19.0
+    return fi
 
 
 class LayerCache(object):
@@ -1383,6 +1400,8 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         scen = workflow.SCENARIO_FLOOD if "pmf_inflow" in files or cfg.get_path(
             "scenario", "inflow_csv") else workflow.SCENARIO_SUNNY
     st.scenario = scen
+    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.19.0
+        raise brmod.BreachInputError(workflow.no_breach_tier_problem(st.scenario, st.tier))
     if files.get("breach"):
         st.user_hydrograph = files["breach"]
     if st.breach_method == brmod.METHOD_USER:
@@ -1400,8 +1419,18 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         notes.append(n)
     dem_projected = True
     notes += apply_layers(st, cfg, setup, dam_xy, layers or LayerCache(), dem_projected)
-    if st.scenario == workflow.SCENARIO_FLOOD:
+    if st.scenario in workflow.FLOOD_SCENARIOS:
         st.flood = build_flood(cfg, dam, files, pool_ft)
+    else:                                                    # 3.19.0: sunny-day starting pool
+        sc = cfg.section("scenario")
+        kind = sc.get("start_pool") or brmod.START_TOP
+        if kind != brmod.START_TOP:
+            wse = (pool_ft if pool_ft is not None else sc.get("normal_pool_ft")) \
+                if kind == brmod.START_NORMAL else sc.get("start_wse_ft")
+            brmod.set_start_pool(dam, kind, wse)
+            notes.append("Sunny day starts {:.2f} ft below the top of dam ({}), not at the top "
+                         "of dam (ND 5.1.1).".format(dam.start_below_top_ft,
+                                                     brmod.START_POOL_TEXT[kind]))
     return Prepared(dam, st, setup, dam_xy, inflow_xy, folder, notes)
 
 
@@ -1807,9 +1836,71 @@ def cmd_batch(args):
     results = []
     n = max(1, len(rows))
     base_opts = args
+    only_row = int(getattr(args, "only_row", 0) or 0)       # 3.20.0: a worker's one dam
+    workers = 1 if only_row else bworkers.clamp_workers(getattr(args, "workers", 1))
+    queue, seen = [], set()
+
+    def run_one(i, row, dam_id, vals, folder, out, pr):
+        """One dam in this process; True when the run was cancelled. 3.20.0: the body of the
+        loop, so the dams a worker run could not take are run here afterwards."""
+        say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
+        t0 = time.time()
+        try:
+            x, y = num(row.get(xc)), num(row.get(yc))
+            if x is None or y is None:
+                raise brmod.BreachInputError("no point coordinates ({}, {})".format(xc, yc))
+            if batch_crs:
+                x, y = _batch_point_to_dem(cfg, cache, batch_crs, x, y)
+            vals["point"] = [x, y]
+            scen = _batch_scenario(cfg, folder)
+            pool = num(row.get(fld["F_POOL"])) if fld.get("F_POOL") else None
+            p = prepare(cfg, base_opts, vals, cache, layers, True, scen, pool)
+            if fld.get("F_DATUM"):                   # 3.12.0: the row's stated datum
+                p.st.elev_datum_stated = (row.get(fld["F_DATUM"]) or "").strip()
+                p.st.vertical_datum = None
+            out["Scenario"] = p.st.scenario
+            for note in p.notes:
+                say(note)
+            res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
+                                   p.folder, None, pr.progress, pr.log, pr.cancel)
+            _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
+            s = res.summary
+            if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
+                out.update({"Status": "no breach",
+                            "Message": "the dam does not fail in this flood"})
+            else:
+                out.update({"Status": "done", "Final_Model": s["final_model"],
+                            "Peak_Breach_cfs": s["peak_breach_cfs"],
+                            "Storage_At_Failure_acft": s["storage_at_failure_acft"],
+                            "Flooded_ac": s["flooded_acres"], "Max_Depth_ft": s["max_depth_ft"],
+                            "Max_Velocity_fps": s["max_velocity_fps"],
+                            **_batch_metrics(s),
+                            "Latest_Arrival_hr": s["latest_arrival_hr"],
+                            "Receptors_Flooded": s.get("receptors_flooded", ""),
+                            "Runs": s["lisflood_runs"],
+                            "Domain_mi": "{} x {}".format(*s["domain_mi"]),
+                            "Warnings": " | ".join(res.warnings)})
+            for w in res.warnings:
+                say("Check ({}): {}".format(dam_id, w))
+        except lfmod.Cancelled:
+            out.update({"Status": "cancelled"})
+            return True
+        except (lfmod.ModelError, brmod.BreachInputError, CliError,
+                workflow.HecRasStageError) as e:
+            out.update({"Status": "failed", "Message": str(e)[:500]})
+            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, e))
+        except Exception as e:
+            out.update({"Status": "failed", "Message": "{}: {}".format(type(e).__name__, e)})
+            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, traceback.format_exc()
+                                                         if args.verbose else e))
+        out["Minutes"] = round((time.time() - t0) / 60.0, 1)
+        return False
+
     for i, row in enumerate(rows):
         if CANCEL["flag"]:
             break
+        if only_row and i + 1 != only_row:
+            continue
         vals = {}
         for key, dk in BATCH_TO_DAM.items():
             col = fld.get(key)
@@ -1840,60 +1931,21 @@ def cmd_batch(args):
             out.update({"Status": "skipped", "Message": "already run (finished)"})
             results.append(out)
             continue
-        say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
-        t0 = time.time()
-        try:
-            x, y = num(row.get(xc)), num(row.get(yc))
-            if x is None or y is None:
-                raise brmod.BreachInputError("no point coordinates ({}, {})".format(xc, yc))
-            if batch_crs:
-                x, y = _batch_point_to_dem(cfg, cache, batch_crs, x, y)
-            vals["point"] = [x, y]
-            scen = _batch_scenario(cfg, folder)
-            pool = num(row.get(fld["F_POOL"])) if fld.get("F_POOL") else None
-            p = prepare(cfg, base_opts, vals, cache, layers, True, scen, pool)
-            if fld.get("F_DATUM"):                   # 3.12.0: the row's stated datum
-                p.st.elev_datum_stated = (row.get(fld["F_DATUM"]) or "").strip()
-                p.st.vertical_datum = None
-            out["Scenario"] = p.st.scenario
-            for note in p.notes:
-                say(note)
-            res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
-                                   p.folder, None, pr.progress, pr.log, pr.cancel)
-            _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
-            s = res.summary
-            if not s.get("breach_occurs", True):
-                out.update({"Status": "no breach",
-                            "Message": "the dam does not fail in this flood"})
-            else:
-                out.update({"Status": "done", "Final_Model": s["final_model"],
-                            "Peak_Breach_cfs": s["peak_breach_cfs"],
-                            "Storage_At_Failure_acft": s["storage_at_failure_acft"],
-                            "Flooded_ac": s["flooded_acres"], "Max_Depth_ft": s["max_depth_ft"],
-                            "Max_Velocity_fps": s["max_velocity_fps"],
-                            **_batch_metrics(s),
-                            "Latest_Arrival_hr": s["latest_arrival_hr"],
-                            "Receptors_Flooded": s.get("receptors_flooded", ""),
-                            "Runs": s["lisflood_runs"],
-                            "Domain_mi": "{} x {}".format(*s["domain_mi"]),
-                            "Warnings": " | ".join(res.warnings)})
-            for w in res.warnings:
-                say("Check ({}): {}".format(dam_id, w))
-        except lfmod.Cancelled:
-            out.update({"Status": "cancelled"})
+        if workers > 1 and folder in seen:                   # two workers, one folder
+            out.update({"Status": "skipped",
+                        "Message": "the same dam ID as an earlier row of the table"})
             results.append(out)
-            break
-        except (lfmod.ModelError, brmod.BreachInputError, CliError,
-                workflow.HecRasStageError) as e:
-            out.update({"Status": "failed", "Message": str(e)[:500]})
-            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, e))
-        except Exception as e:
-            out.update({"Status": "failed", "Message": "{}: {}".format(type(e).__name__, e)})
-            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, traceback.format_exc()
-                                                         if args.verbose else e))
-        out["Minutes"] = round((time.time() - t0) / 60.0, 1)
+            continue
+        seen.add(folder)
         results.append(out)
-    path = os.path.join(out_root, "Batch_Breach_Runs.csv")
+        if workers > 1:                                      # run after the list is known
+            queue.append((i, row, dam_id, vals, folder, out, pr))
+        elif run_one(i, row, dam_id, vals, folder, out, pr):
+            break
+    if queue:
+        _batch_queue(args, cfg, out_root, queue, workers, run_one)
+    results = [r for r in results if r["Status"]]            # cancelled before its turn
+    path = getattr(args, "summary_file", "") or os.path.join(out_root, "Batch_Breach_Runs.csv")
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
         w.writeheader()
@@ -1907,6 +1959,52 @@ def cmd_batch(args):
     if counts["cancelled"] or CANCEL["flag"]:
         return 130
     return 3 if counts["failed"] else 0
+
+
+def _batch_queue(args, cfg, out_root, queue, workers, run_one):
+    """3.20.0: run the queued dams as child processes of this same command, `workers` at a
+    time (core/batch_workers.py). Each child is `batch ... --only-row N` and writes a one-row
+    summary; its rows are filled in here. With one dam, or when the first child cannot be
+    started, the dams run here one after another."""
+    if len(queue) < 2:
+        for job in queue:
+            if CANCEL["flag"] or run_one(*job):
+                break
+        return
+    used, each, text = bworkers.plan(workers, len(queue), args.threads or 0)
+    work = bworkers.work_folder(out_root)
+    say("Workers: {}; logs in {}".format(text, work))
+    base = [sys.executable, os.path.abspath(__file__), "batch", os.path.abspath(args.dams),
+            os.path.abspath(args.config), "--output", out_root, "--threads={}".format(each)]
+    if args.resume:
+        base.append("--resume")
+    if args.verbose:
+        base.append("--verbose")
+    for flag, value in (("--lisflood", args.lisflood), ("--anuga-python", args.anuga_python),
+                        ("--elev-datum", getattr(args, "elev_datum", None))):
+        if value:
+            base += [flag, str(value)]
+    jobs, files = [], {}
+    for i, _row, dam_id, _vals, _folder, _out, _pr in queue:
+        out_csv, log = bworkers.job_paths(work, i + 1, safe_name(dam_id))
+        try:
+            os.remove(out_csv)
+        except OSError:
+            pass
+        files[i] = (out_csv, log)
+        jobs.append({"key": i, "name": dam_id, "log": log,
+                     "cmd": base + ["--only-row", str(i + 1), "--summary-file", out_csv]})
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    results = bworkers.run_children(jobs, used, log=say, cancelled=lambda: CANCEL["flag"],
+                                    timeout_s=60.0 * float(getattr(args, "worker_timeout_min",
+                                                                   0) or 0), env=env)
+    for i, _row, dam_id, _vals, _folder, out, _pr in queue:
+        if i not in results:
+            continue
+        bworkers.fill_row(out, BATCH_FIELDS, results[i], *files[i])
+        if out["Status"] == "failed":
+            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, out["Message"]))
 
 
 def _batch_point_to_dem(cfg, cache, crs_text, x, y):
@@ -1985,6 +2083,13 @@ def build_parser():
     p.add_argument("--output", default="")
     p.add_argument("--limit", type=int, default=0, help="only the first N dams")
     p.add_argument("--verbose", action="store_true", help="tracebacks for unexpected errors")
+    p.add_argument("--workers", type=int, default=1,
+                   help="dams run at the same time, each in its own process with an equal "
+                   "share of the cores (or --threads each). 1 (default) = one after another")
+    p.add_argument("--worker-timeout-min", type=float, default=0.0,
+                   help="stop a dam's worker after this many minutes (0 = no limit)")
+    p.add_argument("--only-row", type=int, default=0, help=argparse.SUPPRESS)
+    p.add_argument("--summary-file", default="", help=argparse.SUPPRESS)
     datum(p)
     models(p)
     p.set_defaults(func=cmd_batch)

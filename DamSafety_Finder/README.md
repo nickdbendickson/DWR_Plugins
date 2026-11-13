@@ -149,7 +149,8 @@ or Feet (feet read as metres made every fill 3.28 times too high). The log says 
 used and warns when the ground it reads is outside North Dakota's 229-1070 m. The warp reads the
 full-resolution cells and keeps the values as stored (`core/warp_opts.py`, as Screening).
 
-**What the output is.** A list to review, not a set of dams. In the review of 2026-11-11 none of
+**What the output is.** A list to review, not a set of dams ([REVIEW.md](REVIEW.md) is the
+reviewer's page). In the review of 2026-11-11 none of
 5 "new dam" candidates checked on aerial photos was a dam (farm and road-ditch fills, a rail
 curve), and dikes beside a channel (lagoon and pond dikes) are not fills across it: turn on the
 raised-ridge search for those. Sort by the score and check each candidate on imagery.
@@ -280,6 +281,10 @@ For each fill of an `embankments` layer, every source optional:
   when the storage is over 12.5 acre-feet (an ND water permit), for every fill with a storage.
 
 ## Review batches and honest numbers (`ndfind:review_batch`, `core/review.py`, `core/evaluate.py`)
+
+**Marking a batch:** [REVIEW.md](REVIEW.md) is the step-by-step page for a reviewer: how to set
+QGIS up so one card takes about half a minute, what each mark means, and how the marks get back
+into the score.
 
 A review batch is the Finder's experiment: the marks are the only ground truth. A batch samples
 the cards not yet reviewed (give it the earlier marks file as `REVIEWED`). It holds a **random

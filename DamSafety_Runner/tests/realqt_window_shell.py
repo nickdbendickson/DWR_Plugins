@@ -61,7 +61,7 @@ pump()
 
 # 1. built with no Dams folder
 assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Run", "Tools"]
-assert dlg.status_label.text() == "Choose the Dams folder and the dam ID."
+assert dlg.status_label.text() == "Choose the Dams folder and the dam ID.\n" + D.SAMPLE_HINT
 assert dlg.strip.states == [N, N, N, N], dlg.strip.states
 assert [c.text() for c in dlg.strip.chips] == ["○ Dam", "○ Terrain", "○ Model run", "○ Products"]
 assert not dlg.chips_row.isVisible() and not dlg.contents_section.isVisible()

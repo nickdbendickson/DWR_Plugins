@@ -304,9 +304,12 @@ def run_detail(folder):
         return ""
     summ = rep.get("summary") if isinstance(rep.get("summary"), dict) else {}
     parts = []
-    if summ.get("breach_occurs") is False or summ.get("final_model") == "none":
+    if (summ.get("breach_occurs") is False and not summ.get("no_breach_scenario")) \
+            or summ.get("final_model") == "none":
         parts.append("no breach")
     else:
+        if summ.get("no_breach_scenario"):                   # 3.19.0: a routed flood, no failure
+            parts.append("flood with no breach")
         if summ.get("final_model"):
             parts.append("final {}".format(summ["final_model"]))
         if summ.get("flooded_acres") is not None:

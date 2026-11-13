@@ -49,6 +49,10 @@ from . import dwr_files as DF
 from . import offline_pack as OP
 from .damsuite import abi as A
 from .damsuite import gpkgpack as GP
+try:
+    from .damsuite import sample_dam as SD
+except ImportError:                          # DamSafety Core before 1.3.0: no sample dam
+    SD = None
 
 PACK2 = GP.PACK_FOLDER                       # ND_Dam_Suite_Pack
 PACK1 = "nd_offline_pack"
@@ -357,10 +361,15 @@ def nd_bbox(pad=DEFAULT_PAD):
 # -------------------------------------------------------------------- build --
 def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifld_folder=None,
           nlcd_file=None, active=(), workers=None, progress=None, log=None, cancel=None,
-          area="North Dakota"):
+          area="North Dakota", sample=None, sample_id=None, sample_fetch=None):
     """Build or resume the pack in out_parent (see the module text). only: layer names (None =
     all pack layers). Returns a summary dict {pack2, pack1, manifest2, manifest1, failed,
-    left_out}."""
+    left_out, sample, sample_error}.
+
+    1.11.0: the last step writes the suite's sample dam (damsuite.sample_dam) into the format-2
+    pack. sample: True / False, or None = when every layer is built and the sample dam lies in
+    the pack's area. A sample that cannot be downloaded never fails the build (sample_error
+    says why; the home window's "Try the sample dam" then downloads it itself)."""
     log = log or print
     progress = progress or (lambda p, m="": None)
     cancel = cancel or (lambda: False)
@@ -374,16 +383,75 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
         if bad:
             raise PackBuildError("unknown layer(s): " + ", ".join(sorted(bad)))
     todo = [t for t in table if want is None or t["name"] in want]
+    if sample is None:
+        sample = want is None and sample_in_area(bbox, sample_id)
     os.makedirs(wk, exist_ok=True)
     lock = _lock(wk, log)
     try:
-        return _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
-                      cancel, area)
+        r = _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
+                   cancel, area)
+        r.update(sample="", sample_error="")
+        if sample:
+            progress(100.0, "Sample dam\u2026")
+            r.update(_sample(p2, sample_id, sample_fetch, log, cancel))
+        return r
     finally:
         try:
             os.remove(lock)
         except OSError:
             pass
+
+
+# --------------------------------------------------------------- sample dam --
+def sample_in_area(bbox, sample_id=None):
+    """True when the sample dam lies in the pack's lon / lat box (False with a DamSafety Core
+    older than 1.3.0, which has no sample dam)."""
+    if SD is None:
+        return False
+    try:
+        f = SD.get(sample_id).fields
+        return bbox[0] <= f["lon"] <= bbox[2] and bbox[1] <= f["lat"] <= bbox[3]
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def sample_folder(out_parent, sample_id=None):
+    """The sample dam's folder in the format-2 pack of out_parent when it is complete, else ''."""
+    if SD is None:
+        return ""
+    return SD.find(os.path.join(os.path.abspath(os.path.expanduser(out_parent)), PACK2),
+                   sample_id=sample_id)
+
+
+def _sample(p2, sample_id, fetch, log, cancel, refresh=False):
+    """Write the sample dam into the pack p2; never raises (see build)."""
+    try:
+        if SD is None:
+            raise PackBuildError("it needs DamSafety Core 1.3.0 or newer (update DamSafety Core)")
+        folder = SD.build(p2, sample_id=sample_id, fetch=fetch, log=log, cancel=cancel,
+                          refresh=refresh)
+        return {"sample": folder, "sample_error": ""}
+    except Exception as e:                                       # noqa: BLE001 - reported
+        if str(e) == "cancelled":
+            raise BP.BuildCancelled("cancelled")
+        log("  The sample dam was NOT added: {}".format(e))
+        log("  (The pack is complete without it: 'Try the sample dam' in the Dam suite home "
+            "downloads it when asked. To add it here, run the build again.)")
+        return {"sample": "", "sample_error": str(e)}
+
+
+def add_sample(out_parent, sample_id=None, refresh=False, log=None, cancel=None, fetch=None):
+    """Write only the sample dam into the pack this builder made in out_parent (a pack built
+    before 1.11.0 has none). Returns its folder. Raises PackBuildError."""
+    log = log or print
+    p2, _p1, _wk = check_target(out_parent)
+    if not os.path.isfile(os.path.join(p2, GP.MANIFEST_NAME)):
+        raise PackBuildError("There is no pack built in {} yet: build the pack first.".format(
+            os.path.abspath(os.path.expanduser(out_parent))))
+    r = _sample(p2, sample_id, fetch, log, cancel or (lambda: False), refresh)
+    if r["sample_error"]:
+        raise PackBuildError("The sample dam was not added: " + r["sample_error"])
+    return r["sample"]
 
 
 LOCK_NAME = "build.lock"
@@ -1706,6 +1774,9 @@ def main(argv=None):
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--verify", action="store_true", help="only check the built packs")
+    ap.add_argument("--sample-only", action="store_true",
+                    help="only add the sample dam to the pack already built in --out")
+    ap.add_argument("--no-sample", action="store_true", help="build without the sample dam")
     ap.add_argument("--zip1", metavar="ZIP",
                     help="also write the format-1 pack (with its NLCD raster) as one zip")
     a = ap.parse_args(argv)
@@ -1719,10 +1790,18 @@ def main(argv=None):
         if ok and a.zip1:
             zip_format1(os.path.join(os.path.abspath(a.out), PACK1), a.zip1, print)
         return 0 if ok else 1
+    if a.sample_only:
+        try:
+            print("Sample dam: " + add_sample(a.out, refresh=a.refresh))
+        except PackBuildError as e:
+            print(str(e))
+            return 1
+        return 0
     bbox = [float(v) for v in a.bbox.split(",")] if a.bbox else None
     only = [x.strip() for x in a.only.split(",") if x.strip()] or None
     r = build(a.out, only=only, bbox=bbox, refresh=a.refresh, dwr_folder=a.dwr_folder,
-              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file)
+              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file,
+              sample=False if a.no_sample else None)
     ok, lines = verify(os.path.abspath(a.out))
     print("\n".join(lines))
     if ok and a.zip1:

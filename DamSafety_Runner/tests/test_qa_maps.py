@@ -80,6 +80,57 @@ def qa_maps_write_both_pngs_on_a_synthetic_grid():
         shutil.rmtree(d)
 
 
+_NO_MPL_NO_APP = r"""
+import os, sys
+sys.modules["matplotlib"] = None                 # import matplotlib -> ImportError
+try:
+    from qgis.PyQt.QtGui import QImage, QPainter
+except Exception:
+    print("NOQT")
+    raise SystemExit(0)
+import numpy as np
+from nd_breach_runner.core import qa_maps as QA
+from nd_breach_runner.tests import test_qa_maps as T
+from qgis.PyQt.QtCore import QCoreApplication
+assert QCoreApplication.instance() is None       # the command line: no Qt application
+g = T._valley()
+depth = np.where(g.x_centers()[None, :] > 15, 1.2, 0.0) * np.ones((g.ny, 1))
+info, problems = QA.write_qa_maps("inflow+depth", sys.argv[1], "T1", g, (0.0, 0.0),
+                                  (25.0, 0.0), 110.0, radius_m=90.0, model_grid=g,
+                                  depth_m=depth, trace=[(25.0, 0.0), (250.0, 10.0)],
+                                  basemap="hillshade")
+print("MAPS", sorted(k for k in ("inflow_map", "depth_map") if info.get(k)), problems)
+"""
+
+
+@register
+def qa_maps_without_matplotlib_and_without_a_qt_application_do_not_end_the_process():
+    """3.20.0: on the command line (and in a batch worker) there is no Qt application. With
+    no matplotlib either, the Qt fallback drew its title with QPainter.drawText, and Qt does
+    not raise there: it aborts the process, after the model had finished and before the run
+    report was written. The fallback now leaves the title off."""
+    import subprocess
+    import sys
+    d = tempfile.mkdtemp(prefix="qa_noapp_")
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        env["PYTHONPATH"] = os.pathsep.join(
+            [p for p in (root, env.get("PYTHONPATH", "")) if p])
+        r = subprocess.run([sys.executable, "-c", _NO_MPL_NO_APP, d], env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           timeout=300)
+        assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-800:])
+        if "NOQT" in r.stdout:
+            print("   (skipped: no Qt in this Python)")
+            return
+        assert "MAPS ['depth_map', 'inflow_map'] []" in r.stdout, (r.stdout, r.stderr[-800:])
+        for name in (QA.INFLOW_PNG, QA.DEPTH_PNG):
+            assert open(os.path.join(d, name), "rb").read(8) == PNG
+    finally:
+        shutil.rmtree(d)
+
+
 @register
 def qa_maps_off_writes_nothing_and_errors_never_raise():
     g = _valley()
