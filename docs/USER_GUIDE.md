@@ -732,6 +732,28 @@ was used.
   pool field; a dam with no normal pool or no top of dam fails with a message instead of
   running from the top of dam.
 
+## Running several dams at the same time (Runner 3.20.0)
+
+One dam gains little from more model threads, so the way to shorten a long batch is to run dams side by side.
+
+**In QGIS.** Open *Run breach models for a layer of dams (batch)* and set **Dams run at the same time** above 1. Each dam then runs in its own background worker, and the cores are shared equally between the workers. Four cores and two workers gives each dam two threads. Set **Threads** yourself if you want a fixed count for each dam. The results are the same as running one dam after another, and `Batch_Breach_Runs.csv` lists the dams in the layer's order.
+
+**Without QGIS.** `ndbreach_cli.py batch DAMS.csv CONFIG.json --workers 3`.
+
+**How many.** Start with half the number of cores. Each worker holds its own grid in memory, so use fewer if the computer starts to swap.
+
+**What you need for the QGIS workers.**
+
+- The dams layer, the DEM and every other layer must be files. A temporary layer has to be saved first.
+- `qgis_process` must be found. It ships with QGIS; set the environment variable `NDBREACH_QGIS_PROCESS` to its full path if the log says it was not found.
+- The workers open the same QGIS profile as your session, so they see the same plugins and settings. A suite setting that only the open project overrides is not seen by a worker, so the batch then runs one dam after another.
+
+When workers cannot be used the log says why in one line and the batch runs one dam after another, exactly as before. The output **How the dams were run** (`MODE`) records which it was.
+
+**Where to look when a dam fails.** Its row says so, as before. When the worker itself stopped (a crash, the time limit), the row's message names the worker's log in `<Dams folder>/_batch_workers/`. **Workers: stop a dam's worker after this many minutes** sets a time limit for each dam; the default is no limit.
+
+The batch chain (Screening to Runner to HEC-RAS to Hazard) still takes one dam at a time.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:

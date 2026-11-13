@@ -784,7 +784,12 @@ height, storage and (ideally) the top of dam elevation and surface area, pick th
 
 **Many dams:** *Run breach models for a layer of dams (batch)*. Leave the field choices empty
 and the fields are matched by name (NIDID, DAM_HEIGHT, MAX_STORAGE, SURFACE_AREA, ...); the
-log lists the matches, so check them. For the flood scenario put each dam's inputs in
+log lists the matches, so check them. **3.20.0:** set *Dams run at the same time* (`WORKERS`)
+above 1 to run that many dams side by side, each in its own `qgis_process` worker with an
+equal share of the cores; the rows are the same as one dam after another. The layers must be
+files, and when workers cannot be used the log says why and the dams run one after another.
+Worker logs are kept in `<Dams folder>/_batch_workers/`. Without QGIS:
+`ndbreach_cli.py batch DAMS.csv CONFIG.json --workers N`. For the flood scenario put each dam's inputs in
 `<Dams folder>/<Dam ID>/inputs/`:
 
 | File | What |
