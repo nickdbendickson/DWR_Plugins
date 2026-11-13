@@ -20,7 +20,7 @@ offscreen in headless QGIS 3.34; not yet exercised by hand in an interactive QGI
 """
 import os
 
-from qgis.PyQt.QtCore import QTimer, QUrl, Qt
+from qgis.PyQt.QtCore import QUrl, Qt
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
@@ -477,6 +477,8 @@ class SuiteHomeDialog(QDialog):
             return ""
         self._sample_job = SD.Job(folder=os.path.join(dams, sm.dam_id)).start()
         self.sample_btn.setText("Downloading the sample dam\u2026 (click to cancel)")
+        # imported here, not at the top: the home window must still load where QTimer is missing
+        from qgis.PyQt.QtCore import QTimer
         self._sample_timer = QTimer(self)
         self._sample_timer.timeout.connect(self._sample_poll)
         self._sample_timer.start(400)
