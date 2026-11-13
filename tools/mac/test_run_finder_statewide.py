@@ -877,6 +877,37 @@ class WholeRun(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.out, "run.lock")))
         self.assertEqual(os.listdir(os.path.join(self.out, "tiles")), [])
 
+    def test_dry_run_uses_this_folders_own_full_tiles_also_for_a_redo(self):
+        """Three finished tiles full of terrain make this computer's own figure; the quick edge tiles
+        do not pull it down; and --redo, which runs them all again, still goes by what they took."""
+        vrt = self._dem()
+        dem = rfs.Dem(vrt)
+        key = rfs.settings_key(self.finder.VERSION, types.SimpleNamespace(tile_km=5), dem)
+        ids = [t.id for t in rfs.lattice(dem.box_5070, 5000.0)]
+        self.assertGreaterEqual(len(ids), 1)
+        seams = Seams("test_rules_across_a_seam")
+        seams.finder, seams.d = self.finder, self.out
+        seams._tile(ids[0], [], key=key)
+        m = rfs.read_json(os.path.join(self.out, "tiles", ids[0], "done.json"))
+        # the plan knows the tile by its place; its time and share are what done.json says
+        times = [(400.0, 0.95), (500.0, 0.9), (600.0, 1.0), (10.0, 0.01), (12.0, 0.02), (9.0, 0.0)]
+        self.assertEqual(rfs.full_tile_seconds(times), (500.0, 3))
+        m.update(seconds=500.0, terrain_share=0.95, finished_epoch=1.0)
+        rfs.write_json(os.path.join(self.out, "tiles", ids[0], "done.json"), m)
+        args = ["--dem", vrt, "--out", self.out, "--tile-km", "5", "--state-outline", "none", "--dry-run"]
+        rc, so, _se = self._main(args)
+        self.assertEqual(rc, 0, so)
+        self.assertIn("(1 so far)", so)                       # one full tile: still the test box's figure, and said
+        self.assertIn("NOT timed on this computer", so)
+        timed = {}
+        plan, shares = rfs.make_plan(types.SimpleNamespace(tile_km=5), dem, self.out, key, None, None,
+                                     lambda q: None, cache_ok=False, since=2.0, timed=timed)
+        self.assertEqual(dict(plan)[[t for t, _s in plan if t.id == ids[0]][0]], "todo")    # --redo: to run again
+        self.assertEqual(timed, {ids[0]: (500.0, 0, 0.95)})   # and what it took last time is still known
+        rc, so, _se = self._main(args + ["--redo"])
+        self.assertEqual(rc, 0, so)
+        self.assertIn("(1 so far)", so)
+
     def test_merge_only_with_the_terrain_drive_unplugged(self):
         seams = Seams("test_rules_across_a_seam")
         seams.finder, seams.d = self.finder, self.out

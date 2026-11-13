@@ -1089,11 +1089,15 @@ def time_for(shares, sec_full, workers):
     return max(sum(costs) / float(max(1, workers)), max(costs)) if costs else 0.0
 
 
-def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
+def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None, timed=None):
     """([(Tile, state)], {tile id: share of terrain or None}) for the lattice tiles over the terrain
     raster that the selection keeps. state: done / other (finished with other settings) / outside
     (the state outline) / nosource (no source file of the VRT there) / nodata (source files, but no
-    terrain) / unreadable (the terrain there cannot be read now; dem.read_error says why) / todo."""
+    terrain) / unreadable (the terrain there cannot be read now; dem.read_error says why) / todo.
+    timed: a dict that is given {tile id: (seconds, fills, share of terrain as its done.json has it
+    or None)} of every tile in the plan that has a result made with these settings - also one
+    --redo is about to run again: what it took last time is this computer's own figure all the
+    same."""
     tile_m = a.tile_km * 1000.0
     tiles = lattice(dem.box_5070, tile_m)
     cache_path = os.path.join(out, "plan_cache.json")
@@ -1111,6 +1115,8 @@ def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
             if not select.Intersects(g):
                 continue
         m = marker(out, t.id) if os.path.isdir(out) else None
+        if m is not None and m.get("key") == key and timed is not None:
+            timed[t.id] = (m.get("seconds"), int(m.get("fills") or 0), m.get("terrain_share"))
         if m is not None and (since is None or float(m.get("finished_epoch") or 0) >= since):
             plan.append((t, "done" if m.get("key") == key else "other"))
             shares[t.id] = m["terrain_share"] if m.get("terrain_share") is not None else cache["share"].get(t.id)
@@ -2325,7 +2331,8 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
     log("Planning the tiles (looking for terrain) ...")
     since = redo_since(a, out, start=not quiet and not a.merge_only) if os.path.isdir(out) \
         else (time.time() if a.redo else None)
-    plan, shares = make_plan(a, dem, out, key, outline, select, log, cache_ok=not quiet, since=since)
+    timed = {}
+    plan, shares = make_plan(a, dem, out, key, outline, select, log, cache_ok=not quiet, since=since, timed=timed)
     n = collections.Counter(s for _t, s in plan)
     # a tile whose terrain cannot be read now is still to run: it fails, and its log says why
     todo = [t for t, s in plan if s in ("todo", "unreadable")]
@@ -2366,11 +2373,10 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
                 else ""))
     # what a tile full of terrain costs: this folder's own finished FULL tiles when there are 3,
     # else the cloud-box number; every tile is then counted by its share of terrain
-    done_m = [(t, marker(out, t.id)) for t, s in plan if s == "done"]
-    done_m = [(t, m) for t, m in done_m if m]
-    sec_per, n_full = full_tile_seconds([(m.get("seconds"), shares.get(t.id)) for t, m in done_m])
+    sec_per, n_full = full_tile_seconds([(sec, shares.get(tid) if own is None else own)
+                                         for tid, (sec, _nf, own) in timed.items()])
     measured = n_full >= EST_MIN_FULL
-    fills_done = sum(int(m.get("fills") or 0) for _t, m in done_m)
+    fills_done = sum(timed[t.id][1] for t, s in plan if s == "done" and t.id in timed)
     if a.limit and a.limit > 0 and not a.merge_only:
         todo_now = todo[:a.limit]
     else:
@@ -2381,14 +2387,17 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
         log("Estimate for the {} tile(s) still to run, {} at a time:".format(len(todo), w))
         todo_shares = [shares.get(t.id) for t in todo]
         worth = sum(tile_cost(sh, sec_per) for sh in todo_shares) / sec_per
-        log("  time    {} (a tile full of terrain taken as {}: {}; a tile with less terrain is counted by its "
-            "share, so the {} tile(s) count as {:.1f} full ones)".format(
-                "about " + dur(time_for(todo_shares, sec_per, w)) if todo else "nothing left to run", dur(sec_per),
-                "the mean of the {} finished tiles in this folder that are full of terrain".format(n_full)
-                if measured else
-                "processor time on the cloud test box, NOT timed on this computer - this computer's own figure "
-                "is used once {} tiles full of terrain are finished here ({} so far)".format(EST_MIN_FULL, n_full),
-                len(todo), worth))
+        how = ("the mean of the {} finished tiles in this folder that are full of terrain".format(n_full)
+               if measured else
+               "processor time on the cloud test box, NOT timed on this computer - this computer's own figure "
+               "is used once {} tiles full of terrain are finished here ({} so far)".format(EST_MIN_FULL, n_full))
+        if todo:
+            log("  time    about {} (a tile full of terrain taken as {}: {}; a tile with less terrain is counted "
+                "by its share, so the {} tile(s) count as {:.1f} full ones)".format(
+                    dur(time_for(todo_shares, sec_per, w)), dur(sec_per), how, len(todo), worth))
+        else:
+            log("  time    nothing left to run (a tile full of terrain took {}: {})".format(dur(sec_per), how)
+                if measured else "  time    nothing left to run")
         if n["unreadable"] and todo:
             log("          (the {} tile(s) whose terrain could not be read are counted as full)".format(
                 n["unreadable"]))
