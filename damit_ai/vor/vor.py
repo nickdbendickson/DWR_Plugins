@@ -103,6 +103,9 @@ MAX_FILE_BYTES = 300 * 1024 * 1024
 TEXT_EXT = (".md", ".txt")
 DOC_EXT = (".pdf",) + TEXT_EXT
 SKIP_DIRS = {"__MACOSX", ".git", "_ocr_tmp", "node_modules"}
+# The one line of character either AI gets. It greets; it never answers, so it cannot change
+# what the model asserts. Everything that shapes an answer is in prompts/manner.txt.
+VOICE = "Vor - literature assistant. Every sentence traces to a page, or it says it cannot."
 BANNER = ("RESEARCH ASSISTANT OUTPUT - NOT ENGINEERING JUDGEMENT. Every statement must be "
           "checked against the cited page of the source before use in any dam-safety decision.")
 
@@ -1269,7 +1272,7 @@ def cmd_chat(a):
     check_embed_model(db)
     idx = Index(db)
     keep, per_doc, note = doc_scope(db, a)
-    say(damit_banner("vor - literature assistant"))
+    say(damit_banner(VOICE))
     if note:
         say(note)
     say("vor chat — cited answers from your library (%s). Blank line or Ctrl+D quits.\n"
