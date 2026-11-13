@@ -520,16 +520,26 @@ class SuiteHomeDialog(QDialog):
             "dam and its terrain filled in. This dam is {}\n\nIt is a sample to learn the tools "
             "on. A run of it is not a hazard determination for this dam.".format(
                 sm.name, sm.dam_id, folder, how, sm.about),
-            "Quick first try: {:g} m cell".format(SD.FIRST_TRY_CELL_M),
-            "Keep the Runner's cell")
+            "Quick first try: {:g} m cell, first {:g} hours".format(SD.FIRST_TRY_CELL_M,
+                                                                     SD.FIRST_TRY_HOURS),
+            "Keep the Runner's settings")
         row = {"folder": folder, "dem": os.path.join(folder, SD.dem_name())}
         if quick:
-            row["grid_m"] = SD.FIRST_TRY_CELL_M
+            row["first_try"] = dict(SD.FIRST_TRY)
         opened = self.open_plugin("ndbreach", row)
         if opened and quick:
-            self._tell("The Runner's cell is now {:g} m. That is for a quick look at the sample "
-                       "only: set it back to 10 m before you model a dam for "
-                       "real.".format(SD.FIRST_TRY_CELL_M))
+            changed = SD.first_try_lines(row.get("first_try_before"))
+            missing = [SD.FIRST_TRY_LABELS[k] for k in row.get("first_try_missing") or []]
+            self._tell(
+                "For a quick look at the sample, these settings of the Runner window were "
+                "changed:\n\n{}\n\nThe run maps the first {:g} hours of the flood and takes a "
+                "few minutes. Its report will say the flood is still advancing: that is "
+                "expected, the flood on this plain moves for days.\n\nThe Runner window "
+                "remembers these values. Set them back before you model a dam for real.{}".format(
+                    "\n".join("  " + ln for ln in changed) or "  (none: they were set already)",
+                    SD.FIRST_TRY_HOURS,
+                    "\n\nThis Runner window has no field for: {}. Without it the run is not "
+                    "quick.".format(", ".join(missing)) if missing else ""))
         return "opened" if opened else ""
 
     def _select_folder(self, folder):
@@ -588,6 +598,24 @@ def point_window_at(dialog, key, dams_folder, row):
             if row.get("grid_m") and hasattr(dialog, "grid_m"):
                 dialog.grid_m.setValue(float(row["grid_m"]))
                 done.append("grid_m")
+            if row.get("first_try"):
+                # the sample dam's quick first try: every value that makes it quick, and what
+                # the window held before, so the user can be told what to set back
+                before, missing = {}, []
+                for name, value in row["first_try"].items():
+                    w = getattr(dialog, name, None)
+                    try:
+                        if isinstance(value, bool):
+                            before[name] = bool(w.isChecked())
+                            w.setChecked(value)
+                        else:
+                            before[name] = float(w.value())
+                            w.setValue(float(value))
+                        done.append(name)
+                    except Exception:                            # noqa: an older Runner window
+                        before.pop(name, None)
+                        missing.append(name)
+                row["first_try_before"], row["first_try_missing"] = before, missing
         elif key == "ndscreen":
             if hasattr(dialog, "dams_folder"):
                 dialog.dams_folder.setText(dams_folder)
