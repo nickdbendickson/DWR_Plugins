@@ -231,9 +231,11 @@ except S.ScheduleError:
     check(True, "a Windows path with a quote is refused")
 check(S.main([os.path.join(T, "nowhere"), "--print"]) == 1, "the command line returns 1 on an error")
 
-# ---- 6. outside a running QGIS, QGIS's own paths are not asked ------------------------
+# ---- 6. outside a running QGIS, QGIS's own paths and its project are not asked ----------
 # In a child process: on Qt 5.15.3 (QGIS 3.34 LTR, Ubuntu 22.04) asking QgsApplication for
-# its paths with no application ended the process, and with it this whole file.
+# its paths, or for the open project, with no application ended the process, and with it this
+# whole file. Section 1 above writes the reports with no QGIS running, so it is the check that
+# the reports themselves can be written there.
 import subprocess  # noqa: E402
 code = (
     "import sys\n"
@@ -249,6 +251,13 @@ code = (
     "exe, why = W.find_qgis_process()\n"
     "assert not asked, asked\n"
     "assert exe or 'not found' in why, (exe, why)\n"
+    # the reports are written through helpers.prepare_output_path, which looks in the open
+    # project for layers of the file: with no QGIS running the project is not asked for
+    "from DamSafety_Hazard import helpers as H\n"
+    "H.QgsProject = type('P', (), dict(instance=staticmethod(lambda: asked.append('project'))))\n"
+    "assert not H.qgis_app_running()\n"
+    "assert H.remove_project_layers_for_path('/tmp/Hazard_Creep_Watch.csv') == 0\n"
+    "assert not asked, asked\n"
     "print('OK')\n").format(root=os.path.dirname(os.path.dirname(HERE)))
 env = dict(os.environ)
 env.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -256,7 +265,7 @@ r = subprocess.run([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE
                    stderr=subprocess.STDOUT, timeout=120)
 out = r.stdout.decode("utf-8", "replace")
 check(r.returncode == 0 and ("OK" in out or "NOQGIS" in out),
-      "qgis_process is looked for without asking QGIS for its paths when no QGIS is running"
+      "with no QGIS running, QGIS is not asked for its paths or its project"
       + ("" if r.returncode == 0 else " (exit {}: {})".format(r.returncode, out[-400:])))
 
 shutil.rmtree(T, ignore_errors=True)
