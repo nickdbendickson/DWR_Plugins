@@ -1,0 +1,13 @@
+{
+ "format": "dam-defaults",
+ "format_version": 1,
+ "name": "DamSafety suite defaults",
+ "note": "The suite's shared starting values. Every DamSafety plugin (and Crest) starts from these; each run dialog can still change them for one run. Do not edit this copy: it is replaced when DamSafety Core is updated. Change your own values in Plugins > Dam safety > Shared defaults, which writes ~/DamSafety/defaults.json.",
+ "values": {
+  "sunny_day_start_pool": "max_pool",
+  "pmf_breach_volume": "storage_at_start_pool",
+  "failure_mode": "piping",
+  "breach_method": "froehlich2008",
+  "manning_n": 0.06
+ }
+}
