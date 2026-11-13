@@ -202,8 +202,8 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
 
 `run_finder_statewide.sh` runs DamSafety Finder's *Fills across streams and draws* over all of
 North Dakota from the statewide 1 m terrain VRT on the SSD, in 10 km tiles, and merges the
-tiles into one scored GeoPackage with a ranked list of the unlisted dam candidates. The
-step-by-step is `RUN-FINDER-STATEWIDE.md`; the short form:
+tiles into one scored GeoPackage with a ranked list of the unlisted dam candidates and a short
+list of the top 2,000 with map links. The step-by-step is `RUN-FINDER-STATEWIDE.md`; the short form:
 
 ```bash
 bash run_finder_statewide.sh --dry-run     # tile count, time / memory / disk estimate; writes nothing
@@ -216,7 +216,8 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   `~/ND_Suite_Data`) and the installed plugin (the damsafety profile; `--plugins FOLDER` or
   `--repo CHECKOUT` for another copy; Finder 0.6.0 or later). **Writes only** into `--out`
   (default `~/ND_Finder_Statewide`); it refuses an `--out` inside the data folder, the pack, the
-  terrain folder or the plugins folder. It downloads nothing.
+  terrain folder or the plugins folder, also when the path is spelled in another case (a Mac's
+  disk treats `~/nd_suite_data` and `~/ND_Suite_Data` as one folder). It downloads nothing.
 * **Tiles:** 10 km squares on a fixed lattice in EPSG:5070 that touch and do not overlap, about
   1,950 for the state. `finder.run_embankments` works in 5 km squares from the corner of the
   box it is given, reads 3 km of terrain beyond each square and keeps a fill only when its
@@ -224,32 +225,46 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   call would use: no fill is dropped at a seam and none is found twice. The engine's two
   cross-square rules (one fill per pool; no two fills within 60 m) are applied across tile
   seams in the merge, with the engine's own functions. The header of
-  `run_finder_statewide.py` has the full reasoning.
+  `run_finder_statewide.py` has the full reasoning and the two edge cases. Finder 0.7.0 lays
+  its own squares and DEM cells on the same fixed lattice; the script works with both.
 * **Time and memory (measured on the 4-core cloud test box, NOT on a Mac):** a tile full of
   terrain takes about 4.5 minutes of processor time on one core (780 CPU-seconds for 9 tiles
   over 300 km2 of terrain; one full tile alone: 175 s) and 1.2 GB of memory at its peak. For the
   state that is about 130 processor-hours: **about a day and a half with the default 4 tiles at
-  a time, and about 5 GB of memory**, if a Mac core is as fast as a test-box core. The run
-  prints its own time left after the first tiles, and `--dry-run` uses this computer's own tile
-  times once 3 tiles are finished. Disk: about 2 GB in `--out` for the state.
+  a time, and about 5 GB of memory**, if a Mac core is as fast as a test-box core. A tile at
+  the edge of the terrain is many times quicker than a full one, so every estimate counts a
+  tile by its share of terrain; `--dry-run` uses this computer's own figure only once 3 tiles
+  **full of terrain** are finished and says which figure it used, and the time left printed
+  during a run is marked a first guess until a few full tiles are done. Disk: about 2 GB in
+  `--out` for the state.
 * **Resume:** each finished tile is a folder `tiles/<tile>/` with a `done.json`; a tile without
   it runs again. Ctrl-C stops cleanly; a killed run leaves nothing half-written in `tiles/`. A
-  failed tile is tried once more, then logged (`failed/<tile>.log`) and left for the next run;
-  the other tiles go on. Tiles with no terrain are found from the VRT's list of source files
-  and a 64 x 64 sample of an overview, and are not run.
-* **Two flags the engine does not have yet:** `in_state` (a fill outside North Dakota: the
-  outline is `--state-outline FILE`, else the pack's county layer when it has one, else a
-  simple built-in outline with a 600 m allowance) and `at_data_edge` (a fill within 150 m of
-  missing terrain, measured on the DEM: NoData acts as a wall and makes a false dam). Both
-  kinds stay in the `embankments` layer and are left out of the ranked list.
+  failed tile is tried once more, then logged with the reason (`failed/<tile>.log`, removed
+  when the tile later finishes) and left for the next run; the other tiles go on. Tiles with
+  no terrain are found from the VRT's list of source files and a 64 x 64 sample of an
+  overview, and are not run; a tile whose terrain file cannot be read is counted apart.
+  `--merge-only` reads the finished tiles only, so it works with the SSD unplugged.
+* **Three flags the script adds:** `in_state` (a fill outside North Dakota: the outline is
+  `--state-outline FILE`, else the pack's county layer when it has one, else a simple built-in
+  outline with a 600 m allowance), `at_data_edge` (a fill within 150 m of missing terrain:
+  NoData acts as a wall and makes a false dam; the distance `edge_ft` is the Finder's own when
+  it writes one, as 0.7.0 is to, else measured on the DEM) and `excluded` (a fill inside a
+  polygon of `--exclude-polygons FILE`: the hook for ground such as mine spoil or sand hills;
+  the script holds no such map itself). All three kinds stay in the `embankments` layer and are
+  left out of the ranked lists.
 * **Results:** `ND_finder_fills.gpkg` (`embankments`, `candidates`, `spillways`, `ridges`,
-  `run_info`), `ND_finder_candidates_ranked.csv` (not listed, dam or dry embankment, in the
-  state, not at the data edge; highest score first, scored with the plugin's
-  `models/nd_fill_score_trees_2026-11.json`) and `ND_finder_summary.txt`.
-* `find_id` is a hash of the crest point, and the crest point moves by a few metres with where
-  the engine's 3 m grid falls, so the ids of a statewide run are **not** the ids of an earlier
-  run over another box (a county run from the toolbox, the cloud test tiles): match old marks
-  to new fills by location, not by id.
+  `run_info`), `ND_finder_candidates_ranked.csv` (every candidate: not listed, dam or dry
+  embankment, in the state, not at the data edge, not excluded; highest score first, scored
+  with the plugin's `models/nd_fill_score_trees_2026-11.json`; about 300,000 rows for the
+  state), `ND_finder_candidates_top.csv` (the first 2,000 of them, `--top N`, with a link to
+  the satellite picture at each: the one to open) and `ND_finder_summary.txt` (which also says
+  how many candidates score 0.5 or more, and which Finder version made the run).
+* **Finder versions and ids:** one result holds the fills of one Finder version; tiles made by
+  another version are kept, not run again and not merged (`--redo` runs them again). `find_id`
+  is a hash of the crest point. On **Finder 0.7.0 or later** the ids are the same in every
+  run. On 0.6.x the crest point moves by a few metres with the box of a run, so marks made on a
+  0.6 run (a county run from the toolbox, the cloud test tiles) are matched to newer fills **by
+  location**, not by id.
 
 ## Good to know
 
