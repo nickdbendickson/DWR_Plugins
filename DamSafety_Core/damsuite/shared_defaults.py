@@ -324,6 +324,9 @@ def from_runner_method(method_id):
 BINDINGS = (
     ("ndbreach", None, "MANNING", lambda v: v.get("manning_n")),
     ("ndbreach", None, "METHOD", runner_method),
+    # Runner 3.19.0: the sunny-day starting pool is a choice of the run tools (START_POOL)
+    ("ndbreach", None, "START_POOL",
+     lambda v: {"max_pool": "top", "normal_pool": "normal"}.get(v.get("sunny_day_start_pool"))),
     ("ndscreen", "runbreachsim", "NDEF", lambda v: v.get("manning_n")),
     ("ndscreen", "runbreachsim", "SCEN",
      lambda v: {"max_pool": "td", "normal_pool": "sd"}.get(v.get("sunny_day_start_pool"))),

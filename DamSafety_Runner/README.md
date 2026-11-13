@@ -321,7 +321,13 @@ model installation*, *Self-test in this QGIS*.
 ## How a run works
 
 1. **Breach hydrograph (ND 5.1.1).**
-   - Starting water surface: top of dam, or the PMF maximum reservoir level if lower.
+   - Starting water surface: top of dam, or the PMF maximum reservoir level if lower. That
+     is the preset. **3.19.0:** 'Sunny day: the pool when the breach starts' (`START_POOL`)
+     also offers the **normal pool** (`NORMAL_POOL_FT`) or **an elevation you state**
+     (`START_WSE_FT`). The pool is held as its depth below the top of dam, so give the top of
+     dam on the same datum. Such a run uses the storage at that pool as Vw, says in the report
+     that it is not the ND 5.1.1 case, and should not be used alone for a classification
+     under the ND standards.
    - Methods, all routed through the reservoir with the broad-crested trapezoidal weir
      equation and a power-law storage curve fitted to storage and surface area:
      Froehlich (2008) piping or overtopping (default: piping); Froehlich (2008) piping
@@ -339,6 +345,19 @@ model installation*, *Self-test in this QGIS*.
    incremental depth and WSE rise are written, with the acres and receptors where the
    breach adds 1, 2 and 3 ft. Arrival times count from breach initiation. If the trigger is
    never reached, the report says the dam does not fail.
+   - **Auxiliary spillway (3.19.0).** `AUX_CREST_FT` and `AUX_LENGTH_FT` (and `AUX_C`, 2.6
+     to start with) add an auxiliary (emergency) spillway as a weir, Q = C L H^1.5, to the
+     spillway rating in every routing. It is a weir formula, not a rating of the built
+     channel.
+   - **Flood with NO breach (3.19.0).** The third scenario routes the same inflow through
+     the spillway rating, the auxiliary spillway, the outlets and, where the pool tops it,
+     over the crest, and models that outflow downstream. The dam stands, also when it
+     overtops. The summary says `breach_occurs: false` and `no_breach_scenario: true`, so ND
+     Dam Hazard's model check does not read the rasters as a failure flood. The outflow
+     enters the model at the toe of the dam, not at the spillway outlet, so the flood path
+     close to the dam is approximate. Arrival times count from the start of the inflow.
+     There is no baseline or incremental result, the HEC-RAS 2D stage is refused, and the
+     sensitivity and probabilistic tools (which vary the breach) refuse this scenario.
 3. **Where the water goes in.** The lowest DEM cell just below the dam (or your point).
 4. **First domain.** A steepest-descent trace from there (default 5 mi), buffered 1 mi.
 5. **LISFLOOD-FP**, inertial solver, 10 m cells by default. **How far downstream

@@ -702,6 +702,36 @@ When a structure, road or rail receptor sits on a NoData cell next to water, the
 
 The path, the 20 m threshold and the cell size are written to the existing Sampling / Notes fields (no new CSV columns). The same rule is used in Hazard, the Screening/Runner `nd_hazard` sampler, Runner receptor summaries, and Hazard Lite.
 
+## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.19.0)
+
+Nothing changes unless you choose it: a sunny-day run starts at the top of dam with a piping
+breach (ND 5.1.1). Those two presets come from the shared defaults file (*Plugins → Dam safety →
+Shared defaults…*, DamSafety Core 1.2.0): change "Sunny-day breach: starting pool" there to
+Normal pool and every run tool, the batch and the wizard open with Normal pool chosen. A single
+run can still be changed either way in its dialog; the run report and dam.json say which pool
+was used.
+
+| You want | Set |
+|---|---|
+| Sunny day from the normal pool | Scenario = Sunny day; 'Sunny day: the pool when the breach starts' = Normal pool; Normal pool elevation; Top of dam elevation |
+| Sunny day from another elevation | the same, with 'An elevation I state' and 'Sunny day: starting pool elevation' |
+| An overtopping breach | Breach = an overtopping method. With no inflow the pool cannot be above the crest, so for a real overtopping failure use the flood scenario |
+| PMF with a breach | Scenario = Flood; inflow CSV; spillway rating and/or normal pool; when the dam fails (highest pool, a time, a pool elevation) |
+| PMF with no breach | Scenario = Flood, NO breach; the same inflow and spillway inputs |
+| An auxiliary spillway in either flood scenario | Auxiliary spillway crest elevation and crest length (weir coefficient 2.6 unless you state one) |
+
+- The stated pool is kept as its depth below the top of dam, so both elevations must be on
+  the same datum and the top of dam must be given (a DEM-estimated crest is refused).
+- A sunny-day run from a lower pool uses the storage at that pool in the breach equations and
+  says in the report that it is not the ND 5.1.1 case.
+- The no-breach flood is the routed outflow, put into the model at the toe of the dam. Its
+  summary says the dam does not fail, so the Hazard model check warns before classifying
+  from it. Compare it with the breach run for the incremental effect; the Flood scenario
+  already does that comparison in one run.
+- Batch: 'Sunny day: the pool when the breach starts' offers the top of dam or the normal
+  pool field; a dam with no normal pool or no top of dam fails with a message instead of
+  running from the top of dam.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:
