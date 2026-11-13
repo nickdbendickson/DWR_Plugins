@@ -48,6 +48,8 @@ jobs:
         run: python3 tools/test_ci_checks.py
       - name: gui_lint source rule self-test (no message-box checks in run handlers)
         run: python3 tools/test_gui_lint.py
+      - name: Batch scripts against a stand-in dam_chain (QGIS-free)
+        run: python3 -W error -m unittest discover -v -s tools/batch/tests
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
