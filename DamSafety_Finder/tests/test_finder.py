@@ -1276,9 +1276,10 @@ class Cards(unittest.TestCase):
         self.assertEqual([f["find_id"] for f in feats], [r["find_id"] for r in res["rows"]])
         self.assertTrue(all(f["water_years"] is None and f["wet_years"] is None for f in feats))   # not '0 of 0'
         self.assertTrue(all("no image year could be read" in f["evid_note"] for f in feats))
-        # the service is given up on after the first card: 5 requests, not 5 x 10 cards
-        self.assertEqual(len(asked), 5)
-        self.assertEqual(res["evidence"]["requests"], 5)
+        # the host is given up on after the first card, each of its 5 years asked twice: 10
+        # requests, not 5 x 10 cards
+        self.assertEqual(len(asked), 10)
+        self.assertEqual(res["evidence"]["requests"], 10)
         self.assertEqual({t for _u, t in asked}, {7.0})                     # the batch's own short time-out
         self.assertEqual(sum(1 for m in said if "not asked again this run" in m), 1)
         self.assertEqual(sum(1 for m in said if "no image" in m), 5)        # the first card's years, no more
@@ -1300,22 +1301,72 @@ class Cards(unittest.TestCase):
             self.assertEqual(r["water_years"], "{} of 3".format(3 if i % 2 == 0 else 0))
         self.assertEqual(res["evidence"]["dead_services"], ["dead.test"])
 
-    def test_one_broken_year_never_stops_a_host_that_answers(self):
+    def test_a_broken_year_is_left_alone_and_never_stops_the_other_years(self):
         from unittest import mock
-        asked = []
+        asked, said = [], []
+        down = ("/svc2012/", "/svc2014/", "/svc2015/")                      # three years in a row are down
 
         def svc(url, timeout=None):
             asked.append(url)
-            if "/svc2012/" in url or "/svc2014/" in url or "/svc2015/" in url:      # three years in a row are down
+            if any(d in url for d in down):
                 raise OSError("HTTP Error 500")
             return Resp(service_tiff(url, 2))
         with mock.patch("urllib.request.urlopen", svc):
-            res = self.batch(images=self.hub_lines())
-        self.assertEqual(res["evidence"]["dead_services"], [])
-        self.assertEqual(len(asked), 5 * 10)                                # every card asked every year
-        for r in res["rows"]:
+            res = self.batch(images=self.hub_lines(), log=said.append)
+        for r in res["rows"]:                                               # the host goes on answering
             i = int(r["find_id"][-8:], 16)
             self.assertEqual(r["water_years"], "{} of 2".format(2 if i % 2 == 0 else 0))
+            self.assertEqual(r["evid_note"], "3 of 5 image years could not be read; no NWI layer given; "
+                                             "no LiDAR count raster given")
+        # each broken year is asked for 3 cards, then left alone: one line each, not one a card
+        self.assertEqual(sum(1 for u in asked if any(d in u for d in down)), 3 * 3)
+        self.assertEqual(len(asked), 2 * 10 + 3 * 3)
+        self.assertEqual(sum(1 for m in said if "not asked again this run" in m), 3)
+        self.assertEqual(res["evidence"]["dead_services"],
+                         ["https://hub.test/svc{}/ImageServer".format(y) for y in (2012, 2014, 2015)])
+
+    def test_a_blank_answer_is_not_kept_as_a_tile(self):
+        # a service under load can answer with an image that holds no data: the card says a year
+        # is missing, and the next run asks for that tile again instead of reading the blank one
+        from unittest import mock
+        import urllib.parse
+        state = {"blank": True, "asked": []}
+
+        def blank(url):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+            w, h = (int(v) for v in q["size"][0].split(","))
+            mem = "/vsimem/blank_{}.tif".format(len(state["asked"]))
+            ds = gdal.GetDriverByName("GTiff").Create(mem, w, h, 4, gdal.GDT_Byte)      # all zeros
+            ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+            ds.SetProjection(srs(5070).ExportToWkt())
+            ds = None
+            fh = gdal.VSIFOpenL(mem, "rb")
+            gdal.VSIFSeekL(fh, 0, 2)
+            n = gdal.VSIFTellL(fh)
+            gdal.VSIFSeekL(fh, 0, 0)
+            data = gdal.VSIFReadL(1, n, fh)
+            gdal.VSIFCloseL(fh)
+            gdal.Unlink(mem)
+            return bytes(data)
+
+        def svc(url, timeout=None):
+            state["asked"].append(url)
+            if state["blank"] and "/svc2012/" in url:
+                return Resp(blank(url))
+            return Resp(service_tiff(url, 2))
+        with mock.patch("urllib.request.urlopen", svc):
+            first = self.batch(images=self.hub_lines())
+            self.assertEqual(len(state["asked"]), 50)
+            self.assertTrue(all(r["img_years"] == 4 for r in first["rows"]))
+            self.assertTrue(all(r["evid_note"].startswith("1 of 5 image years could not be read")
+                                for r in first["rows"]))
+            self.assertEqual(first["evidence"]["dead_services"], [])        # an answer, if an empty one
+            state["blank"] = False
+            again = self.batch(images=self.hub_lines())
+        self.assertEqual(len(state["asked"]), 50 + 10)                      # only the blank tiles again
+        self.assertTrue(all(r["img_years"] == 5 for r in again["rows"]))
+        self.assertTrue(all(not r["evid_note"].startswith("1 of 5") for r in again["rows"]))
 
     def test_a_long_run_asks_a_silent_host_again_after_a_while(self):
         # the evidence tool's rule (retry_s): the host is down for the first two fills, then back
@@ -1343,7 +1394,7 @@ class Cards(unittest.TestCase):
             return rows, c, said
         rows, c, said = read(None, "never")                                 # the batch: not asked again this run
         self.assertEqual([r["img_years"] for r in rows], [0] * 6)
-        self.assertEqual((state["asked"], c["dead_services"]), (5, ["hub.test"]))
+        self.assertEqual((state["asked"], c["dead_services"]), (10, ["hub.test"]))
         rows, c, said = read(0.0, "again")                                  # asked again once the wait is over
         self.assertEqual([r["img_years"] for r in rows], [0, 0, 5, 5, 5, 5])
         self.assertEqual(c["dead_services"], [])
@@ -1351,7 +1402,7 @@ class Cards(unittest.TestCase):
         self.assertEqual(sum(1 for m in said if "answers again" in m), 1)
         rows, c, said = read(3600.0, "later")                               # the wait is not over: left alone
         self.assertEqual([r["img_years"] for r in rows], [0] * 6)
-        self.assertEqual(state["asked"], 5)
+        self.assertEqual(state["asked"], 10)
 
     def test_a_rerun_reads_the_tiles_it_has(self):
         from unittest import mock

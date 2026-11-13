@@ -2224,7 +2224,7 @@ def _points_of(src, box):
 
 
 IMAGE_THREADS = 6           # the image years of one fill are asked for together, this many at a time
-IMAGE_GIVE_UP = 3           # requests to one image host that fail in a row before it is left alone
+IMAGE_GIVE_UP = 3           # failures in a row before an image host, or one image year, is left alone
 
 
 def _host(src):
@@ -2240,24 +2240,40 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
     colour-infrared and the 4-band, must not read each other's tiles), and tiles already there
     are not asked for again.
 
-    A host is given up on when `give_up` or more of its requests in a row failed and no request
-    sent with them was answered: it is then left out of the result (one log line, not one per
-    fill and year) for the rest of the run, or for retry_s seconds when that is given (a long
-    run gets its imagery back after a network outage). One broken year on a host whose other
-    years answer never stops the host. state: a dict kept for one run."""
+    Two things are left alone once they fail `give_up` times in a row, with one log line each
+    instead of one per fill and year, for the rest of the run - or for retry_s seconds when that
+    is given (a long run gets its imagery back after an outage):
+      * a host, when every request sent to it for this fill failed, they were all asked once
+        more, and failed again (no network, the server down);
+      * one service address (one image year), when it failed for `give_up` fills in a row while
+        the host's other years answered (a year that is down does not cost its time-out on
+        every fill, and never stops the other years).
+    What is left alone is left out of the result. state: a dict kept for one run."""
     strikes = state.setdefault("strikes", {})
-    dead = state.setdefault("dead", {})                 # host -> when it was given up on
+    dead = state.setdefault("dead", {})                 # host or service address -> when given up on
     asked = state.setdefault("asked", [])               # one entry per request sent
+
+    def left_alone(key):
+        return key in dead and (retry_s is None or time.monotonic() - dead[key] < retry_s)
+
+    def stop(key, n, why):
+        if key not in dead:
+            log("warning: the image service {} did not answer {} time(s) in a row ({}): not asked again {} - "
+                "the fills after this one have no water history from it".format(
+                    key, n, why, "this run" if retry_s is None else "for {:g} minute(s)".format(retry_s / 60.0)))
+        dead[key] = time.monotonic()
+
+    def answered(key):
+        strikes[key] = 0
+        if dead.pop(key, None) is not None:
+            log("the image service {} answers again".format(key))
     jobs, slot = [], {}
-    for k, im in enumerate(imgs):
-        if not is_service(im["src"]):
+    for im in imgs:
+        src = str(im["src"])
+        if not is_service(src) or left_alone(_host(src)) or left_alone(src):
             continue
-        h = _host(im["src"])
-        if h in dead and (retry_s is None or time.monotonic() - dead[h] < retry_s):
-            continue
-        key = (im["year"], str(im["src"]))              # two lines of one year and service: one folder
-        if key not in slot:
-            slot[key] = len(jobs)
+        if (im["year"], src) not in slot:               # two lines of one year and service: one folder
+            slot[(im["year"], src)] = len(jobs)
             jobs.append(im)
 
     def opener(url):
@@ -2270,27 +2286,53 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
             return fetch_imageserver(im["src"], box, cell, os.path.join(cache, tag), log=_noop, opener=opener)
         except Exception as e:                           # a gap in the service, a dead tile, no network
             return e
-    res = list(pool.map(fetch, jobs)) if pool is not None and len(jobs) > 1 else [fetch(im) for im in jobs]
+
+    def ask(todo):
+        return list(pool.map(fetch, todo)) if pool is not None and len(todo) > 1 else [fetch(im) for im in todo]
+    res = ask(jobs)
     by_host = {}
-    for im, v in zip(jobs, res):
-        by_host.setdefault(_host(im["src"]), []).append(v)
-    for h, got in by_host.items():
-        bad = [v for v in got if isinstance(v, Exception)]
-        if len(bad) < len(got):                         # the host answered
-            strikes[h] = 0
-            if dead.pop(h, None) is not None:
-                log("the image service {} answers again".format(h))
+    for j, im in enumerate(jobs):
+        by_host.setdefault(_host(im["src"]), []).append(j)
+    for h, js in by_host.items():
+        if not all(isinstance(res[j], Exception) for j in js):
+            answered(h)
             continue
-        strikes[h] = strikes.get(h, 0) + len(bad)
+        again = ask([jobs[j] for j in js])              # nothing came back from this host: once more
+        for j, v in zip(js, again):
+            res[j] = v
+        bad = [res[j] for j in js if isinstance(res[j], Exception)]
+        if len(bad) < len(js):
+            answered(h)
+            continue
+        strikes[h] = strikes.get(h, 0) + 2 * len(js)
         if strikes[h] >= give_up:
-            if h not in dead:
-                log("warning: the image service {} did not answer {} time(s) in a row ({}): not asked again "
-                    "{} - the fills after this one have no water history from it".format(
-                        h, strikes[h], bad[-1],
-                        "this run" if retry_s is None else "for {:g} minute(s)".format(retry_s / 60.0)))
-            dead[h] = time.monotonic()
+            stop(h, strikes[h], bad[-1])
+    for im, v in zip(jobs, res):
+        src = str(im["src"])
+        if _host(src) in dead:                          # said for the host: not again year by year
+            continue
+        if not isinstance(v, Exception):
+            answered(src)
+            continue
+        strikes[src] = strikes.get(src, 0) + 1
+        if strikes[src] >= give_up:
+            stop(src, strikes[src], v)
     return {k: res[slot[(im["year"], str(im["src"]))]] for k, im in enumerate(imgs)
-            if is_service(im["src"]) and (im["year"], str(im["src"])) in slot}
+            if (im["year"], str(im["src"])) in slot}
+
+
+def _forget_tiles(vrt):
+    """Remove the downloaded image tiles a VRT is made of. A service can answer with an image
+    that holds no data (the ND GIS Hub did under load, 2026-11): kept, that blank tile would be
+    read as 'no reading' on every later run, so it is asked for again instead."""
+    try:
+        ds = gdal.Open(str(vrt))
+        files = (ds.GetFileList() or [])[1:] if ds is not None else []
+        ds = None
+        for path in files:
+            os.remove(path)
+    except (OSError, RuntimeError):
+        pass
 
 
 class _PolyLayer:
@@ -2332,7 +2374,8 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
     and the LiDAR counts, written on the rows in place. run_evidence reads it for every fill;
     run_review_batch for the picked cards (cards=True). The image years of one fill that come
     from a service are asked for together (`threads` at a time), each request waits `timeout`
-    seconds, and a host that stops answering is left alone (_fetch_years).
+    seconds, and a host or an image year that stops answering is left alone (_fetch_years). A
+    service image with no data over the pool is not kept as a tile (_forget_tiles).
 
     cards=True is the same reading, shown for a reviewer:
       * only CARD_FIELDS are written, with water_years ('6 of 10': years with water of the image
@@ -2419,6 +2462,10 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                         seen[yr] = bool(w)
                     else:
                         seen.setdefault(yr, None)
+                    if w is None and k in got:              # a blank answer is not kept as a tile
+                        _forget_tiles(got[k])
+                        log("{} {}: the image holds no data over the pool (asked for again on the next "
+                            "run)".format(r.get("find_id"), yr))
                     if "red" in im and "blue" in im:
                         v = ev.bare_share(b[im["red"]], b[im["green"]], b[im["blue"]], b[im["nir"]],
                                           ev.disk(m.shape, gt, cx, cy, rad + 20.0))
@@ -2428,9 +2475,12 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                 new.update({"img_years": h["years"], "wet_years": h["wet_years"],
                             "wet_share": None if not h["years"] else round(h["wet_share"], 3),
                             "first_wet": h["first_wet"], "wet_list": h["wet_list"]})
+                listed = len({im["year"] for im in imgs})
                 if cards and not h["years"]:
                     new["wet_years"] = None                 # no year was seen: not '0 years with water'
                     notes.append("no image year could be read")
+                elif h["years"] < listed:
+                    notes.append("{} of {} image years could not be read".format(listed - h["years"], listed))
             elif not imgs and not has_water:
                 notes.append("no imagery given")
             if nwi and not nwi_err:
@@ -2557,7 +2607,8 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
     (and a CSV). When the fills carry a score, each also gets review_order (1 = look at this
     first; core/evidence.py review_order: score in bands 0.1 wide, then what is below, then the
     score) and the CSV is written in that order; the layer keeps the fills' own order.
-    An image host that stops answering is left alone for 10 minutes, with one log line.
+    An image host or image year that stops answering is left alone for 10 minutes, with one
+    log line.
     Returns {'rows', 'gpkg', 'csv', 'counts'}."""
     progress = progress or _noop
     cancelled = cancelled or _noop
