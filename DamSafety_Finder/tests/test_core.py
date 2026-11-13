@@ -615,6 +615,25 @@ class Score(unittest.TestCase):
         with self.assertRaises(ValueError):
             sc.train(rows, learner="forest")
 
+    def test_the_shipped_models_load_and_rank(self):
+        """The default model brand.py names is the 0.5 trees kind, and every model in models/
+        loads and ranks dams above the rest. A build that ships no model is skipped."""
+        import re
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        mdir = os.path.join(here, "models")
+        if not os.path.isdir(mdir):
+            self.skipTest("this build ships no score model")
+        with open(os.path.join(here, "brand.py"), encoding="utf-8") as fh:
+            dm = re.search(r'^DEFAULT_MODEL = "([^"]+)"', fh.read(), re.M).group(1)
+        self.assertTrue(os.path.exists(os.path.join(here, dm)), dm)
+        self.assertEqual(sc.load(os.path.join(here, dm)).get("learner"), "pu-gbm")
+        test = self.rows05(seed=9)
+        y = sc.labels(test)
+        for f in sorted(os.listdir(mdir)):
+            s = sc.score(sc.load(os.path.join(mdir, f)), test)
+            self.assertTrue(np.all(np.isfinite(s)) and s.min() >= 0.0 and s.max() <= 1.0, f)
+            self.assertGreater(sc.ranked_auc(s, y), 0.9, f)
+
     def test_trees_with_few_listed_dams_still_split(self):
         rows = self.rows05(n=600)
         few, seen = [], 0

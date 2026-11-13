@@ -42,7 +42,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.4.4"
+VERSION = "0.5.0"
 
 
 # ------------------------------------------------------------------------------------- GDAL --

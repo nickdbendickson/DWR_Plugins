@@ -83,26 +83,33 @@ rail mask widened to an embankment's base and not one of the fills already found
 pads, drain spoil banks, shelterbelt snow berms and natural ridges pass too (in the Absaraka box
 before the straightness and rail-base tests: 43 ridges, many rail beds and meander spurs).
 
-**Score** (`MODEL`; `core/score.py`). A logistic regression of the fills on a dam list against the
-other fills (height, crest height, net head, storage, pool area, length, flat pool, on a road, open
-pool, spillway beside, length of the raised fill): a ranking of the new fills by how much they look like listed dams, not a
-probability. DamSafety Finder ships `models/nd_fill_score_statewide_2026-11.json` (the default),
-learned 2026-11-12 on 66 USGS 1 m tiles in 7 ND regions (Red River Valley, drift prairie north and
-south, Coteau north, central south, northwest, southwest): 4,470 fills, 615 listed on a dam layer
-within 300 ft (fills listed 300-1000 ft away were left out as unclear). Cross-validated AUC 0.82;
-each region held out and scored by a model learned on the other six: Red River 0.83, drift north
-0.71, drift south 0.83, Coteau north 0.79, central south 0.85, northwest 0.81, southwest 0.81 (the
-first, southwest-only model held out the same way: 0.80, 0.69, 0.79, 0.68, 0.83, 0.80, 0.84).
-Relearned for 0.3.0 with the raised-fill length on the same tiles (held out: Red River 0.84,
-drift north 0.71, drift south 0.83, Coteau north 0.79, central south 0.85, northwest 0.82,
-southwest 0.81) plus Wells County, with the 12 dams a reviewer confirmed from the 2018 aerial
-counted as dams. Checked on those Wells marks before they were added: the long-fill kind is what
-helps (5 of the 10 top-ranked dam / dry fills are real dams, 9 of the top 20, AUC 0.71, against 4,
-5 and 0.64 with long fills left in); the length input itself adds little to the score. Most
-not-listed fills are still not dams: review them.
-Road fills not listed average 0.02, not-listed dams 0.20; 94 of 3,855 not-listed fills score 0.5
-or more, all of them dams. Relearn it for your area with the score tool from runs over areas with many listed dams; the
-cross-validated AUC it reports says how well it ranks dams it has not seen.
+**Score** (`MODEL`; `core/score.py`). A ranking of the new fills by how much they look like listed
+dams, not a probability. DamSafety Finder ships two models:
+
+- `models/nd_fill_score_trees_2026-11.json`, **the default since 0.5.0**. It is the **0.5 trees**
+  kind (see Scores below), learned 2026-11-13 on 66 USGS 1 m tiles in 7 ND regions (Red River
+  Valley, drift prairie north and south, Coteau north, central south, northwest, southwest) with
+  the 0.5 engine. That is 7,612 fills, 678 of them within 300 ft of an Intact dam on the ND dam
+  list. Left out: fills listed 300-1000 ft away, and 64 fills on listed dams that the list calls
+  breached, removed, not built, submerged or inconclusive. No reviewer marks are in it.
+  - **Each region held out** and scored by a model learned on the other six (AUC against listed
+    dams): Red River 0.87, drift north 0.87, drift south 0.85, Coteau north 0.89, central south
+    0.93, northwest 0.91, southwest 0.91. The 0.4 score's 11 measurements, learned on the same
+    fills, give 0.82, 0.75, 0.78, 0.69, 0.87, 0.82 and 0.83.
+  - **On a reviewer's aerial marks** (245 cards in Wells, McLean and Billings counties, 31 dams,
+    none used in learning), it ranks the dams with AUC 0.89. The 0.4 model, on the 0.4 candidates
+    that were reviewed, gave 0.63: a difference of +0.26 (95 % interval +0.16 to +0.36). Leaving
+    out the 21 cards inside a training tile gives 0.87 against 0.62.
+  - **Top 30 cards of each county:** 25 dams with this model against 18 with the 0.4 model (paired
+    bootstrap +1 to +11). Wells, the flat drift prairie where most ND stock dams are, gains too:
+    AUC 0.85 against 0.73.
+- `models/nd_fill_score_statewide_2026-11.json`, the 0.4 default. It is a logistic score on 11
+  measurements, learned on 66 tiles plus Wells County with 12 marked dams. It still scores.
+
+The reviewed cards were picked by the 0.4 model (its top 60 and 30 at random in each county), so
+these figures compare rankings within that set. Most not-listed fills are still not dams: review
+them. Relearn the score for your area with the score tool, from runs over areas with many listed
+dams. The cross-validated AUC it reports says how well it ranks dams it has not seen.
 
 Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
 bounded memory. The elevation unit is what the raster records (its band unit or a vertical CRS;
