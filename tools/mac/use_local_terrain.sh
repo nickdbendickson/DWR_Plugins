@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# use_local_terrain.sh 1.0 - run absaraka, nickreview and the 44-dam batches on a local
+# use_local_terrain.sh 1.1 - run absaraka, nickreview and the 44-dam batches on a local
 # terrain VRT (an external SSD) instead of downloading or copying 3DEP tiles.
 #
 #   bash use_local_terrain.sh check                 # check the VRT and print what each run would do
 #   bash use_local_terrain.sh absaraka              # DWR-2801 on the local terrain
+#   bash use_local_terrain.sh absaraka-kit          # DWR-2801 on the KIT composite, 1 m tiles read
+#                                                   # from the SSD (keeps the 5 m underlay and the
+#                                                   # box run's grid; saves the 9.8 GB tile download)
 #   bash use_local_terrain.sh nickreview            # every nickreview dam
 #   bash use_local_terrain.sh batch44-lisflood      # the 44 dams, ND profile, LISFLOOD-FP
 #   bash use_local_terrain.sh batch44-anuga         # the 44 dams, DamSafety profile, ANUGA + culverts
@@ -13,6 +16,9 @@
 #   --batch44 DIR     the batch-44-dams folder [$BATCH44_DIR, else searched next to this script and in ~]
 #   --dry-run         print the command and the checks, run nothing
 #   --no-redo         nickreview/absaraka: do NOT add --redo (see "record" below; rarely right)
+#   --composite PATH  absaraka-kit: the kit composite VRT to redirect
+#                     [default ~/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/
+#                      DWR-2801_composite_1m_full_native_v2.vrt, written by --stages record]
 #   --yes             skip the "press return" pause before a multi-hour run
 # Anything after the command is passed through, e.g.
 #   bash use_local_terrain.sh batch44-lisflood --only DWR-2801 --parallel 1
@@ -33,7 +39,11 @@
 #  2. ABSARAKA LOSES THE COMPOSITE. The kit DEM for DWR-2801 is a composite: native 1 m over the
 #     dam with a 5 m DEM underneath outside the 1 m tiles. A statewide 1 m VRT has
 #     no 5 m underlay, so anywhere the 1 m coverage stops, the model gets nodata instead of
-#     coarse ground.
+#     coarse ground. Use "absaraka-kit" when you want the box run's terrain: it keeps the kit
+#     composite exactly as it is - underlay, band order, grid - and only rewrites the paths of
+#     the 1 m tiles it already references to the copies on the SSD, so nothing is re-downloaded
+#     and nothing about the model changes. It refuses if the SSD does not hold those tiles, and
+#     warns if an SSD copy has a different size, grid or CRS from the tile it replaces.
 #
 #  3. THE OTHER NICKREVIEW DAMS CHANGE RESOLUTION. DEFAULT_DEM is "3DEP 1 m averaged to 5 m"
 #     (data_files_nickreview.tsv holds 874 *_avg5m.tif rows against 36 native 1 m tiles, all of
@@ -58,6 +68,7 @@ set -uo pipefail
 
 VRT="${ND_LOCAL_TERRAIN:-/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt}"
 B44="${BATCH44_DIR:-}"
+COMPOSITE="${ND_KIT_COMPOSITE:-$HOME/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt}"
 DRY=0; REDO=1; YES=0
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -70,10 +81,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --vrt) VRT="${2:-}"; shift 2 ;;
     --batch44) B44="${2:-}"; shift 2 ;;
+    --composite) COMPOSITE="${2:-}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --no-redo) REDO=0; shift ;;
     --yes|-y) YES=1; shift ;;
-    -h|--help) sed -n '2,53p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,66p' "$0"; exit 0 ;;
     --) shift; break ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) break ;;
@@ -201,6 +213,194 @@ PY
   [ $rc -eq 0 ] || die "the terrain VRT did not pass its checks (above). Nothing was started."
 }
 
+# --------------------------------------------------------------------------- kit composite -> SSD
+# Writes a copy of the kit composite VRT whose 1 m tile paths point at the SSD, and echoes the
+# new file's path. Everything else in the VRT - band order, the 5 m underlay, nodata, the CRS -
+# is left exactly as it is, so the model is the box run's model and only the bytes come from
+# somewhere else. The report goes to stderr so the path alone can be captured.
+make_ssd_composite() {
+  local py; py="$(find_py)" || die "absaraka-kit needs a python with GDAL (none found).
+      It compares each SSD tile with the tile it replaces, which is the point of the command."
+  [ -f "$COMPOSITE" ] || die "no kit composite at:
+      $COMPOSITE
+      Write it first (it runs no model):  bash run_nickreview.sh --dam DWR-2801 --stages record
+      or pass another one with --composite PATH."
+  "$py" - "$COMPOSITE" "$VRT" <<'PY'
+import os, sys
+import xml.etree.ElementTree as ET
+from osgeo import gdal, osr
+gdal.UseExceptions()
+
+comp, ssd = sys.argv[1], sys.argv[2]
+G, Y, R = "\033[1;32mOK\033[0m", "\033[1;33m!\033[0m ", "\033[1;31mX\033[0m "
+def ok(m):   sys.stderr.write("  %s  %s\n" % (G, m))
+def warn(m): sys.stderr.write("  %s  %s\n" % (Y, m))
+def die(m):  sys.stderr.write("  %s  %s\n" % (R, m)); sys.exit(1)
+SOURCES = ("ComplexSource", "SimpleSource", "AveragedSource")
+
+
+def sources(path):
+    """(tree, [(source element, filename element, absolute path)]) for a VRT."""
+    tree = ET.parse(path)
+    base = os.path.dirname(os.path.abspath(path))
+    out = []
+    for src in tree.getroot().iter():
+        if src.tag not in SOURCES:
+            continue
+        fn = src.find("SourceFilename")
+        raw = (fn.text or "").strip() if fn is not None else ""
+        if not raw:
+            continue
+        out.append((src, fn, raw if os.path.isabs(raw) else os.path.normpath(os.path.join(base, raw))))
+    return tree, out
+
+
+def rect(src, name):
+    e = src.find(name)
+    if e is None:
+        return None
+    try:
+        return {k: float(e.get(k)) for k in ("xOff", "yOff", "xSize", "ySize")}
+    except (TypeError, ValueError):
+        return None
+
+
+def expected(src, gt):
+    """What the composite says this source is: (px, py, cell, originX, originY).
+
+    Taken from the VRT's own SrcRect/DstRect, so an SSD tile can be checked even when the
+    tile it replaces was never downloaded to this Mac - which is the whole point of the
+    command.
+    """
+    sr, dr = rect(src, "SrcRect"), rect(src, "DstRect")
+    if not sr or not dr or not sr["xSize"] or not sr["ySize"]:
+        return None
+    return (int(round(sr["xSize"])), int(round(sr["ySize"])),
+            gt[1] * dr["xSize"] / sr["xSize"],
+            gt[0] + dr["xOff"] * gt[1],
+            gt[3] + dr["yOff"] * gt[5])
+
+
+def same_crs(a, b):
+    if not a or not b:
+        return True                      # nothing to compare: do not invent a mismatch
+    x, y = osr.SpatialReference(wkt=a), osr.SpatialReference(wkt=b)
+    return bool(x.IsSame(y))
+
+
+def differs(path, exp, vrt_wkt):
+    """Why this file is not what the composite expects, or '' if it is."""
+    try:
+        d = gdal.Open(path)
+    except Exception as e:
+        return "will not open (%s)" % e
+    try:
+        if exp:
+            px, py, cell, ox, oy = exp
+            g = d.GetGeoTransform()
+            if (d.RasterXSize, d.RasterYSize) != (px, py):
+                return "%d x %d px, the composite expects %d x %d" % (d.RasterXSize, d.RasterYSize, px, py)
+            if abs(abs(g[1]) - abs(cell)) > 1e-6 * max(1.0, abs(cell)):
+                return "%.4f m cells, the composite expects %.4f" % (abs(g[1]), abs(cell))
+            if abs(g[0] - ox) > 1e-3 or abs(g[3] - oy) > 1e-3:
+                return "origin %.3f,%.3f, the composite expects %.3f,%.3f" % (g[0], g[3], ox, oy)
+        if not same_crs(d.GetProjection(), vrt_wkt):
+            return "a different CRS from the composite"
+        return ""
+    finally:
+        d = None
+
+
+try:
+    tree, comp_src = sources(comp)
+except ET.ParseError as e:
+    die("the kit composite is not readable as a VRT (%s)" % e)
+if not comp_src:
+    die("the kit composite references no source files")
+try:
+    _, ssd_src = sources(ssd)
+except ET.ParseError as e:
+    die("the terrain VRT is not readable as a VRT (%s)" % e)
+
+try:
+    cd = gdal.Open(comp)
+    gt, comp_wkt = cd.GetGeoTransform(), cd.GetProjection()
+    cd = None
+except Exception as e:
+    die("the kit composite does not open in GDAL (%s)" % e)
+
+have = {}
+for _, _, path in ssd_src:
+    have.setdefault(os.path.basename(path).lower(), path)
+ok("terrain VRT lists %d tiles; the composite has %d sources" % (len(have), len(comp_src)))
+
+moved, left, refused, unchecked, final = [], [], [], 0, []
+for src, fn, orig in comp_src:
+    final.append(orig)                                     # the file this source will read
+    new = have.get(os.path.basename(orig).lower())
+    if new is None:
+        left.append(orig)                                  # the 5 m underlay, or not on the drive
+        continue
+    if not os.path.exists(new):
+        refused.append("%s: the terrain VRT lists it but it is not on the drive" % os.path.basename(orig))
+        continue
+    exp = expected(src, gt)
+    if exp is None:
+        unchecked += 1
+    why = differs(new, exp, comp_wkt)
+    if why:
+        refused.append("%s: %s" % (os.path.basename(orig), why))
+        continue
+    fn.text = new
+    fn.set("relativeToVRT", "0")
+    final[-1] = new
+    moved.append(new)
+
+# A VRT opens happily with sources that are not there, and reads them back as nodata. That is
+# a hole in the terrain that nothing would report, so every source has to resolve to a file
+# that exists before this is allowed to be written.
+gone = [os.path.basename(path) for path in final if not os.path.exists(path)]
+if gone:
+    die("%d source(s) of the composite are on neither the drive nor this Mac:\n        %s\n"
+        "      A VRT reads a missing source back as nodata, so this would put a silent hole in\n"
+        "      the terrain. Nothing was written. Download those tiles, or use 'absaraka --vrt'\n"
+        "      and accept the statewide VRT's own coverage."
+        % (len(gone), "\n        ".join(gone[:8])))
+if not moved:
+    die("not one source could be redirected. Either that drive does not hold the tiles this\n"
+        "      composite is built from, or none of them matched (reasons above). Nothing was written.")
+ok("redirected %d of %d sources to the drive" % (len(moved), len(comp_src)))
+if left:
+    ok("left pointing where they are: %d (the 5 m underlay, and anything not on the drive)" % len(left))
+    for path in left[:4]:
+        sys.stderr.write("        %s\n" % path)
+if unchecked:
+    warn("%d redirected source(s) had no SrcRect/DstRect to check against; only the CRS was "
+         "compared" % unchecked)
+if refused:
+    warn("%d source(s) were NOT redirected and still point at their original path:" % len(refused))
+    for why in refused[:6]:
+        sys.stderr.write("        %s\n" % why)
+    warn("a warped or resampled copy is not the same terrain, so it is left alone. The run is "
+         "still the box run's terrain; those tiles are just read from where they are.")
+
+out = os.path.join(os.path.dirname(os.path.abspath(comp)),
+                   os.path.splitext(os.path.basename(comp))[0] + "_ssd.vrt")
+tree.write(out, encoding="utf-8", xml_declaration=False)
+try:
+    d = gdal.Open(out)
+    if (d.RasterXSize, d.RasterYSize) != (int(gdal.Open(comp).RasterXSize), int(gdal.Open(comp).RasterYSize)):
+        die("the rewritten VRT is not the same size as the composite; not using it")
+    ok("wrote %s (%d x %d px, same grid as the composite)" % (os.path.basename(out), d.RasterXSize, d.RasterYSize))
+    d = None
+except SystemExit:
+    raise
+except Exception as ex:
+    die("the rewritten VRT does not open: %s" % ex)
+print(out)
+PY
+}
+
 # --------------------------------------------------------------------------- locate batch44
 find_b44() {
   local c
@@ -234,6 +434,14 @@ consequences() {
       echo "    coverage, and the run is NOT comparable to the Grok box run cell for cell" ;;
   esac
   case "$CMD" in
+    absaraka-kit|check)
+      echo "  * absaraka-kit: nothing about the model changes. The DEM is still the kit"
+      echo "    composite - same bands, same 5 m underlay, same grid - and only the paths of"
+      echo "    its 1 m tiles are rewritten to the drive, so this IS the box run's terrain"
+      echo "    and no tiles are downloaded. A <name>_ssd.vrt is written beside the composite"
+      echo "    (also on --dry-run); the original is not touched" ;;
+  esac
+  case "$CMD" in
     nickreview|check)
       echo "  * nickreview: the non-kit dams move from a 5 m averaged DEM to true 1 m," \
            "slower and different" ;;
@@ -260,10 +468,13 @@ case "$CMD" in
     check_vrt
     say "What each command would run"
     echo "  absaraka          run_nickreview.sh --dam DWR-2801 --dem <vrt>$RDO"
+    echo "  absaraka-kit      run_nickreview.sh --dam DWR-2801 --dem <kit composite, tiles on the drive>$RDO"
     echo "  nickreview        run_nickreview.sh --dem <vrt>$RDO"
     echo "  batch44-lisflood  run_lisflood_44.py --dem <vrt>"
     echo "  batch44-anuga     run_anuga_culverts_44.py --dem <vrt>"
     if b="$(find_b44)"; then ok "batch-44 folder: $b"; else warn "batch-44 folder not found; pass --batch44 DIR"; fi
+    if [ -f "$COMPOSITE" ]; then ok "kit composite: $COMPOSITE"
+    else warn "no kit composite at $COMPOSITE (absaraka-kit needs it; run --stages record, or pass --composite)"; fi
     [ -f "$HERE/run_nickreview.sh" ] && ok "nickreview: $HERE/run_nickreview.sh" \
       || warn "run_nickreview.sh is not next to this script"
     consequences
@@ -278,6 +489,24 @@ case "$CMD" in
     CMDLINE=(bash "$NR" --dem "$VRT")
     [ "$REDO" -eq 1 ] && CMDLINE+=(--redo)
     [ "$CMD" = absaraka ] && CMDLINE+=(--dam DWR-2801)
+    CMDLINE+=("$@")
+    consequences
+    say "Starting"
+    run_it "${CMDLINE[@]}"
+    ;;
+
+  absaraka-kit)
+    check_vrt
+    NR="$HERE/run_nickreview.sh"
+    [ -f "$NR" ] || die "run_nickreview.sh is not next to this script ($HERE)"
+    grep -q -- '--dem)' "$NR" || grep -q -- '|--dem)' "$NR" \
+      || die "this run_nickreview.sh has no --dem passthrough: update tools/mac from the DWR repo"
+    say "Kit composite"
+    echo "  $COMPOSITE"
+    SSDVRT="$(make_ssd_composite)" \
+      || die "the kit composite was not redirected (above). Nothing was started."
+    CMDLINE=(bash "$NR" --dem "$SSDVRT" --dam DWR-2801)
+    [ "$REDO" -eq 1 ] && CMDLINE+=(--redo)
     CMDLINE+=("$@")
     consequences
     say "Starting"
@@ -306,5 +535,5 @@ case "$CMD" in
     run_it python3 "$S" --dem "$VRT" "$@"
     ;;
 
-  *) die "unknown command '$CMD' (check, absaraka, nickreview, batch44-lisflood, batch44-anuga)" ;;
+  *) die "unknown command '$CMD' (check, absaraka, absaraka-kit, nickreview, batch44-lisflood, batch44-anuga)" ;;
 esac
