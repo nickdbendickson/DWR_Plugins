@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# vor.py v1.3.1 — local research assistant for dam-safety, dam-design and
+# vor.py v1.3.2 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -47,6 +47,13 @@
 #   OLLAMA_URL           http://127.0.0.1:11434
 #
 # 1.0.1: reads library.csv in every sub-folder of the library (fetch_asdso.py writes one per folder).
+# 1.3.2: `vor ocr`, `vor ingest` and `vor doctor` no longer send you round in a circle. `vor ocr`
+#   said "No scanned PDFs to OCR" when every scanned document was under its default share
+#   (30 % of the pages), and the other two answered that with "Run: vor ocr"; now all three
+#   say how many documents are under it and how to take them, and `vor ocr --list` shows them
+#   without running anything. The doctor sent you to `vor ingest` for a file that is an exact
+#   copy of an indexed one, or too large to index, both of which ingest skips. It gives the
+#   whole path of a document whose file is gone, and `vor list --missing` lists them.
 # 1.3.1: `vor ocr` followed by `vor ingest` no longer puts the scanned original back in the
 #   index beside its searchable copy. library/_ocr/ocr_sources.json records which original each
 #   copy stands in for. A stopped `vor ocr` keeps what it finished and loses nothing, a document
@@ -68,7 +75,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime, timedelta
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 
 def _home():
@@ -126,6 +133,8 @@ CHUNK_OVERLAP = 200
 MIN_PAGE_CHARS = 40
 EMBED_BATCH = 16
 MAX_FILE_BYTES = 300 * 1024 * 1024
+OCR_MIN_FRACTION = 0.3      # `vor ocr` takes a PDF when at least this share of its pages is scanned
+DOCTOR_HASH_LIMIT = 200     # the doctor reads this many unindexed files at most to look for copies
 TEXT_EXT = (".md", ".txt")
 DOC_EXT = (".pdf",) + TEXT_EXT
 SKIP_DIRS = {"__MACOSX", ".git", "_ocr_tmp", "node_modules"}
@@ -633,6 +642,66 @@ def ocr_dir():
     return os.path.join(LIBRARY, "_ocr")
 
 
+def scan_split(rows, min_fraction=OCR_MIN_FRACTION):
+    """The documents with pages that have no text layer, sorted by what `vor ocr` does with
+    them. rows are (id, path, pages, notext); each list holds (id, path, pages, scanned pages).
+
+    take   a PDF with at least min_fraction of its pages scanned: `vor ocr` does it
+    below  a PDF under that share: left alone unless --min-fraction is lowered
+    gone   its file is no longer there, so nothing can be run on it
+    other  not a PDF (ocrmypdf reads only PDFs)
+
+    A copy OCR already made is in none of them: a page OCR could make nothing of stays that
+    way. One function for `vor ocr`, `vor ingest` and the doctor, because before 1.3.2 they
+    disagreed: with every scanned document under the default share, `vor ocr` said there was
+    nothing to OCR and the other two said to run it."""
+    take, below, gone, other = [], [], [], []
+    for i, p, n, nt in rows:
+        k = len([x for x in (nt or "").split(",") if x])
+        if not k or in_ocr_dir(p):
+            continue
+        row = (i, p, n or 0, k)
+        if not os.path.exists(p):
+            gone.append(row)
+        elif not p.lower().endswith(".pdf"):
+            other.append(row)
+        elif k >= max(1, (n or 1) * min_fraction):
+            take.append(row)
+        else:
+            below.append(row)
+    return take, below, gone, other
+
+
+def _share(fraction):
+    return "%g %%" % (fraction * 100)
+
+
+def ocr_advice(take, below, gone, other, installed=True):
+    """What to run for the documents scan_split sorted, at the default share. One sentence."""
+    if not (take or below):
+        return ("Nothing to run: %s." % " and ".join(
+            w for w, on in (("their files are gone", gone), ("they are not PDFs", other)) if on))
+    first = "" if installed else "OCR is not installed: re-run the installer with --ocr, then: "
+    if take and below:
+        return first + ("Run: vor ocr (takes the %d with at least %s of their pages scanned), or "
+                        "vor ocr --min-fraction 0 for all %d. vor ocr --list shows them first."
+                        % (len(take), _share(OCR_MIN_FRACTION), len(take) + len(below)))
+    if take:
+        return first + "Run: vor ocr"
+    return first + ("Each has under %s of its pages scanned, which a plain `vor ocr` leaves alone. "
+                    "See them: vor ocr --min-fraction 0 --list. Take them: vor ocr --min-fraction 0"
+                    % _share(OCR_MIN_FRACTION))
+
+
+def _show_path(path):
+    """A path as the doctor prints it: inside the library, relative to it; else with ~."""
+    p, lib = os.path.abspath(path), os.path.abspath(LIBRARY) + os.sep
+    if p.startswith(lib):
+        return p[len(lib):]
+    home = os.path.expanduser("~") + os.sep
+    return "~" + os.sep + p[len(home):] if p.startswith(home) else p
+
+
 def in_ocr_dir(path):
     return os.path.abspath(path).startswith(os.path.abspath(ocr_dir()) + os.sep)
 
@@ -853,11 +922,11 @@ def cmd_ingest(a):
         % (time.time() - t0, added, notext, skipped, failed, nd, nc))
     if replaced:
         say("%d scanned original(s) left out: the searchable copy in library/_ocr is indexed instead." % replaced)
-    scanned = len([1 for (sp,) in db.execute("SELECT path FROM docs WHERE notext!='' AND notext IS NOT NULL")
-                   if not in_ocr_dir(sp)])
+    split = scan_split(db.execute("SELECT id, path, pages, notext FROM docs WHERE notext!='' AND notext IS NOT NULL"))
+    scanned = sum(len(x) for x in split)
     if scanned:
-        say("%d document(s) have pages with no text layer (scanned). See `vor list`, "
-            "then `vor ocr` to make them searchable." % scanned)
+        say("%d document(s) have pages with no text layer (scanned). %s"
+            % (scanned, ocr_advice(*split, installed=bool(ocr_exe()))))
     db.close()
 
 
@@ -1713,6 +1782,14 @@ def cmd_list(a):
     if not rows:
         say("No documents yet. Put PDFs in %s and run: vor ingest" % LIBRARY)
         return
+    missing = getattr(a, "missing", False)
+    if missing:
+        total = len(rows)
+        rows = [r for r in rows if not os.path.exists(r[5])]
+        if not rows:
+            db.close()
+            say("Every one of the %d indexed documents still has its file." % total)
+            return
     for i, t, y, pages, notext, path, src, nc in rows:
         nt = [x for x in (notext or "").split(",") if x]
         flag = ""
@@ -1721,6 +1798,12 @@ def cmd_list(a):
         say("%4d  %s%s  [%d p, %d passages]%s%s\n      %s" % (
             i, t[:90], " (%s)" % y if y else "", pages or 0, nc, flag,
             "  title from %s" % src if src in ("first-page", "file-name") else "", path))
+    if missing:
+        db.close()
+        say("\n%d of %d indexed documents no longer have a file at the path shown. They are still "
+            "answered from. Put the file back and run `vor ingest` (a moved file is found by its "
+            "content), or drop one with: vor remove ID" % (len(rows), total))
+        return
     say("\n%d documents. Embeddings: %s. Fix a citation: vor meta ID --title ... --year ..."
         % (len(rows), meta_get(db, "embed_model", "?")))
 
@@ -1814,20 +1897,46 @@ def ocr_exe():
 
 
 def cmd_ocr(a):
-    exe = ocr_exe()
-    if not exe:
-        die("ocrmypdf is not installed. Re-run the installer with --ocr (adds ocrmypdf + tesseract to the "
-            "ndvor env), then run this again.")
     db = connect()
     rows = db.execute("SELECT id, path, pages, notext FROM docs WHERE notext!='' AND notext IS NOT NULL").fetchall()
     db.close()
     # 1.3.1: never a copy that OCR already made; a page it could make nothing of stays that way
-    todo = [(i, p) for i, p, n, nt in rows if p.lower().endswith(".pdf") and os.path.exists(p)
-            and not in_ocr_dir(p)
-            and len([x for x in nt.split(",") if x]) >= max(1, (n or 1) * a.min_fraction)]
-    if not todo:
-        say("No scanned PDFs to OCR.")
+    take, below, gone, other = scan_split(rows, a.min_fraction)
+    share = _share(a.min_fraction)
+    pages = lambda docs: sum(d[3] for d in docs)
+    if getattr(a, "list", False):
+        for mark, docs in (("ocr ", take), ("skip", below)):
+            for i, p, n, k in sorted(docs, key=lambda d: -d[3] / float(d[2] or 1)):
+                say("  %s  %4d of %4d pages scanned (%3.0f %%)  %s"
+                    % (mark, k, n, 100.0 * k / (n or 1), _show_path(p)))
+        say("%d document(s), %d scanned page(s) would be OCRed at --min-fraction %g; %d document(s), "
+            "%d page(s) are under it and would be left. Nothing was run."
+            % (len(take), pages(take), a.min_fraction, len(below), pages(below)))
+        if gone:
+            say("%d more have no file any more (vor list --missing)." % len(gone))
         return
+    if not take:
+        # 1.3.2: this said "No scanned PDFs to OCR" whatever the reason, while the doctor and
+        # ingest counted the same documents and said "Run: vor ocr"
+        if below:
+            say("No PDF has at least %s of its pages scanned, so there is nothing to OCR at this setting. "
+                "%d document(s) have a smaller share (%d scanned page(s) in all), often blank pages and "
+                "full-page figures.\nSee them: vor ocr --min-fraction 0 --list\nTake them: vor ocr --min-fraction 0"
+                % (share, len(below), pages(below)))
+        elif gone:
+            say("%d document(s) with scanned pages no longer have a file, so there is nothing to OCR "
+                "(vor list --missing)." % len(gone))
+        else:
+            say("No scanned PDFs to OCR.")
+        return
+    exe = ocr_exe()
+    if not exe:
+        die("ocrmypdf is not installed. Re-run the installer with --ocr (adds ocrmypdf + tesseract to the "
+            "ndvor env), then run this again.")
+    if below:
+        say("%d more document(s) have under %s of their pages scanned and are left alone "
+            "(vor ocr --min-fraction 0 takes them too)." % (len(below), share))
+    todo = [(i, p) for i, p, _, _ in take]
     outdir, tmpdir = ocr_dir(), os.path.join(LIBRARY, "_ocr_tmp")
     os.makedirs(outdir, exist_ok=True)
     os.makedirs(tmpdir, exist_ok=True)
@@ -1949,7 +2058,7 @@ def library_checks():
         db = connect()
         try:
             used = meta_get(db, "embed_model")
-            rows = db.execute("SELECT path, notext, added FROM docs").fetchall()
+            rows = db.execute("SELECT path, notext, added, sha1, id, pages FROM docs").fetchall()
             fts = db.fts
         finally:
             db.close()
@@ -1976,16 +2085,45 @@ def library_checks():
     if rows:
         indexed = {os.path.normpath(r[0]) for r in rows}
         replaced = ocr_replaced_paths()        # a scanned original whose OCR copy is indexed instead
-        new = [f for f in on_disk if os.path.normpath(f) not in indexed and os.path.normpath(f) not in replaced]
+        unindexed = [f for f in on_disk if os.path.normpath(f) not in indexed and os.path.normpath(f) not in replaced]
+        # 1.3.2: a file ingest will never add is not "run: vor ingest". Ingest goes by content, so
+        # a second copy of an indexed file is skipped, and so is a file over the size limit.
+        by_hash = {r[3]: r[0] for r in rows}
+        new, copies, big = [], [], []
+        for f in unindexed:
+            try:
+                if os.path.getsize(f) > MAX_FILE_BYTES:
+                    big.append(f)
+                    continue
+                twin = by_hash.get(sha1_of(f)) if len(unindexed) <= DOCTOR_HASH_LIMIT else None
+            except OSError:
+                twin = None
+            if twin and os.path.exists(twin):
+                copies.append((f, twin))
+            else:
+                new.append(f)       # also a moved file: ingest finds it by content and re-points it
         if new:
             add("WATCH", "%d file(s) in the library are not in the index (first: %s). Run: vor ingest"
                 % (len(new), os.path.relpath(new[0], LIBRARY)))
+        if big:
+            add("WATCH", "%d file(s) are over %d MB, which Vor does not index (first: %s). Split the PDF "
+                "to have it read" % (len(big), MAX_FILE_BYTES >> 20, os.path.relpath(big[0], LIBRARY)))
+        if copies:
+            add("OK", "%d file(s) are exact copies of an indexed document, so ingest leaves them out "
+                "(first: %s is the same file as %s)"
+                % (len(copies), os.path.relpath(copies[0][0], LIBRARY), _show_path(copies[0][1])))
         gone = [r[0] for r in rows if not os.path.exists(r[0])]
         if gone:
+            lib = os.path.abspath(LIBRARY) + os.sep
+            outside = [g for g in gone if not os.path.abspath(g).startswith(lib)]
+            drop = ("To drop them: vor ingest --prune" if not outside else
+                    "%d of them %s indexed from outside the library, which `vor ingest --prune` does "
+                    "not touch: drop one with vor remove ID"
+                    % (len(outside), "was" if len(outside) == 1 else "were"))
             add("WATCH", "%d indexed document(s) no longer have a file (first: %s). They are still "
-                "answered from. To drop them: vor ingest --prune" % (len(gone), os.path.basename(gone[0])))
+                "answered from. List them: vor list --missing. %s" % (len(gone), _show_path(gone[0]), drop))
         changed = []
-        for path, _, added in rows:
+        for path, _, added in (r[:3] for r in rows):
             try:
                 when = datetime.fromisoformat((added or "")[:19])
                 if os.path.exists(path) and datetime.fromtimestamp(os.path.getmtime(path)) > when + timedelta(seconds=2):
@@ -1999,14 +2137,14 @@ def library_checks():
         scanned = [r for r in no_text if not in_ocr_dir(r[0])]
         if scanned:
             pages = sum(len(r[1].split(",")) for r in scanned)
+            split = scan_split([(r[4], r[0], r[5], r[1]) for r in scanned])
             add("WATCH", "%d document(s) have %d page(s) with no text layer: Vor cannot read those pages. %s"
-                % (len(scanned), pages, "Run: vor ocr" if ocr_exe() else
-                   "OCR is not installed: re-run the installer with --ocr, then vor ocr"))
+                % (len(scanned), pages, ocr_advice(*split, installed=bool(ocr_exe()))))
         after = [r for r in no_text if in_ocr_dir(r[0])]
         if after:
             add("OK", "%d page(s) in %d OCR copies still have no text (blank or unreadable pages; "
                       "there is nothing more to run)" % (sum(len(r[1].split(",")) for r in after), len(after)))
-        if not (new or gone or changed):
+        if not (new or big or gone or changed):
             add("OK", "every file in the library is indexed, and none changed since")
     return out
 
@@ -2088,6 +2226,8 @@ def main():
     s.add_argument("paths", nargs="+")
     s.set_defaults(fn=cmd_add)
     s = sub.add_parser("list", help="documents in the library")
+    s.add_argument("--missing", action="store_true",
+                   help="only the indexed documents whose file is no longer where it was")
     s.set_defaults(fn=cmd_list)
     s = sub.add_parser("meta", help="show or fix a document's citation")
     s.add_argument("doc")
@@ -2120,8 +2260,11 @@ def main():
     add_scope_args(s)
     s.set_defaults(fn=cmd_chat)
     s = sub.add_parser("ocr", help="OCR scanned PDFs (needs ocrmypdf) and re-index them")
-    s.add_argument("--min-fraction", type=float, default=0.3,
-                   help="OCR a PDF when at least this share of its pages has no text (default 0.3)")
+    s.add_argument("--min-fraction", type=float, default=OCR_MIN_FRACTION,
+                   help="OCR a PDF when at least this share of its pages has no text (default 0.3; "
+                        "0 = every PDF with a scanned page)")
+    s.add_argument("--list", action="store_true",
+                   help="show what would be OCRed at this --min-fraction, and what would be left; runs nothing")
     s.set_defaults(fn=cmd_ocr)
     s = sub.add_parser("remove", help="drop a document from the index")
     s.add_argument("doc")

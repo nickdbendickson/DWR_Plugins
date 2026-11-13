@@ -265,5 +265,93 @@ class OcrRunTest(Base):
                          ["blank.ocr.pdf"])
 
 
+
+class UnderTheDefaultShareTest(Base):
+    """What a real library showed on its first run with 1.3.1: `vor ocr` had done the 7
+    documents that were mostly scans, 99 more had a few scanned pages each, and the three
+    commands sent the reader round in a circle. `vor ocr`: "No scanned PDFs to OCR." The
+    doctor and ingest, counting the same 99: "Run: vor ocr"."""
+
+    def setUp(self):
+        Base.setUp(self)
+        # 1 page of 5 scanned = 20 %, under the 30 % that a plain `vor ocr` asks for
+        self.few = self.write("manuals/few.pdf", pdf(TEXT * 3, TEXT * 2, TEXT * 2, TEXT * 2, "SCAN"))
+        self.ingest()
+        del SAID[:]
+
+    def advice(self):
+        return [t for lvl, t in self.checks() if "no text layer" in t]
+
+    def test_ocr_says_why_it_did_nothing_and_what_takes_them(self):
+        self.ocr()
+        said = "\n".join(SAID)
+        self.assertNotIn("No scanned PDFs", said)
+        self.assertIn("No PDF has at least 30 % of its pages scanned", said)
+        self.assertIn("1 document(s) have a smaller share (1 scanned page(s) in all)", said)
+        self.assertIn("Take them: vor ocr --min-fraction 0", said)
+        self.assertFalse(os.path.isdir(os.path.join(self.lib, "_ocr")))
+
+    def test_the_doctor_does_not_send_you_back_to_a_plain_vor_ocr(self):
+        (line,) = self.advice()
+        self.assertIn("1 document(s) have 1 page(s) with no text layer", line)
+        self.assertNotIn("Run: vor ocr", line)
+        self.assertIn("under 30 % of its pages scanned, which a plain `vor ocr` leaves alone", line)
+        self.assertIn("Take them: vor ocr --min-fraction 0", line)
+
+    def test_ingest_closes_with_the_same_advice(self):
+        self.ingest()
+        (line,) = [m for m in SAID if "no text layer" in m]
+        self.assertNotIn("Run: vor ocr", line)
+        self.assertIn("vor ocr --min-fraction 0", line)
+
+    def test_following_the_advice_ends_the_circle(self):
+        self.vor.cmd_ocr(argparse.Namespace(min_fraction=0.0))
+        self.assertEqual(self.docs(), {os.path.join("_ocr", "few.ocr.pdf"): ""})
+        self.assertEqual(self.advice(), [])
+        del SAID[:]
+        self.ingest()
+        self.assertFalse([m for m in SAID if "no text layer" in m], SAID)
+
+    def test_some_over_and_some_under(self):
+        self.write("reports/scan.pdf", pdf(TEXT * 3, "SCAN", "SCAN"))
+        self.ingest()
+        (line,) = self.advice()
+        self.assertIn("Run: vor ocr (takes the 1 with at least 30 % of their pages scanned), or "
+                      "vor ocr --min-fraction 0 for all 2", line)
+        del SAID[:]
+        self.ocr()
+        self.assertTrue(any("1 more document(s) have under 30 % of their pages scanned and are left alone"
+                            in m for m in SAID), SAID)
+        self.assertEqual(sorted(self.docs()), [os.path.join("_ocr", "scan.ocr.pdf"),
+                                               os.path.join("manuals", "few.pdf")])
+
+    def test_list_shows_both_and_runs_nothing(self):
+        self.write("reports/scan.pdf", pdf(TEXT * 3, "SCAN", "SCAN"))
+        self.ingest()
+        before = self.docs()
+        self.vor.ocr_exe = lambda: None            # --list must not need ocrmypdf
+        del SAID[:]
+        self.vor.cmd_ocr(argparse.Namespace(min_fraction=0.3, list=True))
+        said = "\n".join(SAID)
+        self.assertRegex(said, r"ocr\s+2 of\s+3 pages scanned \( 67 %\)\s+reports/scan\.pdf")
+        self.assertRegex(said, r"skip\s+1 of\s+5 pages scanned \( 20 %\)\s+manuals/few\.pdf")
+        self.assertIn("1 document(s), 2 scanned page(s) would be OCRed at --min-fraction 0.3; "
+                      "1 document(s), 1 page(s) are under it and would be left. Nothing was run.", said)
+        self.assertEqual(self.docs(), before)
+        self.assertFalse(os.path.isdir(os.path.join(self.lib, "_ocr")))
+
+    def test_a_scanned_document_whose_file_is_gone(self):
+        os.remove(self.few)
+        self.ocr()
+        self.assertTrue(any("1 document(s) with scanned pages no longer have a file" in m for m in SAID), SAID)
+        (line,) = self.advice()
+        self.assertIn("Nothing to run: their files are gone.", line)
+
+    def test_without_ocrmypdf_the_advice_says_to_install_it_first(self):
+        self.vor.ocr_exe = lambda: None
+        (line,) = self.advice()
+        self.assertIn("OCR is not installed: re-run the installer with --ocr, then: Each has under", line)
+
+
 if __name__ == "__main__":
     unittest.main()

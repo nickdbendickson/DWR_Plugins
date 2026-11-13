@@ -182,6 +182,76 @@ class LevelWithItsFolderTest(Base):
         self.assertEqual(len(w), 1)
         self.assertIn("which is not there now", w[0])
 
+    # -------------------------------------------------- v2.8: against what was indexed, not the clock
+
+    def redate(self, root, when):
+        for dp, _, fns in os.walk(root):
+            for fn in fns:
+                os.utime(os.path.join(dp, fn), (when, when))
+
+    def test_files_dated_in_the_future_have_not_changed(self):
+        """The first real install. The pack came out of a zip made on a machine set to UTC, and
+        a zip stores wall-clock time with no zone, so six time zones west every page was dated
+        six hours ahead. The doctor said all 100 had changed, minutes after indexing them."""
+        root = self.folder("knowledge", {"KNOWN.md": "# Known\n\nREFINE_NEAR is off by default.\n",
+                                         "sub/CASES.md": "# Cases\n\nA DEM in metres overrides WORK_CRS.\n"})
+        self.redate(root, time.time() + 6 * 3600)
+        self.index("heim_knowledge", root)
+        c = self.checks()
+        self.assertEqual(self.of(c, "WATCH"), [], c)
+        self.assertTrue(any("level with its folder" in t for t in self.of(c, "OK")), c)
+
+    def test_a_file_given_a_new_date_and_nothing_else_has_not_changed(self):
+        root = self.pack()
+        self.redate(root, time.time() + 6 * 3600)          # unpacked again over itself
+        self.assertEqual(self.of(self.checks(), "WATCH"), [])
+
+    def test_a_change_is_seen_whatever_its_date(self):
+        root = self.pack()
+        p = os.path.join(root, "KNOWN.md")
+        with open(p, encoding="utf-8") as f:
+            text = f.read()
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(text.replace("off", "OFF"))             # same size, other content
+        self.redate(root, time.time() - 30 * 86400)         # and dated before the index run
+        with open(os.path.join(root, "OLD-BUT-NEW.md"), "w", encoding="utf-8") as f:
+            f.write("# Arrived after the run\n")
+        os.utime(os.path.join(root, "OLD-BUT-NEW.md"), (1, 1))
+        (w,) = self.of(self.checks(), "WATCH")
+        self.assertIn("1 file(s) changed since (first: KNOWN.md)", w)
+        self.assertIn("1 new file(s) since (first: OLD-BUT-NEW.md)", w)
+        self.index("heim_knowledge", root)
+        self.assertEqual(self.of(self.checks(), "WATCH"), [])
+
+    def test_an_index_from_before_stamps_says_the_dates_may_be_the_zip(self):
+        root = self.pack()
+        db = sqlite3.connect(self.db)
+        db.execute("DROP TABLE file_stamps")                # as v2.7 left it
+        db.commit()
+        db.close()
+        self.assertEqual(self.of(self.checks(), "WATCH"), [])
+        self.redate(root, time.time() + 6 * 3600)
+        (w,) = self.of(self.checks(), "WATCH")
+        self.assertIn("2 file(s) changed since", w)
+        self.assertIn("2 of these file(s) are dated in the future", w)
+        self.assertIn("they may not have changed at all", w)
+        self.index("heim_knowledge", root)                  # the refresh it asks for settles it
+        self.assertEqual(self.of(self.checks(), "WATCH"), [])
+
+    def test_a_folder_that_moved_with_the_rename_is_named(self):
+        """The Heim installer indexed the engine documents from ~/DamResearch, and the Vor
+        installer, run next, renamed that folder ~/Vor."""
+        old = self.folder(os.path.join("DamResearch", "library", "references", "software"),
+                          {"anuga.md": "# ANUGA\n\nThe domain is a triangular mesh.\n"})
+        self.index("engine_docs", old)
+        os.rename(os.path.join(self.tmp, "DamResearch"), os.path.join(self.tmp, "Vor"))
+        new = os.path.join(self.tmp, "Vor", "library", "references", "software")
+        (w,) = [t for t in self.of(self.checks(), "WATCH") if "engine_docs" in t]
+        self.assertIn("which moved when DamResearch was renamed Vor", w)
+        self.assertIn("Refresh: heim-index -c engine_docs '%s'" % new, w)
+        self.index("engine_docs", new)
+        self.assertFalse([t for t in self.of(self.checks(), "WATCH") if "engine_docs" in t])
+
     def test_leftovers_of_an_interrupted_run(self):
         self.pack()
         db = sqlite3.connect(self.db)
