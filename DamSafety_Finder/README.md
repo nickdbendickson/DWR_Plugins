@@ -138,8 +138,14 @@ dams, not a probability. DamSafety Finder ships two models:
 - `models/nd_fill_score_trees_2026-11.json`, **the default since 0.5.0**. It is the **0.5 trees**
   kind (see Scores below), learned 2026-11-13 on 66 USGS 1 m tiles in 7 ND regions (Red River
   Valley, drift prairie north and south, Coteau north, central south, northwest, southwest) with
-  the 0.5 engine. That is 7,612 fills, 678 of them within 300 ft of an Intact dam on the ND dam
-  list. Left out: fills listed 300-1000 ft away, and 64 fills on listed dams that the list calls
+  the 0.5 engine. That is 7,612 fills, 678 of them "listed": within 300 ft of a dam on one of the
+  dam layers the runs were given - the State's dam layers, the NID and the SARP barrier layer -
+  not only of an Intact dam on the ND dam list, as this page said until 0.7.0. 206 of the 678
+  were matched to the SARP layer and 6 to the NID, the rest to the State's layers. Of the 206
+  SARP rows, 94 are dams SARP itself estimated (they are on no dam list), 71 are copies of the
+  State list, 36 come from the NID, 4 from OpenStreetMap and 1 from another source. (Until
+  0.7.0 a SARP row's `known_id` was its dam name; it is now its SARPID. The model was not
+  relearned.) Left out: fills listed 300-1000 ft away, and 64 fills on listed dams that the list calls
   breached, removed, not built, submerged or inconclusive. No reviewer marks are in it.
   - **Each region held out** and scored by a model learned on the other six (AUC against listed
     dams): Red River 0.87, drift north 0.87, drift south 0.85, Coteau north 0.89, central south
