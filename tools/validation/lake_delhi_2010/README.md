@@ -25,8 +25,9 @@ into the case folder.
 
 The workflow **Validation (real dam failures)** (`.github/workflows/validation.yml`) does the
 same with LISFLOOD-FP built from the official source: by hand from the Actions tab, and on a
-pull request that changes this folder. The score is in the job's summary and in its
-`lake-delhi-2010-score` artifact. It is a report, not a gate.
+pull request that changes this folder. It also runs the observed breach once more with Manning's n 0.04. The
+scores are in the job's summary and in its `lake-delhi-2010-score` artifact. It is a report,
+not a gate.
 
 Without LISFLOOD-FP, add `--lisflood DamSafety_Runner/core/builtin_lisflood.py` to the two
 `run` lines and `--cell 40` to `build_case.py`. The built-in engine is the screening stand-in:

@@ -66,31 +66,57 @@ jobs:
       - name: Build the case (terrain from USGS 3DEP, inflow, gate rating)
         run: |
           python tools/validation/lake_delhi_2010/build_case.py \
-            --out "$RUNNER_TEMP/delhi" --cell "$CELL" --threads 2
-      # the two runs side by side, two threads each (a runner has four cores)
-      - name: Run both breaches with LISFLOOD-FP
+            --out "$RUNNER_TEMP/delhi" --cell "$CELL" --threads 1
+          # the same case with a lower Manning's n (the suite's default is 0.06), to show how
+          # much of the difference at the marks is the roughness
+          mkdir -p "$RUNNER_TEMP/delhi_n04"
+          ln -s "$RUNNER_TEMP/delhi/terrain" "$RUNNER_TEMP/delhi_n04/terrain"
+          python tools/validation/lake_delhi_2010/build_case.py \
+            --out "$RUNNER_TEMP/delhi_n04" --cell "$CELL" --threads 1 --manning-n 0.04 --no-terrain
+      # three runs side by side, one thread each (a runner has four cores)
+      - name: Run the breaches with LISFLOOD-FP
         run: |
-          cd "$RUNNER_TEMP/delhi"
           cli="$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py"
-          for run in blind as_observed; do
-            ( python "$cli" run "$run.json" --lisflood "$HOME/lisflood-nd/lisflood" \
-                > "$run.log" 2>&1; echo "$?" > "$run.rc" ) &
+          runs="delhi/blind delhi/as_observed delhi_n04/as_observed"
+          for run in $runs; do
+            ( cd "$RUNNER_TEMP/$(dirname "$run")"; n="$(basename "$run")"; rc=0
+              python "$cli" run "$n.json" --lisflood "$HOME/lisflood-nd/lisflood" \
+                > "$n.log" 2>&1 || rc="$?"
+              echo "$rc" > "$RUNNER_TEMP/$run.rc" ) &
           done
           wait
           bad=0
-          for run in blind as_observed; do
-            echo "::group::$run (exit $(cat "$run.rc"))"
-            grep -v "^\[ *[0-9]*%\]" "$run.log" | tail -n 60
+          for run in $runs; do
+            echo "::group::$run (exit $(cat "$RUNNER_TEMP/$run.rc"))"
+            grep -v "^\[ *[0-9]*%\]" "$RUNNER_TEMP/$run.log" | tail -n 60
             echo "::endgroup::"
-            [ "$(cat "$run.rc")" = "0" ] || bad=1
+            [ "$(cat "$RUNNER_TEMP/$run.rc")" = "0" ] || bad=1
           done
-          exit "$bad"
+          # no "exit" here: these are login shells, and bash runs ~/.bash_logout on "exit",
+          # whose last test fails on a runner and becomes the step's status
+          [ "$bad" = "0" ]
+      # what the engine itself wrote for the flow sections at the bridges (the artifact holds
+      # the Runner's gauge_*.csv made from it)
+      - name: Flow sections at the bridges, as LISFLOOD-FP wrote them
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/delhi"
+          for run in blind as_observed; do
+            m="runs/$run/IA01297/_breach_model/lisflood"
+            echo "::group::$run"
+            head -n 6 "$m/run.dem.asc" | cut -c1-80 || true
+            cat "$m/run.gauge" || true
+            awk 'NR == 1 || NR % 60 == 0' "$m/results/run.discharge" || true
+            echo "::endgroup::"
+          done
       - name: Score against the surveyed high-water marks
         if: always()
         run: |
-          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi"
-          cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md"
-          cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md" >> "$GITHUB_STEP_SUMMARY"
+          for case in delhi delhi_n04; do
+            python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/$case" || true
+            { [ "$case" = "delhi" ] || printf '\n---\n\n# The same with Manning n 0.04\n\n'
+              cat "$RUNNER_TEMP/$case/Lake_Delhi_2010_Score.md"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
       - name: Keep the score, the reports and the flow at each bridge
         if: always()
         uses: actions/upload-artifact@v4
@@ -99,6 +125,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/delhi/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/delhi_n04/Lake_Delhi_2010_Score.*
             ${{ runner.temp }}/delhi/*.json
             ${{ runner.temp }}/delhi/*.log
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/run_report.*
