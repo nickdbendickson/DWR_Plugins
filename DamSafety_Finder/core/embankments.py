@@ -87,6 +87,15 @@ WHAT IT LOOKS FOR
      than min_pool_m2, stands on a road, or drains so much that a draw already walks it. Where a
      pool line and a draw (or stream line) read the same fill, the draw's reading is kept
      (one_per_pool, dedupe): a pool line only adds fills no other line found.
+     Finder 0.7 (Iowa's census again: most pond dams with a crest under 40 m that were missed
+     had a pond under 400 m2): on a line that comes out of a FLAT WATER SURFACE, a pool of
+     own_pool_m2 (100 m2) is enough when the pool the fill holds contains that surface's seed
+     point - the pond's own dam. A line out of a closed depression keeps min_pool_m2: there the
+     small pools were field hollows and ditch pits far more often than ponds. pool_toe_reach_m
+     (off = 0): on a pool line the toe is at least the lowest ground that far below the hump (the
+     face of a low dam can be one sample long, so the face walk stops on it). It finds more low
+     dams and many more fills that are not dams, and it raises the height of fills already
+     found, so it is yours to turn on, not a default.
   12. A BRIM-FULL POND. The cell just before a hump stands up to tol_m above the lowest ground
      the line passed; on a pond full to a spillway less than tol_m above its water that cell is
      already at the spill level, so the pool and the toe read as joined and the dam was dropped.
@@ -149,6 +158,8 @@ class FinderParams:
     pool_toe_m: float = 40.0            # toe looked for this far below a pool-line / rescued hump
     rescue_joined: bool = True          # test a 'joined' hump again from the pool's lowest ground
     rescue_max_drain_m2: float = 200.0 * 4046.8564224  # a rescued fill drains less than this
+    own_pool_m2: float = 100.0          # pool lines: a pool this big is enough when it holds the flat water the line starts in
+    pool_toe_reach_m: float = 0.0       # pool lines: the toe is at least the lowest ground this far below the hump (0 = off)
 
 
 @dataclass
@@ -745,7 +756,9 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
     (never turned round): on such a line only a hump starting within that distance of its first
     point is tested, its toe is looked for within params.pool_toe_m, and the fill is marked
     pool_line. `pool_rules` (on those lines only): min_area_m2 - the pool at the spill level is at
-    least this; skip_road - not on the road mask; max_drain_m2 - drains less than this at the
+    least this (or, when seed - {line index: (x, y, 'flat' or 'depression')}, the pool seed the
+    line starts from - is a flat water surface and the pool holds that point, at least
+    params.own_pool_m2); skip_road - not on the road mask; max_drain_m2 - drains less than this at the
     crest; line_area - {line index: contributing area (m2) at each of its points}, its own path,
     read for max_drain_m2 and the fill's drain_m2 (else drain_area); pool_drain - {line index: m2
     draining into its pool}, the least drain_m2 of a fill on it; inflow(xs, ys, near) - m2 draining into
@@ -791,6 +804,16 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             cells, z, dist = cells[::-1], z[::-1], dist[::-1]
         dist = np.asarray(dist, float)
         pool_k = max(1, int(round(p.pool_toe_m / cl)))
+
+        def reach(e_, kd_, z=z, dist=dist):
+            # pool_toe_reach_m: the lower of the face-walk toe kd_ and the lowest ground within the
+            # reach below the hump end e_ (the face of a low dam below its pool level is short: the
+            # face walk stops at once when its first window holds one sample of face and the floor)
+            j = e_
+            while j + 1 < len(z) and np.isfinite(z[j + 1]) and abs(dist[j + 1] - dist[e_]) <= p.pool_toe_reach_m:
+                j += 1
+            k2 = e_ + int(np.argmin(z[e_:j + 1]))
+            return k2 if z[k2] < z[kd_] else kd_
         for s, e, kp in humps(z, p.tol_m, max_len, low=True):
             if lim is not None and dist[s] > lim:
                 continue                                # not the pool's own fill
@@ -799,6 +822,8 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             ku = s - 1
             up = float(z[ku])
             kd, face_open = face_toe(z, e, pool_k if lim is not None else toe_k, cl, p.face_deg)
+            if kd is not None and lim is not None and p.pool_toe_reach_m > 0:
+                kd = reach(e, kd)
             if kd is None:
                 continue
             toe = float(z[kd])
@@ -818,6 +843,8 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                 # step 12: a brim-full pond reads as joined from the cell just before the hump;
                 # test again from the pool's lowest ground on the line, with the toe near the fill
                 kr, fr_open = face_toe(z, e, pool_k, cl, p.face_deg)
+                if kr is not None and lim is not None and p.pool_toe_reach_m > 0:
+                    kr = reach(e, kr)
                 pu = (cells[kp][0] - r0, cells[kp][1] - c0)
                 if kr is not None and crest - float(z[kr]) >= p.min_height_m and \
                         0 <= pu[0] < win.shape[0] and 0 <= pu[1] < win.shape[1]:
@@ -842,7 +869,16 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                 continue
             if lim is not None and pool_rules:
                 if parea < pool_rules.get("min_area_m2", 0.0):
-                    continue                            # not the pool's own fill: a dip below it
+                    # ... unless the line comes out of a flat water surface and this pool holds it: a
+                    # pond of 100-400 m2 behind its own dam (Iowa census, 4 tiles: 28 such fills on a
+                    # pond dam, 21 not; from any seed it was 17 dams gained for 375 fills not on one)
+                    sd = (pool_rules.get("seed") or {}).get(li)
+                    held = False
+                    if sd is not None and sd[2] == "flat" and parea >= p.own_pool_m2:
+                        f0 = (int(math.floor((sd[1] - gt[3]) / gt[5])) - r0, int(math.floor((sd[0] - gt[0]) / gt[1])) - c0)
+                        held = 0 <= f0[0] < pm.shape[0] and 0 <= f0[1] < pm.shape[1] and bool(pm[f0])
+                    if not held:
+                        continue                        # not the pool's own fill: a dip below it
                 if pool_rules.get("skip_road") and road_mask is not None and \
                         any(road_mask[r, c] for r, c in cells[s:e]):
                     continue                            # a road over the pool's outlet

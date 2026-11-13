@@ -730,7 +730,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     its outlet, routed as the draws are, so a pond that drains less than drainage_ac still has its
     fill profiled (line_source "DEM pool outlet"; core/embankments.py step 11). On such a line only
     a hump starting within pool_reach_m below where the line leaves the pool is tested, it must
-    hold a pool of params.min_pool_m2 or more, not stand on a road, and drain under
+    hold a pool of params.min_pool_m2 or more (params.own_pool_m2, 100 m2, when the line comes
+    out of a flat water surface that pool holds: 0.7), not stand on a road, and drain under
     pool_max_drain_ac at its crest (a bigger draw is walked by the draws); a pool whose seed
     already drains pool_max_drain_ac gets no line. pool_margin_m: pools are looked for this far
     round each tile's core; pool_opts: keyword overrides for terrain.pool_seeds. Where a pool line
@@ -812,7 +813,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         def keep(xx, yy, b=core_box):               # the whole square, not only its part in the box
             return _inside(xx, yy, b)
 
-        dl, deep, darea, pls, pex, pdr = [], None, None, [], [], []
+        dl, deep, darea, pls, pex, pdr, psd = [], None, None, [], [], [], []
         if drainage_ac or ridges or dikes or contrib or pool_lines:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
             if drainage_ac or contrib or pool_lines:
@@ -824,7 +825,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             if drainage_ac:
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
             if pool_lines and not cancelled():
-                pls, pex, pdr = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
+                pls, pex, pdr, psd = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
                                        pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                                        pool_opts or {})
             if ridges or dikes:
@@ -840,6 +841,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
                      pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
+                     seed={len(tl) + len(dl) + i: (sd[0], sd[1], sd[3]) for i, sd in enumerate(psd)},
                      inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]):
                              _held_inflow(xs, ys, near, rec, area, g, c3)) if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
@@ -991,12 +993,13 @@ def _rnd(v, nd):
 
 
 def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=None):
-    """(lines, exits, drains) of one tile: the pools of the DEM z (grid gt) over the core box plus
+    """(lines, exits, drains, seeds) of one tile: the pools of the DEM z (grid gt) over the core box plus
     margin_m (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec`
     (grid gt10, the draws' receivers); exits = the distance along each line at which it leaves its
     own pool; drains = the ground draining into that pool (m2, terrain.pool_inflow over `area` on
     gt10): flat routing can split a pool's water over many outlet cells, so no one cell on the line
-    holds it all. A pool is the seed's own (its flat or depression), on the 10 m cells at least
+    holds it all; seeds = the pool seed (x, y, area m2, 'flat' or 'depression') each line starts
+    from. A pool is the seed's own (its flat or depression), on the 10 m cells at least
     40 % of whose 3 m cells it covers, so a creek or another pond beside it is not part of it. A pool
     whose seed already drains max_area gets no line: the draws walk it."""
     c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
@@ -1004,7 +1007,7 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     r0 = max(0, int((core_box[3] + margin_m - gt[3]) / gt[5]))
     r1 = min(z.shape[0], int(math.ceil((core_box[1] - margin_m - gt[3]) / gt[5])))
     if r1 <= r0 or c1 <= c0:
-        return [], [], []
+        return [], [], [], []
     sub = z[r0:r1, c0:c1]
     gs = (gt[0] + c0 * gt[1], gt[1], 0.0, gt[3] + r0 * gt[5], 0.0, gt[5])
     seeds, _mask, cells = tr.pool_seeds(sub, gs, cells=True, **(opts or {}))
@@ -1036,7 +1039,7 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     seeds = [pc[0] for pc in pairs]
     pools = [own10(*pc) for pc in pairs]
     lines, exits, index = tr.pool_lines(seeds, rec, gt10, (H10, W10), pools=pools, with_index=True)
-    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index]
+    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index], [seeds[i] for i in index]
 
 
 def _cells10(xs, ys, gt, shape, share=0.0, cell=None):

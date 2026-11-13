@@ -78,7 +78,8 @@ swale with gentle sides is tried again on its own water level) and the deepest c
 depression at least 0.15 m deep, walked out through its outlet down the same opened 10 m routing as
 the draws. On such a line only a hump within 50 m below where it leaves its own pool is tested (the
 pool's own fill), the toe is looked for within `pool_toe_m` (40 m) of it, the line is never turned
-round, the pool must reach `min_pool_m2`, a road over the outlet is left to the road tools, and a
+round, the pool must reach `min_pool_m2` (400 m2; see small ponds below), a road over the outlet is
+left to the road tools, and a
 pool line whose own path drains `POOL_MAX_AC` or more at the crest is left to the draws. Its
 `drain_ac` is the most of: its own path at the crest, all the ground whose water reaches the seed's
 own pool (each cell once, though flat routing can split a pond's water over several outlet cells
@@ -91,6 +92,20 @@ same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The fl
 reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water,
 so a pond near that cut can pass on one grid alignment and fail on another (seen on one Iowa
 census pond: 14 % and 20 %).
+
+**Small ponds** (0.7.0). On Iowa's census of pond dams most of the missed dams with a crest under
+40 m had a pond under 400 m2 (median 270 m2 on three tiles), too small for the pool-line tests. Two
+things changed: a flat water surface now seeds a line from 100 m2 (it was 300 m2; the area counted
+is that of the cells whose neighbours are all at the water level, which leaves out the water's
+edge cells, so this is a pond of about 250 m2 on 3 m cells), and on a line that comes out of a flat
+water surface a pool of `own_pool_m2` (100 m2) is enough when the pool the fill holds contains
+that water surface. A line out of a closed depression keeps the 400 m2: there the small pools
+were mostly field hollows and ditch pits (on four Iowa tiles letting every seed keep a 100 m2 pool
+gained 17 dams for 375 fills that were not on one).
+`pool_toe_reach_m` (a script setting, off = 0) takes the toe of a pool-line fill as at least the
+lowest ground that far below the fill. In the same study 10 m found 28 more dams for 223 more
+fills not on one and raised the height of 4 in 10 pool-line fills already found (median 1 ft), so
+it is left off: turning it on changes the heights the score was learned on.
 
 **Brim-full ponds** (step 12; 0.6.0). A pond full to within 0.15 m of its spill level reads as
 joined to the ground below its dam from the beach cell just above the dam, so it used to be

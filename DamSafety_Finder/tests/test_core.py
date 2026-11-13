@@ -43,6 +43,19 @@ XS = (N // 2) * CELL + 1.5
 LINE = [(XS, N * CELL - 1.0), (XS, 1.0)]
 
 
+def hill_pond(water=6, n=120, r0=50, c0=57):
+    """(DEM, water mask, water level) of a small pond on a 6 % hillside falling south: water x water
+    cells of flat water (6 x 6 = 324 m2, 4 x 4 = 144 m2) 0.3 m below the ground at its uphill
+    side, ringed by a fill two cells wide whose top is 0.9 m above the water."""
+    y, x = np.mgrid[0:n, 0:n]
+    z = 100.0 - y * CELL * 0.06
+    lvl = float(z[r0, 0]) - 0.3
+    ring = (y >= r0 - 2) & (y < r0 + water + 2) & (x >= c0 - 2) & (x < c0 + water + 2)
+    wat = (y >= r0) & (y < r0 + water) & (x >= c0) & (x < c0 + water)
+    z = np.where(ring, np.maximum(z, lvl + 0.9), z)
+    return np.where(wat, lvl, z), wat, lvl
+
+
 def scene():
     """A dam with a flat pool (row 200, 4 m), a dry embankment (row 260, 2.5 m) and a road fill
     (row 320, 2.5 m, on a road)."""
@@ -649,6 +662,83 @@ class Terrain(unittest.TestCase):
 
 
 class PoolSeeds(unittest.TestCase):
+    def test_a_small_pond_is_kept_on_a_line_out_of_its_own_flat_water(self):
+        # Finder 0.7 (F0, from Iowa's census of pond dams: most missed short dams had a pond under
+        # 400 m2). On a pool line the fill's pool must reach min_area_m2 (400 m2) - unless the line
+        # comes out of a flat water surface and the pool the fill holds contains that seed point:
+        # then own_pool_m2 (100 m2) is enough. A line out of a closed depression keeps the 400 m2.
+        n = 120
+        gt = (0.0, CELL, 0.0, n * CELL, 0.0, -CELL)
+        rules = dict(min_area_m2=400.0)
+        for water, area in ((4, 144.0), (6, 324.0)):
+            z, wat, _lvl = hill_pond(water)
+            rr, cc = np.nonzero(wat)
+            r, c = int(rr.mean()), int(cc.mean())                # a water cell near the middle
+            sx, sy = (c + 0.5) * CELL, (n - r - 0.5) * CELL
+            line = [(sx, sy), (sx, 30.0)]                        # from the water down the hillside
+            lim = {0: (rr.max() - r + 1) * CELL + 50.0}
+            self.assertEqual(em.find(z, gt, [line], line_lim=lim, pool_rules=rules), [])     # as 0.6
+            got = em.find(z, gt, [line], line_lim=lim, pool_rules=dict(rules, seed={0: (sx, sy, "flat")}))
+            self.assertEqual(len(got), 1)
+            self.assertEqual(got[0].kind, em.K_DAM)
+            self.assertAlmostEqual(got[0].pool_area_m2, area, delta=1.0)
+            self.assertGreaterEqual(got[0].height_m, 5.0 * em.FT)
+            # the same pond, the same line, but out of a closed depression: not kept
+            self.assertEqual(em.find(z, gt, [line], line_lim=lim,
+                                     pool_rules=dict(rules, seed={0: (sx, sy, "depression")})), [])
+            # a flat seed the fill's pool does not hold (it lies on the hillside beside the pond)
+            self.assertEqual(em.find(z, gt, [line], line_lim=lim,
+                                     pool_rules=dict(rules, seed={0: (sx + 60.0, sy, "flat")})), [])
+            # own_pool_m2 is yours: above the pond's size nothing is kept
+            self.assertEqual(em.find(z, gt, [line], line_lim=lim, params=em.FinderParams(own_pool_m2=area + 50.0),
+                                     pool_rules=dict(rules, seed={0: (sx, sy, "flat")})), [])
+        z, wat, _lvl = hill_pond(3)                              # 81 m2: under own_pool_m2
+        rr, cc = np.nonzero(wat)
+        sx, sy = (int(cc.mean()) + 0.5) * CELL, (n - int(rr.mean()) - 0.5) * CELL
+        self.assertEqual(em.find(z, gt, [[(sx, sy), (sx, 30.0)]], line_lim={0: 60.0},
+                                 pool_rules=dict(rules, seed={0: (sx, sy, "flat")})), [])
+
+    def test_flat_water_from_100_m2_seeds_a_line(self):
+        # 6 x 6 cells of water: 4 x 4 of them (144 m2) pass the 3 x 3 flat test (a flat's own edge
+        # cells do not). A flat seed since 0.7 (100 m2); not at the 0.6 size (300 m2)
+        z, wat, _lvl = hill_pond(6)
+        gt = (0.0, CELL, 0.0, z.shape[0] * CELL, 0.0, -CELL)
+        flat = [s for s in tr.pool_seeds(z, gt)[0] if s[3] == "flat"]
+        self.assertEqual(len(flat), 1)
+        self.assertAlmostEqual(flat[0][2], 144.0, delta=1.0)
+        c, r = int(flat[0][0] / CELL), int((z.shape[0] * CELL - flat[0][1]) / CELL)
+        self.assertTrue(wat[r, c])
+        self.assertEqual([s for s in tr.pool_seeds(z, gt, flat_min_m2=300.0)[0] if s[3] == "flat"], [])
+        self.assertEqual([s for s in tr.pool_seeds(hill_pond(4)[0], gt)[0] if s[3] == "flat"], [])   # 2 x 2 flat
+
+    def test_the_toe_reach_is_off_unless_asked_for(self):
+        # pool_toe_reach_m (0 = off, the default): on a pool line the toe is at least the lowest
+        # ground that far below the hump. Off, every reading is as it was; on, the toe can only be
+        # lower and the fill higher.
+        self.assertEqual(em.FinderParams().pool_toe_reach_m, 0.0)
+        n = 120
+        gt = (0.0, CELL, 0.0, n * CELL, 0.0, -CELL)
+        z, wat, _lvl = hill_pond(6)
+        rr, cc = np.nonzero(wat)
+        sx, sy = (int(cc.mean()) + 0.5) * CELL, (n - int(rr.mean()) - 0.5) * CELL
+        line, lim = [(sx, sy), (sx, 30.0)], {0: 70.0}
+        rules = dict(min_area_m2=100.0)
+
+        def read(**kw):
+            got = em.find(z, gt, [line], line_lim=lim, pool_rules=rules, params=em.FinderParams(**kw))
+            self.assertEqual(len(got), 1)
+            return got[0]
+
+        off, zero, on = read(), read(pool_toe_reach_m=0.0), read(pool_toe_reach_m=10.0)
+        self.assertEqual((off.toe_m, off.height_m, off.spill_m, off.toe_xy), (zero.toe_m, zero.height_m, zero.spill_m, zero.toe_xy))
+        self.assertLess(on.toe_m, off.toe_m)                     # 10 m further down the 6 % hillside
+        self.assertGreater(on.height_m, off.height_m)
+        self.assertEqual(on.spill_m, off.spill_m)
+        # an ordinary line (a draw or a stream) is never given the reach
+        a = em.find(z, gt, [line], params=em.FinderParams(pool_toe_reach_m=10.0))
+        b = em.find(z, gt, [line])
+        self.assertEqual([(e.toe_m, e.height_m) for e in a], [(e.toe_m, e.height_m) for e in b])
+
     def test_depression_and_flat_water_seeds(self):
         # valley sides of 10 %: a 2 % side slope on 3 m cells spans under 15 cm in 3 x 3 and
         # would read as one flat with the pool (the ring test then rejects the lot)
