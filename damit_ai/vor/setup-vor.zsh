@@ -13,7 +13,7 @@
 #   zsh setup-vor.zsh               # pick the model from this Mac's memory
 #   zsh setup-vor.zsh --big         # try qwen3.6:35b-a3b even on a 32 GB Mac
 #   zsh setup-vor.zsh --small       # a small model (16 GB Macs, or for speed)
-#   zsh setup-vor.zsh --model TAG   # any Ollama model tag
+#   zsh setup-vor.zsh --model qwen3.6:27b   # any Ollama model tag, written out in full
 #   zsh setup-vor.zsh --ocr         # also install OCR for scanned PDFs
 # Re-running is safe: it only redoes what changed.
 set -u
@@ -44,6 +44,18 @@ while (( $# )); do
   shift
 done
 
+# A placeholder is not a model tag. The line first-run.zsh used to print ended "--model TAG",
+# and on 2026-11-13 that was typed literally: Ollama tried to pull a model called TAG and the
+# run died at step 2/6 with "pull model manifest: file does not exist". Catch it here and name
+# a real tag, rather than letting the registry give the answer.
+case "$FORCE_MODEL" in
+  TAG|MODEL|NAME|tag|model|"<tag>"|"<model>")
+    print -u2 -r -- "--model $FORCE_MODEL looks like a placeholder, not an Ollama tag."
+    print -u2 -r -- "Write the tag out in full, e.g.:  zsh setup-vor.zsh --model qwen3.6:27b"
+    print -u2 -r -- "Installed tags:  ollama list"
+    exit 2 ;;
+esac
+
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[1;32mOK\033[0m  %s\n' "$*"; }
 warn() { printf '  \033[1;33m!\033[0m   %s\n' "$*"; }
@@ -55,12 +67,37 @@ die()  { printf '  \033[1;31mX\033[0m   %s\n' "$*"; exit 1; }
 # This tool was called damresearch until 2026-11-13. Carry an existing install over rather than
 # leaving a second, empty library beside it: ~/DamResearch -> ~/Vor, research.db -> vor.db.
 # Only ever done when the new name does not exist, so re-running cannot clobber anything.
+has_index() { [[ -f "$1/vor.db" || -f "$1/research.db" ]]; }
+# A library the old installer was pointed at somewhere else (DAMRESEARCH_HOME, another disk)
+# stays where it is: moving it home would copy the whole library, not rename a folder.
+if [[ -z "${VOR_HOME:-}" && -n "${DAMRESEARCH_HOME:-}" && "$DAMRESEARCH_HOME" != "$OLD_HOME" ]] \
+   && has_index "$DAMRESEARCH_HOME" && ! has_index "$RHOME"; then
+  RHOME="$DAMRESEARCH_HOME"
+  ok "keeping your library where DAMRESEARCH_HOME put it: $RHOME"
+fi
 if [[ -z "${VOR_HOME:-}" && ! -d "$RHOME" && -d "$OLD_HOME" ]]; then
   if mv "$OLD_HOME" "$RHOME" 2>/dev/null; then
     ok "moved your library from $OLD_HOME to $RHOME (the old name is gone, nothing was copied)"
   else
     RHOME="$OLD_HOME"
     warn "could not move $OLD_HOME to $HOME/Vor; keeping the library where it is"
+  fi
+elif [[ -z "${VOR_HOME:-}" && -d "$RHOME" && -d "$OLD_HOME" ]] && has_index "$OLD_HOME" && ! has_index "$RHOME"; then
+  # Both names exist and the index is under the OLD one: something made ~/Vor first (a library
+  # download, a first-run log). Treating that folder as "the rename is done" would write
+  # VOR_HOME=~/Vor below and leave the indexed library behind for good, with no error from
+  # anything. The index decides. Nothing is deleted: the stray ~/Vor is set aside, the real
+  # library takes the name, and the stray files are copied back in without overwriting.
+  ASIDE="$RHOME.before-rename-$(date +%Y%m%d-%H%M%S)"
+  if mv "$RHOME" "$ASIDE" 2>/dev/null && mv "$OLD_HOME" "$RHOME" 2>/dev/null; then
+    cp -Rn "$ASIDE/." "$RHOME/" 2>/dev/null || true
+    ok "moved your indexed library from $OLD_HOME to $RHOME"
+    warn "$RHOME already existed without an index; its files were merged in (nothing overwritten)."
+    warn "The original is kept at $ASIDE: delete it once you have looked."
+  else
+    [[ -d "$ASIDE" && ! -d "$RHOME" ]] && mv "$ASIDE" "$RHOME" 2>/dev/null
+    RHOME="$OLD_HOME"
+    warn "could not move $OLD_HOME to $HOME/Vor; keeping the indexed library where it is"
   fi
 fi
 if [[ -f "$RHOME/research.db" && ! -f "$RHOME/vor.db" ]]; then
@@ -106,6 +143,14 @@ fi
 trap '[[ -n "$SERVE_PID" ]] && kill $SERVE_PID 2>/dev/null' EXIT
 OLLAMA_VER=$(curl -sf http://127.0.0.1:11434/api/version | sed -E 's/.*"version": *"([^"]+)".*/\1/')
 ok "Ollama $OLLAMA_VER"
+
+# seed models from a pre-downloaded offline bundle (download-all-mac.sh), so pulls are skipped
+MODELS_DIR="${OLLAMA_MODELS:-$LOCAL_AI/models}"
+if [[ -d "$HERE/../offline/models/manifests" && ! -d "$MODELS_DIR/manifests" ]]; then
+  mkdir -p "$MODELS_DIR"
+  cp -R "$HERE/../offline/models/." "$MODELS_DIR/" 2>/dev/null \
+    && ok "seeded models from offline/models (no download needed)" || warn "could not seed offline models"
+fi
 
 # ---------------------------------------------------------------------------
 say "2/6  Models for this Mac"
@@ -291,17 +336,17 @@ cp "$ZSHRC" "$ZSHRC.bak-vor" 2>/dev/null
 mv "$TMPRC" "$ZSHRC"
 ok "vor command added to ~/.zshrc (backup: ~/.zshrc.bak-vor)"
 
-# damchain research ...: only replace dam_chain.py when it is a copy we shipped (never your edits).
+# damchain vor ...: only replace dam_chain.py when it is a copy we shipped (never your edits).
 SHIPPED=(b99ae0264e4aec9dfa5a22f3eb973a1f2e2a1345 8aa559dccee85442b0b64957b6609c35aa0f0a3d)
 DC="$LOCAL_AI/dam_chain.py"
 if [[ -f "$DC" ]]; then
   if grep -q "vor_passthrough" "$DC"; then
-    ok "damchain research already available"
+    ok "damchain vor already available"
   elif (( ${SHIPPED[(Ie)$(shasum "$DC" | awk '{print $1}')]} )); then
     NEW_DC="$HERE/damchain-1.4/dam_chain.py"
     [[ -f "$NEW_DC" ]] || NEW_DC="$HERE/../heim/tools/dam_chain.py"   # damit_ai repo layout
     cp "$DC" "$DC.bak-1.3" && cp "$NEW_DC" "$DC" \
-      && ok "dam_chain.py 1.3 -> 1.4: 'damchain research ...' works (old copy: dam_chain.py.bak-1.3)"
+      && ok "dam_chain.py 1.3 -> 1.4: 'damchain vor ...' works (old copy: dam_chain.py.bak-1.3)"
   else
     warn "your ~/local-ai/dam_chain.py has local changes; left alone. Use 'vor ...' directly."
   fi

@@ -39,10 +39,14 @@ and number.
 - NOAA Atlas 14 Volume 8 (precipitation frequency, Midwestern states incl. ND)
 
 ## Research papers (journal access may be needed)
-- Froehlich (2008), J. Water Resour. Plann. Manage.: Embankment dam breach parameters and their uncertainties
-- Froehlich (2016), J. Hydraul. Eng./J. Hydrol. Eng.: breach width and peak outflow updates
-- MacDonald & Langridge-Monopolis (1984), J. Hydraul. Eng.: Breaching characteristics of dam failures
-- Xu & Zhang (2009), Can. Geotech. J.: Breach parameters for earth and rockfill dams
+- Froehlich (1995), J. Water Resour. Plann. Manage. 121(1), 90-97: Peak outflow from breached embankment dam
+- Froehlich (1995), Proc. ASCE Water Resources Engineering conf., 887-891: Embankment dam breach parameters revisited
+- Froehlich (2008), J. Hydraul. Eng. 134(12), 1708-1721: Embankment dam breach parameters and their uncertainties
+- Froehlich (2016), J. Hydrol. Eng. 21(11): Predicting peak discharge from gradually breached embankment dam
+- MacDonald & Langridge-Monopolis (1984), J. Hydraul. Eng. 110(5), 567-586: Breaching characteristics of dam failures
+- Von Thun & Gillette (1990), USBR internal memorandum: Guidance on breach parameters
+- Xu & Zhang (2009), J. Geotech. Geoenviron. Eng. 135(12), 1957-1970: Breaching parameters for earth and rockfill dams
+- Pierce, Thornton & Abt (2010), J. Hydrol. Eng. 15(5), 338-349: Predicting peak outflow from breached embankment dams
 - Shaw et al. (2021), Geosci. Model Dev. (open access): LISFLOOD-FP 8.0
 - DSS-WISE Lite documentation (NCCHE, University of Mississippi)
 - ANUGA user manual (Geoscience Australia / ANU)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# vor.py v1.0.5 — local research assistant for dam-safety, dam-design and
+# vor.py v1.2.0 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -10,6 +10,8 @@
 #   vor ingest [PATH ...]      add PDFs / .md / .txt (default: ~/Vor/library,
 #                                      the drop folder). Unchanged files are skipped.
 #                                      --prune drops documents whose file is gone.
+#   vor add PATH [PATH ...]    copy the files into ~/Vor/library/added and index them. In
+#                                      Terminal, type `vor add ` and drag the files in.
 #   vor list                   documents, pages, chunks, pages with no text layer
 #   vor meta DOC --title T --authors A --year Y --org O --number N
 #                                      fix a document's citation (DOC = id or part of file name)
@@ -19,7 +21,8 @@
 #   vor research QUESTION      deep research: plan sub-questions -> retrieve -> extract
 #                                      verbatim evidence -> check every quote against the page
 #                                      -> cited report in ~/Vor/reports/
-#   vor chat                   ask follow-up questions in a loop
+#   vor chat                   ask follow-up questions in a loop. Drag a file or folder into
+#                                      the window to add it without leaving the chat.
 #
 #   search / ask / research / chat also take:
 #     --doc KEY        only read this publication. KEY is the id from `vor list`,
@@ -44,28 +47,42 @@
 #   OLLAMA_URL           http://127.0.0.1:11434
 #
 # 1.0.1: reads library.csv in every sub-folder of the library (fetch_asdso.py writes one per folder).
+# 1.2.0: `vor add`, and `vor chat` takes a dragged file: the line Terminal pastes is a path, which
+#        used to be sent to the model as a question. A chat that is running keeps its vectors in
+#        memory, so before this a document ingested from another tab was invisible to it until
+#        the chat was restarted, and nothing said so.
 #
 # Stdlib only; numpy makes search fast, PyMuPDF gives printed page labels. PDF text
 # backends in order: PyMuPDF -> pdftotext -> pypdf.
-import os, sys, re, json, time, math, hashlib, sqlite3, argparse, subprocess, difflib, shutil
+import os, sys, re, json, time, math, hashlib, sqlite3, argparse, subprocess, difflib, shutil, shlex
 import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def _home():
-    """~/Vor, or the pre-rename ~/DamResearch if that is the one that exists.
+    """Where the library and its index live: the folder that HOLDS THE INDEX.
 
-    The tool was called damresearch until 2026-11-13 and kept its library and index in
-    ~/DamResearch/research.db. Re-running setup-vor.zsh moves both to the new names, but
-    somebody who runs `vor` first should still find their library rather than an empty one.
+    The tool was called damresearch until 2026-11-13 and kept everything in ~/DamResearch
+    (research.db). setup-vor.zsh moves that to ~/Vor (vor.db). Until it has run, both names
+    can exist: fetch_asdso.py or download-library.zsh run first would create ~/Vor to hold
+    the downloads, and a rule of "use ~/Vor if it is there" then opens a new, empty index
+    beside the real one. Nothing errors: `vor ask` simply finds no passages. So the index
+    decides, not the folder. fetch_asdso.py carries the same rule (vor_home), and
+    tests/test_home.py holds the two to the same answer.
     """
     if os.environ.get("VOR_HOME"):
         return os.path.expanduser(os.environ["VOR_HOME"])
     new = os.path.expanduser("~/Vor")
     old = os.path.expanduser("~/DamResearch")
+    # DAMRESEARCH_HOME: the old installers exported it, so a library kept somewhere else is
+    # still named by it in a shell whose rc file has not been rewritten yet.
+    legacy = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME") or old)
+    for d in (new, legacy, old):
+        if any(os.path.isfile(os.path.join(d, f)) for f in ("vor.db", "research.db")):
+            return d
     if not os.path.isdir(new) and os.path.isdir(old):
         return old
     return new
@@ -636,6 +653,7 @@ def cmd_ingest(a):
             break
         except RuntimeError as e:
             if "cannot reach Ollama" in str(e):
+                db.close()
                 die(str(e))
             say("  [%d/%d] FAILED %s: %s" % (n, len(files), os.path.basename(path), e))
             failed += 1
@@ -654,6 +672,85 @@ def cmd_ingest(a):
     if scanned:
         say("%d document(s) have pages with no text layer (scanned). See `vor list`, "
             "then `vor ocr` to make them searchable." % scanned)
+    db.close()
+
+
+def dropped_paths(line):
+    """The existing files/folders a line names, when it names nothing else.
+
+    Dragging a file into a terminal pastes its path: spaces backslash-escaped in Terminal
+    and iTerm, the whole path quoted in some others, several files space-separated. A token
+    must look like a path (a separator or a leading ~) AND exist, so an ordinary question is
+    never mistaken for a drop, even one whose only word matches a file in the current folder."""
+    try:
+        parts = shlex.split(line)
+    except ValueError:                  # an unbalanced quote: a question, not a path
+        return []
+    out = []
+    for p in parts:
+        full = os.path.abspath(os.path.expanduser(p))
+        if not (os.sep in p or p.startswith("~")) or not os.path.exists(full):
+            return []
+        out.append(full)
+    return out
+
+
+def add_paths(paths):
+    """Copy files into LIBRARY/added and index them; returns (documents, passages) added.
+
+    Both numbers, because a scanned PDF adds a document and no passages: it is in the
+    library and nothing can be asked of it until `vor ocr` has run.
+
+    Copied, not indexed where they lie: a dragged file usually sits in Downloads or on the
+    Desktop, and the library should not lose its source when that copy is tidied away. A
+    file already inside the library, and a whole folder, are indexed in place."""
+    db = connect()
+    have = {r[0]: r[1] for r in db.execute("SELECT sha1, path FROM docs")}
+    count = "SELECT (SELECT COUNT(*) FROM docs), (SELECT COUNT(*) FROM chunks)"
+    before = db.execute(count).fetchone()
+    lib = os.path.join(os.path.abspath(LIBRARY), "")
+    dest_dir = os.path.join(LIBRARY, "added")
+    targets = []
+    for p in paths:
+        p = os.path.abspath(os.path.expanduser(p))
+        if os.path.isdir(p):
+            say("  folder, indexed where it is: %s" % p)
+            targets.append(p)
+            continue
+        if not os.path.isfile(p):
+            say("  not found: %s" % p)
+            continue
+        if not p.lower().endswith(DOC_EXT):
+            say("  not added (%s files are what the library reads): %s"
+                % (" ".join(DOC_EXT), os.path.basename(p)))
+            continue
+        if p.startswith(lib):
+            targets.append(p)
+            continue
+        h = sha1_of(p)
+        if h in have:
+            say("  already in the library: %s  (as %s)" % (os.path.basename(p), have[h]))
+            continue
+        os.makedirs(dest_dir, exist_ok=True)
+        dst = os.path.join(dest_dir, os.path.basename(p))
+        if os.path.exists(dst) and sha1_of(dst) != h:      # same name, different file
+            stem, ext = os.path.splitext(os.path.basename(p))
+            dst = os.path.join(dest_dir, "%s-%s%s" % (stem, h[:8], ext))
+        if not os.path.exists(dst):
+            shutil.copy2(p, dst)
+        targets.append(dst)
+    db.close()
+    if not targets:
+        return 0, 0
+    cmd_ingest(argparse.Namespace(paths=targets, prune=False))
+    db = connect()
+    after = db.execute(count).fetchone()
+    db.close()
+    return after[0] - before[0], after[1] - before[1]
+
+
+def cmd_add(a):
+    add_paths(a.paths)
 
 
 def ingest_one(db, path, h, side, n, total):
@@ -1276,7 +1373,8 @@ def cmd_chat(a):
     if note:
         say(note)
     say("vor chat — cited answers from your library (%s). Blank line or Ctrl+D quits.\n"
-        "Prefix a question with '!' for deep research.\n%s" % (CHAT_MODEL, BANNER))
+        "Prefix a question with '!' for deep research. Drag a file or folder into this window\n"
+        "to add it to the library.\n%s" % (CHAT_MODEL, BANNER))
     last_q, last_a = None, None
     while True:
         try:
@@ -1285,6 +1383,24 @@ def cmd_chat(a):
             break
         if not q:
             break
+        drop = dropped_paths(q)
+        if drop:
+            try:
+                ndocs, npass = add_paths(drop)
+            except SystemExit:              # cmd_ingest dies when Ollama is down: keep the chat
+                say("not indexed (reason above). Anything copied is in %s and the next "
+                    "`vor ingest` picks it up." % os.path.join(LIBRARY, "added"))
+                continue
+            if npass:
+                idx = Index(db)             # the vectors are held in memory: reload, or the new
+                say("Ready: ask about it.") # document is invisible to this chat
+                if keep:
+                    say("(this chat was started with --doc, so answers still come only from that "
+                        "selection; start `vor chat` without it to read the new document)")
+            elif ndocs:
+                say("Added, but it has no readable text, so there is nothing to ask it yet. "
+                    "A scanned PDF needs `vor ocr` first.")
+            continue
         deep = q.startswith("!")
         q = q.lstrip("!").strip()
         if last_q:
@@ -1304,6 +1420,7 @@ def cmd_chat(a):
             say("error: %s" % e)
             continue
         last_q, last_a = q, ans
+    db.close()
 
 
 # --------------------------------------------------------------------------- housekeeping
@@ -1499,6 +1616,9 @@ def main():
     s.add_argument("paths", nargs="*")
     s.add_argument("--prune", action="store_true", help="drop documents whose file is gone")
     s.set_defaults(fn=cmd_ingest)
+    s = sub.add_parser("add", help="copy files into the library and index them (drag them in)")
+    s.add_argument("paths", nargs="+")
+    s.set_defaults(fn=cmd_add)
     s = sub.add_parser("list", help="documents in the library")
     s.set_defaults(fn=cmd_list)
     s = sub.add_parser("meta", help="show or fix a document's citation")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# eval_vor.py v1.0 - score vor's answers against questions with known answers.
+# eval_vor.py v1.1 - score vor's answers against questions with known answers.
 #
 #   python3 eval_vor.py                         # the vor model, all questions
 #   python3 eval_vor.py --model qwen3.6:27b     # any Ollama model (run once per model)
@@ -80,6 +80,11 @@ def main():
         text = rendered or ""
         r = dict(id=q["id"], q=q["q"], secs=round(secs, 1), answer=text, findings=len(ev.findings),
                  rejected=len(ev.rejected))
+        # 1.1: why findings were dropped and which pages were retrieved, so a failed question can
+        # be told apart: retrieval missed the page, or the model's quote did not check out
+        r["rejected_why"] = [{k: str(x.get(k, ""))[:300] for k in ("why", "quote", "claim")}
+                             for x in ev.rejected[:6]]
+        r["retrieved"] = ["%s %s" % (h.short(), h.pg) for h in list(ev.sources)[:15]]
         if missing:
             invented = [f for f in q.get("forbid", []) if re.search(f, text, re.I)]
             ok = (not ev.findings or bool(NOT_COVERED.search(text))) and not invented

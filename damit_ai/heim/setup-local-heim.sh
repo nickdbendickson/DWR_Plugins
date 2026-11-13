@@ -321,9 +321,12 @@ say "Step 6/9 — Python tools (written to ~/local-ai)"
 if [[ $REWRITE_SCRIPTS -eq 1 ]]; then
   cat > "$LOCAL_AI/rag_index.py" << 'SCRIPT_EOF_RAG_INDEX'
 #!/usr/bin/env python3
-# rag_index.py v2.5 — multi-collection RAG indexer (stdlib only)
+# rag_index.py v2.6 — multi-collection RAG indexer (stdlib only)
 # Atomic rebuilds via a hidden per-collection stage; auto-migrates v1 DBs;
 # PDF backends: pdftotext -> pymupdf -> pypdf -> skip.
+#
+# v2.6: --add FILE ... copies single files into <index folder>/added and indexes them as the
+#   collection 'added' (heim-add). Indexing took folders only, so one dragged PDF had no home.
 #
 # v2.4 fixes (vs v2.3):
 #   - A missing folder, or a run that produced 0 chunks, no longer swaps an
@@ -337,6 +340,7 @@ if [[ $REWRITE_SCRIPTS -eq 1 ]]; then
 #   - TypeScript/JS added so the crest repo indexes its source, not just docs.
 #   - Stage name is per collection, so two indexers cannot clobber each other.
 import os, sys, json, sqlite3, argparse, subprocess, urllib.request, urllib.error, time, re
+import hashlib, shutil
 
 DB = os.path.expanduser(os.environ.get("HEIM_DB", "~/local-ai/knowledge.db"))
 EMBED_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/embed"
@@ -598,7 +602,15 @@ def index_collection(collection, roots, allow_empty=False):
                         nf += 1
                     elif kind == "pdf":
                         nnp += 1
-                        print("    [no text layer] %s — needs OCR" % rel)
+                        # With no PDF library installed, EVERY pdf yields nothing, and saying
+                        # "needs OCR" blames the file for a missing dependency. On 2026-11-13
+                        # that sent seven perfectly good engine-doc PDFs to an OCR queue they
+                        # did not need; the real fix was to run this with the python that has
+                        # PyMuPDF. Only claim a missing text layer when we could have read one.
+                        if pdf_backend_names():
+                            print("    [no text layer] %s — needs OCR" % rel)
+                        else:
+                            print("    [skipped, no PDF library] %s" % rel)
         flush()
     except KeyboardInterrupt:
         try:
@@ -638,8 +650,12 @@ def index_collection(collection, roots, allow_empty=False):
         sys.exit("ERROR: swap failed (%s). Live collection untouched." % e)
     db.close()
     print("Indexed collection '%s': %d files, %d chunks in %.0fs" % (collection, nf, nc, time.time() - t0))
-    if nnp:
+    if nnp and pdf_backend_names():
         print("NOTE: %d PDFs had no extractable text (scanned?). OCR then re-run." % nnp)
+    elif nnp:
+        print("NOTE: %d PDFs were skipped because this python has no PDF library. They are not\n"
+              "      necessarily scanned. Re-run with the alias, which uses the environment the\n"
+              "      installer put PyMuPDF in:  heim-index -c <collection> <folder>" % nnp)
 
 
 def list_collections():
@@ -654,6 +670,8 @@ def list_collections():
     except sqlite3.OperationalError:
         print("Database exists but has no usable collections yet.")
         return
+    finally:
+        db.close()
     if not rows:
         print("Index exists but is empty.")
         return
@@ -663,11 +681,72 @@ def list_collections():
         print("  %-20s %8d %8d" % (c, a, b))
 
 
+ADDED = "added"
+
+
+def _digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def add_files(paths):
+    """Copy single files into <folder of the index>/added and index that folder as 'added'.
+
+    Copied, because a dragged file usually lies in Downloads and the index stores only its
+    text: the copy is what lets the collection be rebuilt later. The whole (small) folder is
+    re-indexed through the usual stage, so a failed run leaves the live collection as it was.
+    Returns the number of files copied in."""
+    dest = os.path.join(os.path.dirname(DB), ADDED)
+    copied = 0
+    for p in paths:
+        p = os.path.abspath(os.path.expanduser(p))
+        name = os.path.basename(p)
+        if os.path.isdir(p):
+            print("  folder, not added: %s\n    index a folder where it is: rag_index.py -c <name> %s" % (p, p))
+            continue
+        if not os.path.isfile(p):
+            print("  not found: %s" % p)
+            continue
+        if file_filter(name) is None:
+            print("  not added (not a text or PDF type this index reads): %s" % name)
+            continue
+        os.makedirs(dest, exist_ok=True)
+        dst = os.path.join(dest, name)
+        if os.path.abspath(dst) == p:
+            continue
+        if os.path.exists(dst):
+            if _digest(dst) == _digest(p):
+                print("  already added: %s" % name)
+                continue
+            stem, ext = os.path.splitext(name)          # same name, different file: keep both
+            dst = os.path.join(dest, "%s-%s%s" % (stem, _digest(p)[:8], ext))
+            if os.path.exists(dst):
+                print("  already added: %s" % name)
+                continue
+        shutil.copy2(p, dst)
+        copied += 1
+        print("  added: %s" % os.path.basename(dst))
+    if not copied:
+        print("Nothing new to index.")
+        return 0
+    b = pdf_backend_names()
+    print("PDF extraction backends: %s" % (", ".join(b) if b else "NONE — PDFs skipped"))
+    index_collection(ADDED, [dest])
+    list_collections()
+    return copied
+
+
 def main():
     ap = argparse.ArgumentParser(description="Index folders (text+PDFs) into a named collection.")
     ap.add_argument("-c", "--collection", default=None)
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--list-collections", action="store_true")
+    ap.add_argument("--add", action="store_true",
+                    help="the paths are single FILES: copy them into <index folder>/added and "
+                         "index them as the collection 'added' (type the command, drag the files in)")
     ap.add_argument("--allow-empty", action="store_true",
                     help="allow a run with 0 chunks to replace (clear) the collection")
     args = ap.parse_args()
@@ -675,7 +754,14 @@ def main():
         list_collections()
         return
     if not args.paths:
-        sys.exit("usage: rag_index.py [-c NAME] <folder> ...\n  rag_index.py --list-collections")
+        sys.exit("usage: rag_index.py [-c NAME] <folder> ...\n  rag_index.py --add <file> ...\n"
+                 "  rag_index.py --list-collections")
+    if args.add:
+        if args.collection not in (None, ADDED):
+            sys.exit("ERROR: --add always uses the collection '%s'; to index a folder into "
+                     "'%s' leave --add out." % (ADDED, args.collection))
+        add_files(args.paths)
+        return
     coll = args.collection or os.path.basename(os.path.normpath(os.path.expanduser(args.paths[0])))
     if not re.match(r"^[a-zA-Z0-9_\-]{1,32}$", coll) or coll.startswith("__"):
         sys.exit("ERROR: bad collection name '%s' (letters, digits, _ and -, max 32, no leading __)" % coll)
@@ -3191,6 +3277,7 @@ function heim-chat {
 }
 alias heim-ps="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama ps"
 alias heim-index="$PYRUN \$HOME/local-ai/rag_index.py"
+alias heim-add="$PYRUN \$HOME/local-ai/rag_index.py --add"
 alias heim-query="$PYRUN \$HOME/local-ai/rag_query.py"
 alias heim-audit="$PYRUN \$HOME/local-ai/audit_plugin.py"
 alias heim-test="$PYRUN \$HOME/local-ai/suite_check.py"

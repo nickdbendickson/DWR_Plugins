@@ -1,7 +1,7 @@
 #!/bin/zsh
 # first-run.zsh v1.0 - the first real run of vor on this Mac, in one command:
 #   1. install vor if it is not installed yet (needs Ollama: Heim's installer or the app)
-#   2. download the reference library: the ASDSO / FEMA set and the hazard + design catalog
+#   2. download the reference library: the ASDSO / FEMA set and the whole catalog
 #   3. index it (and OCR scanned pages when OCR is installed)
 #   4. score two models on the answer test (eval/questions.json) and pick the better one
 #   5. pack the results into ~/Desktop/vor-first-run.zip to send back for review
@@ -36,6 +36,18 @@ die()  { printf '  \033[1;31mX\033[0m   %s\n' "$*"; exit 1; }
 [[ -f "$HERE/vor.py" && -f "$HERE/fetch_asdso.py" ]] || die "run this from damit_ai/vor"
 LOCAL_AI="$HOME/local-ai"
 DR_HOME="${VOR_HOME:-$HOME/Vor}"
+# This run's log folder is made inside $DR_HOME two lines down, BEFORE the installer runs. On a
+# machine that still has the pre-rename ~/DamResearch that would create ~/Vor first, and
+# setup-vor.zsh only moves the old library across when ~/Vor does not exist. So do that one
+# move here, ahead of the mkdir. Same condition and same move as setup-vor.zsh.
+if [[ -z "${VOR_HOME:-}" && ! -d "$HOME/Vor" && -d "$HOME/DamResearch" ]]; then
+  if mv "$HOME/DamResearch" "$HOME/Vor" 2>/dev/null; then
+    ok "moved your library from ~/DamResearch to ~/Vor (renamed 2026-11-13; nothing was copied)"
+  else
+    DR_HOME="$HOME/DamResearch"
+    warn "could not move ~/DamResearch to ~/Vor; using the library where it is"
+  fi
+fi
 STAMP=$(date +%Y%m%d-%H%M)
 OUT="$DR_HOME/first-run-$STAMP"
 mkdir -p "$OUT"
@@ -109,19 +121,81 @@ else
     ok "${RAM_GB} GB: comparing $MODELS"
   fi
   "$PY" "$HERE/eval_vor.py" --list | tee "$OUT/eval-coverage.txt"
-  for m in ${=MODELS}; do
+  MODEL_LIST=( ${=MODELS} )
+  # mtime marker so the copy below can tell this run's reports from older ones
+  EVAL_MARK="$OUT/.eval-start"
+  : > "$EVAL_MARK"
+  for m in $MODEL_LIST; do
     if ! "$OLLAMA" list 2>/dev/null | awk '{print $1}' | grep -qx "$m"; then
-      printf '  pulling %s ...\n' "$m"
+      # Say what is about to happen. `ollama pull` draws its progress with carriage
+      # returns, which the tee into first-run.log swallows, so a 17-24 GB download can
+      # look exactly like a hung script for twenty minutes.
+      printf '  pulling %s (this model is not installed yet: expect 17-24 GB).\n' "$m"
+      printf '  The progress bar may not redraw here. To watch it: du -sh ~/.ollama/models\n'
       "$OLLAMA" pull "$m" || { warn "could not pull $m, skipped"; continue; }
     fi
-    "$PY" "$HERE/eval_vor.py" --model "$m" || warn "test run for $m stopped early"
+    # PYTHONUNBUFFERED: line 42 sends this whole script's stdout through `tee`, so the
+    # eval's stdout is a PIPE and Python block-buffers it. The eval prints a banner plus
+    # one "[n/16] <id> PASS 42 s" line per question -- about 1.5 KB, which never fills a
+    # 4 KB buffer -- so on a long model run the screen shows NOTHING for the best part of
+    # an hour and then the whole block at once. (`--list` above escapes this only because
+    # that process exits straight away, which flushes it.) Verified both ways.
+    PYTHONUNBUFFERED=1 "$PY" "$HERE/eval_vor.py" --model "$m" || warn "test run for $m stopped early"
+    # Unload before the next model. Every multi-model tier above pairs two models that
+    # do not fit in RAM together (32 GB: qwen3.6:27b ~17 GB + qwen3:30b-a3b ~18 GB), and
+    # eval_vor.py sets no keep_alive, so Ollama holds the one just scored for its
+    # default 5 minutes while the next one loads. The machine then swaps and the second
+    # half of the comparison is timed under memory pressure, which makes the two reports
+    # not comparable. `stop` is advisory: never let it fail the run.
+    if (( ${#MODEL_LIST} > 1 )); then
+      "$OLLAMA" stop "$m" >/dev/null 2>&1 || true
+    fi
   done
-  cp "$DR_HOME"/reports/eval_*.md "$DR_HOME"/reports/eval_*.json "$OUT"/ 2>/dev/null
+  # Copy only the reports THIS run produced. This used to be a bare
+  # `cp "$DR_HOME"/reports/eval_*` which swept up every report ever written, so the
+  # zip and the summary below mixed old runs in with the new ones. On 2026-11-12 that
+  # put a stale 11-10 report showing "qwen3.6:27b 0 / 16 passed" (all 16 ERROR, from an
+  # older Ollama that answered /api/chat with "structured output is unavailable") right
+  # next to the same model's real 9 / 16 from that day -- actively misleading for the
+  # one decision this step exists to inform.
+  for f in "$DR_HOME"/reports/eval_*.md(N) "$DR_HOME"/reports/eval_*.json(N); do
+    if [[ "$f" -nt "$EVAL_MARK" ]]; then
+      cp "$f" "$OUT/"
+    fi
+  done
+  rm -f "$EVAL_MARK"
   echo
+  if [[ -z "$OUT"/eval_*.json(N) ]]; then
+    warn "no report from this run: every model errored or was skipped (see above)"
+  fi
   for j in "$OUT"/eval_*.json(N); do
     "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("  %-22s %2d / %2d passed  %5.1f min" % (d["model"], d["passed"], d["scored"], d["minutes"]))' "$j"
   done
-  echo "  To use the better model:  zsh setup-vor.zsh --model TAG   (rebuilds the vor persona)"
+  # Name the winning tag instead of printing a literal "TAG". On 2026-11-13 Nick read that
+  # line as the command and ran `--model TAG`, which Ollama dutifully tried to pull
+  # ("pull model manifest: file does not exist"). Best = most passed, ties broken by the
+  # shorter run.
+  BEST=$("$PY" - "$OUT"/eval_*.json(N) <<'PY'
+import json, sys
+best = None
+for p in sys.argv[1:]:
+    try:
+        d = json.load(open(p))
+    except Exception:
+        continue
+    if not d.get("scored"):
+        continue
+    k = (d["passed"], -d["minutes"])
+    if best is None or k > best[0]:
+        best = (k, d["model"])
+print(best[1] if best else "")
+PY
+)
+  if [[ -n "$BEST" ]]; then
+    echo "  To use the better model:  zsh setup-vor.zsh --model $BEST   (rebuilds the vor persona)"
+  else
+    echo "  To use a model:  zsh setup-vor.zsh --model <a tag from the table above>   (rebuilds the vor persona)"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

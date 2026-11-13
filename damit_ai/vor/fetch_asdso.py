@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fetch_asdso.py v1.3 — download public dam-safety reference documents listed by ASDSO
+# fetch_asdso.py v1.4 — download public dam-safety reference documents listed by ASDSO
 # (damsafety.org), plus a curated catalog of agency and state sources, into the vor library,
 # with a citation for each file.
 #
@@ -15,7 +15,8 @@
 #                                               # hazard-classification sources (federal + state rules,
 #                                               # ND REG_05, TM-11, FEMA 333 ...) and dam-design references
 #                                               # (USBR, USACE, NRCS, NOAA HMR, FERC ...)
-#   python3 fetch_asdso.py --catalog hazard     # one group only (hazard | design)
+#   python3 fetch_asdso.py --catalog hazard     # one group only, or a comma list (hazard | design |
+#                                               # breach | software | consequence | data | hydrology | ponds)
 #   python3 fetch_asdso.py --catalog --asdso    # catalog and the ASDSO pages in one run
 #   python3 fetch_asdso.py --urls library-urls.txt
 #                                               # write a plain-text list of every catalog source
@@ -38,7 +39,7 @@ import os, re, sys, csv, json, time, hashlib, argparse, html
 import urllib.request, urllib.error, urllib.parse, urllib.robotparser
 from datetime import datetime, timezone
 
-VERSION = "1.3"
+VERSION = "1.4"
 SITE = "https://damsafety.org"
 UA = "damit-reference-fetch/%s (+research library; polite crawler)" % VERSION
 DEFAULT_PAGES = [
@@ -647,10 +648,35 @@ def write_sources_csv(folder, report):
             w.writerow({k: r.get(k, "") for k in w.fieldnames})
 
 
+def vor_home():
+    """1.4: the folder vor.py reads, by vor.py's own rule (its _home): VOR_HOME, else whichever
+    of ~/Vor and the pre-rename ~/DamResearch HOLDS THE INDEX, else ~/Vor.
+
+    Before 1.4 this script always wrote to ~/Vor. Run before setup-vor.zsh had moved an
+    existing ~/DamResearch across, that created ~/Vor, which made vor.py and the setup script
+    both treat the rename as done: the downloads landed in a second library and the indexed
+    one was left behind, with no message from anything."""
+    if os.environ.get("VOR_HOME"):
+        return os.path.expanduser(os.environ["VOR_HOME"])
+    new = os.path.expanduser("~/Vor")
+    old = os.path.expanduser("~/DamResearch")
+    # DAMRESEARCH_HOME: the old installers exported it, so a library kept somewhere else is
+    # still named by it in a shell whose rc file has not been rewritten yet.
+    legacy = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME") or old)
+    for d in (new, legacy, old):
+        if any(os.path.isfile(os.path.join(d, f)) for f in ("vor.db", "research.db")):
+            return d
+    if not os.path.isdir(new) and os.path.isdir(old):
+        return old
+    return new
+
+
 def main():
+    if sys.argv[1:] == ["--print-home"]:        # for the shell scripts: one rule, not four copies
+        print(vor_home())
+        return
     ap = argparse.ArgumentParser(description="Download public ASDSO-listed dam-safety references into the vor library.")
-    ap.add_argument("--out", default=os.path.join(os.path.expanduser(os.environ.get("VOR_HOME", "~/Vor")),
-                                                   "library", "asdso"))
+    ap.add_argument("--out", default=os.path.join(vor_home(), "library", "asdso"))
     ap.add_argument("--page", action="append", default=[], help="another ASDSO page to collect file links from")
     ap.add_argument("--no-default-pages", action="store_true", help="skip the built-in resource-center pages")
     ap.add_argument("--search", help="also search ASDSO's Dam Safety Resource Database for these words")
@@ -660,9 +686,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="list, download nothing")
     ap.add_argument("--catalog", nargs="?", const="all", metavar="GROUPS",
                     help="download the curated catalog (reference_sources.json) instead of the ASDSO pages: "
-                         "all (default), or a comma list of groups, e.g. hazard or design")
+                         "all (default), or a comma list of groups, e.g. hazard or breach,ponds")
     ap.add_argument("--catalog-file", default=CATALOG_FILE, help="catalog JSON (default: next to this script)")
-    ap.add_argument("--catalog-out", default=os.path.join(os.path.expanduser(os.environ.get("VOR_HOME", "~/Vor")),
+    ap.add_argument("--catalog-out", default=os.path.join(vor_home(),
                                                            "library", "references"),
                     help="folder for catalog downloads (default ~/Vor/library/references)")
     ap.add_argument("--asdso", action="store_true", help="with --catalog: also run the ASDSO pages")

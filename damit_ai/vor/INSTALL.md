@@ -1,4 +1,4 @@
-# vor: local research assistant for dam-safety literature
+# Vor: local research assistant for dam-safety literature
 
 A second local AI that sits next to `heim`. Heim triages code; `vor` reads your library
 of dam-safety, dam-design and flood-hazard publications and answers with citations to the
@@ -13,13 +13,13 @@ document and page. It runs on your Mac through Ollama, so nothing leaves the mac
 
 | Piece | Name | Kept apart from heim by |
 |---|---|---|
-| Chat model | `vor` (Ollama persona, citation-first system prompt) | own name; heim's `heim` persona is untouched |
+| Chat model | `vor` (Ollama persona, citation-first system prompt) | own name; Heim's `heim` persona is untouched |
 | Embedding model | `qwen3-embedding:0.6b` (falls back to `nomic-embed-text`) | own model; heim keeps `nomic-embed-text` |
 | Library database | `~/Vor/vor.db` | heim uses `~/local-ai/knowledge.db` |
 | Drop folder | `~/Vor/library/` | |
 | Reports | `~/Vor/reports/` | |
 | Python | conda env `ndvor` (Python 3.12, numpy, PyMuPDF) | never touches `ndqgis` or `ndheim` |
-| Commands | `vor ...`, `vor-chat`, and `damchain research ...` | |
+| Commands | `vor ...`, `vor-chat`, and `damchain vor ...` | |
 
 ## Which model, and the memory trade-offs
 
@@ -48,7 +48,7 @@ You need Ollama, which `setup-local-heim.sh` / `install_all.zsh` already install
 `~/local-ai/bin`, or the Ollama app. Conda is optional; without it a venv is used.
 
 ```zsh
-cd damit_ai/vor          # or the unpacked vor zip folder
+cd damit_ai/vor          # or the unpacked Vor zip folder
 zsh setup-vor.zsh            # add --ocr to make scanned PDFs searchable
 source ~/.zshrc                       # or open a new Terminal tab
 ```
@@ -56,7 +56,7 @@ source ~/.zshrc                       # or open a new Terminal tab
 Options: `--big`, `--small`, `--model TAG`, `--ocr`. Re-running is safe. Your `~/.zshrc` is
 backed up first, and the installer only rewrites its own marked block.
 
-`damchain research ...` works only if `~/local-ai/dam_chain.py` is a copy we shipped (1.3). The
+`damchain vor ...` works only if `~/local-ai/dam_chain.py` is a copy we shipped (1.3). The
 installer upgrades that copy to 1.4 and keeps the old one as `dam_chain.py.bak-1.3`. If you have
 edited the file, it is left alone; use `vor` directly.
 
@@ -68,6 +68,8 @@ heim-start                                     # Ollama server in its own tab (s
 # 1. Build the library: drop PDFs (sub-folders fine) into ~/Vor/library, then
 vor ingest                             # re-run any time; only new/changed files are read
 vor ingest ~/Zotero/storage            # or index a folder where it already lives
+vor add ~/Downloads/TR-66.pdf          # one file: copied into ~/Vor/library/added and indexed.
+                                       # Type `vor add ` and drag the file into the window.
 vor list                               # what's in, pages, and pages with no text (scanned)
 
 # 2. Fix citations (makes the references readable)
@@ -79,8 +81,9 @@ vor meta fema_p946 --title "Federal Guidelines for Inundation Mapping..." --year
 vor search "Froehlich breach width side slope"      # passages + pages, no model, instant
 vor ask "What flow depth do federal guidelines use for the inundation boundary?"
 vor research "How should breach formation time be chosen for small homogeneous earthen dams, and how uncertain is it?"
-vor chat                               # follow-ups; prefix a question with ! for deep research
-damchain research ask "..."                    # same thing through damchain
+vor chat                               # follow-ups; prefix a question with ! for deep research.
+                                       # Drag a file into the chat window to add it on the spot.
+damchain vor ask "..."                         # same thing through damchain
 vor doctor                             # checks Ollama, both models, the library
 ```
 
@@ -142,7 +145,7 @@ The test alone:
 
 ```zsh
 python3 eval_vor.py --list                 # which test questions have their source indexed
-python3 eval_vor.py --model qwen3.6:27b    # score one model (default: the vor persona)
+python3 eval_vor.py --model qwen3.6:27b    # score one model (default: the Vor persona)
 ```
 
 `eval/questions.json` has 16 questions whose answers were read off the PDF pages: FEMA 333 hazard
@@ -154,10 +157,11 @@ expected fact is in the answer **and** a quote the code checked comes from the r
 page (+/-1). Questions whose source is not indexed are skipped. Add your own questions in the same
 format; use questions you know the answer to.
 
-### Hazard-classification and dam-design sources (the catalog)
+### The catalog: hazard, design, breach, software, consequence, data, hydrology, ponds
 
-`reference_sources.json` lists 58 more sources, and `fetch_asdso.py --catalog` downloads them into
-`~/Vor/library/references/<group>/`:
+`reference_sources.json` lists 121 more sources in eight groups, and `fetch_asdso.py --catalog`
+downloads them into `~/Vor/library/references/<group>/`. About a third are `manual`: paywalled papers
+and documents with no stable public link, which the run lists in `sources.csv` for you to get by hand.
 
 - **hazard** (39): the sources cited in the "US Dam Hazard Classification" papers: FEMA 333 and P-919,
   USBR ACER TM-11, DSO-99-06 and RCEM, NRCS TR-210-60, FERC Ch. 2, USFWS 361 FW 2, CRS R45981 and
@@ -167,10 +171,26 @@ format; use questions you know the answer to.
   chapters, Wahl's breach-parameter review (DSO-98-004), USACE EM 1110-2-1420 / -2300 / -1902 / -1603 /
   -1913 and ER 1110-2-1156, HEC TD-39 (HEC-RAS dam break), NOAA HMR 51 / 52 / 55A and Atlas 14 Vol. 8,
   the FERC Engineering Guidelines, NY's dam design guidelines and TCEQ GI-364.
+- **breach** (18): FEMA P-946, FERC Chapter R21, HEC Research Note 5, NRCS TR-66, the Ohio and Washington
+  dam-break guidance, HR Wallingford's breach guide, USBR DSO-04-01, the DSS-WISE Lite technical report,
+  and the breach-parameter papers themselves: Froehlich (1995, 2008, 2016), MacDonald and
+  Langridge-Monopolis (1984), Von Thun and Gillette (1990), Xu and Zhang (2009), Pierce, Thornton and
+  Abt (2010). The papers are paywalled, so every one of them is `manual`.
+- **software** (26): LISFLOOD-FP 8.0 to 8.3, Gmsh, ANUGA and HEC-RAS documentation, the GDAL VRT driver
+  page and the QGIS 4 plugin migration notes. Heim indexes this folder as its `engine_docs` collection.
+- **consequence** (6): flood hazard to people outside ACER TM-11: AIDR Guideline 7-3 (the H1-H6 curves),
+  Defra FD2321 TR1 and TR2, the DHS 2011 loss-of-life and economic-consequence reports, and the LifeSim
+  technical reference manual.
+- **data** (3): what the suite's inputs mean: the NSI technical documentation, the NID data dictionary and
+  the USGS Lidar Base Specification (point classes and hydro-flattening).
+- **hydrology** (6): USGS SIR 2015-5096 (North Dakota peak-flow regressions), Bulletin 17C, NEH Part 630,
+  WSP 2339 (Manning's roughness), FHWA HDS-5 (culverts) and NDDOT Design Manual chapter V.
+- **ponds** (4): NRCS Conservation Practice Standard 378 (national, North Dakota, Iowa) and Agriculture
+  Handbook 590.
 
 ```zsh
 python3 fetch_asdso.py --catalog --dry-run   # the list
-python3 fetch_asdso.py --catalog             # both groups (or --catalog hazard / --catalog design)
+python3 fetch_asdso.py --catalog             # every group (or one or more: --catalog breach,ponds)
 vor ingest
 ```
 
@@ -229,7 +249,7 @@ second.
 
 - Tested in the cloud with a stand-in Ollama server and real PDFs. Ingest, page labels, hybrid
   search, quote checking, rejected quotes, reports, chat follow-ups, the installer and
-  `damchain research` all ran. Answer quality with the real models has NOT been tested; Ollama's
+  `damchain vor` all ran. Answer quality with the real models has NOT been tested; Ollama's
   registry is blocked from the cloud. Try a few questions whose answers you know first.
 - Tables and equations often come out of PDFs garbled. Check equations on the page itself, every time.
 - Retrieval finds what is in your library and nothing else. "Not covered" usually means a missing
@@ -249,9 +269,9 @@ Delete the block between `# >>> vor` and `# <<< vor` in `~/.zshrc`, then
 
 - `setup-vor.zsh`: installer
 - `vor.py`: the tool (stdlib + optional numpy / PyMuPDF)
-- `../heim/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
+- `../heim/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `vor` pass-through, nothing else changed
 - `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set, and with `--catalog` the sources in `reference_sources.json`
-- `reference_sources.json`: catalog of hazard-classification and dam-design sources (edit to add more)
+- `reference_sources.json`: the catalog of sources in eight groups (edit to add more)
 - `first-run.zsh`: install, download, index, test and pack the results, in one command
 - `eval_vor.py` + `eval/questions.json`: the answer test
 - `READING-LIST.md`: a starter library of public dam-safety publications
