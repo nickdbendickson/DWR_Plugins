@@ -51,6 +51,32 @@ WHAT IT LOOKS FOR
      the crest). In Wells County (2026-11-12, 88 fills marked from the aerial) every dam a
      reviewer confirmed was under 400 m; 41 of the 76 rejected fills were 600 m or more.
 
+  Finder 0.5 adds evidence fields (they describe a fill; none of them drops one, except that one
+  pool is held by one fill - item 7):
+  7. THE POOL'S OUTLET. A dam is the fill at its pool's way out. outlet_dist = how far the spill
+     point (step 5) is from the raised fill (step 6); within outlet_m the fill holds the pool at
+     its outlet (overtopping or an auxiliary spillway at its end), further away the pool gets out
+     somewhere else and this hump is not what holds it. Several humps whose pools get out at the
+     same spill point (spoil heaps round one dug pit, a road crossing a pond) are one pool: only
+     the fill nearest that outlet is kept (one_per_pool). Contributing area at the crest (from
+     the caller's flow grid) and its ratio to storage: a "dam" with almost no drainage is a pit,
+     a hilltop or a ridge nose.
+  8. ABOVE ORIGINAL GROUND (the NRCS 378 test: an embankment pond holds 3 ft or more of water
+     against its fill above the original ground on the centerline; a dug pond holds none).
+     Original ground under the fill on the stream line is put back by a straight line from where
+     the pool's water line meets the ground upstream on the line to the toe (or, when the pool
+     runs off the line, from the toe up the valley's own fall below it). ag_head = spill - that
+     ground. below_frac = the share of the pool's volume below that original ground, carried up
+     the valley at its own fall from the crest: ~1 for a pit dug into level ground, ~0 for a pool
+     in a valley behind a fill. Neither reads the pool surface. This is reasoning from the definitions, not a published method.
+  9. SHAPE. Of the pool at the spill level: rectangularity (area / smallest rectangle), elongation
+     (long / short side), the median slope of its inner wall (dug pits ~1.5:1 = 0.67), the count
+     of raised spoil mounds within spoil_m of it that are not the fill. Of the fill on the stream
+     line: the flat top width (within 0.15 m of the crest) and the side-slope sum (upstream +
+     downstream face, horizontal per vertical; NRCS fills are 5:1 or flatter).
+  10. TERRAIN round the crest (terrain_m): relief (95th - 5th percentile ground) and median slope,
+     for terrain-aware scoring.
+
 Every threshold is a FinderParams value the engineer chooses; the defaults are starting values,
 not standards. The result is a list of candidates for review against an aerial image, not a
 survey and not a determination.
@@ -64,6 +90,8 @@ try:  # scipy ships with the QGIS bundles
     from scipy import ndimage as ndi
 except Exception:  # pragma: no cover
     ndi = None
+
+from . import ridges as rd
 
 FT = 0.3048
 AF_M3 = 1233.4818375
@@ -95,6 +123,10 @@ class FinderParams:
     long_fill_m: float = 600.0          # a raised fill this long is a road / rail / canal / levee
     ridge_width_m: float = 75.0         # wider than a fill: the opening that takes it away
     ridge_half_m: float = 600.0         # half-width of the window the fill length is measured in
+    outlet_m: float = 45.0              # spill point this close to the fill = it holds the outlet
+    one_per_pool: bool = True           # keep only the fill nearest each pool's outlet
+    spoil_m: float = 40.0               # spoil mounds looked for this far from the pool
+    terrain_m: float = 600.0            # half-width of the window for relief / slope
 
 
 @dataclass
@@ -126,6 +158,24 @@ class Embankment:
     spill_dist_m: float = 0.0           # from the crest point on the line
     line_src: str = ""                  # set by the caller (stream line / DEM drainage)
     ridge_len_m: float = 0.0            # length of the raised fill along its own axis (step 6)
+    # Finder 0.5 evidence (steps 7-10); NaN = not measured
+    outlet_dist_m: float = float("nan")  # spill point to the raised fill (step 7)
+    spill_on_fill: bool = False         # outlet_dist <= outlet_m
+    same_pool: int = 0                  # other humps on this pool that were dropped
+    drain_m2: float = float("nan")      # contributing area at the crest
+    pool_xy: tuple = None               # centre of the pool at the spill level
+    orig_m: float = float("nan")        # original ground under the fill on the line (step 8)
+    ag_head_m: float = float("nan")     # spill - original ground
+    below_frac: float = float("nan")    # share of the pool volume below the ring's ground
+    rect: float = float("nan")          # pool rectangularity (step 9)
+    elong: float = float("nan")         # pool long / short side
+    wall_slope: float = float("nan")    # median inner-wall slope of the pool (rise / run)
+    mounds: int = 0                     # spoil mounds beside the pool, not the fill
+    top_w_m: float = float("nan")       # flat top of the fill on the line
+    side_sum: float = float("nan")      # upstream + downstream face, H per V
+    relief_m: float = float("nan")      # terrain round the crest (step 10)
+    slope_pct: float = float("nan")
+    fill_road: bool = False             # the raised fill touches a road / rail (road-seeded)
 
 
 def _need_scipy():
@@ -133,23 +183,36 @@ def _need_scipy():
         raise RuntimeError("scipy is required for the embankment finder")
 
 
-def line_cells(xy, gt, shape):
+def line_cells(xy, gt, shape, with_dist=False):
     """Grid cells (row, col) along a polyline, in order, each once (consecutive duplicates
-    dropped), sampled every half cell. `gt` is a GDAL geotransform with no rotation."""
+    dropped), sampled every half cell. `gt` is a GDAL geotransform with no rotation. with_dist:
+    also the distance along the line (m) of each cell - the middle of the stretch of line inside
+    it. The samples are one cell apart across the grid and up to 1.41 cells apart on the skew, so
+    a profile's index times the cell size is not metres: use these distances."""
     cell = abs(gt[1])
-    out = []
+    out, spans = [], []
     last = None
+    acc = 0.0
     pts = [(float(x), float(y)) for x, y in xy]
     for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
-        n = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / (cell * 0.5))))
+        seg = math.hypot(x1 - x0, y1 - y0)
+        n = max(1, int(math.ceil(seg / (cell * 0.5))))
         for k in range(n + 1):
             t = k / n
             x, y = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
             c = int(math.floor((x - gt[0]) / gt[1]))
             r = int(math.floor((y - gt[3]) / gt[5]))
-            if 0 <= r < shape[0] and 0 <= c < shape[1] and (r, c) != last:
+            if not (0 <= r < shape[0] and 0 <= c < shape[1]):
+                continue
+            if (r, c) != last:
                 out.append((r, c))
+                spans.append([acc + t * seg, acc + t * seg])
                 last = (r, c)
+            else:
+                spans[-1][1] = acc + t * seg
+        acc += seg
+    if with_dist:
+        return out, [0.5 * (a + b) for a, b in spans]
     return out
 
 
@@ -205,8 +268,9 @@ def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
     no ground below the hump."""
     end = min(len(z) - 1, e + toe_k)
     step = m * cell * math.tan(math.radians(face_deg))
-    bench = max(1, int(round(bench_m / cell)))
+    bench = max(m + 1, int(round(bench_m / cell)))
     k = e
+    cut = False
     while k < end:
         k2 = min(end, k + m)
         if not (np.isfinite(z[k]) and np.isfinite(z[k2])):
@@ -214,15 +278,28 @@ def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
         if z[k] - z[k2] >= step * (k2 - k) / m:
             k += 1                                      # still on the steep face
             continue
-        look = z[k:min(end, k + bench) + 1]             # flattened: a bench only if it drops again
-        if np.isfinite(look).any() and z[k] - np.nanmin(look) >= step:
-            k += 1
+        # flattened: a bench only if the ground falls as steeply as a face again within bench_m
+        # (a slope test - a valley floor of a few per cent falls a lot over bench_m too, but never
+        # as steeply as a fill's face)
+        again = None
+        for j in range(k + 1, min(end, k + bench) - m + 1):
+            if np.isfinite(z[j]) and np.isfinite(z[j + m]) and z[j] - z[j + m] >= step:
+                again = j
+                break
+        if again is not None:
+            k = again
             continue
+        cut = k + bench > end                           # the look-ahead ran into the search end
         break                                           # the valley floor / outlet channel: stop
+    # the m-sample window that stopped the walk can still hold the last steep sample(s) of the
+    # face: finish it one sample at a time (a draw under tan(face_deg) falls less than this a sample)
+    one = cell * math.tan(math.radians(face_deg))
+    while k < end and np.isfinite(z[k]) and np.isfinite(z[k + 1]) and z[k] - z[k + 1] >= one:
+        k += 1
     seg = z[e:k + 1]
     if not np.isfinite(seg).any():
         return None, False
-    return e + int(np.nanargmin(seg)), bool(k >= end)
+    return e + int(np.nanargmin(seg)), bool(k >= end or cut)
 
 
 def _window(dem, r, c, half):
@@ -259,12 +336,9 @@ def spill_level(win, u, d, lo, hi, tol=0.02):
 
 def pool_at(win, u, level, cell):
     """(storage m3, area m2, touches the window edge) of the pool of {ground < level} holding u."""
-    g = np.where(np.isfinite(win), win, np.inf)
-    lab, _n = ndi.label(g < level)
-    k = lab[u]
-    if k == 0:
+    m = pool_mask(win, u, level)
+    if not m.any():
         return 0.0, 0.0, False
-    m = lab == k
     vol = float((level - win[m]).sum() * cell * cell)
     edge = bool(m[0, :].any() or m[-1, :].any() or m[:, 0].any() or m[:, -1].any())
     return vol, float(m.sum() * cell * cell), edge
@@ -325,35 +399,55 @@ def spill_point(win, u, d, spill, tol=0.02, limit=400):
     return (int(rr[k]) + r0, int(cc[k]) + c0), int(sill.sum())
 
 
-def ridge_length(dem, r, c, cell, crest_height, width_m=75.0, half_m=600.0):
-    """Length (m) of the raised fill through cell (r, c): the cells standing more than
-    max(0.5 m, 0.3 x crest_height) above the grey opening of the ground (size width_m) that
-    connect to the crest, measured along their long axis, within half_m of the crest.
-    0 when the crest does not stand out (a fill wider than width_m)."""
+def raised_fill(dem, r, c, cell, crest_height, width_m=75.0, half_m=600.0):
+    """(length m, mask, (r0, c0), rel) of the raised fill through cell (r, c): the cells standing
+    more than max(0.5 m, 0.3 x crest_height) above the grey opening of the ground (size width_m)
+    that connect to the crest, measured along their long axis, within half_m of the crest. `mask`
+    is that fill in the window whose top-left cell of `dem` is (r0, c0); `rel` is every cell's
+    height above the opening there. Length 0 (and an empty mask) when the crest does not stand out
+    (a fill wider than width_m)."""
     half = max(4, int(round(half_m / cell)))
     r0, r1, c0, c1 = _window(dem, r, c, half)
     win = dem[r0:r1, c0:c1]
     ok = np.isfinite(win)
+    empty = np.zeros(win.shape, bool)
     if not ok.any():
-        return 0.0
+        return 0.0, empty, (r0, c0), np.zeros(win.shape)
     zz = np.where(ok, win, np.nanmax(win))
     k = max(3, int(round(width_m / cell)) | 1)
-    rel = zz - ndi.grey_opening(zz, size=(k, k))
+    rel = np.where(ok, zz - ndi.grey_opening(zz, size=(k, k)), 0.0)
     m = (rel > max(0.5, 0.3 * crest_height)) & ok
     lab, _n = ndi.label(m)
     rr, cc = r - r0, c - c0
     sub = lab[max(0, rr - 3):rr + 4, max(0, cc - 3):cc + 4]
     ids = sub[sub > 0]
     if not len(ids):
-        return 0.0
-    ys, xs = np.nonzero(lab == np.bincount(ids).argmax())
+        return 0.0, empty, (r0, c0), rel
+    fill = lab == np.bincount(ids).argmax()
+    ys, xs = np.nonzero(fill)
     if len(xs) < 3:
-        return float(len(xs) * cell)
+        return float(len(xs) * cell), fill, (r0, c0), rel
     pts = np.c_[xs, ys].astype(float) * cell
     pts -= pts.mean(axis=0)
     _w, v = np.linalg.eigh(np.cov(pts.T))
     pr = pts @ v[:, -1]
-    return float(pr.max() - pr.min() + cell)
+    return float(pr.max() - pr.min() + cell), fill, (r0, c0), rel
+
+
+def ridge_length(dem, r, c, cell, crest_height, width_m=75.0, half_m=600.0):
+    """Length (m) of the raised fill through cell (r, c) (see raised_fill)."""
+    return raised_fill(dem, r, c, cell, crest_height, width_m, half_m)[0]
+
+
+def pool_mask(win, u, level):
+    """The pool of {ground < level} holding cell u of `win` (bool grid; all False when u is not
+    under the level)."""
+    g = np.where(np.isfinite(win), win, np.inf)
+    lab, _n = ndi.label(g < level)
+    k = lab[u]
+    if k == 0:
+        return np.zeros(win.shape, bool)
+    return lab == k
 
 
 def flat_pool_area(win, u, up_level, flat_tol, cell):
@@ -383,19 +477,243 @@ def upstream_slope(z, ku, n, cell):
     return max(0.0, float(z[a] - z[ku]) / ((ku - a) * cell))
 
 
-def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None):
+def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0, tol_m=0.15, beyond_m=60.0, hump_m=0.5):
+    """(original ground at the crest index kc, its rise per metre going upstream, how it was
+    found) of a downstream-ordered profile z whose hump starts at ks and has its toe at kd and
+    spill level `spill`. At the crest: a straight line from where the pool's water line meets the
+    ground upstream on the line (the first sample above the hump at or over the spill level) to the toe
+    - the valley floor the fill was built on; when the pool runs off the line upstream, the toe
+    plus the valley's own fall below it (the profile over down_m below the toe) over the
+    crest-to-toe distance. The rise carried on upstream is the smaller of that line's and the
+    valley's own fall below the toe (the pool can end on another fill upstream, which is not
+    ground). Never reads the pool surface: both ends are ground the water does not cover.
+    The fall below the toe is fitted from the foot of the face (the toe can sit a sample up it) to
+    the next hump at least hump_m high, less that hump's lower face (another fill or a road below
+    this one is not the valley; floor micro-relief is not a hump); a pool end whose ground drops
+    back below the water line within beyond_m further up is the face of another fill, not the
+    valley side, and is not used.
+    (NaN, 0, "") when neither can be had."""
+    toe = float(z[kd])
+    fall = None
+    n = max(3, int(round(down_m / cell)))
+    seg = z[kd:min(len(z), kd + n + 1)]
+    head, j0 = seg[:4], 0                               # kd can sit one sample up the face
+    if np.isfinite(head).any():
+        low = np.nanmin(head)
+        j0 = next(i for i, v in enumerate(head) if np.isfinite(v) and v <= low + tol_m)
+    run, stop = np.inf, len(seg)
+    for i in range(j0, len(seg)):
+        v = seg[i]
+        if not np.isfinite(v):
+            continue
+        if v > run + hump_m:                            # a real hump (a fill, a road): stop the fit
+            stop = i
+            break
+        run = min(run, v)
+    if stop < len(seg):                                 # and leave out that hump's lower face
+        while stop - 1 > j0 and np.isfinite(seg[stop - 1]) and \
+                seg[stop - 1] > np.nanmin(seg[j0:stop]) + tol_m:
+            stop -= 1
+    seg = seg[j0:stop]
+    f = np.isfinite(seg)
+    if f.sum() >= 3:
+        xs = np.flatnonzero(f) * cell
+        fall = max(0.0, -float(np.polyfit(xs, seg[f], 1)[0]))
+    kp = None
+    for k in range(ks - 1, -1, -1):
+        if not np.isfinite(z[k]):
+            break
+        if z[k] >= spill:
+            kp = k
+            break
+    if kp is not None:
+        far = z[max(0, kp - max(2, int(round(beyond_m / cell)))):kp]
+        if np.isfinite(far).any() and np.nanmin(far) < spill - tol_m:
+            kp = None                                   # another fill's face, not the valley side
+    if kp is not None and kd > kp:
+        rise = (float(z[kp]) - toe) / ((kd - kp) * cell)
+        orig = toe + rise * (kd - kc) * cell
+        return orig, rise if fall is None else min(rise, fall), "pool end to toe"
+    if fall is not None:
+        return toe + fall * (kd - kc) * cell, fall, "valley fall below the toe"
+    return float("nan"), 0.0, ""
+
+
+def below_grade(win, pool, spill, crest_rc, orig, rise, cell):
+    """Share of the pool's volume (at the spill level) below the original ground: the line of
+    original_ground carried upstream from the crest (orig at the crest, `rise` per metre away from
+    it). A pool behind a fill sits on the old valley floor - on that line or above it (~0); a pit
+    dug into the ground is below it (~1). NaN without a pool or an original ground."""
+    if not pool.any() or not math.isfinite(orig):
+        return float("nan")
+    pr, pc = np.nonzero(pool)
+    zp = win[pr, pc]
+    dist = np.hypot(pr - crest_rc[0], pc - crest_rc[1]) * cell
+    grade = orig + rise * dist
+    depth = spill - zp
+    tot = float(np.nansum(depth))
+    if tot <= 0:
+        return float("nan")
+    return float(np.nansum(np.clip(grade - zp, 0.0, depth))) / tot
+
+
+def pool_shape(win, pool, cell):
+    """(rectangularity, elongation, median inner-wall slope) of a pool mask: its area over its
+    smallest rectangle's, that rectangle's long over short side, and the median ground slope
+    (rise per run) over its edge cells (the pool's own wall). NaNs for fewer than 4 cells."""
+    rows, cols = np.nonzero(pool)
+    if len(rows) < 4:
+        return float("nan"), float("nan"), float("nan")
+    area, a, b = rd.min_rect(rows, cols, cell)
+    rect = float(len(rows) * cell * cell / area) if area > 0 else float("nan")
+    elong = float(a / b) if b > 0 else float("nan")
+    r0, r1 = max(0, rows.min() - 1), min(win.shape[0], rows.max() + 2)
+    c0, c1 = max(0, cols.min() - 1), min(win.shape[1], cols.max() + 2)
+    sub = win[r0:r1, c0:c1]
+    pm = pool[r0:r1, c0:c1]
+    edge = pm & ~ndi.binary_erosion(pm, border_value=0)
+    gz = np.where(np.isfinite(sub), sub, np.nanmedian(sub))
+    gy, gx = np.gradient(gz, cell)
+    slope = np.hypot(gx, gy)[edge]
+    return rect, elong, float(np.median(slope)) if len(slope) else float("nan")
+
+
+def spoil_mounds(rel, fill, pool, cell, near_m=40.0, min_m=0.5, min_cells=3):
+    """Raised mounds (rel > min_m, at least min_cells) within near_m of the pool that are not the
+    fill (`rel`, `fill`, `pool`: grids of one window): the spoil heaps a dug pit has along its
+    sides. Count."""
+    if not pool.any():
+        return 0
+    near = ndi.binary_dilation(pool, iterations=max(1, int(round(near_m / cell))))
+    m = (rel > min_m) & near & ~pool & ~ndi.binary_dilation(fill, iterations=1)
+    lab, n = ndi.label(m)
+    if not n:
+        return 0
+    sizes = np.bincount(lab.ravel())[1:]
+    return int((sizes >= min_cells).sum())
+
+
+def fill_profile(z, s, kc, kd, crest, up, toe, cell, top_tol=0.15, d=None):
+    """(flat top width m, side-slope sum H per V) of the fill on the stream profile: the run of
+    samples round the crest within top_tol of it, and the upstream face (hump start to crest,
+    over crest - upstream level) plus the downstream face (crest to toe, over crest - toe). A
+    line crossing the fill on the skew reads both wider / flatter than square across. d: the
+    distance along the line of each sample (line_cells with_dist); without it, index x cell."""
+    # the top's edges are interpolated where the profile crosses crest - top_tol; each face's slope
+    # is read from samples ON the face (above its base, below the flat top; its middle half when
+    # two or more samples are there): interpolating across the waterline or the top edge reads a
+    # face about one sample long flatter on every sample phase. NaN when a face is not resolved.
+    def cross(level, step, stop):
+        j = kc
+        while j != stop:
+            a_, b_ = z[j], z[j + step]
+            if not (np.isfinite(a_) and np.isfinite(b_)):
+                return None
+            if a_ >= level >= b_ and a_ != b_:
+                return j + step * (a_ - level) / (a_ - b_)
+            j += step
+        return None
+
+    def run(i, j):                                      # metres between fractional indices
+        if d is None:
+            return abs(j - i) * cell
+        k = np.arange(len(d))
+        return abs(float(np.interp(j, k, d)) - float(np.interp(i, k, d)))
+
+    lo, hi = max(s - 1, 0), kd
+    ta, tb = cross(crest - top_tol, -1, lo), cross(crest - top_tol, 1, hi)
+    top = run(ta, tb) if ta is not None and tb is not None else float("nan")
+    def face(base, h, step, stop):
+        mid, on, j = [], [], kc
+        while j != stop:
+            v = z[j]
+            if not np.isfinite(v):
+                return None
+            if v <= base + top_tol:
+                break
+            if v < crest - top_tol:
+                on.append(j)
+                if base + 0.25 * h < v < base + 0.75 * h:
+                    mid.append(j)
+            j += step
+        use = mid if len(mid) >= 2 else on
+        if len(use) < 2 or z[use[0]] <= z[use[-1]]:
+            return None                                 # the face is not resolved at this spacing
+        return run(use[0], use[-1]) / (z[use[0]] - z[use[-1]])
+
+    hu, hd = crest - up, crest - toe
+    side = float("nan")
+    if hu > 0.2 and hd > 0.2:
+        fu, fd = face(up, hu, -1, lo), face(toe, hd, 1, hi)
+        if fu is not None and fd is not None:
+            side = fu + fd
+    return top, side
+
+
+def terrain_round(dem, r, c, cell, half_m=600.0):
+    """(relief m, median slope %) of the ground within half_m of cell (r, c): the 95th minus the
+    5th percentile, and the median of the slope - flat prairie, rolling drift, cut breaks /
+    badlands."""
+    half = max(4, int(round(half_m / cell)))
+    r0, r1, c0, c1 = _window(dem, r, c, half)
+    sub = dem[r0:r1:2, c0:c1:2]
+    f = np.isfinite(sub)
+    if f.sum() < 16:
+        return float("nan"), float("nan")
+    relief = float(np.percentile(sub[f], 95) - np.percentile(sub[f], 5))
+    gz = np.where(f, sub, np.nanmedian(sub))
+    gy, gx = np.gradient(gz, 2.0 * cell)
+    return relief, float(np.median(np.hypot(gx, gy)[f]) * 100.0)
+
+
+def one_per_pool(cands, cell=3.0, level_tol=0.15):
+    """One fill per pool: humps whose pools get out at the same spill point (within 2 cells, at
+    the same level) hold one pool - keep the one nearest that outlet (then the higher), count
+    the others on it (same_pool)."""
+    out, groups = [], {}
+    for c in cands:
+        if not c.spill_xy:
+            out.append(c)
+            continue
+        key = None
+        for k, g in groups.items():
+            h = g[0]
+            if (math.hypot(c.spill_xy[0] - h.spill_xy[0], c.spill_xy[1] - h.spill_xy[1]) <= 2.0 * cell
+                    and abs(c.spill_m - h.spill_m) <= level_tol):
+                key = k
+                break
+        if key is None:
+            groups[len(groups)] = [c]
+        else:
+            groups[key].append(c)
+
+    def near(e):
+        d = e.outlet_dist_m if math.isfinite(e.outlet_dist_m) else e.spill_dist_m
+        return (d, -e.height_m)
+
+    for g in groups.values():
+        g.sort(key=near)
+        if len(g) > 1:                                  # a second pass (across tiles) adds up
+            g[0].same_pool += sum(1 + e.same_pool for e in g[1:])
+            g[0].notes = [t for t in g[0].notes if not t.endswith("(one fill per pool)")]
+            g[0].notes.append("{} other hump(s) on this pool dropped (one fill per pool)".format(g[0].same_pool))
+        out.append(g[0])
+    return out
+
+
+def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None, drain_area=None):
     """Embankments across the stream `lines` (lists of (x, y) in the grid CRS) of `dem` (2-D, m,
     NaN or <= -9998 = no data) with geotransform `gt` (square cells, north up).
     `road_mask`: bool grid, True on roads / railroads (dilated by the caller).
     `keep(x, y)`: optional filter on the crest point (e.g. the core of a tile).
-    Returns a list of Embankment, deduplicated, highest first."""
+    `drain_area(x, y)`: optional contributing area (m2) at a point, from the caller's flow grid.
+    Returns a list of Embankment, one per pool (params.one_per_pool), deduplicated, highest
+    first."""
     _need_scipy()
     p = params or FinderParams()
     dem = np.asarray(dem, float).copy()
     dem[dem <= -9998.0] = np.nan
     cell = abs(gt[1])
-    max_len = max(1, int(round(p.max_len_m / cell)))
-    toe_k = max(1, int(round(p.toe_search_m / cell)))
     half = max(4, int(round(p.window_m / cell)))
     found = []
     for li, xy in enumerate(lines):
@@ -403,18 +721,27 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
             break
         if len(xy) < 2:
             continue
-        cells = line_cells(xy, gt, dem.shape)
+        cells, dist = line_cells(xy, gt, dem.shape, with_dist=True)
         if len(cells) < 5:
             continue
+        # metres between profile samples on this line (1 to 1.41 cells, by its angle to the grid),
+        # leaving out the jump where the line runs off the grid and comes back
+        st = np.diff(np.asarray(dist, float))
+        ok = st <= 2.0 * cell
+        cl = float(st[ok].mean()) if ok.any() and st[ok].mean() > 0 else cell
+        max_len = max(1, int(round(p.max_len_m / cl)))
+        toe_k = max(1, int(round(p.toe_search_m / cl)))
         z = np.array([dem[r, c] for r, c in cells])
+        z[np.flatnonzero(~ok) + 1] = np.nan             # no hump or toe walk across such a gap
         if orient_down(z):
-            cells, z = cells[::-1], z[::-1]
+            cells, z, dist = cells[::-1], z[::-1], dist[::-1]
+        dist = np.asarray(dist, float)
         for s, e in humps(z, p.tol_m, max_len):
             k_crest = s + int(np.nanargmax(z[s:e]))
             crest = float(z[k_crest])
             ku = s - 1
             up = float(z[ku])
-            kd, face_open = face_toe(z, e, toe_k, cell, p.face_deg)
+            kd, face_open = face_toe(z, e, toe_k, cl, p.face_deg)
             if kd is None:
                 continue
             toe = float(z[kd])
@@ -435,8 +762,11 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
             if height < p.min_height_m:
                 continue
             head = up - toe
-            valley = upstream_slope(z, ku, toe_k, cell) * (kd - ku) * cell
-            storage, parea, open_pool = pool_at(win, u, spill, cell)
+            valley = upstream_slope(z, ku, toe_k, cl) * (kd - ku) * cl
+            pm = pool_mask(win, u, spill)
+            storage = float((spill - win[pm]).sum() * cell * cell)
+            parea = float(pm.sum() * cell * cell)
+            open_pool = bool(pm[0, :].any() or pm[-1, :].any() or pm[:, 0].any() or pm[:, -1].any())
             if storage < p.min_storage_m3:
                 continue
             flat, lower = flat_pool_area(win, u, up, p.flat_tol_m, cell)
@@ -452,7 +782,8 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
             # still reported (a note and the pool / pool_area fields), but it no longer, on its own,
             # makes the fill a dam.
             holds = (head - valley) >= p.min_head_m
-            ridge = ridge_length(dem, rc[0], rc[1], cell, crest - toe, p.ridge_width_m, p.ridge_half_m)
+            ridge, fmask, (fr0, fc0), rel = raised_fill(dem, rc[0], rc[1], cell, crest - toe,
+                                                         p.ridge_width_m, p.ridge_half_m)
             if on_road:
                 kind = K_ROAD_POND if holds else K_ROAD
             elif ridge >= p.long_fill_m:
@@ -490,13 +821,59 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None)
                 if sdist > 30.0:
                     notes.append("the water gets out {:.0f} ft from the fill on the line (a "
                                  "spillway, a saddle or the end of the fill)".format(sdist / FT))
+            # --- Finder 0.5 evidence (steps 7-10) ---
+            fr, fc = np.nonzero(fmask)
+            outlet = float("nan")
+            if sp is not None:
+                if len(fr):
+                    outlet = float(np.hypot(fr + fr0 - (sp[0][0] + r0), fc + fc0 - (sp[0][1] + c0)).min() * cell)
+                else:
+                    outlet = sdist
+                if outlet > p.outlet_m:
+                    notes.append("the pool gets out {:.0f} ft from this fill: something else holds "
+                                 "it".format(outlet / FT))
+            fill_road = bool(road_mask is not None and len(fr)
+                             and road_mask[fr + fr0, fc + fc0].any())
+            pool_xy = None
+            if pm.any():
+                pr_, pc_ = np.nonzero(pm)
+                pool_xy = cell_xy(gt, float(pr_.mean()) + r0, float(pc_.mean()) + c0)
+            orig, rise, _how = original_ground(z, s, k_crest, kd, spill, cl, p.toe_search_m)
+            ag = spill - orig if math.isfinite(orig) else float("nan")
+            below = below_grade(win, pm, spill, (rc[0] - r0, rc[1] - c0), orig, rise, cell)
+            if math.isfinite(ag) and ag < 3.0 * FT and holds:
+                notes.append("holds {:.1f} ft above the original ground at the fill (under the "
+                             "NRCS 378 3 ft line: a dug pond, not an embankment pond)".format(ag / FT))
+            if math.isfinite(below) and below >= 0.5:
+                notes.append("{:.0f} % of the pool is below the ground round it (dug)".format(100 * below))
+            if pm.sum() <= 40000:
+                rect, elong, wall = pool_shape(win, pm, cell)
+            else:
+                rect, elong, wall = float("nan"), float("nan"), float("nan")
+            # the pool (analysis window) and the raised fill (its own window) on their overlap
+            R0, R1 = max(r0, fr0), min(r0 + pm.shape[0], fr0 + rel.shape[0])
+            C0, C1 = max(c0, fc0), min(c0 + pm.shape[1], fc0 + rel.shape[1])
+            mounds = 0
+            if R1 > R0 and C1 > C0:
+                mounds = spoil_mounds(rel[R0 - fr0:R1 - fr0, C0 - fc0:C1 - fc0],
+                                      fmask[R0 - fr0:R1 - fr0, C0 - fc0:C1 - fc0],
+                                      pm[R0 - r0:R1 - r0, C0 - c0:C1 - c0], cell, p.spoil_m)
+            top_w, side = fill_profile(z, s, k_crest, kd, crest, up, toe, cl, d=dist)
+            relief, slope = terrain_round(dem, rc[0], rc[1], cell, p.terrain_m)
+            drain = float(drain_area(x, y)) if drain_area is not None else float("nan")
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
-                up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cell, storage_m3=storage,
+                up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cl, storage_m3=storage,
                 pool_area_m2=parea, pool=pool, open_pool=open_pool,
                 confidence="low" if low else "medium",
                 line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku]),
-                spill_xy=spill_xy, spill_width_m=sw, spill_dist_m=sdist, ridge_len_m=ridge))
+                spill_xy=spill_xy, spill_width_m=sw, spill_dist_m=sdist, ridge_len_m=ridge,
+                outlet_dist_m=outlet, spill_on_fill=bool(math.isfinite(outlet) and outlet <= p.outlet_m),
+                drain_m2=drain, pool_xy=pool_xy, orig_m=orig, ag_head_m=ag, below_frac=below,
+                rect=rect, elong=elong, wall_slope=wall, mounds=mounds, top_w_m=top_w, side_sum=side,
+                relief_m=relief, slope_pct=slope, fill_road=fill_road))
+    if p.one_per_pool:
+        found = one_per_pool(found, cell)
     return dedupe(found, p.dedupe_m)
 
 

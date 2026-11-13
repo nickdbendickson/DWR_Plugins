@@ -310,6 +310,13 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in rows), ["culvert", "dam"])
         kn = self.f.read_known([src])
         self.assertEqual(len(kn), 2)
+        # a dam list with a status field: each point's status rides along (known_state)
+        dams = write_layer(os.path.join(self.tmp, "dams.gpkg"), "dams",
+                           [("POINT ({} {})".format(X0, Y0), {"structure_id": "20061", "status": "Breached"}),
+                            ("POINT ({} {})".format(X0 + 900.0, Y0), {"structure_id": "20071", "status": "Intact"})],
+                           fields=("structure_id", "status"))
+        kn = self.f.read_known([(dams, "DWR dams", None)])
+        self.assertEqual(sorted(zip(kn.state, (p[2] for p in kn.pts))), [("Breached", "20061"), ("Intact", "20071")])
 
     def test_score_run(self):
         from . import test_core as c
@@ -325,6 +332,37 @@ class Runs(unittest.TestCase):
         res2 = self.f.run_embankments(self.dem, self.streams, self.out, model=res["model_path"],
                                       hillshade=False, log=lambda *_: None)
         self.assertTrue(all(0.0 <= r["score"] <= 1.0 for r in res2["rows"]))
+        self.assertTrue(all("score_note" in r for r in res2["rows"]))
+        # the 0.5 kinds, with reviewers' marks as trusted labels (self.out now holds the run above)
+        self.f.write_points(self.out, "embankments", self.f.EMB_FIELDS, rows)
+        marks = os.path.join(self.tmp, "marks.csv")
+        with open(marks, "w", encoding="utf-8-sig") as fh:          # a spreadsheet's BOM
+            fh.write("find_id,mark\nFIND-0,no\nFIND-1,yes\nFIND-2,unsure\nFIND-9999,yes\n")
+        for kind in ("0.5", "0.5-terrain", "0.5-trees"):
+            r3 = self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, kind + ".gpkg"),
+                                  kind=kind, marks=marks, log=lambda *_: None)
+            # the unknown id is left out
+            self.assertEqual(r3["model"]["trusted_labels"], 3)
+            self.assertIn("ag_head", r3["model"]["features"])
+            self.assertGreater(r3["cv_auc"], 0.7)
+        with self.assertRaises(RuntimeError):
+            self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "x.gpkg"), kind="v9",
+                             log=lambda *_: None)
+        # a marks file with no matching card says so; one without the columns, or missing, raises
+        said = []
+        none_ = os.path.join(self.tmp, "none.csv")
+        with open(none_, "w") as fh:
+            fh.write("find_id,mark\nFIND-9999,yes\n")
+        self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "n.gpkg"), kind="0.5",
+                         marks=none_, log=said.append)
+        self.assertTrue(any("none of the 1 mark" in m for m in said))
+        bad = os.path.join(self.tmp, "bad.csv")
+        with open(bad, "w") as fh:
+            fh.write("id,verdict\nFIND-1,yes\n")
+        for m in (bad, os.path.join(self.tmp, "nowhere.csv")):
+            with self.assertRaises(RuntimeError):
+                self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "b.gpkg"),
+                                 kind="0.5", marks=m, log=lambda *_: None)
 
     # -------------------------------------------------------------------------------- water --
     def write_image(self, path, epsg=5070):
@@ -443,6 +481,17 @@ class Runs(unittest.TestCase):
         r2 = self.f.run_water(None, self.out, water_raster=res["count_vrt"], cell=1.0, min_ac=0.02,
                               min_width_m=3.0, log=lambda *_: None)
         self.assertEqual(len(r2["rows"]), 2)
+        self.assertIsNone(res["points_vrt"])
+        # with the return counts: every point counted (water and ground), the mosaic unchanged
+        r3 = self.f.build_water_mosaic(tiles, os.path.join(self.tmp, "m3"), cell=1.0, mosaic_epsg=5070,
+                                       src_epsg=5070, point_counts=True, log=lambda *_: None)
+        pds = gdal.Open(r3["points_vrt"])
+        pa = pds.GetRasterBand(1).ReadAsArray()
+        self.assertEqual(int(pa.sum()), 2 * (40 * 40 + 60))
+        cds3 = gdal.Open(r3["count_vrt"])
+        ca3 = cds3.GetRasterBand(1).ReadAsArray()
+        pds = cds3 = None
+        self.assertEqual(int((ca3 == 1).sum()), 2 * 40 * 40)
 
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
@@ -510,6 +559,344 @@ class Runs(unittest.TestCase):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
         with self.assertRaises(RuntimeError):
             self.f.run_water(img, self.out, nir_band=5, log=lambda *_: None)
+
+    def test_evidence(self):
+        res = self.emb()
+        dam = [r for r in res["rows"] if r["kind"] == "dam"][0]
+        for k in ("ag_head_ft", "below_frac", "outlet_dist_ft", "drain_ac", "relief_ft", "pool_lat"):
+            self.assertIsNotNone(dam.get(k), k)
+        self.assertGreater(dam["ag_head_ft"], 3.0)
+        self.assertGreater(dam["drain_ac"], 1.0)
+        # imagery at the DEM's grid: open water on the dam's pool in 2018, none in 2014
+        dem, _r = tc.scene()
+        pool = np.isclose(dem, tc.bed(200) + 3.0) & (np.arange(tc.N)[:, None] < 197)
+        imgs = []
+        for year, wet in ((2014, False), (2018, True)):
+            path = os.path.join(self.tmp, "img{}.tif".format(year))
+            ds = gdal.GetDriverByName("GTiff").Create(path, tc.N, tc.N, 4, gdal.GDT_Byte)
+            ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + tc.N * tc.CELL, 0.0, -tc.CELL))
+            ds.SetProjection(srs(5070).ExportToWkt())
+            nir = np.where(pool & wet, 20, 140)
+            for b, a in ((1, np.full(pool.shape, 70)), (2, np.full(pool.shape, 80)), (3, np.full(pool.shape, 60)), (4, nir)):
+                ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+            ds = None
+            imgs.append({"year": year, "src": path, "green": 2, "nir": 4, "red": 1, "blue": 3})
+        x = gx(tc.XS)
+        nwi = write_layer(self.vec, "nwi", [("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=x - 300.0, b=x + 300.0, c=row_y(197), d=row_y(0)), {"ATTRIBUTE": "PUBHh"})], fields=("ATTRIBUTE",))
+        blds = write_layer(self.vec, "buildings", [("POINT ({} {})".format(x + 9.0, row_y(360)), {})])
+        out = os.path.join(self.tmp, "ev.gpkg")
+        ev = self.f.run_evidence(self.out + "|layername=embankments", out, images=imgs, nwi=nwi, dem=self.dem,
+                                 buildings=blds, roads=self.roads, log=lambda *_: None)
+        d = [r for r in ev["rows"] if r["kind"] == "dam"][0]
+        self.assertEqual((d["img_years"], d["wet_years"], d["first_wet"]), (2, 1, 2018))
+        self.assertEqual((d["nwi_code"], d["nwi_h"], d["nwi_x"], d["nwi_regime"]), ("PUBHh", "yes", "no", "H"))
+        self.assertGreaterEqual(d["bld_1mi"], 1)
+        self.assertGreaterEqual(d["roads_1mi"], 1)
+        self.assertGreater(d["conseq"], 0)
+        # the dam, and the dry embankment below it whose pool (about 100 m round) reaches the
+        # polygon's edge; the road fill further down does not
+        self.assertEqual(ev["counts"]["nwi_h"], 2)
+        self.assertEqual([r["nwi_h"] for r in ev["rows"] if r["kind"] == "road fill"], ["no"])
+        back = self.f.read_rows(out + "|layername=evidence")
+        self.assertEqual(len(back), len(ev["rows"]))
+        self.assertIn("wet_years", back[0])
+        # the permit check is from the storage alone: blank when the storage is unknown, and the
+        # consequence pass does not overwrite it
+        fl = self.evid_fills([{"x": x, "y": row_y(200), "find_id": "NOSTORE", "kind": "dam", "area_ac": 1.0},
+                              {"x": x, "y": row_y(210), "find_id": "BIG", "kind": "dam", "area_ac": 1.0,
+                               "storage_af": 40.0}])
+        ev2 = self.f.run_evidence(fl, os.path.join(self.tmp, "ev2.gpkg"), dem=self.dem, roads=self.roads,
+                                  log=lambda *_: None)
+        got = {r["find_id"]: r for r in ev2["rows"]}
+        self.assertIsNone(got["NOSTORE"].get("permit_check"))
+        self.assertEqual(got["BIG"]["permit_check"], "yes")
+        self.assertIn("conseq", got["NOSTORE"])
+        # a numeric field blank in every row is still written as a number
+        self.assertIn(("storage_af", "float"), self.f._fields_of([{"find_id": "A", "storage_af": None}]))
+        self.assertIn(("nwi_h", "str"), self.f._fields_of([{"nwi_h": None}]))
+        txt = "2018 | /x/img.tif | green=3 nir=1 red=2\n# a comment\n2020|svc|nir=1, green=3"
+        self.assertEqual(self.f.parse_images(txt), [{"year": 2018, "src": "/x/img.tif", "green": 3, "nir": 1, "red": 2},
+                                                    {"year": 2020, "src": "svc", "nir": 1, "green": 3}])
+        with self.assertRaises(ValueError):
+            self.f.parse_images("2018 | x | red=1")
+        # the ND GIS Hub colour-infrared years are NIR, green, blue: green is band 2, no red
+        from .. import brand
+        for d in self.f.parse_images(brand.EVIDENCE_IMAGES):
+            if "_CIR" in d["src"]:
+                self.assertEqual((d["nir"], d["green"], d.get("red")), (1, 2, None))
+        for _lab, src, g, n in brand.IMAGE_SERVICES:
+            if "_CIR" in src:
+                self.assertEqual((g, n), (2, 1))
+
+    def evid_fills(self, rows):
+        path = os.path.join(self.tmp, "fills.gpkg")
+        self.f.write_points(path, "embankments", [("find_id", "str"), ("kind", "str"), ("area_ac", "float"),
+                                                  ("storage_af", "float"), ("note", "str"), ("height_ft", "float")],
+                            rows)
+        return path + "|layername=embankments"
+
+    def test_review_batch_reviewed_file_must_exist(self):
+        fills = self.evid_fills([{"x": X0 + 100.0 * i, "y": Y0, "find_id": "FIND-{:08X}".format(i), "kind": "dam",
+                                  "area_ac": 1.0, "height_ft": float(i)} for i in range(30)])
+        out = os.path.join(self.tmp, "rb.gpkg")
+        with self.assertRaises(RuntimeError):
+            self.f.run_review_batch(fills, out, n=10, reviewed=os.path.join(self.tmp, "nowhere.txt"),
+                                    log=lambda *_: None)
+        said = []
+        top = "FIND-0000001D"                           # height 29: rank 1
+        res = self.f.run_review_batch(fills, out, n=10, per_tile_cap=10, log=said.append)
+        self.assertIn(top, [r["find_id"] for r in res["rows"]])     # so the checks below can fail
+        # a reviewed card is left out of the batch (a list, then a marks file)
+        res = self.f.run_review_batch(fills, out, n=10, reviewed=[top], per_tile_cap=10, log=said.append)
+        self.assertEqual(len(res["rows"]), 10)
+        self.assertNotIn(top, [r["find_id"] for r in res["rows"]])
+        self.assertTrue(all(r["pool_n"] == 29 for r in res["rows"]))
+        path = os.path.join(self.tmp, "reviewed.csv")
+        with open(path, "w", encoding="utf-8-sig") as fh:
+            fh.write("find_id,mark\n{},yes\n".format(top))
+        res = self.f.run_review_batch(fills, out, n=10, reviewed=path, per_tile_cap=10, log=said.append)
+        self.assertNotIn(top, [r["find_id"] for r in res["rows"]])
+        # one 5 km tile, at most 3 near the cut: a short batch, and it says so
+        res = self.f.run_review_batch(fills, out, n=10, log=said.append)
+        self.assertEqual(len(res["rows"]), 9)
+        self.assertTrue(any("the batch has 9 card(s), not 10" in m for m in said))
+
+    def test_evidence_lidar_needs_coverage(self):
+        # a return-count tile 6 returns a cell over x0..x0+400 (0 stored as nodata, as the
+        # mosaic builder writes it): a fill 5 km away has no LiDAR evidence, and a fill whose pool
+        # straddles the tile edge is read on its covered cells only (dry land, nothing empty)
+        tif = os.path.join(self.tmp, "points_count_t.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 400, 400, 1, gdal.GDT_Int32)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + 400.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetNoDataValue(0)
+        ds.GetRasterBand(1).WriteArray(np.full((400, 400), 6, np.int32))
+        ds = None
+        vrt = os.path.join(self.tmp, "point_count.vrt")
+        gdal.BuildVRT(vrt, [tif])
+        wide = os.path.join(self.tmp, "wide.vrt")                    # a VRT wider than its tiles
+        gdal.BuildVRT(wide, [tif], outputBounds=(X0 - 2000.0, Y0 - 2000.0, X0 + 6000.0, Y0 + 2000.0))
+        fills = self.evid_fills([
+            {"x": X0 + 5400.0, "y": Y0 + 200.0, "find_id": "FAR", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 380.0, "y": Y0 + 200.0, "find_id": "EDGE", "kind": "dam", "area_ac": 1.0}])
+        for src in (vrt, wide):
+            ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lc.gpkg"), lidar_points=src, log=lambda *_: None)
+            got = {r["find_id"]: r for r in ev["rows"]}
+            for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+                self.assertIsNone(got["FAR"].get(k), (src, k))
+            self.assertEqual(got["EDGE"]["lidar_pool_empty"], 0.0)
+            self.assertEqual(got["EDGE"]["lidar_ring_empty"], 0.0)
+
+    def count_tile(self, name, x0, y0, arr):
+        """A return-count GeoTIFF (EPSG:5070, 1 m, 0 = nodata) with its top-left at (x0, y0 + rows)."""
+        tif = os.path.join(self.tmp, name)
+        ds = gdal.GetDriverByName("GTiff").Create(tif, arr.shape[1], arr.shape[0], 1, gdal.GDT_Int32)
+        ds.SetGeoTransform((x0, 1.0, 0.0, y0 + arr.shape[0], 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetNoDataValue(0)
+        ds.GetRasterBand(1).WriteArray(arr.astype(np.int32))
+        ds = None
+        return tif
+
+    def lidar_of(self, fills, src):
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lc.gpkg"), lidar_points=src, log=lambda *_: None)
+        return {r["find_id"]: r for r in ev["rows"]}
+
+    def test_evidence_lidar_partial_tile_and_pond(self):
+        # a tile cut by a diagonal project edge (returns where x + y < 420 m, the rest nodata in
+        # the tile's box), with a pond void (no returns) inside the survey: a pool in the empty
+        # corner has no evidence, a pool 20 m inside the edge reads dry, and the pond reads empty
+        yy, xx = np.mgrid[0:600, 0:600]
+        x, y = xx + 0.5, 600 - yy - 0.5
+        a = np.where(x + y < 420.0, 6, 0)
+        a[(x - 120.0) ** 2 + (y - 120.0) ** 2 < 30.0 ** 2] = 0          # the pond
+        vrt = os.path.join(self.tmp, "cut.vrt")
+        gdal.BuildVRT(vrt, [self.count_tile("cut.tif", X0, Y0, a)])
+        fills = self.evid_fills([
+            {"x": X0 + 450.0, "y": Y0 + 450.0, "find_id": "CORNER", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 196.0, "y": Y0 + 196.0, "find_id": "EDGE", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 120.0, "y": Y0 + 120.0, "find_id": "POND", "kind": "dam", "area_ac": 0.7}])
+        got = self.lidar_of(fills, vrt)
+        for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+            self.assertIsNone(got["CORNER"].get(k), k)
+        self.assertEqual(got["EDGE"]["lidar_pool_empty"], 0.0)
+        self.assertEqual(got["EDGE"]["lidar_ring_empty"], 0.0)
+        self.assertGreater(got["POND"]["lidar_pool_empty"], 0.9)
+        self.assertLess(got["POND"]["lidar_ring_empty"], 0.2)
+
+    def test_evidence_lidar_nested_vrt_and_a_rebuilt_one(self):
+        # a VRT of a per-project VRT keeps the gap between the project's tiles; and a VRT
+        # rebuilt at the same path between two runs is read afresh
+        ta = self.count_tile("na.tif", X0, Y0, np.full((400, 400), 6))
+        tb = self.count_tile("nb.tif", X0 + 1000.0, Y0, np.full((400, 400), 6))
+        inner = os.path.join(self.tmp, "proj", "point_count.vrt")
+        os.makedirs(os.path.dirname(inner))
+        gdal.BuildVRT(inner, [ta, tb])
+        outer = os.path.join(self.tmp, "state.vrt")
+        gdal.BuildVRT(outer, [inner])
+        fills = self.evid_fills([
+            {"x": X0 + 700.0, "y": Y0 + 200.0, "find_id": "GAP", "kind": "dam", "area_ac": 1.0},
+            {"x": X0 + 1200.0, "y": Y0 + 200.0, "find_id": "IN", "kind": "dam", "area_ac": 1.0}])
+        got = self.lidar_of(fills, outer)
+        self.assertIsNone(got["GAP"].get("lidar_pool_empty"))
+        self.assertEqual(got["IN"]["lidar_pool_empty"], 0.0)
+        one = os.path.join(self.tmp, "redo.vrt")
+        gdal.BuildVRT(one, [ta])
+        self.assertIsNone(self.lidar_of(fills, one)["IN"].get("lidar_pool_empty"))
+        gdal.BuildVRT(one, [ta, tb])                    # the same path, now over both tiles
+        self.assertEqual(self.lidar_of(fills, one)["IN"]["lidar_pool_empty"], 0.0)
+
+    def test_evidence_lidar_gap_between_two_surveys(self):
+        # project P1's tile box runs to x0+600 but its survey stops at x0+500; project P2 starts at
+        # x0+700. Returns of P2 must not close P1's unsurveyed strip: a pool over the strip reads
+        # dry on its surveyed cells, not 'empty'
+        x = np.arange(600)[None, :] + 0.5
+        a = np.where(np.broadcast_to(x, (600, 600)) < 500.0, 6, 0)
+        p1 = os.path.join(self.tmp, "P1", "point_count.vrt")
+        p2 = os.path.join(self.tmp, "P2", "point_count.vrt")
+        for d in (p1, p2):
+            os.makedirs(os.path.dirname(d))
+        gdal.BuildVRT(p1, [self.count_tile("P1/t.tif", X0, Y0, a)])
+        gdal.BuildVRT(p2, [self.count_tile("P2/t.tif", X0 + 700.0, Y0, np.full((600, 600), 6))])
+        state = os.path.join(self.tmp, "state_gap.vrt")
+        gdal.BuildVRT(state, [p1, p2])
+        fills = self.evid_fills([{"x": X0 + 545.0, "y": Y0 + 300.0, "find_id": "GAP", "kind": "dam", "area_ac": 5.0}])
+        got = self.lidar_of(fills, state)["GAP"]
+        for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+            self.assertIn(got.get(k), (None, 0.0), k)
+
+    def test_evidence_lidar_pond_on_a_tile_seam_and_odd_vrts(self):
+        # a pond void on the seam of two tiles still reads empty; a warped VRT and a VRT source
+        # with no DstRect still count as surveyed; a missing project VRT costs only its own fills
+        a = np.full((400, 800), 6)
+        yy, xx = np.mgrid[0:400, 0:800]
+        a[((xx + 0.5) - 400.0) ** 2 + ((400 - yy - 0.5) - 200.0) ** 2 < 30.0 ** 2] = 0
+        ta = self.count_tile("seam_a.tif", X0, Y0, a[:, :400])
+        tb = self.count_tile("seam_b.tif", X0 + 400.0, Y0, a[:, 400:])
+        seam = os.path.join(self.tmp, "seam.vrt")
+        gdal.BuildVRT(seam, [ta, tb])
+        fills = self.evid_fills([{"x": X0 + 400.0, "y": Y0 + 200.0, "find_id": "POND", "kind": "dam", "area_ac": 0.7},
+                                 {"x": X0 + 150.0, "y": Y0 + 200.0, "find_id": "DRY", "kind": "dam", "area_ac": 1.0}])
+        got = self.lidar_of(fills, seam)
+        self.assertGreater(got["POND"]["lidar_pool_empty"], 0.8)
+        self.assertLess(got["POND"]["lidar_ring_empty"], 0.2)
+        warped = os.path.join(self.tmp, "warped.vrt")
+        gdal.Warp(warped, ta, format="VRT")
+        hand = os.path.join(self.tmp, "hand.vrt")
+        with open(hand, "w") as fh:
+            fh.write('<VRTDataset rasterXSize="400" rasterYSize="400"><SRS>{}</SRS>'
+                     '<GeoTransform>{}, 1, 0, {}, 0, -1</GeoTransform>'
+                     '<VRTRasterBand dataType="Int32" band="1"><NoDataValue>0</NoDataValue><SimpleSource>'
+                     '<SourceFilename relativeToVRT="0">{}</SourceFilename><SourceBand>1</SourceBand>'
+                     '</SimpleSource></VRTRasterBand></VRTDataset>'.format(srs(5070).ExportToWkt().replace('"', "&quot;"),
+                                                                           X0, Y0 + 400.0, ta))
+        for src in (warped, hand):
+            self.assertEqual(self.lidar_of(fills, src)["DRY"]["lidar_pool_empty"], 0.0, src)
+        pa = os.path.join(self.tmp, "PA", "point_count.vrt")
+        pb = os.path.join(self.tmp, "PB", "point_count.vrt")
+        for d in (pa, pb):
+            os.makedirs(os.path.dirname(d))
+        gdal.BuildVRT(pa, [ta])
+        gdal.BuildVRT(pb, [self.count_tile("PB/far.tif", X0 + 3000.0, Y0, np.full((400, 400), 6))])
+        state = os.path.join(self.tmp, "state_missing.vrt")
+        gdal.BuildVRT(state, [pa, pb])
+        import shutil
+        shutil.rmtree(os.path.dirname(pb))
+        said = []
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lm.gpkg"), lidar_points=state, log=said.append)
+        got = {r["find_id"]: r for r in ev["rows"]}
+        self.assertEqual(got["DRY"]["lidar_pool_empty"], 0.0)
+        self.assertTrue(any("could not be read" in m and "PB" in m for m in said), said)
+
+    def test_evidence_two_services_one_year(self):
+        # the CIR and the 4-band of one year: each its own tiles, and water in either counts
+        from unittest import mock
+        import urllib.parse
+        asked = []
+
+        def image(url, bands):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+            w, h = (int(v) for v in q["size"][0].split(","))
+            mem = "/vsimem/svc_{}.tif".format(len(asked))
+            ds = gdal.GetDriverByName("GTiff").Create(mem, w, h, len(bands), gdal.GDT_Byte)
+            ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+            ds.SetProjection(srs(5070).ExportToWkt())
+            for k, v in enumerate(bands):
+                ds.GetRasterBand(k + 1).WriteArray(np.full((h, w), v, np.uint8))
+            ds = None
+            f = gdal.VSIFOpenL(mem, "rb")
+            gdal.VSIFSeekL(f, 0, 2)
+            n = gdal.VSIFTellL(f)
+            gdal.VSIFSeekL(f, 0, 0)
+            data = gdal.VSIFReadL(1, n, f)
+            gdal.VSIFCloseL(f)
+            gdal.Unlink(mem)
+            return data
+
+        class Resp:
+            def __init__(self, data):
+                self.data = data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return self.data
+
+        def fake(url, timeout=None):
+            asked.append(url)
+            if "/cir/" in url:
+                return Resp(image(url, (20, 90, 60)))               # NIR, green, blue: water
+            return Resp(image(url, (60, 90, 50, 20)))               # R, G, B, NIR: water
+        imgs = "2018 | https://svc.test/cir/ImageServer | nir=1 green=2\n" \
+               "2018 | https://svc.test/four/ImageServer | red=1 green=2 blue=3 nir=4"
+        fills = self.evid_fills([{"x": X0 + 200.0, "y": Y0 + 200.0, "find_id": "F1", "kind": "dam", "area_ac": 1.0}])
+        with mock.patch("urllib.request.urlopen", fake):
+            ev = self.f.run_evidence(fills, os.path.join(self.tmp, "svc.gpkg"), images=imgs, log=lambda *_: None)
+        self.assertTrue(any("/cir/" in u for u in asked) and any("/four/" in u for u in asked))
+        r = ev["rows"][0]
+        self.assertEqual((r["img_years"], r["wet_years"]), (1, 1))
+
+    def test_evidence_permit_bare_and_fields(self):
+        # permit_check needs only the storage; a later image with no data keeps the bare share;
+        # a field blank in row 1 keeps its number type; a polygon edge 20 m off counts as near
+        a = os.path.join(self.tmp, "a.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(a, 400, 400, 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + 400.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        yy, xx = np.mgrid[0:400, 0:400]
+        bare = np.hypot(xx + 0.5 - 200.0, yy + 0.5 - 200.0) < 40.0      # bright bare ground at F1, grass round it
+        for b, v, g in ((1, 200, 60), (2, 190, 90), (3, 180, 50), (4, 205, 160)):
+            ds.GetRasterBand(b).WriteArray(np.where(bare, v, g).astype(np.uint8))
+        ds = None
+        b_ = os.path.join(self.tmp, "b.tif")                              # 2020: somewhere else
+        ds = gdal.GetDriverByName("GTiff").Create(b_, 50, 50, 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 + 9000.0, 1.0, 0.0, Y0 + 9050.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds = None
+        imgs = [{"year": 2018, "src": a, "red": 1, "green": 2, "blue": 3, "nir": 4},
+                {"year": 2020, "src": b_, "red": 1, "green": 2, "blue": 3, "nir": 4}]
+        q = write_layer(self.vec, "quarry", [("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=X0 - 200.0, b=X0 + 200.0, c=Y0 + 220.0, d=Y0 + 620.0), {})], epsg=5070)
+        fills = self.evid_fills([
+            {"x": X0 + 200.0, "y": Y0 + 200.0, "find_id": "F1", "kind": "dam", "area_ac": 0.5, "storage_af": 40.0},
+            {"x": X0 + 100.0, "y": Y0 + 100.0, "find_id": "F2", "kind": "dam", "area_ac": 0.5, "storage_af": 3.0,
+             "height_ft": 7.5}])
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "pb.gpkg"), images=imgs, quarries=q,
+                                 log=lambda *_: None)
+        got = {r["find_id"]: r for r in ev["rows"]}
+        self.assertEqual((got["F1"]["permit_check"], got["F2"]["permit_check"]), ("yes", "no"))
+        self.assertEqual(ev["counts"]["permit_check"], 1)
+        self.assertGreater(got["F1"]["bare_share"], 0.5)
+        self.assertEqual(got["F1"]["in_quarry"], "yes")                   # 20 m below the south edge
+        self.assertEqual(dict(self.f._fields_of(ev["rows"]))["height_ft"], "float")
+        back = self.f.read_rows(os.path.join(self.tmp, "pb.gpkg") + "|layername=evidence")
+        self.assertIsInstance([r for r in back if r["find_id"] == "F2"][0]["height_ft"], float)
 
 
 if __name__ == "__main__":

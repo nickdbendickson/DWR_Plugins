@@ -54,8 +54,8 @@ class Tools(tf.Runs):
     def test_registered(self):
         reg = QgsApplication.processingRegistry()
         names = sorted(a.name() for a in reg.providerById(self.pid).algorithms())
-        self.assertEqual(names, ["crossings", "embankments", "osm", "ponds", "score", "water",
-                                 "water_mosaic"])
+        self.assertEqual(names, ["crossings", "embankments", "evidence", "osm", "ponds", "review_batch",
+                                 "score", "water", "water_mosaic"])
 
     def test_embankments_tool(self):
         from osgeo import ogr
@@ -158,6 +158,27 @@ class Tools(tf.Runs):
         mem = QgsVectorLayer("LineString?crs=EPSG:5070", "scratch", "memory")
         with self.assertRaises(QgsProcessingException):
             self.run_alg("crossings", {"ROADS": mem, "STREAMS": self.streams, "OUT": self.out})
+
+    def test_evidence_and_review_batch_tools(self):
+        from osgeo import ogr
+        self.run_alg("embankments", {"DEM": self.dem, "STREAMS": self.streams, "ROADS": self.roads,
+                                     "OUT": self.out, "HILLSHADE": False})
+        fills = self.out + "|layername=embankments"
+        ev = os.path.join(self.tmp, "ev.gpkg")
+        self.run_alg("evidence", {"FILLS": fills, "IMAGES": "", "DEM": self.dem, "ROADS": self.roads, "OUT": ev})
+        ds = ogr.Open(ev)
+        lyr = ds.GetLayerByName("evidence")
+        self.assertEqual(lyr.GetFeatureCount(), 3)
+        self.assertGreaterEqual(lyr.GetLayerDefn().GetFieldIndex("roads_1mi"), 0)
+        ds = None
+        rb = os.path.join(self.tmp, "rb.gpkg")
+        self.run_alg("review_batch", {"FILLS": fills, "N": 5, "OUT": rb})
+        ds = ogr.Open(rb)
+        lyr = ds.GetLayerByName("review_batch")
+        self.assertEqual(lyr.GetFeatureCount(), 2)   # the dam + the dry fill
+        f = lyr.GetNextFeature()                     # a sheet needs the fill's own fields too
+        self.assertEqual(f.GetField("list_n"), 2)
+        self.assertGreater(f.GetField("length_ft"), 0)
 
 
 if __name__ == "__main__":
