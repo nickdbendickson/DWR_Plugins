@@ -54,6 +54,10 @@ plugin zip or CI job.
    Any HIGH finding gives exit code 1, so the audit can gate a merge. `--only release,security`
    runs a subset.
 
+   Run the first command after the `source` line, not in the same paste: zsh reads a whole pasted
+   block before running any of it, so a new command pasted along with `source ~/.zshrc` is
+   `command not found` although the install is fine. A new Terminal tab does the same job.
+
 2. **vor (needs Ollama from step 1, or the Ollama app):**
    ```zsh
    cd damit_ai/vor
@@ -66,7 +70,8 @@ plugin zip or CI job.
    `vor search | ask | research | chat ...`, also available as `damchain vor ...`.
    **One more document later:** `vor add <file>`, or drag the file into a running `vor chat`
    and press Return. For Heim: `heim-add <file>`.
-   **Is it reading what you think it is:** `vor doctor` and `heim-doctor` name the states in which
+   **Is it reading what you think it is:** `vor doctor` and `heim-doctor` (or `heim doctor`; `heim add`
+   and `heim chat` are words too) name the states in which
    an AI runs without an error and answers from nothing (an empty index, a second library, a
    collection under an old name, an index older than its files). `heim-chat` looks every
    question up in the indexed documents first; `heim-chat --bare` is the model on its own.

@@ -410,5 +410,6 @@ def _write_report(out, dam, st, fine_cell_m, folder):
               "- The coarse model cannot send water back into the fine domain.", ""]
     p = os.path.join(out.folder, "Nested_Report.md")
     with open(p, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        # 3.20.2: in SI when the suite shows SI (as run_report.md is)
+        f.write(workflow._display_units_md("\n".join(lines)))
     return p

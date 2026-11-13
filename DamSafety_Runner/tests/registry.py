@@ -5,8 +5,21 @@ A test that cannot run in this Python raises Skip (through need_osgeo() for the 
 ones); run_tests.py counts it as skipped, not failed, so the suite also gives a clean verdict on
 a plain python + numpy + scipy (the fast-checks CI job, audit CI matrix 2026-11-07). Where GDAL
 is present the test runs in full: nothing is weakened."""
+import atexit
+import os
+import shutil
+import tempfile
+
 TESTS = []
 MODEL_TESTS = []
+
+# 3.20.3: checkpoints are signed with a key in the user's settings folder (core/ckpt_sign.py).
+# The tests sign with a key of their own in a temporary folder, never the user's, and the
+# worker processes they start inherit it.
+if not os.environ.get("NDBREACH_CKPT_KEY_FILE"):
+    _KEY_DIR = tempfile.mkdtemp(prefix="ndbreach_test_key_")
+    os.environ["NDBREACH_CKPT_KEY_FILE"] = os.path.join(_KEY_DIR, "anuga_checkpoint.key")
+    atexit.register(shutil.rmtree, _KEY_DIR, True)
 
 
 class Skip(Exception):

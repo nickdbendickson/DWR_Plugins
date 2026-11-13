@@ -302,4 +302,5 @@ def _report(out, fail_rule, st):
     lines += [""]
     out.report_md = os.path.join(out.folder, "Cascade_Report.md")
     with open(out.report_md, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        # 3.20.2: in SI when the suite shows SI (as run_report.md is)
+        f.write(workflow._display_units_md("\n".join(lines)))

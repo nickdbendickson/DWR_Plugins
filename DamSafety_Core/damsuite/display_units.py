@@ -437,3 +437,233 @@ def report_note(system_value=None):
         return ""
     return ("Units: SI (m, ha, m³, m³/s, km), converted for this report from the US customary "
             "values the tools compute and store; the data files keep US units.")
+
+
+# -- CSV files (Core 1.4.0) ----------------------------------------------------------------------
+# A result CSV keeps its US columns and its name: other tools read it back. Under SI a copy is
+# written in the sub-folder SI_units beside it, under the same file name, with an SI column
+# right after every column whose name says its unit ('Max_Depth_ft' -> 'Max_Depth_m',
+# 'Peak (cfs)' -> 'Peak (m³/s)'). Nothing reads the copy back; it is for the engineer who opens
+# the table. A sub-folder (not a second name in the same folder) keeps the copies out of the way
+# of every tool that lists a folder's CSVs.
+
+SI_CSV_DIR = "SI_units"
+# column-name ending -> (stored unit, the ending of the SI column)
+_CSV_ENDINGS = (
+    ("_ft2s", "ft²/s", "_m2s"), ("_acft", "ac-ft", "_m3"), ("_ac_ft", "ac-ft", "_m3"),
+    ("_acres", "acres", "_ha"), ("_miles", "miles", "_km"), ("_sqmi", "sq mi", "_km2"),
+    ("_mi2", "sq mi", "_km2"), ("_sqft", "ft²", "_m2"), ("_ft2", "ft²", "_m2"),
+    ("_fps", "ft/s", "_mps"), ("_cfs", "cfs", "_cms"), ("_mph", "mph", "_kmh"),
+    ("_af", "ac-ft", "_m3"), ("_ac", "acres", "_ha"), ("_mi", "miles", "_km"),
+    ("_ft", "ft", "_m"),
+)
+# '_in' ends many names that are not inches (built_in, also_in): only after these words
+_CSV_INCH_WORDS = ("depth", "loss", "rain", "rainfall", "precip", "pmp", "runoff")
+_CSV_NUM = re.compile(r"^\s*[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?(?:[eE][-+]?\d+)?\s*$")
+
+
+def csv_column_unit(name):
+    """(stored unit, SI column name) of a CSV column whose name says its unit, else
+    (None, None): 'Max_Depth_ft' -> ('ft', 'Max_Depth_m'); 'Peak (cfs)' -> ('cfs',
+    'Peak (m³/s)'). A column that is already metric, or names no unit, gives (None, None)."""
+    n = (name or "").strip()
+    low = n.lower()
+    for end, unit, si_end in _CSV_ENDINGS:
+        if low.endswith(end) and len(n) > len(end):
+            return unit, n[:len(n) - len(end)] + (si_end.upper() if n[-len(end):].isupper()
+                                                  else si_end)
+    if low.endswith("_in") and low[:-3].rsplit("_", 1)[-1] in _CSV_INCH_WORDS:
+        return "in", n[:-3] + ("_MM" if n[-3:].isupper() else "_mm")
+    u = header_unit(n)
+    if u in SI_UNITS and "(" in n:                 # only '(ft)' style: a bare 'ft' is a word
+        return u, convert_header(n, SI)
+    return None, None
+
+
+def csv_cell_si(cell, unit):
+    """One CSV value in SI: a plain number is converted (about the precision it had); a blank,
+    a word or a mixed cell gives ''."""
+    t = "" if cell is None else str(cell)
+    if not t.strip() or not _CSV_NUM.match(t) or unit not in SI_UNITS:
+        return ""
+    try:
+        v = float(t.replace(",", ""))
+    except ValueError:
+        return ""
+    if v != v or v in (float("inf"), float("-inf")):
+        return ""
+    si = v * SI_UNITS[unit][1]
+    if "e" in t.lower():
+        return repr(si)
+    # the decimals the value had, and at least four significant figures; no separators
+    body = t.strip().replace(",", "")
+    dec = len(body.split(".")[1]) if "." in body else 0
+    if si:
+        import math
+        dec = max(dec, 3 - int(math.floor(math.log10(abs(si)))))
+    txt = ("{:.%df}" % max(0, min(dec, 6))).format(si)
+    return txt.rstrip("0").rstrip(".") if "." in txt else txt
+
+
+def si_table(fieldnames, rows):
+    """(fieldnames, rows) with an SI column right after each unit column. `rows` are lists in
+    the order of `fieldnames`. A table with no unit column comes back as (None, None). An SI
+    name the table already has is not added again, nor is a column with no number in it."""
+    names = list(fieldnames)
+    rows = [list(r) for r in rows]
+    taken = {n for n in names}
+    plan, out_names = [], []
+    for i, n in enumerate(names):
+        unit, si = csv_column_unit(n)
+        if unit and si not in taken and any(
+                csv_cell_si(r[i], unit) for r in rows if i < len(r)):   # a number to convert
+            taken.add(si)
+            plan.append((unit, si))
+        else:
+            plan.append((None, None))
+        out_names.append(n)
+        if plan[-1][0]:
+            out_names.append(si)
+    if not any(u for u, _ in plan):
+        return None, None
+    out_rows = []
+    for r in rows:
+        new = []
+        for i, (unit, _si) in enumerate(plan):
+            c = r[i] if i < len(r) else ""
+            new.append(c)
+            if unit:
+                new.append(csv_cell_si(c, unit))
+        new.extend(r[len(plan):])                  # a row longer than the header keeps its tail
+        out_rows.append(new)
+    return out_names, out_rows
+
+
+def si_csv_path(path):
+    """<folder>/SI_units/<name> for the CSV at <folder>/<name>."""
+    return os.path.join(os.path.dirname(os.path.abspath(path)), SI_CSV_DIR,
+                        os.path.basename(path))
+
+
+def is_si_copy(path):
+    """True for a file inside an SI_units folder."""
+    return os.path.basename(os.path.dirname(os.path.abspath(path))).lower() == SI_CSV_DIR.lower()
+
+
+def write_si_csv(path, system_value=None, header_row=0):
+    """Write SI_units/<name> beside the CSV at `path`: the same table with an SI column after
+    each column that names a US unit. Returns the path written, '' under US, when the table
+    has no unit column, or when anything goes wrong (a copy for reading never stops a run).
+    A copy left by an earlier run is removed when the table no longer has a unit column.
+    `header_row` is the index of the header line (lines before it are copied as they are)."""
+    import csv
+    sysv = system() if system_value is None else normalize(system_value)
+    if sysv != SI or not path:
+        return ""
+    try:
+        if is_si_copy(path) or not os.path.isfile(path):
+            return ""
+        out = si_csv_path(path)
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            table = list(csv.reader(f))
+        names, rows = (None, None) if len(table) <= header_row else \
+            si_table(table[header_row], table[header_row + 1:])
+        if names is None:
+            if os.path.isfile(out):                 # a stale copy would show old numbers
+                os.remove(out)
+            return ""
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerows(table[:header_row])
+            w.writerow(names)
+            w.writerows(rows)
+        os.replace(tmp, out)
+        return out
+    except Exception:                                             # noqa: BLE001
+        return ""
+
+
+def write_si_csvs(paths, system_value=None):
+    """write_si_csv for each path (missing files and non-CSV names are skipped); the copies
+    written."""
+    sysv = system() if system_value is None else normalize(system_value)
+    if sysv != SI:
+        return []
+    out = []
+    for p in paths or []:
+        if p and str(p).lower().endswith(".csv"):
+            w = write_si_csv(str(p), sysv)
+            if w:
+                out.append(w)
+    return out
+
+
+def write_si_csvs_in(folder, system_value=None, recursive=False):
+    """write_si_csv for every CSV in `folder` (and, with recursive, below it; never the
+    copies themselves); the copies written."""
+    sysv = system() if system_value is None else normalize(system_value)
+    if sysv != SI or not folder or not os.path.isdir(folder):
+        return []
+    found = []
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d.lower() != SI_CSV_DIR.lower())
+        if os.path.basename(base).lower() != SI_CSV_DIR.lower():
+            found.extend(os.path.join(base, n) for n in sorted(files)
+                         if n.lower().endswith(".csv"))
+        if not recursive:
+            break
+    _prune_si_copies(folder, recursive)
+    return write_si_csvs(found, sysv)
+
+
+def _prune_si_copies(folder, recursive=False):
+    """Remove the copies in <folder>/SI_units whose table is gone (a retired or renamed
+    output), so the folder never shows numbers of an older run. Only .csv files in an
+    SI_units folder are touched."""
+    for base, dirs, _files in os.walk(folder):
+        for d in list(dirs):
+            if d.lower() != SI_CSV_DIR.lower():
+                continue
+            sub = os.path.join(base, d)
+            try:
+                for n in os.listdir(sub):
+                    if n.lower().endswith(".csv") and not os.path.isfile(os.path.join(base, n)):
+                        os.remove(os.path.join(sub, n))
+                if not os.listdir(sub):
+                    os.rmdir(sub)
+            except OSError:
+                pass
+        dirs[:] = [d for d in dirs if d.lower() != SI_CSV_DIR.lower()]
+        if not recursive:
+            break
+
+
+def write_si_csvs_of(results, system_value=None):
+    """The SI copies for what a tool returned (`results`: its outputs, a dict or a list):
+    every value that is a CSV file, and the CSVs in the folder of every report it names (a
+    .md / .html / .docx / .pdf file). Other folders and files are left alone, so a tool that
+    returns a terrain or an input never gets copies in the user's own data folders."""
+    sysv = system() if system_value is None else normalize(system_value)
+    if sysv != SI:
+        return []
+    vals = list(results.values()) if isinstance(results, dict) else list(results or [])
+    files, folders = [], []
+    for v in vals:
+        if not isinstance(v, str) or not v or "\n" in v or len(v) > 1024:
+            continue
+        low = v.lower()
+        try:
+            if low.endswith(".csv") and os.path.isfile(v):
+                files.append(v)
+            elif low.endswith((".md", ".html", ".docx", ".pdf")) and os.path.isfile(v):
+                d = os.path.dirname(os.path.abspath(v))
+                if d not in folders:
+                    folders.append(d)
+        except (OSError, ValueError):
+            continue
+    out = write_si_csvs(files, sysv)
+    for d in folders:
+        out.extend(w for w in write_si_csvs_in(d, sysv) if w not in out)
+    return out

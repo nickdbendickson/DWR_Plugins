@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-# rag_index.py v2.7 — multi-collection RAG indexer (stdlib only)
+# rag_index.py v2.8 — multi-collection RAG indexer (stdlib only)
 # Atomic rebuilds via a hidden per-collection stage; auto-migrates v1 DBs;
 # PDF backends: pdftotext -> pymupdf -> pypdf -> skip.
 #
+# v2.8: the doctor compares each file with what was indexed, not with the clock. An index run
+#   now records every file's size, date and content hash (table file_stamps), and a file has
+#   "changed" when its content differs from that. Before, it had changed when its date was
+#   later than the run, and a knowledge pack unpacked from a zip made in another time zone is
+#   dated hours in the future: on its first real install the doctor said all 100 pages had
+#   changed minutes after indexing them, and re-indexing could not clear it. A folder that
+#   moved with the DamResearch -> Vor rename is named, with the command that re-indexes it.
 # v2.7: --doctor (heim-doctor). Says, without changing anything, whether Heim is reading what
 #   you think it is: no index, an empty index, no knowledge pack (Heim then answers from its
 #   built-in rules alone, and an empty collection is not an error), a collection still under
@@ -147,6 +154,9 @@ def ensure_schema(db):
     db.execute("CREATE INDEX IF NOT EXISTS idx_coll ON chunks(collection)")
     db.execute("""CREATE TABLE IF NOT EXISTS roots (collection TEXT PRIMARY KEY,
         roots TEXT NOT NULL, indexed_at TEXT NOT NULL)""")
+    # v2.8: what each file was when its collection was indexed (see file_stamp)
+    db.execute("""CREATE TABLE IF NOT EXISTS file_stamps (collection TEXT NOT NULL, path TEXT NOT NULL,
+        mtime REAL NOT NULL, size INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (collection, path))""")
     rename_legacy_collections(db)
 
 
@@ -165,6 +175,7 @@ def rename_legacy_collections(db):
             continue
         db.execute("UPDATE chunks SET collection = ? WHERE collection = ?", (new, old))
         db.execute("UPDATE OR REPLACE roots SET collection = ? WHERE collection = ?", (new, old))
+        db.execute("UPDATE OR REPLACE file_stamps SET collection = ? WHERE collection = ?", (new, old))
         print("  renamed collection '%s' -> '%s' (nothing re-embedded)" % (old, new))
 
 
@@ -227,10 +238,47 @@ def iter_chunks(kind, full, rel):
             break
 
 
+def file_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def file_stamp(path):
+    """(mtime, size, content hash) of a file as it is now, or None when it cannot be read.
+
+    Recorded for every file an index run looks at, so the doctor can say whether a file
+    changed by comparing it with what was indexed. The date alone cannot: a file unpacked from
+    a zip carries the zip's date, which is a wall-clock time with no zone, and lands hours in
+    the future (or the past) on a machine in another one."""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size, file_sha(path))
+    except OSError:
+        return None
+
+
+def same_as_indexed(path, st, stamp):
+    """Is the file what was indexed? Size first, then the date, and the content only when
+    the date differs (so a healthy folder is checked without reading a single file)."""
+    mtime, size, sha = stamp
+    if st.st_size != size:
+        return False
+    if abs(st.st_mtime - mtime) <= 1:
+        return True
+    try:
+        return file_sha(path) == sha
+    except OSError:
+        return False
+
+
 def index_collection(collection, roots, allow_empty=False):
     t0 = time.time()
     nf = nc = nnp = 0
     pending = []
+    stamps = {}
     stage = STAGE_PREFIX + collection
     abs_roots = [os.path.abspath(os.path.expanduser(r)) for r in roots]
     missing = [r for r in abs_roots if not os.path.isdir(r)]
@@ -275,6 +323,9 @@ def index_collection(collection, roots, allow_empty=False):
                         except OSError as e:
                             print("    [unreadable, skipped: %s] %s" % (e, rel))
                             continue
+                    stamp = file_stamp(full)      # before it is read, so a write during the
+                    if stamp:                     # run shows up as a change afterwards
+                        stamps[rel] = stamp
                     got = False
                     for i, c in enumerate(iter_chunks(kind, full, rel)):
                         pending.append((rel, i, c))
@@ -323,6 +374,9 @@ def index_collection(collection, roots, allow_empty=False):
         db.execute("UPDATE chunks SET collection = ? WHERE collection = ?", (collection, stage))
         db.execute("INSERT OR REPLACE INTO roots (collection, roots, indexed_at) VALUES (?,?,?)",
                    (collection, json.dumps(abs_roots), time.strftime("%Y-%m-%d %H:%M:%S")))
+        db.execute("DELETE FROM file_stamps WHERE collection = ?", (collection,))
+        db.executemany("INSERT INTO file_stamps (collection, path, mtime, size, sha) VALUES (?,?,?,?,?)",
+                       [(collection, p) + st for p, st in stamps.items()])
         db.execute("COMMIT")
     except Exception as e:
         try:
@@ -466,6 +520,12 @@ def doctor_checks(ollama=True):
         paths = {}
         for c, p in db.execute("SELECT DISTINCT collection, path FROM chunks"):
             paths.setdefault(c, set()).add(p)
+        stamps = {}
+        try:
+            for c, p, m, sz, sha in db.execute("SELECT collection, path, mtime, size, sha FROM file_stamps"):
+                stamps.setdefault(c, {})[p] = (m, sz, sha)
+        except sqlite3.Error:
+            pass                    # an index no v2.8 run has touched: the dates are all there is
         db.close()
     except sqlite3.Error as e:
         add("PROBLEM", "%s is not a readable index (%s)" % (DB, e))
@@ -501,15 +561,25 @@ def doctor_checks(ollama=True):
         rts, when = roots[c]
         missing = [r for r in rts if not os.path.isdir(r)]
         if missing:
-            add("WATCH", "%s was indexed from %s, which is not there now: it still answers from the text "
-                         "as it was on %s, and cannot be refreshed until the folder is back or it is "
-                         "re-indexed from where it moved" % (c, ", ".join(missing), when))
+            # the one move the installers make themselves: ~/DamResearch became ~/Vor
+            now_at = [r if os.path.isdir(r) else r.replace(os.sep + "DamResearch" + os.sep, os.sep + "Vor" + os.sep)
+                      for r in rts]
+            if all(os.path.isdir(r) for r in now_at):
+                add("WATCH", "%s was indexed from %s, which moved when DamResearch was renamed Vor: it still "
+                             "answers from the text as it was on %s. Refresh: heim-index -c %s %s"
+                    % (c, ", ".join(missing), when, c, " ".join("'%s'" % r for r in now_at)))
+            else:
+                add("WATCH", "%s was indexed from %s, which is not there now: it still answers from the text "
+                             "as it was on %s, and cannot be refreshed until the folder is back or it is "
+                             "re-indexed from where it moved" % (c, ", ".join(missing), when))
             continue
         try:
             stamp = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
         except ValueError:
             stamp = None
-        new, changed, big = [], [], []
+        new, changed, big, ahead = [], [], [], []
+        known = stamps.get(c)
+        now = time.time()
         on_disk = set()
         for rel, full, kind in _walk_indexable(rts):
             on_disk.add(rel)
@@ -520,6 +590,15 @@ def doctor_checks(ollama=True):
             if st.st_size > (MAX_PDF_BYTES if kind == "pdf" else MAX_TEXT_BYTES):
                 big.append(rel)
                 continue
+            if known is not None:
+                # v2.8: against what the run recorded, whatever the dates say
+                if rel not in known:
+                    new.append(rel)
+                elif not same_as_indexed(full, st, known[rel]):
+                    changed.append(rel)
+                continue
+            if stamp is not None and st.st_mtime > stamp + 2 and st.st_mtime > now + 60:
+                ahead.append(rel)       # dated in the future: says nothing about a change
             if rel not in paths.get(c, ()):
                 # a file with no text (an empty __init__.py, a scanned PDF) is never in the
                 # index, so "not indexed" only means something when it arrived after the run
@@ -535,6 +614,10 @@ def doctor_checks(ollama=True):
             notes.append("%d new file(s) since (first: %s)" % (len(new), new[0]))
         if gone:
             notes.append("%d indexed file(s) are gone from the folder (first: %s)" % (len(gone), gone[0]))
+        if notes and ahead:
+            notes.append("%d of these file(s) are dated in the future, as files unpacked from a zip made in "
+                         "another time zone are, so they may not have changed at all (one refresh settles it: "
+                         "from then on files are compared with what was indexed, not with the clock)" % len(ahead))
         if notes:
             add("WATCH", "%s is older than its files (indexed %s): %s. Heim answers from the text as it "
                          "was. Refresh: heim-index -c %s %s"
