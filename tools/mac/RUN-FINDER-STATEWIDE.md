@@ -56,10 +56,11 @@ and are not run again.
 
 The trial shows that everything is in place; it does **not** settle the time. A tile at the
 edge of the terrain has little terrain in it and is many times quicker than a full one (on the
-test box: 8 to 35 seconds against 2.5 to 4 minutes), and the first tiles are at the edge. So
-`--dry-run` keeps the test box's figure until **three tiles full of terrain** have finished on
-the Mac, and it says which figure it used and how many full tiles it has so far. Every estimate
-counts a tile by how much terrain it holds.
+test box: 8 to 35 seconds against 2.5 to 4 minutes), and the first tiles of a run, in the
+corner of the terrain, can be such tiles. So `--dry-run` keeps the test box's figure until
+**three tiles full of terrain** have finished on the Mac, and it says which figure it used and
+how many full tiles it has so far. Every estimate counts a tile by how much terrain it holds.
+`--list` shows each tile's share of terrain.
 
 ## 3. The whole state
 
@@ -105,7 +106,7 @@ All in `~/ND_Finder_Statewide`:
 | `tiles/` | one folder per tile (what lets it go on after a stop). Leave it there until you are done |
 | `logs/`, `failed/` | a log per run; the log of any tile that failed |
 
-Four columns are added by this script. The first three explain why a fill is **not** in the
+The script adds these columns. The first three explain why a fill is **not** in the
 ranked lists:
 
 * `in_state` = `no`: the fill is outside North Dakota (the terrain covers a strip of the
