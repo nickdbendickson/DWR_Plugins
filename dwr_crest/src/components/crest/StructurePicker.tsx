@@ -9,6 +9,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 
+import { applyDefaults } from "@/lib/crest/settings";
+import { sharedNow } from "@/lib/crest/settings-store";
 import { KIND_LABEL, aimAlongChannel, deriveRecord, loadStructures, missingData, nearRequest, structureRecord, type Structure } from "@/lib/crest/batch";
 import { autoBreachOn } from "@/lib/crest/breach-point";
 import { fold, type NdData } from "@/lib/crest/nd-dams";
@@ -49,14 +51,15 @@ export function StructurePicker() {
     setBusy(true);
     setNote(null);
     const id = `${s.id.toLowerCase()}-${Date.now().toString(36)}`;
-    let made = structureRecord(s, data?.nd, id);
+    const shared = sharedNow().values;
+    let made = applyDefaults(structureRecord(s, data?.nd, id), shared);
     let msg = "New record from DWR. Elevations are blank: enter the crest and breach bottom, or read them from the terrain.";
     if (!missingData(s)) {
       try {
         const g = await fetchDem(nearRequest(s.lon!, s.lat!, 0.6, 5));
         const r = deriveRecord(s, g, data?.nd, demSourceLabel() === "3DEP" ? "3DEP" : "local DEM");
         if (r.ok) {
-          made = { ...r.dam, id };
+          made = applyDefaults({ ...r.dam, id }, shared);
           // Same two-pass aim as the batch: the synthesized line down the traced channel.
           made = (await aimAlongChannel(made, r.derived.u, (q) => fetchDem(q)).catch(() => ({ dam: made }))).dam;
           const b = autoBreachOn(made, g);

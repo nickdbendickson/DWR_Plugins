@@ -7,10 +7,14 @@
  *   node --experimental-strip-types scripts/batch-dams.mjs --out <dir> (--state | --county Cass[,Barnes] | --watershed "Maple" | --ids ND00199,DWR-4031)
  *        [--kinds nid,dam,dugout,unknown] [--statuses NID,Intact,Dugout,...] [--concurrency 2] [--limit N] [--list]
  *        [--dem /path/ND_1m_EPSG26914.vrt [--dem-feet] [--gdalwarp <path>]]
+ *        [--defaults ~/DamSafety/defaults.json]
  *
  * --dem reads the terrain from a local raster (the statewide 1 m mosaic) through gdalwarp instead of the 3DEP service
  * (scripts/local-dem.mjs): no per-dam download, and the crest is read on a 2 m grid. The VRT must be in metres
  * (--dem-feet for a feet DEM). 911 address points still come from the ND GIS Hub.
+ *
+ * --defaults starts every structure from a shared defaults file (the one the QGIS plugins and the desk's Settings
+ * read: starting pool, failure mode, breach equation, Manning's n) instead of Crest's built-in values.
  *
  * Writes <dir>/batch.jsonl (one row per structure, appended as each finishes) and <dir>/batch.csv (sorted, rewritten
  * at the end and every 25 rows). --list prints the selection and the time estimate without running anything.
@@ -21,6 +25,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { localDemFetcher } from "./local-dem.mjs";
+import { applyDefaults, mergeDefaults, readDefaultsFile, recordDefaults } from "../src/lib/crest/settings.ts";
 import { DEFAULT_STATUSES, batchCsv, batchCsvMeta, estimateSeconds, loadStructures, runBatch, selectStructures } from "../src/lib/crest/batch.ts";
 
 /**
@@ -82,11 +87,23 @@ export function parseArgs(argv) {
     else if (a === "--dem") o.dem = argv[++i];
     else if (a === "--dem-feet") o.demFeet = true;
     else if (a === "--gdalwarp") o.gdalwarp = argv[++i];
+    else if (a === "--defaults") o.defaults = argv[++i];
     else throw new Error(`unexpected ${a}`);
   }
   if (!o.by) throw new Error("pick one of --state, --county, --watershed, --ids");
   if (!o.out && !o.list) throw new Error("--out <dir> is required");
   return o;
+}
+
+/** The merged values of a shared defaults file (--defaults), with what was left out or changed logged. */
+export function sharedFrom(file, log = console.log) {
+  const read = readDefaultsFile(readFileSync(file, "utf8"), file);
+  if (!read.ok) throw new Error(read.reason);
+  for (const p of read.problems) log(`defaults: ${p}; left out`);
+  const { values } = mergeDefaults(read.values);
+  for (const n of recordDefaults(values).notes) log(`defaults: ${n}`);
+  log(`defaults: ${file}: ${Object.entries(values).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+  return values;
 }
 
 export async function main(argv, log = console.log) {
@@ -121,8 +138,10 @@ export async function main(argv, log = console.log) {
     writeFileSync(join(o.out, "batch.csv"), batchCsv([...new Map(rows.map((r) => [r.id, r])).values()], batchCsvMeta(bundles)));
   const local = o.dem ? localDemFetcher(o.dem, { gdalwarp: o.gdalwarp, zFactor: o.demFeet ? 0.3048 : 1 }) : null;
   if (local) log(`terrain: ${o.dem} (local, through gdalwarp)`);
+  const shared = o.defaults ? sharedFrom(o.defaults, log) : null;
   await runBatch(sel, {
     nd,
+    ...(shared ? { prepare: (d) => applyDefaults(d, shared) } : {}),
     ...(local ? { fetchDem: local, nearCellM: 2, demLabel: "local DEM" } : {}),
     concurrency: o.concurrency,
     skip,

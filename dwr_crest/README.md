@@ -84,6 +84,47 @@ list:
 A file is read as data only: each record is rebuilt field by field, and a value of the wrong type is dropped with a
 note (`src/lib/crest/desk-file.ts`).
 
+## Settings: starting pool, roughness and the shared defaults
+
+Crest's presets are the pool at the top of dam, a piping failure, Froehlich (2008) and Manning's n of 0.035 in the
+channel and 0.06 on the floodplain. They can be changed in two places.
+
+**On one record (Breach step, "Advanced: starting pool and roughness").**
+
+- *Starting pool*: top of dam (the default), the record's normal pool, or an elevation you enter (in the same datum
+  as the crest; it is tied to NAVD88 the same way). Below the top of dam the head on the breach is lower and the
+  breach equations use the storage at that pool, so the peak and the released volume are smaller. A pool that cannot
+  be used (no normal pool on the record, above the top of dam, not above the breach bottom) falls back to the top of
+  dam and says why. Inflow cases (PMF, flow over the spillway with or without a breach) are the Runner's, not Crest's.
+- *Manning's n*, channel and floodplain (0.01 to 0.3). Used by the routed flood on the terrain: travel time, depth and
+  spread. Changing either asks for the terrain layer to be built again; the LISFLOOD export's `fpfric` follows the
+  floodplain value.
+
+These belong to the record: they are saved with it, in the desk file and in its `dam.json`.
+
+**For every new record (header, Settings).** Settings holds the suite's *shared defaults*, the same `defaults.json`
+the QGIS plugins read (DamSafety Core: Plugins > Dam safety > Shared defaults): the sunny-day starting pool, the
+failure mode, the breach equation and Manning's n. A new record, a record made from the NID or DWR pickers and every
+batch row starts from them. Records you already have are not changed; the Breach step lists where a record differs
+from the shared defaults and has a button to put it back on them.
+
+| Where | Your values live in | How to change them |
+| --- | --- | --- |
+| Desktop app | `~/DamSafety/defaults.json` (or the path in `CREST_DEFAULTS` / `DAMSAFETY_DEFAULTS`) | Settings > Save writes the file. Editing it in QGIS or by hand works too; Crest reads it when it opens. |
+| Web desk, Crest.html | this browser | Settings > Save. *Open settings file* reads a `defaults.json`; *Save settings file* writes one to hand to the plugins. |
+| Batch command line | a file you name | `npm run batch:dams -- --defaults ~/DamSafety/defaults.json ...` |
+
+Your file holds only the keys you changed, so a key you never touched follows the suite's value when the suite is
+updated. Unknown keys and out-of-range values are left out and named, never guessed. Crest has three of the suite's
+breach equations (Froehlich 2008, MacDonald & Langridge-Monopolis, a TR-60 width); if the shared defaults ask for
+another, new records start on Froehlich (2008) and Settings says so. `pmf_breach_volume` is kept in the file for the
+Runner and not used by Crest.
+
+Every `dam.json` Crest writes (Report step, and the desktop's dam folder) carries an `assumptions` entry, the same one
+a Runner run writes: what the record used, in the shared file's own names, the shared values at the time, and
+`differs`, the keys where the two are not the same. `starting_pool_ft` and `starting_pool_rule` give the pool the
+breach really started from.
+
 ## Drawn area of interest (AOI)
 
 A drawn area limits the schematic flood. The valley is laid from the breach in the downstream direction; the reach
@@ -357,7 +398,7 @@ The Report step can hand the open dam to the QGIS plugins already installed on t
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
 | `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
-| `npm run check:engine-sync [-- --other <damit checkout>]` | Checks that `engine.ts`, `spread.ts`, `outline.ts`, `routing.ts` and `warnings.ts` match DamIT's `damit_crest` copy line for line, apart from the pairs listed (with a reason each) in `scripts/engine-sync-allow.json`. Without `--other` it reads damit `main` from GitHub. CI runs it on every change and daily (`.github/workflows/engine-sync.yml`). |
+| `npm run check:engine-sync [-- --other <damit checkout>]` | Checks that `engine.ts`, `spread.ts`, `outline.ts`, `routing.ts` and `warnings.ts` match DamIT's `damit_crest` copy line for line, apart from the pairs listed (with a reason each) in `scripts/engine-sync-allow.json`. Without `--other` it reads damit `main` from GitHub. CI runs it on every change and daily (`.github/workflows/engine-sync.yml`); a PR is compared with damit's branch of the same name when there is one, so an engine change lands as a pair of PRs that are green together. |
 | `npm run batch:dams -- --out <dir> (--state \| --county Cass \| --watershed 09020205 \| --ids ND00199,DWR-4031) [--dem <1 m mosaic .vrt>]` | Batch screen from the command line (see **Batch screen** above); resumes from `<dir>/batch.jsonl`. |
 | `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp>` | Rebuilds `src/lib/crest/data/nd_structures.json` (every DWR dam and dugout, with HUC8 watersheds) for the batch screen. Run only when asked. |
 | `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |

@@ -2,6 +2,20 @@
 
 ## 2026-11-13
 
+- **Starting pool and roughness can be changed; Settings reads the suite's shared defaults.** The breach still
+  starts at the top of dam with a piping failure, but the Breach step now has an Advanced section: start the breach
+  at the normal pool or at an entered elevation (the head and the storage in the breach equations follow the pool; a
+  pool that cannot be used falls back to the top of dam with a W-V1 flag), and set Manning's n for the channel and
+  the floodplain of the routed flood (it was fixed at 0.035 / 0.06 with no way to pass another). A header Settings
+  panel holds the shared defaults file the QGIS plugins read (`dam-defaults` format: starting pool, failure mode,
+  breach equation, Manning's n): the desktop app reads and writes `~/DamSafety/defaults.json`, the web desk keeps the
+  values in the browser and opens / saves the file, and `batch:dams` takes `--defaults`. New records, picker records
+  and batch rows start from them; existing records keep their values and say where they differ. `dam.json` (Report
+  step and the desktop dam folder) gains `assumptions` (used / differs / shared values, as a Runner run writes),
+  `starting_pool_ft`, `starting_pool_rule` and the two n values. Default records are unchanged to the last digit and
+  their saved terrain layers stay valid: the layer fingerprint only moves when a record leaves the defaults, so
+  `ENGINE_VERSION` is not bumped. The desk file reads the three new record fields. The engine-sync workflow now
+  compares a PR with damit's branch of the same name when it exists.
 - **Engine sync check across crest and DamIT.** The old `check-engine-parity.mjs` hashed `engine.ts` and
   `warnings.ts` against a pin kept in the same repo, so it never compared crest with `damit_crest` (the two repos'
   pins already differed), was not run by CI, and did not cover `spread.ts`, `outline.ts` or `routing.ts`.

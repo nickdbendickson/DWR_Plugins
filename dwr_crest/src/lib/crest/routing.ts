@@ -41,6 +41,22 @@ export type RoughnessOptions = {
 
 export const DEFAULT_ROUGHNESS: RoughnessOptions = { nChannel: 0.035, nFloodplain: 0.06, bankfullM: 1.5 };
 
+/** The range a typed Manning's n is held to: the shared defaults file's range for `manning_n` (settings.ts). */
+export const MANNING_RANGE = { lo: 0.01, hi: 0.3 } as const;
+
+/**
+ * The roughness a record asks for: its own Manning's n values where they are usable numbers, the built-in ones
+ * otherwise. A value outside MANNING_RANGE is held to the range. With nothing set this is DEFAULT_ROUGHNESS itself.
+ */
+export function roughnessOf(r?: { nChannel?: number; nFloodplain?: number } | null): RoughnessOptions {
+  const pick = (v: number | undefined, d: number) =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(MANNING_RANGE.hi, Math.max(MANNING_RANGE.lo, v)) : d;
+  const nChannel = pick(r?.nChannel, DEFAULT_ROUGHNESS.nChannel);
+  const nFloodplain = pick(r?.nFloodplain, DEFAULT_ROUGHNESS.nFloodplain);
+  if (nChannel === DEFAULT_ROUGHNESS.nChannel && nFloodplain === DEFAULT_ROUGHNESS.nFloodplain) return DEFAULT_ROUGHNESS;
+  return { nChannel, nFloodplain, bankfullM: DEFAULT_ROUGHNESS.bankfullM };
+}
+
 export type SectionTable = {
   x: number;
   /** Thalweg elevation (m). */

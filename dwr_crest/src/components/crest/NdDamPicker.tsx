@@ -31,6 +31,8 @@ import {
 } from "@/lib/crest/nd-dams";
 import { deskBundles, staleBundleBanner } from "@/lib/crest/data-provenance";
 import { blankDam } from "@/lib/crest/samples";
+import { applyDefaults } from "@/lib/crest/settings";
+import { sharedNow } from "@/lib/crest/settings-store";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord } from "@/lib/crest/types";
 
@@ -211,7 +213,7 @@ export function NdDamPicker({ dam }: { dam: DamRecord }) {
               className="h-10 rounded-sm border border-line bg-paper px-3"
               onClick={() => {
                 const { patch } = prefillPatch(picked, data);
-                const base = blankDam();
+                const base = applyDefaults(blankDam(), sharedNow().values);
                 addDam({ ...base, ...patch, id: `nid-${picked.nid.toLowerCase()}-${base.id.slice(5)}` });
                 setPicked(null);
               }}

@@ -102,6 +102,23 @@ describe("desk file", () => {
     assert.equal(recordFromFile(null), null);
   });
 
+  it("keeps a record's starting pool and Manning's n, and drops unusable ones", () => {
+    const dam: DamRecord = { ...blankDam(), id: "p1", startPool: "elevation", startPoolFt: 95.5, roughness: { nChannel: 0.04, nFloodplain: 0.08 } };
+    const back = ok(openDeskFile(deskFileText([dam], dam.id, new Date(0))));
+    assert.equal(back.kind, "desk");
+    const got = back.dams[0];
+    assert.equal(got.startPool, "elevation");
+    assert.equal(got.startPoolFt, 95.5);
+    assert.deepEqual(got.roughness, { nChannel: 0.04, nFloodplain: 0.08 });
+    const notes: string[] = [];
+    const bad = recordFromFile({ ...viaJson(dam), startPool: "flood", startPoolFt: "high", roughness: { nChannel: "x", nFloodplain: -1, bankfullM: 9 } }, notes);
+    assert.ok(bad);
+    assert.equal(bad.startPool, undefined);
+    assert.equal(bad.startPoolFt, undefined);
+    assert.equal(bad.roughness, undefined);
+    assert.deepEqual(recordFromFile({ ...viaJson(dam), roughness: { nFloodplain: 0.05, extra: 1 } }, [])?.roughness, { nFloodplain: 0.05 });
+  });
+
   it("skips a second record with the same id inside one file", () => {
     const r = ok(
       openDeskFile(

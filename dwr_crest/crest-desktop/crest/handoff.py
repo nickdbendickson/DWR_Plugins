@@ -292,6 +292,19 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
             notes.append(
                 "line_xy is not set. The drawn line is longitude and latitude, so the Runner will not insert the embankment."
             )
+        # What this record used of the suite's shared defaults (the desk's settings.ts assumptions()), the same
+        # top-level entry a Runner run writes. Another tool's entry is kept: Crest fills it only when it is empty or
+        # its own; the screened status entry below always carries Crest's.
+        assume = analysis.get("assumptions") if isinstance(analysis.get("assumptions"), dict) else None
+        if assume:
+            existing_assume = record.get("assumptions")
+            if not isinstance(existing_assume, dict) or existing_assume.get("tool") in (None, "", assume.get("tool")):
+                record["assumptions"] = assume
+            else:
+                notes.append(
+                    f"Kept the assumptions entry {existing_assume.get('tool')} already wrote in dam.json. "
+                    "Crest's own is on its screened status entry."
+                )
         if append_status:
             reasons = screen.get("reasons") if isinstance(screen.get("reasons"), list) else []
             # A record written by another tool may carry "status": null (or a non-list); setdefault would
@@ -313,6 +326,10 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
                     "width_ft": _num(breach_block.get("widthFt")),
                     "notes": reasons,
                     "preview": True,
+                    **({"starting_pool_ft": _num(breach_block.get("startPoolNavdFt")),
+                        "starting_pool_rule": breach_block.get("startPoolLabel")}
+                       if breach_block.get("startPoolLabel") else {}),
+                    **({"assumptions": assume} if assume else {}),
                 },
             })
         _dump(path, record)

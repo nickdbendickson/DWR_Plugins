@@ -20,11 +20,24 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # An engine change lands as a pair of PRs, one in each repo, on branches with the same name. A PR is compared
+      # with damit's branch of that name when there is one (so the pair is green together), with damit main otherwise.
+      - name: Pick the damit branch to compare with
+        id: other
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          ref=main
+          if [ -n "$HEAD_REF" ] && git ls-remote --exit-code --heads https://github.com/nickdbendickson/damit.git "refs/heads/$HEAD_REF" >/dev/null 2>&1; then
+            ref="$HEAD_REF"
+          fi
+          echo "Comparing with damit $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - name: Check out damit (damit_crest engine only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nickdbendickson/damit
-          ref: main
+          ref: ${{ steps.other.outputs.ref }}
           path: .damit
           sparse-checkout: damit_crest/src/lib/crest
           persist-credentials: false

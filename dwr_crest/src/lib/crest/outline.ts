@@ -4,6 +4,7 @@ import { damLocation, ENGINE_VERSION } from "./engine.ts";
 import type { ExtentSensitivity } from "./extent.ts";
 import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } from "./floodstrip.ts";
 import type { Bbox } from "./plss.ts";
+import { DEFAULT_ROUGHNESS, roughnessOf } from "./routing.ts";
 import type { Centerline } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 import { warning, type Warning } from "./warnings.ts";
@@ -566,6 +567,7 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
     fromM = aoi.nearKm * 1000;
   }
   const r = (n: number) => Math.round(n * 1000) / 1000;
+  const rough = roughnessOf(dam.roughness);
   // The fingerprint mixes in the two METHOD versions (the engine's numerics and the terrain trace), never the build
   // version (version.ts): a rebuild that changes no method must not ask every saved layer to be built again.
   const fingerprint = fnv(
@@ -579,6 +581,10 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
       f: r(fromM),
       s: Number.isFinite(dam.storageAcFt) ? r(dam.storageAcFt) : null,
       rd: roadPoints(dam).map((q) => [r(q.lon * 1e4), r(q.lat * 1e4)]),
+      // Only when the record leaves the defaults (top of dam, built-in Manning's n), so every layer saved before
+      // these options existed keeps its fingerprint and is not asked to be rebuilt.
+      ...(result.breach.startPool && result.breach.startPool !== "top" ? { p: [result.breach.startPool, r(result.breach.startPoolNavdFt)] } : {}),
+      ...(rough !== DEFAULT_ROUGHNESS ? { n: [rough.nChannel, rough.nFloodplain] } : {}),
     }),
   );
   return { ok: true, inputs: { loc, u, st, parts, fromM, lastX: st[st.length - 1].x, fingerprint } };

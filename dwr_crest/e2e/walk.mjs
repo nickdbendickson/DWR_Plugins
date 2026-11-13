@@ -51,6 +51,17 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
     await assert.doesNotReject(step(page, name).waitFor(), `step button "${name}"`);
   await page.getByText("Swan Buffalo Detention 12").first().waitFor();
 
+  // Settings: the shared defaults open from the header, a changed value saves, and the panel closes.
+  await page.getByTestId("settings-toggle").click();
+  await page.getByTestId("settings-panel").waitFor();
+  assert.equal(await page.getByTestId("setting-sunny_day_start_pool").inputValue(), "max_pool");
+  assert.equal(await page.getByTestId("setting-failure_mode").inputValue(), "piping");
+  await page.getByTestId("setting-manning_n").fill("0.05");
+  await page.getByTestId("settings-save").click();
+  await page.getByTestId("settings-note").waitFor();
+  await page.getByTestId("settings-close").click();
+  await page.getByTestId("settings-panel").waitFor({ state: "detached" });
+
   // Record: the record form, and an edit goes through to the engine (the height field feeds the breach).
   await step(page, "Record").click();
   await page.getByRole("heading", { name: "Dam record" }).waitFor();
@@ -61,6 +72,20 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
   await page.getByRole("heading", { name: "Outflow" }).waitFor();
   const breachText = await page.locator("body").innerText();
   assert.match(breachText, /[\d,]+\s*cfs/, "Breach step shows a peak outflow");
+  // Advanced: the breach starts at the top of dam; an entered elevation moves it, and the reset puts it back.
+  const poolUsed = () => page.getByTestId("start-pool-used").innerText();
+  assert.match(await poolUsed(), /top of dam/);
+  await page.getByTestId("breach-advanced").locator("summary").click();
+  await page.getByTestId("start-pool").selectOption("elevation");
+  await page.getByTestId("start-pool-ft").fill("1065");
+  await page.waitForFunction(() =>
+    /entered elevation, 1,065\.0 ft/.test(document.querySelector('[data-testid="start-pool-used"]')?.textContent ?? ""),
+  );
+  await page.getByTestId("differs-from-shared").first().waitFor();
+  await page.getByTestId("reset-to-shared").click();
+  await page.waitForFunction(() =>
+    /top of dam/.test(document.querySelector('[data-testid="start-pool-used"]')?.textContent ?? ""),
+  );
 
   // Flood: the map draws, the terrain layer builds from (stubbed) 3DEP in the worker, and the 911 lookup lists points.
   await step(page, "Flood").click();
@@ -103,6 +128,14 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
       .then((c) => Buffer.concat(c).toString("utf8")),
   );
   assert.ok(damJson && typeof damJson === "object", "dam.json is JSON");
+  // The record says what it used of the shared defaults (with the value saved in Settings above).
+  assert.equal(damJson.assumptions?.tool, "Crest");
+  assert.equal(damJson.assumptions.used.sunny_day_start_pool, "max_pool");
+  assert.equal(damJson.assumptions.shared_values.manning_n, 0.05);
+  // The Breach step's reset put the record on the saved value, so nothing differs.
+  assert.equal(damJson.assumptions.used.manning_n, 0.05);
+  assert.equal(damJson.manning_n_floodplain, 0.05);
+  assert.deepEqual(damJson.assumptions.differs, {});
 
   await page.waitForTimeout(500);
   assert.deepEqual(

@@ -35,6 +35,8 @@ import {
   type Structure,
   type StructureKind,
 } from "@/lib/crest/batch";
+import { applyDefaults } from "@/lib/crest/settings";
+import { sharedNow } from "@/lib/crest/settings-store";
 import {
   FailureWatch,
   RecentRecords,
@@ -411,7 +413,9 @@ export function BatchScreen({ onOpen }: { onOpen: (note?: string) => void }) {
         if (!s || !data) return;
         setOpening(id);
         try {
-          const again = await runStructure(s, { nd: data.nd });
+          // The same shared defaults the batch starts each record from (batch.ts runBatchInBrowser).
+          const shared = sharedNow().values;
+          const again = await runStructure(s, { nd: data.nd, prepare: (r) => applyDefaults(r, shared) });
           d = again.dam ?? undefined;
           if (d) dams.current.set(id, d);
           else

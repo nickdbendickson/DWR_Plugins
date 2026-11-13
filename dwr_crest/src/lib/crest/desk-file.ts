@@ -109,6 +109,19 @@ const READ: { [K in keyof Required<DamRecord>]: (v: unknown) => unknown } = {
   failureMode: oneOf(FAILURE),
   method: oneOf(METHOD),
   engine: oneOf(ENGINE),
+  startPool: oneOf(["top", "normal", "elevation"] as const),
+  startPoolFt: num,
+  // Only the two Manning's n values, and only usable numbers (the engine holds them to its range, routing.ts).
+  roughness: (v) => {
+    const o = obj(v);
+    if (!o) return undefined;
+    const out: { nChannel?: number; nFloodplain?: number } = {};
+    for (const k of ["nChannel", "nFloodplain"] as const) {
+      const n = num(o[k]);
+      if (n != null && n > 0) out[k] = n;
+    }
+    return Object.keys(out).length ? out : undefined;
+  },
   lat: num,
   lon: num,
   datumOffsetFt: num,

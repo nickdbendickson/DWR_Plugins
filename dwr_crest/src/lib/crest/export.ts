@@ -1,4 +1,6 @@
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
+import { roughnessOf } from "./routing.ts";
+import { assumptions, mergeDefaults, type Shared } from "./settings.ts";
 import type { Analysis, DamRecord, SeriesPoint } from "./types.ts";
 import { CREST_VERSION } from "./version.ts";
 
@@ -15,8 +17,9 @@ export function exportHydrographCsv(series: SeriesPoint[]): string {
 }
 
 /** Minimal dam.json matching fields the Runner / Screening read. */
-export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
+export function exportDamJson(dam: DamRecord, analysis: Analysis, shared: Shared = mergeDefaults({}), now = new Date()): string {
   const loc = damLocation(dam);
+  const rough = roughnessOf(dam.roughness);
   const obj = {
     // Which Crest wrote this (build "<version>+<git sha>") and which engine method made the numbers, so a dam.json on
     // disk can be matched to a build and a method years on. The Runner and the Screening plugin ignore unknown keys.
@@ -39,6 +42,14 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
     lon: loc?.lon ?? null,
     method: dam.method,
     failure_mode: dam.failureMode,
+    // The pool the breach started from (NAVD88) and why, as the Runner's starting_wse_ft / starting_wse_rule.
+    starting_pool_ft: Number.isFinite(analysis.breach.startPoolNavdFt) ? analysis.breach.startPoolNavdFt : null,
+    starting_pool_rule: analysis.breach.startPoolLabel,
+    manning_n_channel: rough.nChannel,
+    manning_n_floodplain: rough.nFloodplain,
+    // What this record used of the suite's shared defaults, and where it differs from them (settings.ts): the same
+    // entry a Runner run writes, so the two can be checked against the same starting values.
+    assumptions: assumptions(dam, shared, CREST_VERSION, analysis.breach.startPool, now),
     screened: {
       level: analysis.screen.level,
       level_label: analysis.screen.label,
@@ -180,7 +191,8 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
   const cell = opts.cellSizeM != null && Number.isFinite(opts.cellSizeM) && opts.cellSizeM > 0 ? opts.cellSizeM : 10;
   const cells = Math.max(1, Math.round(opts.inflowCells ?? 2));
   const simHours = opts.simHours ?? 72;
-  const fpfric = opts.fpfric ?? 0.06;
+  // The record's floodplain Manning's n (the built-in 0.06 unless set on the Breach step), so the export matches the desk.
+  const fpfric = opts.fpfric ?? roughnessOf(dam.roughness).nFloodplain;
   const resroot = (dam.nid || "dam").toLowerCase().replace(/[^a-z0-9]/g, "_");
 
   let x = opts.pointX;

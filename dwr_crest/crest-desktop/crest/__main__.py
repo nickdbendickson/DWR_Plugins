@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
-from crest import localdem
+from crest import defaults, localdem
 from crest.qgis_run import WorkFolderError, resolve_work, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
@@ -471,6 +471,14 @@ class Api:
         if self._settings_file:
             localdem.write_dem_path(self._settings_file, None)
         return {"path": None, "gdalwarp": localdem.find_gdalwarp()}
+
+    def get_defaults(self) -> dict:
+        """Your shared defaults file (defaults.py): its path and text, text None when you have none yet."""
+        return defaults.read_user()
+
+    def save_defaults(self, text: str) -> dict:
+        """Write your shared defaults file, the one the QGIS plugins read too."""
+        return defaults.write_user(text)
 
     def save_file(self, name: str, text: str) -> dict:
         import webview

@@ -85,6 +85,19 @@ export type DamRecord = {
   failureMode: FailureMode;
   method: BreachMethod;
   engine: EngineName;
+  /**
+   * Where the pool stands when the breach starts. Absent = "top" (top of dam, the ND sunny-day default). "normal" is
+   * the record's normal pool; "elevation" is `startPoolFt`. A choice that cannot be used falls back to the top of dam
+   * with a warning (engine.ts startingPool).
+   */
+  startPool?: StartPool;
+  /** Starting pool elevation (ft, in the record's stated datum like the crest) when `startPool` is "elevation". */
+  startPoolFt?: number;
+  /**
+   * Manning's n for the routed flood, when it differs from the built-in values (routing.ts DEFAULT_ROUGHNESS:
+   * channel 0.035, floodplain 0.06). Absent, or a key absent = the built-in value.
+   */
+  roughness?: { nChannel?: number; nFloodplain?: number };
   /** Dam location (decimal degrees). Used for the VERTCON NGVD29 offset; the drawn breach point is the fallback. */
   lat?: number;
   lon?: number;
@@ -142,6 +155,9 @@ export type DamRecord = {
   /** Read-only NID reference values (not used by the engine). */
   nidRef?: NidRef;
 };
+
+/** Where the pool stands when the breach starts (DamRecord.startPool). */
+export type StartPool = "top" | "normal" | "elevation";
 
 export type NidHazard = "Low" | "Significant" | "High" | "Undetermined";
 export type ProvenanceSource = "NID" | "DWR" | "DEM";
@@ -206,8 +222,12 @@ export type Analysis = {
     widthFt: number;
     timeHr: number;
     capped: boolean;
-    /** Head on the breach at failure: pool (top of dam) minus breach bottom. */
+    /** Head on the breach at failure: starting pool (top of dam unless the record says otherwise) minus breach bottom. */
     headFt: number;
+    /** The starting pool the breach used ("top" also when a chosen pool could not be used), and its level. */
+    startPool: StartPool;
+    startPoolNavdFt: number;
+    startPoolLabel: string;
     bottomWidthFt: number;
     sideSlope: number;
     /** Froehlich (1995) regression peak on the head (a check). */

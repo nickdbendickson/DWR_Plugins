@@ -20,7 +20,7 @@ import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
 import { breachPath, SETTLE_SWEEPS, settlePools, spreadVolume, spreadVolumeAsync } from "./spread.ts";
 import { type OutlineInputs, outlineInputs, traceChannel } from "./outline.ts";
-import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
+import { DEFAULT_ROUGHNESS, roughnessOf, type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
@@ -202,7 +202,9 @@ export async function buildRoutedFlood(
     method === "spread"
       ? { ridgeTolM: opts.ridgeTolM ?? SPREAD_RIDGE_TOL_M, thalwegWindowM: SPREAD_THALWEG_WINDOW_M }
       : {};
-  const tables = sections.map((s) => sectionTable(s, undefined, undefined, undefined, tableOpts));
+  // The record's own Manning's n where it sets one (Breach step, Advanced), the built-in values otherwise.
+  const rough = roughnessOf(dam.roughness);
+  const tables = sections.map((s) => sectionTable(s, rough, undefined, undefined, tableOpts));
   // The breach outflow hydrograph (SI) is the routing inflow at the first section.
   const inflow = {
     tS: series.map((p) => p.tHr * 3600),
@@ -215,12 +217,17 @@ export async function buildRoutedFlood(
   const routed = routeMuskingumCunge(inflow, tables, {
     maxHours: opts.maxHours ?? 72,
     router: opts.router ?? "auto",
+    rough,
   });
 
   const releasedAcFt = result.breach.volumeAcFt;
   const N = g.width * g.height;
   const depthFt = new Float32Array(N);
   const notes = [...routed.notes];
+  if (rough !== DEFAULT_ROUGHNESS)
+    notes.push(
+      `Manning's n set on this record: channel ${rough.nChannel}, floodplain ${rough.nFloodplain} (built-in ${DEFAULT_ROUGHNESS.nChannel} and ${DEFAULT_ROUGHNESS.nFloodplain}).`,
+    );
   if (pathNote) notes.unshift(pathNote);
   let wseM: Float32Array;
   let floodedAc: number;
@@ -239,6 +246,7 @@ export async function buildRoutedFlood(
       minDepthM: opts.minDepthM ?? 0.03,
       releasedM3: releasedAcFt * ACFT,
       basins: opts.basins ?? true,
+      rough,
       // A stretch that runs out of ground is held at the routed stage + 1 ft and never above 2× the dam's height.
       maxLevelM: Number.isFinite(dam.heightFt) && dam.heightFt > 0 ? 2 * dam.heightFt * FT : undefined,
     };

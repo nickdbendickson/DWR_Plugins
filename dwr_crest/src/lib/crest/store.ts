@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { deleteOutline, loadOutlines, outlineSync, withoutOutline } from "./outline-store.ts";
 import { blankDam, SAMPLE_DAMS } from "./samples.ts";
+import { applyDefaults } from "./settings.ts";
+import { sharedNow } from "./settings-store.ts";
 import type { DamRecord, StepId } from "./types.ts";
 
 type DeskState = {
@@ -149,7 +151,8 @@ export const useDesk = create<DeskState>()(
         });
       },
       add: () => {
-        const dam = blankDam();
+        // A new record starts from the shared defaults (Settings): starting pool, failure mode, equation, Manning's n.
+        const dam = applyDefaults(blankDam(), sharedNow().values);
         set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" });
       },
       addDam: (dam) => set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" }),
