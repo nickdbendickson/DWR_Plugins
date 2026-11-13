@@ -482,7 +482,8 @@ def cli_batch_workers_start_one_child_per_dam_and_merge_the_rows():
         cmd = calls["jobs"][1]["cmd"]
         assert cmd[0] == sys.executable and cmd[2] == "batch" and cmd[1].endswith("ndbreach_cli.py")
         assert cmd[cmd.index("--only-row") + 1] == "2"
-        assert cmd[cmd.index("--lisflood") + 1] == c.lfmod.BUILTIN_EXE and "--threads" in cmd
+        assert cmd[cmd.index("--lisflood") + 1] == c.lfmod.BUILTIN_EXE
+        assert any(x.startswith("--threads=") and int(x.split("=")[1]) >= 1 for x in cmd), cmd
         assert cmd[cmd.index("--output") + 1] == os.path.join(d, "out")
         # the child's side: --only-row runs that row alone and writes the summary it was given
         ran = []

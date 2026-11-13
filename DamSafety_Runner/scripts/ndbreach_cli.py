@@ -1975,7 +1975,7 @@ def _batch_queue(args, cfg, out_root, queue, workers, run_one):
     work = bworkers.work_folder(out_root)
     say("Workers: {}; logs in {}".format(text, work))
     base = [sys.executable, os.path.abspath(__file__), "batch", os.path.abspath(args.dams),
-            os.path.abspath(args.config), "--output", out_root, "--threads", str(each)]
+            os.path.abspath(args.config), "--output", out_root, "--threads={}".format(each)]
     if args.resume:
         base.append("--resume")
     if args.verbose:
