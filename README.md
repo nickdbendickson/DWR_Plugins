@@ -71,6 +71,8 @@ release carries the patched LISFLOOD-FP binary for Windows, Linux x64 and Apple 
    (structures, roads, railroads, lifelines, hydro, DWR dams and dugouts, counties, HIFLD, ND DEQ,
    barriers, NLCD land cover) into a folder you pick and keeps it up to date; or copy a pack you
    were given. `docs/USER_GUIDE.md` has the pack formats and the pack check.
+   **New to the suite?** Open *Plugins → Dam safety → Dam suite home…* and click *Try the
+   sample dam…*: it sets up one real dam with its terrain and opens the breach Runner on it.
 3. **LISFLOOD-FP** (the Runner's flood engine; a build with the arrival-depth patch is required,
    an unpatched one is refused).
    - *Windows, Linux x64, macOS Apple Silicon (once a release is tagged):* the Runner zip of a GitHub Release carries a

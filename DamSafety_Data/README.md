@@ -106,6 +106,11 @@ writes it twice from the same download, into a folder you pick:
 | `nd_offline_pack/nd_offline_pack.sqlite` + `manifest.json` | 1: every vector layer in one file (no raster; the manifest's `rasters_not_included` says so) | older plugin versions |
 | `ND_Dam_Suite_Pack_build/` | the work file and downloads | resume only; delete after the build if you like |
 
+- **Sample dam (1.11.0).** A build of all layers also writes `ND_Dam_Suite_Pack/sample_dam/DWR-2801/`
+  (a dam record and 10 m terrain, about 14 MB), which the Dam suite home's *Try the sample dam…*
+  copies to the Dams folder. If it cannot be downloaded the build still finishes and says so.
+  `python3 -m DamSafety_Data.pack_build --out <folder> --sample-only` adds it to a pack built
+  earlier; `--no-sample` leaves it out.
 - **All pack layers** (default) or tick the ones you want. Area: all of North Dakota, a small
   test box, or your own box.
 - Optional local files: a DWR folder (needed for `DWR_unknown_structures`, which the DWR
