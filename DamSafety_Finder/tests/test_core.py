@@ -339,6 +339,127 @@ class Embankments(unittest.TestCase):
         self.assertEqual(em.find(dem, GT, [LINE]), [])
 
 
+class EdgeOfTheTerrainData(unittest.TestCase):
+    """Finder 0.7 (core/embankments.py step 13): missing DEM cells stand as a wall in the spill
+    test, so a fill beside them is kept but is not a candidate."""
+
+    def test_fills_beside_missing_terrain_are_kept_but_are_not_candidates(self):
+        dem, road = scene()
+        dem[:, 230:] = np.nan                                # the east half is outside the data: 90 m off
+        got = sorted(em.find(dem, GT, [LINE], road_mask=road), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in got], [em.K_EDGE] * 3)
+        for e, was in zip(got, (em.K_DAM, em.K_DRY, em.K_ROAD)):
+            self.assertAlmostEqual(e.edge_m, 30 * CELL, delta=CELL)
+            self.assertTrue(e.notes[0].startswith("at the edge of the terrain data: missing terrain acts as a wall here"))
+            self.assertTrue(e.notes[0].endswith("it would otherwise read as: " + was), e.notes[0])
+            self.assertEqual(e.confidence, "low")
+        self.assertIn(em.K_EDGE, em.KINDS)
+        # the readings are as they were (the wall and all): only the kind and the notes say so
+        off = sorted(em.find(dem, GT, [LINE], road_mask=road, params=em.FinderParams(edge_m_max=0.0)), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in off], [em.K_DAM, em.K_DRY, em.K_ROAD])
+        self.assertTrue(all(math.isnan(e.edge_m) for e in off))
+        self.assertEqual([(e.x, e.y, e.height_m, e.storage_m3) for e in got], [(e.x, e.y, e.height_m, e.storage_m3) for e in off])
+        # your distance: 60 m leaves all three (90 m off) as they are, with the distance written; the
+        # dam's flat pool runs into the missing cells, and it says so
+        far = sorted(em.find(dem, GT, [LINE], road_mask=road, params=em.FinderParams(edge_m_max=60.0)), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in far], [em.K_DAM, em.K_DRY, em.K_ROAD])
+        self.assertTrue(all(abs(e.edge_m - 90.0) <= CELL for e in far))
+        self.assertTrue(far[0].edge_pool)
+        self.assertTrue(any("the pool reaches missing terrain" in t for t in far[0].notes))
+        self.assertEqual(far[0].confidence, "low")
+
+    def test_missing_terrain_far_from_the_fill_and_its_pool_changes_nothing(self):
+        dem, road = scene()
+        whole = sorted(em.find(dem, GT, [LINE], road_mask=road), key=lambda e: -e.y)
+        self.assertTrue(all(math.isnan(e.edge_m) and not e.edge_pool for e in whole))      # no missing cell
+        dem[:, 300:] = np.nan                                # 300 m east of the valley line
+        got = sorted(em.find(dem, GT, [LINE], road_mask=road), key=lambda e: -e.y)
+        self.assertEqual([e.kind for e in got], [em.K_DAM, em.K_DRY, em.K_ROAD])
+        self.assertTrue(all(abs(e.edge_m - 300.0) <= CELL and not e.edge_pool for e in got))
+        self.assertEqual([(e.height_m, e.storage_m3) for e in got], [(e.height_m, e.storage_m3) for e in whole])
+        # not measured beyond the search distance
+        near = em.find(dem, GT, [LINE], road_mask=road, params=em.FinderParams(edge_search_m=200.0))
+        self.assertTrue(all(math.isnan(e.edge_m) for e in near))
+        # a hole of a few cells is not an edge of the data (under 100 m2: 3 x 3 cells = 81 m2)
+        dem, road = scene()
+        dem[150:153, 210:213] = np.nan
+        self.assertTrue(all(math.isnan(e.edge_m) for e in em.find(dem, GT, [LINE], road_mask=road)))
+        dem[150:154, 210:214] = np.nan                       # 4 x 4 cells = 144 m2: it is
+        self.assertTrue(any(math.isfinite(e.edge_m) for e in em.find(dem, GT, [LINE], road_mask=road)))
+
+    def test_a_pool_only_missing_terrain_holds(self):
+        # A spur beside the data edge. West of the spur the ground falls away west; east of it a draw
+        # runs north out of the data. With the missing cells as a wall the draw is a pool 4 m deep
+        # "held" by the spur: a false dam. The crest is 180 m from the missing cells (not within
+        # 150 m), so the distance rule does not reach it: a known limit, and it says so in its notes.
+        n = 300
+        y, x = np.mgrid[0:n, 0:n]
+        gt = (0.0, CELL, 0.0, n * CELL, 0.0, -CELL)
+        draw = 104.0 + (y - 60) * CELL * 0.01                # the draw's floor falls north (to row 60 and out)
+        z = np.where(x >= 150, draw + np.abs(x - 190) * CELL * 0.05, 0.0)
+        west = 100.0 - (150 - x) * CELL * 0.03               # the ground west of the spur falls west
+        z = np.where(x < 150, west, z)
+        spur = (np.abs(x - 150) <= 3)
+        z = np.where(spur, np.maximum(z, draw + 5.0), z)     # the spur: 5 m over the draw's floor
+        z[:60, :] = np.nan                                   # north of row 60: no terrain data
+        line = [((190 + 0.5) * CELL, (n - 120.5) * CELL), ((60 + 0.5) * CELL, (n - 120.5) * CELL)]   # east to west, over the spur
+        got = em.find(z, gt, [line])
+        self.assertEqual(len(got), 1)
+        e = got[0]
+        self.assertGreater(e.edge_m, 150.0)
+        self.assertTrue(e.edge_pool)
+        # the missing cells are a wall (the default): it keeps its kind, with a plain warning
+        self.assertNotEqual(e.kind, em.K_EDGE)
+        self.assertEqual(e.confidence, "low")
+        self.assertTrue(any("the pool reaches missing terrain at its lowest levels" in t for t in e.notes))
+        # edge_open (off by default): the missing cells are open ground, the pool gets out at once
+        opened = em.find(z, gt, [line], params=em.FinderParams(edge_open=True))[0]
+        self.assertEqual(opened.kind, em.K_EDGE)
+        self.assertIn("its pool reaches missing terrain and gets out there", opened.notes[0])
+        self.assertEqual((opened.height_m, opened.storage_m3), (e.height_m, e.storage_m3))
+        # the same ground with the terrain there (north of row 55 the draw turns west round the end
+        # of the spur and runs down to the lower ground): no pool, no fill
+        z2 = z.copy()
+        z2[:55, :] = (100.0 + (x - 150) * CELL * 0.03)[:55, :]
+        z2[55:60, :] = np.where(x >= 150, draw + np.abs(x - 190) * CELL * 0.05, west)[55:60, :]
+        self.assertEqual(em.find(z2, gt, [line]), [])
+
+    def test_a_dam_whose_pool_reaches_missing_terrain_higher_up_keeps_its_kind(self):
+        # the scene's dam, with the terrain missing 165 m east of the valley line: its pool at the
+        # spill level (4 m deep, 200 m to each side) reaches the missing cells, but on the ground the
+        # DEM has it still holds over 3 m: a dam, with a note that its height is a maximum
+        dem, road = scene()
+        dem[:, 255:] = np.nan
+        dam = [e for e in em.find(dem, GT, [LINE], road_mask=road) if e.y > N * CELL - 230 * CELL][0]
+        self.assertEqual(dam.kind, em.K_DAM)
+        self.assertTrue(dam.edge_pool)
+        self.assertAlmostEqual(dam.edge_m, 165.0, delta=CELL)
+        self.assertTrue(any("the pool reaches missing terrain" in t and "maximum" in t for t in dam.notes))
+        self.assertEqual(dam.confidence, "low")
+
+    def test_missing_cells_as_open_ground_in_the_spill_test(self):
+        # spill_level with a rim: the pool has got out once it holds a ground cell next to missing terrain
+        win = np.full((40, 40), 10.0)
+        win[10:30, 5:20] = 5.0                               # a basin
+        win[10:30, 20:22] = 8.0                              # its east wall, 3 m high
+        win[10:30, 22:35] = 4.0                              # lower ground beyond
+        u, d = (20, 10), (20, 30)
+        self.assertAlmostEqual(em.spill_level(win, u, d, 5.01, 10.0), 8.0, delta=0.05)
+        hole = win.copy()
+        hole[0:10, 5:20] = np.nan                            # missing terrain along the basin's north side
+        hole[10, 5:20] = 6.0                                 # the ground next to it: 1 m over the floor
+        edge, rim = em.missing_terrain(hole, 3.0)
+        self.assertTrue(rim[10, 10] and edge[9, 10] and not rim[20, 10])
+        self.assertAlmostEqual(em.spill_level(hole, u, d, 5.01, 10.0), 8.0, delta=0.05)              # a wall
+        self.assertAlmostEqual(em.spill_level(hole, u, d, 5.01, 10.0, rim=rim), 6.0, delta=0.05)     # open
+        hole[10, 5:20] = 5.0                                 # the floor runs straight into it
+        edge, rim = em.missing_terrain(hole, 3.0)
+        self.assertIsNone(em.spill_level(hole, u, d, 5.01, 10.0, rim=rim))
+        self.assertEqual(em.missing_terrain(win, 3.0), (None, None))
+        self.assertAlmostEqual(em.edge_distance(edge, 20, 10, 3.0, 1000.0), 33.0, delta=0.01)
+        self.assertTrue(math.isnan(em.edge_distance(edge, 20, 10, 3.0, 30.0)))
+
+
 class PoolLinesAndRescue(unittest.TestCase):
     """Finder 0.6 (core/embankments.py steps 11-12): pool-outlet lines and brim-full ponds."""
 

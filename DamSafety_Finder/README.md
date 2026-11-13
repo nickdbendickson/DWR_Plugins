@@ -14,7 +14,7 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 
 | Tool | Input | Finds |
 |---|---|---|
-| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the score tool |
+| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss), **at the edge of the terrain data** (a fill within 150 m of missing terrain: kept, not a candidate); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the score tool |
 | `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM; optionally the class-9 water-surface mosaic (`water_elev.vrt`) to set each pool level from the LiDAR water | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
 | `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills, a DEM (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there and, with a DEM, the drainage area and the round pipe the rational method asks for |
 | `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; **or** a classified LiDAR tile / folder (.las/.laz, ASPRS class 9 = water), **or** a prebuilt class-9 water-count raster / VRT (the statewide LiDAR water mosaic); mapped water bodies, buildings / streets (both optional) | Open-water outlines (one year, or the water of most of several years), each marked **mapped** or not (cast shadows and, with a buildings / streets layer, roofs and pavement in town are left out): the pond outlines for the second tool when no layer has them |
@@ -199,6 +199,49 @@ cells the same way, so their results do not depend on what else is in the run ei
 tool reads each water body in a window round its own outline, and the evidence tool reads imagery
 in a window round each fill's pool: neither depends on a run's box, so they are as they were.
 
+**The edge of the terrain data** (0.7.0; step 13 of `core/embankments.py`). Where the DEM has no
+cells - outside a LiDAR project, past the end of the file, in a hole - the spill test cannot see
+the ground, and the missing cells stand as a wall. A spur beside the edge then reads as a dam
+holding back everything on its other side. The case that showed it is on the ND / SD line (tile
+`USGS_1M_14_x61y509`, 45.935419, -97.520507): a 17 ft "dam" with a 262 acre pool and a score of
+0.69, 39 m from where the terrain stops; its "toe" is a draw that really drains away through the
+missing ground. So:
+
+- every fill has `edge_ft`, the distance from its crest to the nearest missing terrain cell (blank
+  when there is none within 1,000 m). It is measured on the 3 m cells of the run, so no edge can
+  be stepped over. Holes smaller than 100 m2 are not counted (`edge_min_m2`): a few missing cells
+  inside the data are not its edge;
+- a fill within 150 m of missing terrain (`edge_m_max` in a script; 0 = off) is kept, with the kind
+  **at the edge of the terrain data** and a note that starts "at the edge of the terrain data:
+  missing terrain acts as a wall here" and says what it would otherwise have been called. It is
+  **not a candidate**: it has no score, it is not handed to Screening, a review batch does not pick
+  it, and the score tool neither learns from it nor scores it. Its height and pool are written as
+  read, wall and all;
+- farther off, a fill whose pool reaches missing terrain keeps its kind, with low confidence and a
+  note of how high above its toe the pool first touches the missing cells.
+
+It is a kind, not a yes / no field, because everything downstream already chooses by kind:
+Screening is handed the kind `dam` only and a review batch takes `dam` and `dry embankment`. A
+new kind falls out of both with no further change, and anyone filtering or colouring the layer by
+`kind` sees it at once; a flag would have needed a test added in each place, and a place missed
+would have passed these fills on as candidates.
+
+Taking the missing cells as open ground, where water gets out, instead of as a wall was tried and
+is **not** done (`edge_open`, a script setting, off). It does not remove the case above: that pool
+meets the missing cells only 0.1 ft under its spill level, and what makes the false dam is the
+wall on the toe side and the pool running off the 1,200 m search window. And it would drop real
+dams: a reservoir's flat water surface cut by the end of the data gets out at once through open
+cells. The distance rule catches the case (128 ft); on the whole tile it sets aside 7 of 246 fills
+(4 that read as dams, 3 as road fills), none of them listed.
+
+Limits. A real dam within 150 m of the edge of the data is set aside too: run it again with
+terrain that covers both sides. A false dam of this kind more than 150 m from missing terrain is
+not caught by the distance (it carries the pool note only when its pool reaches the missing
+cells). A DEM that stores open water as missing cells would put every pond dam at an "edge": raise
+`edge_min_m2` above the largest water body, or set `edge_m_max` to 0, for such data (USGS 3DEP
+1 m tiles store water as a level surface, not as missing cells). An edge fill can still take the
+place of a real fill within 60 m of it or on the same pool, as before.
+
 The elevation unit is what the raster records (its band unit or a vertical CRS;
 USGS 3DEP files, `USGS_*`, are metres); a DEM that records none is refused until you choose Metres
 or Feet (feet read as metres made every fill 3.28 times too high). The log says which unit was
@@ -371,7 +414,7 @@ regression, USGS StreamStats), and a basin longer than the DEM read is a minimum
 One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and a CSV beside it:
 
 * `embankments` / `ponds` / `crossings`: every candidate, new first, with `status`, `known_id`,
-  `known_layer`, `known_state` (the list's own status of that structure, when it has one), `known_ft`, heights in feet, storage in acre-feet, areas in acres, `confidence`
+  `known_layer`, `known_state` (the list's own status of that structure, when it has one), `known_ft`, heights in feet, storage in acre-feet, areas in acres, `edge_ft` (fills: feet from the crest to the nearest missing terrain), `confidence`
   and `notes`.
 * `screening_dams` / `screening_ponds`: the not-listed candidates that could release water
   (dams, dry embankments, levees; never a road fill, which Screening cuts to open its culvert), as

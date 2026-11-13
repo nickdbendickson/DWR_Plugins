@@ -689,6 +689,8 @@ EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new",
               ("below_frac", "float"), ("rect", "float"), ("elong", "float"), ("wall_slope", "float"),
               ("mounds", "int"), ("top_w_ft", "float"), ("side_sum", "float"), ("relief_ft", "float"),
               ("slope_pct", "float"), ("fill_road", "str"), ("pool_lat", "float"), ("pool_lon", "float"),
+              # Finder 0.7 (step 13): crest to the nearest missing terrain (blank: none within the search)
+              ("edge_ft", "float"),
               ("confidence", "str"), ("notes", "str"), ("lat", "float"), ("lon", "float")]
 SPILL_FIELDS = [("find_id", "str"), ("kind", "str"), ("spill_ft", "float"), ("width_ft", "float"),
                 ("dist_ft", "float"), ("lat", "float"), ("lon", "float")]
@@ -744,6 +746,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     depend on where bbox is - except near a lattice line whose other square is not in the run
     (two squares can read one fill or pool; counts['dropped_between_squares'] says how many
     readings were dropped between the squares of this run).
+    THE EDGE OF THE TERRAIN DATA (0.7, core/embankments.py step 13): edge_ft = how far the crest is
+    from the nearest missing DEM cell; a fill within params.edge_m_max (150 m) of one has
+    the kind em.K_EDGE: it is written, but it is not scored, not handed to Screening and not
+    picked for a review batch (the ground past the end of the DEM file counts as missing too).
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()
@@ -920,7 +926,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      "rect": _rnd(e.rect, 2), "elong": _rnd(e.elong, 2), "wall_slope": _rnd(e.wall_slope, 3),
                      "mounds": e.mounds, "top_w_ft": _rnd(e.top_w_m / FT, 0), "side_sum": _rnd(e.side_sum, 1),
                      "relief_ft": _rnd(e.relief_m / FT, 1), "slope_pct": _rnd(e.slope_pct, 2),
-                     "fill_road": "yes" if e.fill_road else "no",
+                     "fill_road": "yes" if e.fill_road else "no", "edge_ft": _rnd(e.edge_m / FT, 0),
                      "pool_lat": None if plat is None else round(plat, 6),
                      "pool_lon": None if plon is None else round(plon, 6),
                      "confidence": e.confidence,
@@ -929,6 +935,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         from .core import score as sc
         m = sc.load(model) if isinstance(model, str) else model
         for r, (s_, why) in zip(rows, sc.score_detail(m, rows)):
+            if r["kind"] == em.K_EDGE:              # not a candidate: its readings lean on a wall
+                r["score"], r["score_note"] = None, "not scored: at the edge of the terrain data"
+                continue
             r["score"] = round(float(s_), 3)
             r["score_note"] = why
     rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}[r["status"]],
@@ -970,8 +979,12 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
               "dem_drainage": sum(1 for r in rows if r["line_source"] == LINE_DEM),
               "pool_outlet": sum(1 for r in rows if r["line_source"] == LINE_POOL),
               "rescued": sum(1 for r in rows if r["rescued"] == "yes"),
-              "squares": len(tiles), "dropped_between_squares": n_seam}
+              "squares": len(tiles), "dropped_between_squares": n_seam,
+              "data_edge": sum(1 for r in rows if r["kind"] == em.K_EDGE)}
     log(_summary(rows, "fill(s) across streams"))
+    if counts["data_edge"]:
+        log("{} of them at the edge of the terrain data (missing terrain acts as a wall there): kept, "
+            "not candidates".format(counts["data_edge"]))
     hs = None
     if hillshade and not cancelled():
         w = p.window_m if bbox is None else 0.0             # the stream box plus the search window
@@ -2715,6 +2728,12 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
         for r in read_rows(s_):
             r["source"] = s_
             rows.append(r)
+    # a fill at the edge of the terrain data is not learned from and not scored: its height and pool
+    # lean on missing terrain standing as a wall
+    edge = [r for r in rows if r.get("kind") == em.K_EDGE]
+    rows = [r for r in rows if r.get("kind") != em.K_EDGE]
+    if edge:
+        log("{} fill(s) at the edge of the terrain data: not learned from and not scored".format(len(edge)))
     if not rows:
         raise RuntimeError("no fills in the layers given")
     y = sc.labels(rows, positive_words)
@@ -2780,6 +2799,9 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
         r["score"] = round(float(v), 3)
         r["score_note"] = why
     rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}.get(r.get("status"), 3), -r["score"]))
+    for r in edge:                                      # written last, with no score
+        r["score"], r["score_note"] = None, "not scored: at the edge of the terrain data"
+    rows = rows + edge
     fields = [f for f in EMB_FIELDS] + [("source", "str")]
     write_points(out_gpkg, "scored_fills", fields, rows)
     write_csv(os.path.splitext(out_gpkg)[0] + "_scored_fills.csv", fields, rows)

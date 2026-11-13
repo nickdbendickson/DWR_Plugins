@@ -105,6 +105,22 @@ WHAT IT LOOKS FOR
      (a flat floodplain beside an incised creek passes the other tests). Such a fill is marked
      `rescued`.
 
+  Finder 0.7:
+  13. THE EDGE OF THE TERRAIN DATA. Where the DEM has no cells (outside a LiDAR project, a hole)
+     the spill test cannot see the ground, and the missing cells stand as a wall: a spur beside
+     the data edge reads as a dam holding everything on its other side (a real case on the ND / SD
+     line: a 17 ft "dam" with a 262 acre pool, 39 m from the edge). Every fill gets edge_m, the
+     distance from its crest to the nearest missing cell (pieces of missing cells under
+     edge_min_m2 are ignored; not measured beyond edge_search_m). A fill within edge_m_max of
+     missing terrain is kept but given the kind "at the edge of the terrain data": nothing can
+     be said about it without the terrain beyond. Farther off, a fill whose pool reaches missing
+     terrain keeps its kind, with low confidence and a note of the level at which the pool first
+     touches the missing cells. Taking the missing cells as open ground instead of a wall
+     (edge_open, off) is not the default: it does not remove the real case (its pool meets the
+     missing cells only 0.1 ft under its spill level; the wall that makes it is on the toe side
+     and at the analysis window), and it would drop a real dam whose flat water surface is cut
+     by the edge of the data.
+
 Every threshold is a FinderParams value the engineer chooses; the defaults are starting values,
 not standards. The result is a list of candidates for review against an aerial image, not a
 survey and not a determination.
@@ -130,7 +146,8 @@ K_DRY = "dry embankment"
 K_ROAD_POND = "road fill (ponding)"
 K_ROAD = "road fill"
 K_LONG = "long fill (road, rail, canal or levee)"
-KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD, K_LONG)
+K_EDGE = "at the edge of the terrain data"      # kept, but not a candidate (step 13)
+KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD, K_LONG, K_EDGE)
 
 
 @dataclass
@@ -160,6 +177,10 @@ class FinderParams:
     rescue_max_drain_m2: float = 200.0 * 4046.8564224  # a rescued fill drains less than this
     own_pool_m2: float = 100.0          # pool lines: a pool this big is enough when it holds the flat water the line starts in
     pool_toe_reach_m: float = 0.0       # pool lines: the toe is at least the lowest ground this far below the hump (0 = off)
+    edge_m_max: float = 150.0           # a crest this close to missing terrain: "at the edge of the terrain data" (0 = off)
+    edge_min_m2: float = 100.0          # a piece of missing cells smaller than this is ignored
+    edge_search_m: float = 1000.0       # the distance to missing terrain is measured this far
+    edge_open: bool = False             # True: also a fill whose pool gets out through missing terrain under min_height_m
 
 
 @dataclass
@@ -212,6 +233,9 @@ class Embankment:
     # Finder 0.6
     pool_line: bool = False             # found on a pool-outlet line (step 11)
     rescued: bool = False               # tested from the pool's lowest ground (step 12)
+    # Finder 0.7 (step 13)
+    edge_m: float = float("nan")        # crest to the nearest missing terrain (NaN: none within the search)
+    edge_pool: bool = False             # the pool at the spill level reaches missing terrain
 
 
 def _need_scipy():
@@ -351,17 +375,23 @@ def _window(dem, r, c, half):
     return r0, r1, c0, c1
 
 
-def spill_level(win, u, d, lo, hi, tol=0.02):
+def spill_level(win, u, d, lo, hi, tol=0.02, rim=None):
     """Highest level L in [lo, hi] at which cells u and d of `win` (finite = ground, NaN = no data,
     treated as high ground) are in different 4-connected components of {ground < L}. None when
-    they are joined already at lo. Connectivity only grows with L, so bisection is exact."""
+    they are joined already at lo. Connectivity only grows with L, so bisection is exact.
+    rim (bool grid: the ground cells next to missing terrain, missing_terrain()): the missing
+    cells are open ground instead - the pool of u has also got out once it holds a rim cell."""
     _need_scipy()
     g = np.where(np.isfinite(win), win, np.inf)
 
     def apart(level):
         lab, _n = ndi.label(g < level)
         a, b = lab[u], lab[d]
-        return a == 0 or b == 0 or a != b
+        if a == 0:
+            return True
+        if a == b:
+            return False
+        return not (rim is not None and bool((lab[rim] == a).any()))
 
     if not apart(lo):
         return None
@@ -375,6 +405,40 @@ def spill_level(win, u, d, lo, hi, tol=0.02):
         else:
             b = m
     return a
+
+
+def missing_terrain(dem, cell, min_m2=100.0):
+    """(edge, rim) of the missing terrain of a DEM (NaN): `edge` = the missing cells that touch
+    ground, `rim` = the ground cells that touch missing cells (both 8-connected), counting only
+    pieces of missing cells of at least min_m2 (a hole of a few cells is not an edge of the
+    data). (None, None) when there is no such piece."""
+    _need_scipy()
+    nan = ~np.isfinite(dem)
+    if not nan.any():
+        return None, None
+    k3 = np.ones((3, 3), bool)
+    lab, n = ndi.label(nan, structure=k3)
+    big = np.bincount(lab.ravel(), minlength=n + 1) * cell * cell >= min_m2
+    big[0] = False
+    if not big.any():
+        return None, None
+    miss = big[lab]
+    rim = ndi.binary_dilation(miss, structure=k3) & ~nan
+    if not rim.any():
+        return None, None
+    return miss & ndi.binary_dilation(rim, structure=k3), rim
+
+
+def edge_distance(edge, r, c, cell, search_m):
+    """Distance (m) from cell (r, c) to the nearest cell of `edge` (missing_terrain()), cell
+    centre to cell centre; NaN when there is none within search_m."""
+    k = int(math.ceil(search_m / cell))
+    r0, c0 = max(0, r - k), max(0, c - k)
+    rr, cc = np.nonzero(edge[r0:r + k + 1, c0:c + k + 1])
+    if not len(rr):
+        return float("nan")
+    d = float(np.hypot(rr + r0 - r, cc + c0 - c).min() * cell)
+    return d if d <= search_m else float("nan")
 
 
 def pool_at(win, u, level, cell):
@@ -773,6 +837,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
     dem[dem <= -9998.0] = np.nan
     cell = abs(gt[1])
     half = max(4, int(round(p.window_m / cell)))
+    miss_edge, miss_rim = missing_terrain(dem, cell, p.edge_min_m2) if p.edge_m_max > 0 else (None, None)
     found = []
     for li, xy in enumerate(lines):
         if cancelled is not None and li % 50 == 0 and cancelled():
@@ -854,6 +919,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                     if sp2 is not None and pool_mask(win, pu, sp2).sum() * cell * cell >= p.min_pool_m2:
                         u, d, spill, rescued = pu, dr, sp2, True
                         kd, face_open, toe = kr, fr_open, tr_
+                        lo = max(float(z[kp]), tr_) + 1e-3
             if spill is None:
                 continue
             height = spill - toe
@@ -1019,6 +1085,38 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                         (x, y, p.outlet_m + 0.5 * (e - s) * cl + 20.0))))
             else:
                 drain = float(drain_area(x, y)) if drain_area is not None else float("nan")
+            # --- step 13: the edge of the terrain data ---
+            edge, edge_pool = float("nan"), False
+            if miss_edge is not None:
+                edge = edge_distance(miss_edge, rc[0], rc[1], cell, p.edge_search_m)
+                rimw = miss_rim[r0:r1, c0:c1]
+                edge_pool = bool((pm & rimw).any())
+                why = None
+                if math.isfinite(edge) and edge <= p.edge_m_max:
+                    why = "{:.0f} ft from missing terrain".format(edge / FT)
+                elif edge_pool:
+                    # what the fill holds on the ground the DEM has: the missing cells open
+                    known = spill_level(win, u, d, lo, spill, p.level_tol_m, rim=rimw)
+                    if known is None or known - toe < p.min_height_m:
+                        if p.edge_open:
+                            why = "its pool reaches missing terrain and gets out there {}".format(
+                                "at once" if known is None else "{:.1f} ft above the toe, under the "
+                                "{:.1f} ft minimum".format((known - toe) / FT, p.min_height_m / FT))
+                    else:
+                        notes.append("the pool reaches missing terrain {:.1f} ft above the toe: above that "
+                                     "the missing terrain acts as a wall, so the height and storage are a "
+                                     "maximum".format((known - toe) / FT))
+                        low = True
+                    if why is None and (known is None or known - toe < p.min_height_m):
+                        notes.append("the pool reaches missing terrain at its lowest levels, and the missing "
+                                     "terrain acts as a wall: the height and storage are too big if the "
+                                     "ground falls away there, and the storage is a minimum if the water "
+                                     "carries on past the data")
+                        low = True
+                if why is not None:
+                    notes.insert(0, "at the edge of the terrain data: missing terrain acts as a wall here "
+                                    "({}); not a candidate - it would otherwise read as: {}".format(why, kind))
+                    kind, low = K_EDGE, True
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
                 up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cl, storage_m3=storage,
@@ -1030,7 +1128,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                 drain_m2=drain, pool_xy=pool_xy, orig_m=orig, ag_head_m=ag, below_frac=below,
                 rect=rect, elong=elong, wall_slope=wall, mounds=mounds, top_w_m=top_w, side_sum=side,
                 relief_m=relief, slope_pct=slope, fill_road=fill_road, pool_line=lim is not None,
-                rescued=rescued))
+                rescued=rescued, edge_m=edge, edge_pool=edge_pool))
     if p.one_per_pool:
         found = one_per_pool(found, cell)
     return dedupe(found, p.dedupe_m)

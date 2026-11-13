@@ -260,6 +260,65 @@ class Runs(unittest.TestCase):
         self.assertEqual(res["rows"][0]["status"], "new")
 
 
+    def test_fills_at_the_edge_of_the_terrain_data(self):
+        # Finder 0.7: the whole scene first - the end of the DEM file is missing terrain too (600 m
+        # east and west of the valley line, nearer for the two fills towards its south end), all
+        # over 150 m off: the kinds are as ever and edge_ft says how far
+        res = self.emb(hillshade=False)
+        by = {r["kind"]: r["edge_ft"] for r in res["rows"]}
+        self.assertEqual(sorted(by), ["dam", "dry embankment", "road fill"])
+        self.assertAlmostEqual(by["dam"], 600.0 / 0.3048, delta=30.0)
+        self.assertTrue(all(v > 150.0 / 0.3048 for v in by.values()), by)
+        self.assertEqual(res["counts"]["data_edge"], 0)
+        # the east part of the DEM is NoData from 90 m east of the valley line: every fill is kept, as
+        # "at the edge of the terrain data", and none is a candidate
+        from . import test_core as c
+        rows = c.Score().rows()
+        for i, r in enumerate(rows):
+            r.update({"x": X0 + 100.0 * i, "y": Y0, "find_id": "FIND-{}".format(i), "kind": "dam", "lat": 0.0, "lon": 0.0})
+        listed = os.path.join(self.tmp, "listed.gpkg")
+        self.f.write_points(listed, "embankments", self.f.EMB_FIELDS, rows)
+        model = self.f.run_score([listed + "|layername=embankments"], os.path.join(self.tmp, "s.gpkg"),
+                                 log=lambda *_: None)
+        dem, _road = tc.scene()
+        dem[:, 230:] = np.nan
+        write_dem(self.dem, dem)
+        said = []
+        res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, model=model["model_path"],
+                                     hillshade=False, log=said.append)
+        self.assertEqual([r["kind"] for r in res["rows"]], [self.f.em.K_EDGE] * 3)
+        self.assertEqual(res["counts"]["data_edge"], 3)
+        self.assertTrue(any("3 of them at the edge of the terrain data" in m for m in said), said)
+        for r in res["rows"]:
+            self.assertAlmostEqual(r["edge_ft"], 90.0 / 0.3048, delta=12.0)
+            self.assertTrue(r["notes"].startswith("at the edge of the terrain data: missing terrain acts as a wall here"))
+            self.assertIsNone(r["score"])
+            self.assertEqual(r["score_note"], "not scored: at the edge of the terrain data")
+        self.assertEqual({r["notes"].split("it would otherwise read as: ")[1].split(";")[0] for r in res["rows"]},
+                         {"dam", "dry embankment", "road fill"})
+        ds = ogr.Open(self.out)
+        lyr = ds.GetLayerByName("embankments")
+        self.assertEqual(lyr.GetFeatureCount(), 3)
+        self.assertGreaterEqual(lyr.GetLayerDefn().GetFieldIndex("edge_ft"), 0)
+        self.assertEqual(ds.GetLayerByName("screening_dams").GetFeatureCount(), 0)     # nothing for Screening
+        ds = None
+        fills = self.out + "|layername=embankments"
+        with self.assertRaises(RuntimeError):                                          # nothing for a review batch
+            self.f.run_review_batch(fills, os.path.join(self.tmp, "rb.gpkg"), n=3, log=lambda *_: None)
+        # the score tool does not learn from them and does not score them
+        said = []
+        sc = self.f.run_score([listed + "|layername=embankments", fills], os.path.join(self.tmp, "s2.gpkg"),
+                              log=said.append)
+        self.assertTrue(any("3 fill(s) at the edge of the terrain data: not learned from and not scored" in m for m in said))
+        self.assertEqual(sc["model"]["n_listed"] + sc["model"]["n_other"], len(rows))
+        self.assertEqual([r["score"] for r in sc["rows"][-3:]], [None] * 3)
+        self.assertTrue(all(r["score"] is not None for r in sc["rows"][:-3]))
+        # the distance is yours: 0 = the rule is off, and the kinds are as in 0.6
+        res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, hillshade=False,
+                                     params=self.f.em.FinderParams(edge_m_max=0.0), log=lambda *_: None)
+        self.assertEqual(sorted(r["kind"] for r in res["rows"]), ["dam", "dry embankment", "road fill"])
+        self.assertTrue(all(r["edge_ft"] is None for r in res["rows"]))
+
     def test_dem_drainage_alone_finds_the_fills(self):
         res = self.f.run_embankments(self.dem, None, self.out, roads=self.roads,
                                      known=[(self.known, "DWR dams", None)], match_ft=200.0,
