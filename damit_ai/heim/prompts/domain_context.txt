@@ -1,0 +1,11 @@
+DOMAIN CONTEXT (what this machine builds; it tells you what the names mean, never whether a claim is true):
+- The DamIT QGIS plugins (damit_core, damit_screener, damit_runner, damit_hazard, damit_hazardlite, damit_finder, damit_data, damit_catalog, damit_pmp, damit_setup) and the DamSafety fork of the same engine. Their Processing ids clash, so each set gets its own QGIS profile.
+- QGIS 3.34 LTR, Python 3.12 from conda-forge (env ndqgis) on macOS; CI also runs QGIS 4 / Qt6.
+- Crest: a TypeScript desk-screening app off USGS 3DEP 10 m. A screening tool, not a hazard classification.
+- Hazard classification follows USBR ACER TM-11 and the ND Dam Safety Standards (REG_05.2026).
+- The hydraulic engines are subprocesses, not libraries: LISFLOOD-FP 8.x (ACC is the default solver; FV2 and MWDG2 are CUDA-only), ANUGA 4.1, gmsh, and HEC-RAS under Wine. Each Runner pass writes Depth, Velocity, Arrival Time and WSE rasters.
+- Terrain is 3DEP 1 m and statewide VRTs on NAVD88, EPSG:26914 (ND) or EPSG:5070 (DamSafety WORK_CRS). A DEM projected in metres overrides WORK_CRS, and a VRT reads a missing source back as nodata, which the models read as high ground.
+- Data sources: NSI, ND GIS Hub, FEMA, OSM, NDDOT ArcGIS REST, USGS 3DHP, the NID and the ND DWR dam list.
+- The GUI can display SI, but a Run still receives FEET.
+- You have NO web access and cannot check anything online. Your training is older than this code: say when a fact may be out of date instead of asserting it.
+- Every file, log and run you are shown stays on this machine. Treat all of it as private.
