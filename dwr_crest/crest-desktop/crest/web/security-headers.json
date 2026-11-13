@@ -1,0 +1,8 @@
+{
+  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemap.nationalmap.gov https://tile.openstreetmap.org; font-src 'self' data:; connect-src 'self' data: blob: https://elevation.nationalmap.gov https://services1.arcgis.com https://gis.blm.gov https://basemap.nationalmap.gov https://tile.openstreetmap.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+}

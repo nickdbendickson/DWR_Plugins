@@ -69,6 +69,20 @@ class BundleTests(unittest.TestCase):
         stale = [rel for rel, digest in sources.items() if not (REPO / rel).is_file() or sha256_lf(REPO / rel) != digest]
         self.assertEqual(stale, [], "crest-desktop/crest/web is older than src/: run `npm run build:desktop` and commit it")
 
+    def test_integrity_hashes_match_assets(self):
+        import base64
+
+        index = (WEB / "index.html").read_text(encoding="utf-8")
+        tags = re.findall(r'<(?:script|link)\b[^>]*?(?:src|href)="\./(assets/[^"]+\.(?:js|css))"[^>]*>', index)
+        self.assertTrue(tags, "index.html names no script or stylesheet")
+        for tag in re.finditer(r'<(?:script|link)\b[^>]*?(?:src|href)="\./(assets/[^"]+\.(?:js|css))"[^>]*>', index):
+            found = re.search(r'integrity="sha384-([^"]+)"', tag.group(0))
+            self.assertTrue(found, f"{tag.group(1)} has no integrity attribute")
+            digest = base64.b64encode(hashlib.sha384((WEB / tag.group(1)).read_bytes()).digest()).decode()
+            self.assertEqual(found.group(1), digest, f"{tag.group(1)} does not match its integrity hash (line endings converted?)")
+        headers = json.loads((WEB / "security-headers.json").read_text(encoding="utf-8"))
+        self.assertIn("script-src 'self';", headers["Content-Security-Policy"])
+
     def test_offline_assets(self):
         index = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertNotRegex(index, r'(?:src|href)="(?:https?:)?//', "index.html loads something remote")

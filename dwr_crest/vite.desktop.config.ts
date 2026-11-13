@@ -18,21 +18,24 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { relative } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { crestVersion } from "./scripts/crest-version.mjs";
+import { contentSecurityPolicy, SECURITY_HEADERS } from "./src/lib/crest/csp.ts";
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const ROOT = r("./");
 
 /** SHA-256 of a text file with CRLF folded to LF, so a Windows checkout hashes the same as Linux. */
 function sha256(file: string): string {
-  return createHash("sha256").update(readFileSync(file, "utf8").replace(/\r\n/g, "\n")).digest("hex");
+  return createHash("sha256")
+    .update(readFileSync(file, "utf8").replace(/\r\n/g, "\n"))
+    .digest("hex");
 }
 
 /** Writes build-info.json. */
@@ -41,7 +44,11 @@ function buildInfoPlugin(): Plugin {
     name: "crest-desktop:build-info",
     apply: "build",
     generateBundle() {
-      this.emitFile({ type: "asset", fileName: "build-info.json", source: buildInfo(this.getModuleIds()) });
+      this.emitFile({
+        type: "asset",
+        fileName: "build-info.json",
+        source: buildInfo(this.getModuleIds()),
+      });
     },
   };
 }
@@ -58,6 +65,60 @@ function buildInfo(moduleIds: Iterable<string>, builtBy = "npm run build:desktop
   const sorted = Object.fromEntries(Object.entries(sources).sort(([a], [b]) => a.localeCompare(b)));
   const pkg = JSON.parse(readFileSync(r("./package.json"), "utf8")) as { name?: string };
   return JSON.stringify({ app: pkg.name ?? "crest", builtBy, sources: sorted }, null, 2) + "\n";
+}
+
+/** The build's VITE_CREST_TILE_URL (basemap.ts), read the way Vite reads it for the bundle, so the policy allows it. */
+function configuredTileUrl(mode: string): string | undefined {
+  return loadEnv(mode, r("./src/desktop"), "VITE_").VITE_CREST_TILE_URL || undefined;
+}
+
+/** `sha384-…` / `sha256-…` of a string or bytes, as Subresource Integrity and CSP hash sources write it. */
+function integrity(algo: "sha256" | "sha384", data: string | Uint8Array): string {
+  return `${algo}-${createHash(algo).update(data).digest("base64")}`;
+}
+
+/**
+ * Desktop bundle security files (2026-11-13):
+ *  - security-headers.json: the Content-Security-Policy (src/lib/crest/csp.ts) and the other security headers; the
+ *    Python server (crest-desktop/crest/__main__.py) sends them with every response, so the policy has one source.
+ *  - `integrity="sha384-…"` on index.html's entry script, its preloads and its stylesheet (Subresource Integrity): the
+ *    window refuses a bundle file that does not match the index.html it shipped with. .gitattributes keeps git from
+ *    rewriting line endings in the bundle, which would change the hashes on a Windows checkout.
+ */
+function desktopSecurityPlugin(mode: string): Plugin {
+  return {
+    name: "crest-desktop:security",
+    apply: "build",
+    enforce: "post",
+    // After the files are written: Vite still rewrites the entry chunk (its preload list) after generateBundle, so the
+    // hashes are taken from the bytes on disk, the bytes the window will load.
+    writeBundle(options) {
+      const out = options.dir ?? r("./crest-desktop/crest/web");
+      const index = join(out, "index.html");
+      let n = 0;
+      const text = readFileSync(index, "utf8").replace(
+        /<(?:script|link)\b[^>]*?\s(?:src|href)="\.\/(assets\/[^"]+\.(?:js|css))"[^>]*>/g,
+        (tag, name: string) => {
+          n++;
+          return tag.replace(
+            /\s*\/?>$/,
+            (end: string) =>
+              ` integrity="${integrity("sha384", readFileSync(join(out, name)))}"${end}`,
+          );
+        },
+      );
+      if (!n)
+        throw new Error(
+          "security: index.html has no script or stylesheet to put an integrity hash on",
+        );
+      writeFileSync(index, text);
+      const headers = {
+        "Content-Security-Policy": contentSecurityPolicy({ tileUrl: configuredTileUrl(mode) }),
+        ...SECURITY_HEADERS,
+      };
+      writeFileSync(join(out, "security-headers.json"), JSON.stringify(headers, null, 2) + "\n");
+    },
+  };
 }
 
 /**
@@ -80,7 +141,12 @@ function packedDataPlugin(): Plugin {
     enforce: "pre",
     resolveId(source, importer) {
       // Only data-bundle.ts's own fallback imports are stubbed; a test or script importing a bundle is left alone.
-      if (importer && importer.split("?")[0] === loader && /^\.\/data\/nd_[a-z_]+\.json$/.test(source)) return OMITTED_JSON;
+      if (
+        importer &&
+        importer.split("?")[0] === loader &&
+        /^\.\/data\/nd_[a-z_]+\.json$/.test(source)
+      )
+        return OMITTED_JSON;
       return null;
     },
     load(id) {
@@ -96,34 +162,66 @@ function packedDataPlugin(): Plugin {
 }
 
 /** Inline the one JS chunk and the CSS into the HTML and emit it as Crest.html (what vite-plugin-singlefile does). */
-function singleFilePlugin(): Plugin {
+function singleFilePlugin(mode: string): Plugin {
   return {
     name: "crest-desktop:single-file",
     apply: "build",
     enforce: "post",
     generateBundle(_options, bundle) {
-      const html = Object.values(bundle).find((f) => f.type === "asset" && f.fileName.endsWith(".html"));
+      const html = Object.values(bundle).find(
+        (f) => f.type === "asset" && f.fileName.endsWith(".html"),
+      );
       if (!html || html.type !== "asset") throw new Error("single-file: no HTML in the bundle");
       let text = String(html.source);
       for (const [name, file] of Object.entries(bundle)) {
         if (file === html) continue;
-        const ref = new RegExp(`<script[^>]*src="\\./${name.replace(/[.]/g, "\\.")}"[^>]*></script>|<link[^>]*href="\\./${name.replace(/[.]/g, "\\.")}"[^>]*>`);
+        const ref = new RegExp(
+          `<script[^>]*src="\\./${name.replace(/[.]/g, "\\.")}"[^>]*></script>|<link[^>]*href="\\./${name.replace(/[.]/g, "\\.")}"[^>]*>`,
+        );
         if (file.type === "chunk") {
           // With code splitting off Vite leaves its preload-deps placeholder unreplaced; there is nothing to preload.
-          const code = file.code.replace(/__VITE_PRELOAD__/g, "void 0").replace(/<\/(script)/gi, "<\\/$1");
+          const code = file.code
+            .replace(/__VITE_PRELOAD__/g, "void 0")
+            .replace(/<\/(script)/gi, "<\\/$1");
           text = text.replace(ref, () => `<script type="module">\n${code}</script>`);
         } else if (name.endsWith(".css")) {
           text = text.replace(ref, () => `<style>\n${String(file.source)}</style>`);
         } else {
           // An asset the HTML links directly (the favicon): Vite does not inline those, so use a data: URL.
-          const type = name.endsWith(".svg") ? "image/svg+xml" : name.endsWith(".png") ? "image/png" : "";
-          if (!type || !text.includes(`"./${name}"`)) throw new Error(`single-file: ${name} was not inlined`);
+          const type = name.endsWith(".svg")
+            ? "image/svg+xml"
+            : name.endsWith(".png")
+              ? "image/png"
+              : "";
+          if (!type || !text.includes(`"./${name}"`))
+            throw new Error(`single-file: ${name} was not inlined`);
           const data = Buffer.from(file.source).toString("base64");
           text = text.split(`"./${name}"`).join(`"data:${type};base64,${data}"`);
         }
         delete bundle[name];
       }
-      if (/(src|href)="\.\/assets\//.test(text)) throw new Error("single-file: a reference to ./assets/ is left");
+      if (/(src|href)="\.\/assets\//.test(text))
+        throw new Error("single-file: a reference to ./assets/ is left");
+      // Content-Security-Policy for the one file (src/lib/crest/csp.ts): only the script inlined above may run, by
+      // its SHA-256, and the page may reach only the tile and lookup services the desk names. Opened from disk the
+      // file has no origin of its own to trust, so 'self' is left out.
+      const scripts = [...text.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].map(
+        (m) => m[1],
+      );
+      if (scripts.length !== 1)
+        throw new Error(`single-file: expected one inline script, found ${scripts.length}`);
+      const csp = contentSecurityPolicy({
+        delivery: "meta",
+        self: false,
+        tileUrl: configuredTileUrl(mode),
+        scriptHashes: [integrity("sha256", scripts[0])],
+      });
+      text = text.replace(
+        "<head>",
+        `<head>\n    <meta http-equiv="Content-Security-Policy" content="${csp}" />`,
+      );
+      if (!text.includes("Content-Security-Policy"))
+        throw new Error("single-file: no <head> to carry the policy");
       const info = buildInfo(this.getModuleIds(), "npm run build:crest-html").replace(/--/g, "- -");
       delete bundle[html.fileName];
       writeFileSync(
@@ -147,7 +245,7 @@ const desktop = defineConfig({
   // timestamp, so the committed bundle and Crest.html stay reproducible from the same tree.
   define: { __CREST_VERSION__: JSON.stringify(crestVersion()) },
   resolve: { alias: { "@": r("./src") } },
-  plugins: [tailwindcss(), viteReact(), buildInfoPlugin()],
+  plugins: [tailwindcss(), viteReact(), buildInfoPlugin(), desktopSecurityPlugin("production")],
   build: {
     outDir: r("./crest-desktop/crest/web"),
     emptyOutDir: true,
@@ -161,7 +259,10 @@ const desktop = defineConfig({
         // modules, and which one moves with small source edits (samples.js became export.js), so the one chunk
         // index and engine share always keeps the name it was first committed under.
         entryFileNames: "assets/[name].js",
-        chunkFileNames: (chunk) => (chunk.isDynamicEntry || LAZY_CHUNKS.includes(chunk.name) ? "assets/[name].js" : "assets/samples.js"),
+        chunkFileNames: (chunk) =>
+          chunk.isDynamicEntry || LAZY_CHUNKS.includes(chunk.name)
+            ? "assets/[name].js"
+            : "assets/samples.js",
         assetFileNames: "assets/[name][extname]",
         // The data bundles (nd_dams, nd_dams_dwr, nd_structures: 2.2 MB) and geotiff stay their own chunks, loaded
         // only when the picker, the Batch view or a results import asks for them, whatever else shares a module with
@@ -170,8 +271,16 @@ const desktop = defineConfig({
         // sharing rules could fold it into the desk chunk.
         codeSplitting: {
           groups: [
-            { name: "nd_structures", test: /[\\/]src[\\/]lib[\\/]crest[\\/]data[\\/]nd_structures\.json/, priority: 30 },
-            { name: "nd_dams", test: /[\\/]src[\\/]lib[\\/]crest[\\/]data[\\/]nd_dams(_dwr)?\.json/, priority: 30 },
+            {
+              name: "nd_structures",
+              test: /[\\/]src[\\/]lib[\\/]crest[\\/]data[\\/]nd_structures\.json/,
+              priority: 30,
+            },
+            {
+              name: "nd_dams",
+              test: /[\\/]src[\\/]lib[\\/]crest[\\/]data[\\/]nd_dams(_dwr)?\.json/,
+              priority: 30,
+            },
             { name: "geotiff", test: /[\\/]node_modules[\\/]geotiff[\\/]/, priority: 20 },
           ],
         },
@@ -183,7 +292,7 @@ const desktop = defineConfig({
 /** Crest.html: the desk alone (no engine facade), everything in one file. */
 const singleFile = defineConfig({
   ...desktop,
-  plugins: [packedDataPlugin(), tailwindcss(), viteReact(), singleFilePlugin()],
+  plugins: [packedDataPlugin(), tailwindcss(), viteReact(), singleFilePlugin("singlefile")],
   build: {
     outDir: r("./node_modules/.cache/crest-html"), // stays empty: the plugin writes Crest.html at the repo root
     emptyOutDir: true,
@@ -194,7 +303,11 @@ const singleFile = defineConfig({
     modulePreload: { polyfill: false },
     rollupOptions: {
       input: { index: r("./src/desktop/index.html") },
-      output: { codeSplitting: false, entryFileNames: "assets/[name].js", assetFileNames: "assets/[name][extname]" },
+      output: {
+        codeSplitting: false,
+        entryFileNames: "assets/[name].js",
+        assetFileNames: "assets/[name][extname]",
+      },
     },
   },
 });

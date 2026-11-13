@@ -3,8 +3,9 @@ import appCss from "../styles.css?url";
 
 const APP_NAME = "Crest";
 
-// The web shell is the one place the desk loads anything from a third-party CDN: the two Google Fonts below. The
-// desktop bundle and Crest.html (src/desktop) do not load them and fall back to the system font stack in styles.css.
+// The web shell loads nothing from a third-party origin. It used to link two Google Fonts (IBM Plex Sans and Source
+// Serif 4) that no rule in styles.css ever used; the link was removed on 2026-11-13 with the Content-Security-Policy
+// (src/lib/crest/csp.ts), so the desk's only network use is the basemap tiles and the on-request lookups.
 
 export const Route = createRootRoute({
   head: () => ({
@@ -23,10 +24,6 @@ export const Route = createRootRoute({
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
       { rel: "stylesheet", href: appCss },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,650&display=swap",
-      },
     ],
   }),
   component: () => (

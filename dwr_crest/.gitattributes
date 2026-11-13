@@ -1,0 +1,5 @@
+# Generated files whose bytes are hashed: Crest.html's Content-Security-Policy carries the SHA-256 of its inline
+# script, and the desktop bundle's index.html carries Subresource Integrity hashes of its assets. A line-ending
+# conversion on checkout (Windows, core.autocrlf) would change the bytes and the browser would refuse to run them.
+Crest.html -text
+crest-desktop/crest/web/** -text

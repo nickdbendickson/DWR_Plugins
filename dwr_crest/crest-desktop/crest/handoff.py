@@ -7,6 +7,7 @@ import math
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -82,6 +83,21 @@ def _line(feature):
     return out if len(out) >= 2 else None
 
 
+def _replace(tmp: Path, path: Path, tries: int = 20, wait_s: float = 0.02) -> None:
+    """os.replace, retried on PermissionError. On Windows a replace is refused ("Access is denied") while another
+    thread or process has the target open even for an instant: a second hand-off job writing the same shared file,
+    a virus scanner, the search indexer. The Windows CI run of the concurrent-write test hit exactly that. POSIX
+    never raises it here, so there the first try is the only one."""
+    for attempt in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(wait_s * (attempt + 1))
+
+
 def _dump(path: Path, obj) -> None:
     """Write JSON atomically. A crash mid-write must not leave a truncated dam.json — write_dam_folder then
     refuses to overwrite it (not a valid record) and the folder is stuck until someone deletes the file by hand.
@@ -91,7 +107,7 @@ def _dump(path: Path, obj) -> None:
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
     try:
         tmp.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except OSError:
         try:
             tmp.unlink()

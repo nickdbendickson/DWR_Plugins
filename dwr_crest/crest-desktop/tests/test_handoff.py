@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import threading
+from unittest import mock
 import time
 import unittest
 from pathlib import Path
@@ -281,6 +282,9 @@ class NumsTests(unittest.TestCase):
         self.assertEqual(_nums([[1.0, float("nan")], [3.0, 4.0]]), [1.0, 3.0, 4.0])
 
 
+# The fake qgis_process and ndbreach CLI these tests run are "#!/usr/bin/env python3" scripts, which Windows cannot
+# execute directly; the hand-off's own logic is the same on every platform and is covered on Linux and macOS.
+@unittest.skipIf(os.name == "nt", "the fake qgis_process is a shebang script (POSIX only)")
 class GateTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -361,7 +365,8 @@ class GateTests(unittest.TestCase):
         settings = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(settings["only_ids"], "ND00199")
         text = self.calls_text()
-        self.assertIn(f"--SETTINGS={path}", text)
+        # The hand-off resolves the work folder, and on macOS the temp dir is a symlink (/var -> /private/var).
+        self.assertIn(f"--SETTINGS={path.resolve()}", text)
         self.assertIn("--DAM_ID=ND00199", text)
         self.assertIn("--DAM_ID=ND00199", text)
 
@@ -666,6 +671,36 @@ class RobustnessTests(unittest.TestCase):
             record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
             self.assertEqual(len(record["status"]), n, "every concurrent write must land its status entry")
 
+    def test_replace_is_retried_when_windows_refuses_it(self):
+        # Windows answers "Access is denied" to a replace while anything has the target open for an instant.
+        from crest import handoff
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "dam.json"
+            calls = []
+            real = os.replace
+
+            def flaky(a, b):
+                calls.append(1)
+                if len(calls) < 3:
+                    raise PermissionError(13, "Access is denied")
+                return real(a, b)
+
+            with mock.patch.object(handoff.os, "replace", flaky), mock.patch.object(handoff.time, "sleep", lambda _s: None):
+                handoff._dump(path, {"ok": True})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"ok": True})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual([p.name for p in Path(d).iterdir()], ["dam.json"], "no .part file is left behind")
+
+            # A replace that never succeeds still fails, and still cleans up its .part file.
+            def never(_a, _b):
+                raise PermissionError(13, "Access is denied")
+
+            with mock.patch.object(handoff.os, "replace", never), mock.patch.object(handoff.time, "sleep", lambda _s: None):
+                with self.assertRaises(PermissionError):
+                    handoff._dump(Path(d) / "other.json", {"ok": True})
+            self.assertEqual([p.name for p in Path(d).iterdir()], ["dam.json"])
+
     # ---- H2: run output is kept head + tail only -------------------------------------------------------------
     def test_collect_bounded_keeps_head_and_tail_and_notes_the_drop(self):
         block = 8192
@@ -727,6 +762,7 @@ class RobustnessTests(unittest.TestCase):
         _opt_num(cmd, "TOP_FT", 12.5)
         self.assertEqual(cmd, ["--TOP_FT=12.5"])
 
+    @unittest.skipIf(os.name == "nt", "'?' is not allowed in a Windows folder name")
     def test_chain_names_handles_a_work_path_with_a_question_mark(self):
         # A '?' in the work-folder name must not break the SQLite file: URI (it would be read as a query, leaving
         # the path truncated so the open fails and the dam is silently not found). Build a minimal gpkg and look

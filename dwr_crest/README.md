@@ -44,8 +44,9 @@ adds `trace_version` (`outline.ts TRACE_VERSION`).
 - **The terrain layer** (USGS 3DEP), **911 address points** (ND GIS Hub) and **PLSS sections** (BLM) — one request each,
   only when you press the button, and the answer is saved with the dam so it shows offline from then on. The batch
   screen makes the same 3DEP and 911 requests for every structure it runs.
-- **Google Fonts** — the web app only; `Crest.html` and the desktop app use the system font stack and load nothing from
-  a CDN.
+
+Nothing else is loaded: no CDN, no web fonts, no analytics. A Content-Security-Policy enforces that list in all three
+(see **Security** below).
 
 The NID / DWR dam lists and the DWR structure list are bundled and never fetched.
 
@@ -97,10 +98,33 @@ warning asks you to check the drawing.
 
 The map uses key-free tiles: **USGS The National Map Topo** by default (public domain, with contours and streams),
 with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the one thing the desk fetches without being
-asked; the terrain, 911 and PLSS lookups are on buttons and saved with the dam (see **Start here**), and the web app
-alone loads two Google Fonts. To use another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
+asked; the terrain, 911 and PLSS lookups are on buttons and saved with the dam (see **Start here**). To use another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
 build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle and `Crest.html` pick it up
-when rebuilt with the variable set.
+when rebuilt with the variable set, and the Content-Security-Policy of that build allows the configured server's origin.
+
+## Security
+
+The desk runs under a Content-Security-Policy built in one place, `src/lib/crest/csp.ts`:
+
+- **Scripts** run only from the app itself. The web app sends the policy as a header with a fresh nonce per request
+  (`src/server.ts`) for the one inline script the framework writes; the desktop app's local server sends it from
+  `web/security-headers.json`; `Crest.html` carries it in a `<meta>` tag with the SHA-256 of its one inline script.
+  No `unsafe-inline` or `unsafe-eval` for scripts anywhere.
+- **Network** is limited to the services named under **Start here**: USGS basemap tiles and OpenStreetMap, USGS 3DEP,
+  the ND GIS Hub 911 points and the BLM PLSS service (plus a tile server set with `VITE_CREST_TILE_URL`). A new
+  service has to be added to `csp.ts`; `csp.test.ts` fails when the source names a host the policy does not.
+- **Subresource Integrity**: the desktop bundle's `index.html` carries a `sha384` hash for its script, preloads and
+  stylesheet. Nothing is loaded from another origin, so there is no third-party file to pin. `.gitattributes` stops
+  git converting line endings in `Crest.html` and the bundle, which would break the hashes on Windows.
+- Also sent: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` / `frame-ancestors 'none'`, `Referrer-Policy`,
+  `Cross-Origin-Opener-Policy`, `Permissions-Policy`.
+
+If a desktop webview ever needs something the policy blocks, start the app with `CREST_NO_CSP=1` to drop the policy
+(the other headers stay) and report what was blocked.
+
+`npm run test:e2e` opens all three in Chromium, walks the eight steps on the first sample dam with every service
+stubbed, and fails on anything the policy blocks (`e2e/`; needs `npx playwright install chromium` once, and
+`npm run build` for the web app).
 
 ## North Dakota dam picker (NID, with DWR values)
 
@@ -251,7 +275,7 @@ hand. `npm test` fails while it is older than the sources, so rebuild and commit
 
 `crest-desktop/` opens the same Crest desk as the web app in a native window (pywebview). It is not a second
 engine: it shows the static build of the web desk in `crest-desktop/crest/web/`, which is committed, so you do
-not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, styles, no Google Fonts); the basemap
+not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, styles, no web fonts); the basemap
 tiles and the on-request terrain, 911 and PLSS lookups need the network, as on the web (**Start here**). Your work
 is saved on the computer (the same autosave as the browser). Export buttons open a Save dialog.
 

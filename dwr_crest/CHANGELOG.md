@@ -10,6 +10,26 @@
   lines), each with its reason. An allow entry whose line has gone fails the check, so the list cannot rot. The
   `Engine sync` workflow runs it on every push / PR and daily (so a damit-side change shows up), checking damit out
   sparsely. The same script and allow list go into damit. Tests: `scripts/check-engine-sync.test.mjs`.
+- **Content-Security-Policy and Subresource Integrity.** Crest had neither (the open item from the security passes;
+  an earlier test even asserted there was no policy, so the PLSS lookup could not be blocked by one).
+  `src/lib/crest/csp.ts` now builds one policy for all three shells: scripts from the app only, `object-src 'none'`,
+  no framing, and `connect-src` / `img-src` limited to the services the desk names (USGS tiles, OpenStreetMap, 3DEP,
+  ND 911, BLM PLSS, and a `VITE_CREST_TILE_URL` server when set). The web app sends it as a header with a per-request
+  nonce (`src/server.ts`; the router puts the nonce on the framework's inline hydration script), the desktop server
+  sends it from `web/security-headers.json` on every response, and `Crest.html` carries it in a `<meta>` tag with the
+  SHA-256 of its one inline script. No `unsafe-inline` / `unsafe-eval` for scripts. The desktop `index.html` carries
+  `sha384` integrity hashes for its script, preloads and stylesheet; `.gitattributes` keeps line endings in
+  `Crest.html` and the bundle from being converted (that would break the hashes). `CREST_NO_CSP=1` drops the desktop
+  policy if a webview needs it. `vercel.json` adds `nosniff` / `X-Frame-Options` / `Referrer-Policy` to static files.
+- **The two Google Fonts are gone.** The web shell linked IBM Plex Sans and Source Serif 4, and no style rule used
+  either. The link is removed, so the web app loads nothing from a third-party origin.
+- **Browser click-through test.** `npm run test:e2e` (`e2e/`, Playwright + Chromium) opens `Crest.html` from disk, the
+  desktop bundle behind its Python server and the built web app, and walks the eight steps on the first sample dam:
+  record, breach, build the terrain layer (worker), 911 lookup, results, dashboard, screen, report, download
+  `dam.json`. Every public service is stubbed from the committed fixtures, so it needs no network. It fails on an
+  uncaught error, a console error, a request to a host it does not know, or anything the policy blocks, and checks an
+  injected inline script is refused. CI runs it (new `e2e` job), and the desktop Python tests now also run on
+  Windows and macOS runners.
 
 ## 2026-11-08
 

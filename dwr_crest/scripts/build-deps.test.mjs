@@ -108,9 +108,12 @@ test("no dependency is left over from the removed app-builder scaffolding (auth,
     "react-hook-form",
     "@hookform/resolvers",
     "zod",
-    "playwright",
   ])
     assert.equal(all[n], undefined, `${n} is still listed`);
+  // Playwright left with the scaffolding and came back on 2026-11-13 for the browser click-through (e2e/): a dev
+  // dependency only, so the Vercel install (--omit=dev) never pulls it, pinned to one version so CI's Chromium matches.
+  assert.equal(pkg.dependencies.playwright, undefined, "playwright must stay a devDependency");
+  assert.match(pkg.devDependencies.playwright ?? "", /^\d+\.\d+\.\d+$/, "playwright is pinned to an exact version");
   for (const n of Object.keys(all)) assert.ok(!n.startsWith("@radix-ui/"), `${n} is still listed`);
 });
 

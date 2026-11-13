@@ -30,10 +30,41 @@ jobs:
       - name: Test
         run: npm test
 
+  # Browser click-through (e2e/): Chromium opens Crest.html, the desktop bundle behind its Python server and the built
+  # web app, and walks the eight steps on the first sample dam with every public service stubbed. Fails on an uncaught
+  # error, a console error, or anything the Content-Security-Policy blocks.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the web app
+        run: npm run build
+      - name: Click-through
+        env:
+          E2E_WEB: "1"
+        run: npm run test:e2e
+
   # The crest-desktop Python server/handoff tests (stdlib unittest, no third-party deps). They were not run in
   # CI before, so the desktop robustness fixes only had local coverage; this gates them too.
+  # Also on Windows and macOS, where the desktop app is installed (the server, the save / open paths and the bundle
+  # hashes are the parts that differ by platform); the pywebview window itself is not opened.
   desktop-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
