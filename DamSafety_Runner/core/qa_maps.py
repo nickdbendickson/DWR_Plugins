@@ -299,8 +299,20 @@ def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=No
     return path
 
 
+def _qt_has_fonts():
+    """True when Qt can draw text here. Text needs a QGuiApplication: without one (the command
+    line, a batch worker) Qt does not raise, it aborts the whole process (3.20.0)."""
+    try:
+        from qgis.PyQt.QtCore import QCoreApplication
+        from qgis.PyQt.QtGui import QGuiApplication
+        return isinstance(QCoreApplication.instance(), QGuiApplication)
+    except Exception:                        # noqa: BLE001
+        return False
+
+
 def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
-    """Fallback without matplotlib: a Qt image (hillshade, depth in blue, symbols)."""
+    """Fallback without matplotlib: a Qt image (hillshade, depth in blue, symbols). The title
+    is left off when there is no Qt application to draw text with (_qt_has_fonts)."""
     from qgis.PyQt.QtGui import QImage, QPainter, QColor, QPen
     from qgis.PyQt.QtCore import QPointF
     hs = (_hillshade(a, cell) * 255).astype(np.uint8)
@@ -331,8 +343,9 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
         if inflow_xy:
             p.setPen(QPen(QColor(255, 0, 0), 3))
             p.drawEllipse(px(*inflow_xy), 5, 5)
-        p.setPen(QPen(QColor(0, 0, 0)))
-        p.drawText(4, 14, title.split("\n")[0])
+        if _qt_has_fonts():
+            p.setPen(QPen(QColor(0, 0, 0)))
+            p.drawText(4, 14, title.split("\n")[0])
     finally:
         p.end()
     if not img.save(path, "PNG"):
