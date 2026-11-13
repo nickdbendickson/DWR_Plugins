@@ -992,5 +992,154 @@ class Runs(unittest.TestCase):
         self.assertIsInstance([r for r in back if r["find_id"] == "F2"][0]["height_ft"], float)
 
 
+def country(size=3600, seed=3):
+    """(DEM at 1 m cells, number of fills built) of rolling ground falling south with seven draws
+    that wander, an earth fill across each every 410 m (3.0 to 4.2 m high, 2.5:1 faces, a 6 m top)
+    and a flat pond behind every other one. The ground is rough at the scale of a 3 m cell, so
+    where the cells fall changes every reading (as on real LiDAR)."""
+    from scipy import ndimage as ndi
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[0:size, 0:size].astype(float)
+    rough = ndi.zoom(ndi.gaussian_filter(rng.standard_normal((size // 8, size // 8)), 3.0), 8, order=1)[:size, :size]
+    z = 300.0 - 0.012 * y + 6.0 * rough
+    n = 0
+    for k, xc in enumerate((330.3, 800.6, 1290.2, 1760.9, 2240.4, 2700.5, 3200.8)):
+        wig = xc + 60.0 * np.sin(y / 310.0 + k)
+        z = z + np.minimum(np.abs(x - wig) * 0.035, 9.0) - 9.0
+        for j, yr in enumerate(np.arange(380.4 + 37 * k, size - 300, 410.3)):
+            h = 3.0 + 0.6 * ((k + j) % 3)
+            xw = xc + 60.0 * np.sin(yr / 310.0 + k)
+            base = 300.0 - 0.012 * yr - 9.0 + 6.0 * rough[int(yr), int(xw)]
+            face = np.clip(1.0 - (np.abs(y - yr) - 3.0) / (2.5 * h), 0.0, 1.0)
+            z = np.where(face > 0, np.maximum(z, base + h * face), z)
+            n += 1
+            if (k + j) % 2 == 0:
+                lvl = base + h - 0.9
+                z = np.where((y < yr - 3.0) & (y > yr - 400) & (np.abs(x - wig) < 200) & (z < lvl), lvl, z)
+    return z, n
+
+
+@unittest.skipIf(gdal is None, "no GDAL (osgeo) in this Python")
+class FixedLattice(unittest.TestCase):
+    """Finder 0.7: a result does not depend on where the run's box is."""
+
+    def setUp(self):
+        from .. import finder
+        self.f = finder
+        self.tmp = tempfile.mkdtemp(prefix="finder_lat_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_lattice(self):
+        f = self.f
+        self.assertEqual(f.grid_lattice(3.0, 10.0), 30.0)
+        self.assertEqual(f.grid_lattice(2.0, 10.0), 10.0)
+        self.assertEqual(f.grid_lattice(2.5, 10.0), 10.0)
+        self.assertEqual(f.grid_lattice(1.5, 10.0), 30.0)
+        self.assertEqual(f.grid_lattice(3.0, 3.0), 3.0)
+        self.assertIsNone(f.grid_lattice(3.3, 10.0))         # they meet only every 330 m
+        self.assertIsNone(f.grid_lattice(math.pi, 10.0))     # not a whole millimetre
+        self.assertEqual(f.snap_out((100001.0, 2700007.0, 100061.0, 2700059.5), 30.0),
+                         (99990.0, 2700000.0, 100080.0, 2700060.0))
+        on = (99990.0, 2699970.0, 100080.0, 2700060.0)
+        self.assertEqual(f.snap_out(on, 30.0), on)           # a box on the lattice stays
+        self.assertEqual(f.snap_out((5.0, 5.0, 5.0, 5.0), 3.0), (3.0, 3.0, 6.0, 6.0))
+        self.assertEqual(f.snap_out((-7.0, -7.0, -1.0, 2.0), 3.0), (-9.0, -9.0, 0.0, 3.0))
+        sq = f.lattice_squares((4999.0, -1.0, 5001.0, 1.0), 5000.0)
+        self.assertEqual(sq, [(0.0, -5000.0, 5000.0, 0.0), (0.0, 0.0, 5000.0, 5000.0),
+                              (5000.0, -5000.0, 10000.0, 0.0), (5000.0, 0.0, 10000.0, 5000.0)])
+        self.assertEqual(f.lattice_squares((5000.0, 0.0, 10000.0, 5000.0), 5000.0),
+                         [(5000.0, 0.0, 10000.0, 5000.0)])    # a box that is a square is that square
+
+    def test_the_dem_cells_do_not_move_with_the_box(self):
+        dem, _n = country(600)
+        tif = os.path.join(self.tmp, "c.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 600, 600, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0 + 0.4, 1.0, 0.0, Y0 + 600.7, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.GetRasterBand(1).WriteArray(dem.astype(np.float32))
+        ds = None
+        box = (X0 + 101.0, Y0 + 100.0, X0 + 400.0, Y0 + 421.0)
+        za, ga = self.f.warp_dem(tif, box, 3.0)
+        for dx, dy in ((1.0, 1.0), (7.0, -2.0), (0.3, 100.1)):
+            zb, gb = self.f.warp_dem(tif, (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy), 3.0)
+            for g in (ga, gb):                               # cell edges at whole multiples of 3 m
+                self.assertEqual((g[0] % 3.0, g[3] % 3.0, g[1], g[5]), (0.0, 0.0, 3.0, -3.0))
+            c, r = int(round((gb[0] - ga[0]) / 3.0)), int(round((ga[3] - gb[3]) / 3.0))
+            a = za[max(r, 0):, max(c, 0):]
+            b = zb[max(-r, 0):, max(-c, 0):]
+            h, w = min(a.shape[0], b.shape[0]), min(a.shape[1], b.shape[1])
+            self.assertGreater(h * w, 5000)
+            self.assertTrue(np.array_equal(a[:h, :w], b[:h, :w]))     # the same cells, to the bit
+
+    def test_a_moved_box_gives_the_same_fills(self):
+        # draws, pool lines and stream lines over rough ground; a box moved by 1 m, 7 m and 1,234 m
+        # (the last touches other squares of the lattice): every fill inside both boxes is the same
+        # fill with the same id and the same readings. On 0.6 (squares and cells laid from the box's
+        # corner) no id survived a 1 m move on this ground.
+        dem, built = country()
+        self.assertEqual(built, 51)
+        tif = os.path.join(self.tmp, "country.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
+        x0, y0 = X0 + 0.4, Y0 + 0.7                          # the DEM's own corner is on no lattice
+        ds.SetGeoTransform((x0, 1.0, 0.0, y0 + dem.shape[0], 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.GetRasterBand(1).WriteArray(dem.astype(np.float32))
+        ds = None
+        vec = os.path.join(self.tmp, "in.gpkg")              # a mapped stream down the third draw
+        ys = np.arange(40.0, 3560.0, 25.0)
+        xs = 1290.2 + 60.0 * np.sin(ys / 310.0 + 2)
+        streams = write_layer(vec, "streams", [("LINESTRING ({})".format(", ".join(
+            "{} {}".format(x0 + a, y0 + 3600.0 - b) for a, b in zip(xs, ys))), {})])
+        from ..core import embankments as em
+        p = em.FinderParams(window_m=400.0, ridge_half_m=200.0, terrain_m=200.0)
+        base = (x0 + 100.0, y0 + 100.0, x0 + 2300.0, y0 + 2300.0)
+
+        def run(d):
+            b = tuple(v + d for v in base)
+            res = self.f.run_embankments(tif, streams, os.path.join(self.tmp, "o.gpkg"), bbox=b, drainage_ac=3.0,
+                                         tile_m=1000.0, hillshade=False, dikes=False, params=p,
+                                         pool_margin_m=90.0, log=lambda *_: None)
+            for r in res["rows"]:
+                self.assertTrue(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3])   # only the box's own
+            return b, res["rows"]
+
+        b0, r0 = run(0.0)
+        self.assertGreater(len(r0), 40)
+        self.assertGreater(len({r["line_source"] for r in r0}), 1)
+        self.assertEqual(len({r["find_id"] for r in r0}), len(r0))
+        for d, least in ((1.0, 40), (7.0, 40), (1234.0, 10)):
+            b1, r1 = run(d)
+            both = lambda r: all(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3] for b in (b0, b1))   # noqa: E731
+            a = {r["find_id"]: r for r in r0 if both(r)}
+            c = {r["find_id"]: r for r in r1 if both(r)}
+            self.assertGreaterEqual(len(a), least)
+            self.assertEqual(sorted(a), sorted(c), "box moved by {} m".format(d))
+            for k in a:
+                self.assertEqual({f: v for f, v in a[k].items() if f != "known_ft"},
+                                 {f: v for f, v in c[k].items() if f != "known_ft"})
+
+    def test_open_water_does_not_move_with_the_box(self):
+        g, nir, _pond = tc.image()
+        img = os.path.join(self.tmp, "img.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(img, g.shape[1], g.shape[0], 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 + 0.37, 1.0, 0.0, Y0 + g.shape[0] + 0.61, 0.0, -1.0))   # pixels on no lattice
+        ds.SetProjection(srs(5070).ExportToWkt())
+        for b, a in zip((1, 2, 3, 4), (g, g, g, nir)):
+            ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+        ds = None
+        got = []
+        for dx, dy in ((0.0, 0.0), (0.45, 0.2), (7.0, -3.3)):
+            box = (X0 + 20.0 + dx, Y0 + 20.0 + dy, X0 + 280.0 + dx, Y0 + 280.0 + dy)
+            res = self.f.run_water(img, os.path.join(self.tmp, "w.gpkg"), bbox=box, cell=1.0, tile_m=200.0,
+                                   log=lambda *_: None)
+            self.assertEqual(len(res["rows"]), 1)
+            got.append((res["rows"][0]["water_id"], res["rows"][0]["area_ac"], res["rows"][0]["ndwi"]))
+        self.assertEqual(len(set(got)), 1, got)
+
+
 if __name__ == "__main__":
     unittest.main()

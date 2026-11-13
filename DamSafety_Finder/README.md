@@ -66,8 +66,8 @@ ND LiDAR tiles the nearest fill to an intact DWR dam was a median 194 m (640 ft)
 again at 10 m, the narrow raised features (fills, roads, embankments narrower than 60 m) are opened
 away, and flow is routed by a priority flood (each cell drains to the cell it was reached from, so
 a pit drains over its rim). Every draw that drains at least `DRAIN_AC` becomes a line and is walked
-exactly like a stream line; `line_source` says which kind of line found the fill. The tile pad is
-3 km so most of a draw's basin is in the tile.
+exactly like a stream line; `line_source` says which kind of line found the fill. The pad round
+each 5 km square is 3 km so most of a draw's basin is in the window.
 
 **Lines out of each pond** (`POOLS`, on whenever the draws are; `POOL_MAX_AC`, 50 acres; 0.6.0;
 `core/terrain.py` `pool_seeds` / `pool_lines`, step 11 of `core/embankments.py`). Most farm ponds
@@ -142,8 +142,46 @@ these figures compare rankings within that set. Most not-listed fills are still 
 them. Relearn the score for your area with the score tool, from runs over areas with many listed
 dams. The cross-validated AUC it reports says how well it ranks dams it has not seen.
 
-Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
-bounded memory. The elevation unit is what the raster records (its band unit or a vertical CRS;
+Fills closer than 60 m are one. The DEM is read in 5 km squares with a pad, so a county runs in
+bounded memory.
+
+**The same ground gives the same fills, whatever box you run** (0.7.0). Up to 0.6 the squares and
+the 3 m and 10 m cells were laid out from the south-west corner of the run's box, so moving the box
+by one metre moved every cell: most crest points shifted by a cell or two and almost every
+`find_id` changed. Now:
+
+- the squares are those of a **fixed lattice** in EPSG:5070 (corners at whole multiples of the
+  square size, 5 km). A square the box only touches is still read and searched whole, with its
+  full pad; one fill per pool and one fill per 60 m are settled over those whole squares, and only
+  then are the fills outside your box left out;
+- every DEM window is grown outward to a fixed grid: whole multiples of 30 m, the smallest length
+  that both the 3 m fill cells and the 10 m routing cells divide. For other cell sizes it is their
+  smallest common multiple (2 m and 10 m: 10 m). When that is over 300 m, or a cell size is not a
+  whole millimetre (3.3 m and 10 m meet only every 330 m), each grid is grown to whole multiples
+  of its own cell size instead: the cells still fall on the same ground in every run, the two
+  windows just end up to one routing cell apart.
+
+So a fill inside two different boxes is the same fill in both: same point, same `find_id`, same
+readings. What can still differ is a fill near a line of the 5 km lattice when the square on the
+other side of that line is in one run and not in the other: two squares can read the same fill or
+the same pool, and which reading is kept is settled between the squares a run has (the log says
+how many fills were dropped that way). A box that only clips a square costs the whole square in
+time. The square size (`tile_m` in a script) is part of the lattice: change it and fills near the
+square edges can change.
+
+**Ids.** `find_id` is made from the crest point (an 8-digit code of its x, y rounded to 1 m), so
+it is stable between runs of 0.7.0 and later over the same terrain data and settings, whatever
+the box. It is **not** stable across versions: ids from 0.6 and earlier do not carry over, and a
+later version that moves a crest point by a cell changes that id. Marks made on an older version
+are matched to the new fills by location, not by id.
+
+The crossings tool (drainage areas) and the evidence tool (flow paths below a fill) route the DEM
+in squares of the same kind of fixed lattice, and the open-water tool lays its squares and its
+cells the same way, so their results do not depend on what else is in the run either. The pond
+tool reads each water body in a window round its own outline, and the evidence tool reads imagery
+in a window round each fill's pool: neither depends on a run's box, so they are as they were.
+
+The elevation unit is what the raster records (its band unit or a vertical CRS;
 USGS 3DEP files, `USGS_*`, are metres); a DEM that records none is refused until you choose Metres
 or Feet (feet read as metres made every fill 3.28 times too high). The log says which unit was
 used and warns when the ground it reads is outside North Dakota's 229-1070 m. The warp reads the
@@ -198,8 +236,10 @@ grid so the VRT has no seams, and the builder reuses `core/lidar` so it launches
 process. Build the mosaic once, then feed `water_count.vrt` to the open-water tool above; the
 mean-elevation mosaic is the pond starting level for a later *Find ponds* / Runner step.
 
-An image service is downloaded for the extent only, in 2000-pixel GeoTIFF tiles kept beside the
-output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
+An image service is downloaded for the extent only (grown outward to whole multiples of the
+cell size since 0.7.0, so the service resamples on to the same cells for any box; tiles kept from
+an older run whose corner was not on that grid are downloaded again), in 2000-pixel GeoTIFF tiles
+kept beside the output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
 natural colour only (no near-infrared band) and cannot be used. Imagery shows the day it was flown: a dry year misses ponds, a wet year adds flooded
 fields. Pick several years: a cell is then water when it is water in at least `PERSIST` (half)
 of the images that cover it, so the ponds stay and a field flooded in one wet year goes
