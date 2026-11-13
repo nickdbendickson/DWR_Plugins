@@ -53,6 +53,10 @@ zsh setup-vor.zsh            # add --ocr to make scanned PDFs searchable
 source ~/.zshrc                       # or open a new Terminal tab
 ```
 
+Type the first `vor` command after that, not in the same paste. zsh reads a whole pasted block
+before it runs any of it, so a `vor` line pasted together with the `source` line answers
+`command not found: vor` although the install is fine.
+
 Options: `--big`, `--small`, `--model TAG`, `--ocr`. Re-running is safe. Your `~/.zshrc` is
 backed up first, and the installer only rewrites its own marked block.
 
@@ -88,6 +92,7 @@ vor doctor                             # Ollama and both models, and that the li
                                        # full one and level with its files (two libraries, an empty
                                        # index, files not indexed, scanned pages). Exits 1 on a PROBLEM.
 vor doctor --library                   # the library checks only; needs no Ollama
+vor list --missing                     # the indexed documents whose file is no longer where it was
 ```
 
 **Do not name the publication inside the question.** "...in FEMA P-946" does not narrow
@@ -217,6 +222,13 @@ copies to `library/_ocr/` and indexes them. Your originals are not touched. The 
 document from then on: `library/_ocr/ocr_sources.json` records which original each copy stands
 in for, so a later `vor ingest` does not index the scanned original a second time. `vor ocr`
 can be stopped with Ctrl-C and run again; it carries on with the documents it has not done.
+
+A plain `vor ocr` takes a PDF only when at least 30 % of its pages are scanned. A long manual
+with a few pages that have no text (often blank pages and full-page figures) is left alone,
+and `vor ocr`, `vor ingest` and `vor doctor` each say how many were. `vor ocr --min-fraction 0
+--list` shows every document with its share of scanned pages and runs nothing;
+`vor ocr --min-fraction 0` takes them all, and any value between sets the share. Each document
+that is done is re-read in full afterwards, so a large batch is a job to leave running.
 
 ## How deep research works
 

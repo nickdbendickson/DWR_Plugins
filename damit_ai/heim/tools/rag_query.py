@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-# rag_query.py v2.3 — query the RAG store, streaming output (stdlib only; numpy if present)
+# rag_query.py v2.4 — query the RAG store, streaming output (stdlib only; numpy if present)
 #
 #   rag_query.py "question"            one question, answered from the indexed documents
 #   rag_query.py -c standards "..."    from one collection
 #   rag_query.py --chat                a conversation: every question is looked up first
 #
+# v2.4: `heim doctor`, `heim add FILE ...` and `heim chat` do what `heim-doctor`, `heim-add`
+#   and `heim-chat` do. Vor takes its commands as words (`vor doctor`), Heim took them only
+#   as separate hyphenated commands, so `heim doctor` put the one word "doctor" to the model
+#   as a question and came back with an answer instead of the check.
 # v2.3: --chat (the `heim-chat` command). heim-chat used to be `ollama run heim`: the bare
 #   model, which never read a document, so the knowledge pack and anything added with
 #   heim-add were invisible to it. Now each question is looked up in the index like a one-shot
@@ -305,8 +309,43 @@ def chat(coll, top_k, ask=input):
             earlier = (q, ans.strip())
 
 
+def command_word(argv):
+    """`heim doctor`, `heim add FILE ...`, `heim chat`: the arguments to run instead, or None
+    when argv is a question.
+
+    Returns ("index", [...]) for rag_index.py beside this file, ("query", [...]) for this one.
+    A question is never taken for a command: `doctor` counts only with nothing after it but
+    flags, `chat` only alone, and `add` only when every word after it is a file or folder that
+    exists (or there is none, which gets the usage line). "add a culvert to the run?" is a
+    question; "doctor" on its own is not one."""
+    if not argv or argv[0] not in ("doctor", "add", "chat"):
+        return None
+    word, rest = argv[0], argv[1:]
+    if word == "doctor" and all(r.startswith("-") for r in rest):
+        return ("index", ["--doctor"] + rest)
+    if word == "chat" and not rest:
+        return ("query", ["--chat"])
+    if word == "add":
+        if not rest:
+            sys.exit("usage: heim add FILE ...   (a file dragged into the Terminal window gives its path)")
+        if all(os.path.exists(os.path.expanduser(r)) for r in rest):
+            return ("index", ["--add"] + rest)
+    return None
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Ask Heim a question, answered from the indexed documents.")
+    word = command_word(sys.argv[1:])
+    if word and word[0] == "index":
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_index.py")
+        if not os.path.exists(tool):
+            sys.exit("ERROR: %s is missing; re-run the Heim installer" % tool)
+        sys.stdout.flush()
+        os.execv(sys.executable, [sys.executable, tool] + word[1])
+    if word:
+        sys.argv[1:] = word[1]
+    ap = argparse.ArgumentParser(description="Ask Heim a question, answered from the indexed documents.",
+                                 epilog="Also: heim doctor (is Heim reading what you think it is), "
+                                        "heim add FILE ... (index a file), heim chat (a conversation).")
     ap.add_argument("-c", "--collection", default="all",
                     help="read one collection only (default: all of them)")
     ap.add_argument("-k", "--top-k", type=int, default=TOP_K, help="passages handed to the model per question")

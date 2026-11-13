@@ -789,6 +789,63 @@ The quick run's report says *the flood is still advancing after 6 h, the duratio
 
 A run of the sample is for learning the tools. It is not a hazard determination for this dam.
 
+## SI units in the result tables (Core 1.4.0, Runner 3.20.2, Hazard 2.25.1)
+
+The suite computes and stores in US customary units. *DamSafety Setup → Suite setup / status → Units shown in windows* switches what you **see** to SI: the windows, the run report, the Hazard report and (from these versions) the result tables and three more Runner reports.
+
+**Tables.** With SI chosen, each tool leaves a copy of its result tables in a folder named `SI_units` beside them:
+
+```
+DWR-2801/_breach_model/receptors_flooded.csv            US units, as always
+DWR-2801/_breach_model/SI_units/receptors_flooded.csv   the same table with SI columns added
+```
+
+In the copy an SI column sits right after each US column:
+
+| `id` | `depth_ft` | `depth_m` | `vel_fps` | `vel_mps` |
+|---|---|---|---|---|
+| a | 2.0 | 0.6096 | 10 | 3.048 |
+
+The column names follow one rule: `_ft` becomes `_m`, `_fps` `_mps`, `_cfs` `_cms`, `_acft` `_m3`, `_ac` or `_acres` `_ha`, `_mi` `_km`, `_ft2` `_m2`, `_mph` `_kmh`. Elevations stay on the same datum. The tool's log names the folder.
+
+Things to know:
+
+- **Open the copy to read, give the original to a tool.** The tables outside `SI_units` keep US units and their names because the Runner, Hazard and the review tools read them. Nothing reads a copy back, so editing one changes nothing.
+- The copies are rewritten each time the tool runs. A copy whose table is gone is removed.
+- A column gets an SI partner only when its name says its unit and it holds a number. A text column, or one already in metres, is left as it is.
+- Under US customary units no `SI_units` folder is written.
+- The command line (`ndbreach_cli.py`) writes no copies; run the tool in QGIS for them.
+
+**Reports.** `Nested_Report.md`, `Cascade_Report.md` and `Probabilistic_Report.md` / `.html` are now in SI when SI is chosen, like `run_report.md`. Each says so in a "Units: SI" line at the top. The sensitivity, benchmark and verification HTML reports are not converted yet. `Hazard_Classification_Summary.txt` stays US because other tools read it.
+
+## Files from somewhere else: checkpoints, zips and downloads (Runner 3.20.3, Core 1.5.0, Screening 0.20.1, Hazard 2.25.2)
+
+Three kinds of file can reach the suite from outside your computer: an ANUGA checkpoint in a dam folder someone gave you, a zip (a LiDAR tile, an updater data set, a submittal or DSS-WISE package), and the NSI structures the updater downloads. Each is now checked before it is used. Nothing here changes a result.
+
+**Resuming an ANUGA run.** A checkpoint is a saved copy of the whole model, and opening one can run code that was put in the file. So the Runner only resumes checkpoints its own runs wrote for you, on this computer:
+
+- Each checkpoint has a small `.sig` file beside it. Leave it there; a checkpoint without it will not resume.
+- A dam folder you copied from a colleague, a shared drive or a download will not resume. The run stops and says why. The checkpoints are kept. Either turn resume off to start that run over, or, **if you know the checkpoint is your own** (made before Runner 3.20.3, or on your other computer), set `NDBREACH_ANUGA_RESUME_TRUST=1` for that one run. The log says it was loaded unverified.
+- The signing key is one small file in your own settings folder (`%APPDATA%\DamSafety` on Windows, `~/Library/Application Support/DamSafety` on a Mac, `~/.config/DamSafety` on Linux), named `anuga_checkpoint.key`. It is made the first time a checkpoint is saved. To resume your own runs on a second computer without the override, copy that file there, or point `NDBREACH_CKPT_KEY_FILE` at a copy both computers can read. Do not put it in a dam folder or share it.
+- Never set `NDBREACH_ANUGA_RESUME_TRUST=1` for a folder you did not make.
+
+**Zips.** Before a zip is unpacked the suite reads its list of contents and refuses it, writing nothing, when an entry would land outside the folder, when it holds a link, when it would unpack to more than the limit below or more than the free disk space, or when it is compressed far harder than real data ever is.
+
+| Zip | Limit unpacked |
+|---|---|
+| One LiDAR tile (Screening) | 8 GB (and 4 GB downloaded) |
+| One data set of the Data Updater | 64 GB |
+| A submittal package (Hazard Reproduce), a DSS-WISE package, an offline pack | 64 GB |
+
+The message names the size and the limit. If a real archive is larger, set `NDSUITE_ZIP_MAX_GB` to a number of GB above it and run again. A DSS-WISE package may hold zips inside zips three deep; a deeper one is left as a file.
+
+**NSI structures.** USACE publishes no checksum for the NSI, so the updater checks what it received: each structure must be a point inside North Dakota, and the new inventory may not be much smaller than the one you have. If the answer is cut short or wrong, the update of that data set fails with the reason and **the inventory you have stays in use**. Two messages you may see:
+
+- *"... structures are not points inside North Dakota; the response was not used"*: try the update again later.
+- *"... % fewer than the ... of the inventory in use"* or *"counties with structures ... came back empty"*: the same. If USACE really did remove that many structures, set `NDSUITE_NSI_ALLOW_DROP=1` and update again.
+
+`nsi/nsi_summary.json` lists how many structures were installed, how many bad records were left out, and the SHA-256 of each answer from the API.
+
 ## A class that rests on velocity (Hazard 2.25.0)
 
 A structure's hazard zone is read from its peak depth and its **peak** velocity. Depth is steady from one solver or grid to the next. Peak velocity is not: it can come from one fast cell at a building corner, and it differs between solvers and cell sizes. So a class can rest on a number that is the least certain one in the model.

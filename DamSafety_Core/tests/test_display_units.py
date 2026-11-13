@@ -9,6 +9,45 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from DamSafety_Core.damsuite import display_units as DU   # noqa: E402
 
 
+def test_no_project_object_is_made_without_a_running_qgis():
+    """suite_config must not make QGIS's project object in a plain Python: on Qt 5.15.3 (the
+    QGIS 3.34 LTR on Ubuntu 22.04) that asks for a font with no application and Qt ends the
+    process. Checked in a child process, so an abort is a failed test and not a dead suite."""
+    import subprocess
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, {root!r})\n"
+        "try:\n"
+        "    from qgis.PyQt.QtCore import QCoreApplication\n"
+        "    from qgis.core import QgsProject\n"
+        "except Exception:\n"
+        "    print('NOQGIS'); sys.exit(0)\n"
+        "made = []\n"
+        "real = QgsProject.instance\n"
+        "QgsProject.instance = staticmethod(lambda: made.append(1) or real())\n"
+        "from DamSafety_Core.damsuite import suite_config, display_units\n"
+        "assert suite_config._project() is None, 'a project without an application'\n"
+        "assert display_units.system() in ('us', 'si')\n"
+        "suite_config.source('unit_system')\n"
+        "assert not made, 'QgsProject.instance() was called without an application'\n"
+        "if sys.argv[1] == 'core':\n"            # a command line tool's application: not enough
+        "    app = QCoreApplication([])\n"
+        "    assert suite_config._project() is None and not made, 'a project with no GUI application'\n"
+        "else:\n"                                # QGIS, qgis_process, a test's QgsApplication
+        "    from qgis.core import QgsApplication\n"
+        "    app = QgsApplication([], False)\n"
+        "    assert suite_config._project() is not None and made, 'no project in QGIS'\n"
+        "print('OK')\n").format(root=os.path.dirname(os.path.dirname(HERE)))
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env.pop("NDSUITE_UNITS", None)
+    for kind in ("core", "qgis"):
+        r = subprocess.run([sys.executable, "-c", code, kind], env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=120)
+        out = r.stdout.decode("utf-8", "replace")
+        assert r.returncode == 0 and ("OK" in out or "NOQGIS" in out), (kind, r.returncode, out[-1500:])
+
+
 def test_system_default_and_env(monkeypatch=None):
     old = os.environ.pop(DU.ENV, None)
     try:
@@ -105,6 +144,133 @@ def test_convert_table_and_markdown():
     assert out[0] == "| Pass | Size (km) | Edge depth N/S/E/W (m) |"
     assert out[2] == "| 1 | 6.78 x 5.2 | 0/1.8/0.893/0 |"
     assert DU.convert_markdown(md, "us") == md
+
+
+# -- SI copies of the result CSVs (Core 1.4.0) --------------------------------------------------
+
+def _csv(path, rows):
+    import csv
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows(rows)
+    return path
+
+
+def _rows(path):
+    import csv
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.reader(f))
+
+
+def test_csv_column_unit_reads_the_unit_from_the_name():
+    u = DU.csv_column_unit
+    assert u("Max_Depth_ft") == ("ft", "Max_Depth_m")
+    assert u("Max_Vel_fps") == ("ft/s", "Max_Vel_mps")
+    assert u("peak_cfs") == ("cfs", "peak_cms")
+    assert u("Storage_acft") == ("ac-ft", "Storage_m3")
+    assert u("Area_ac") == ("acres", "Area_ha") and u("Flooded_acres") == ("acres", "Flooded_ha")
+    assert u("dist_mi") == ("miles", "dist_km") and u("drain_mi2") == ("sq mi", "drain_km2")
+    assert u("DV_Max_ft2s") == ("ft²/s", "DV_Max_m2s") and u("Area_ft2") == ("ft²", "Area_m2")
+    assert u("HEIGHT_FT") == ("ft", "HEIGHT_M")
+    assert u("Peak (cfs)") == ("cfs", "Peak (m³/s)") and u("Depth (ft)") == ("ft", "Depth (m)")
+    # inches only after a word that means a depth of water
+    assert u("storm_depth_in") == ("in", "storm_depth_mm")
+    for name in ("built_in", "also_in", "Notes", "cell_m", "Left", "draft", "ft", "Crest ft",
+                 "Struct_ID", "Arrival_hr", ""):
+        assert u(name) == (None, None), name
+
+
+def test_si_table_puts_an_si_column_beside_each_us_one():
+    names, rows = DU.si_table(
+        ["id", "Max_Depth_ft", "peak_cfs", "Notes", "width_ft", "Top_ft", "Top_m"],
+        [["1", "3.25", "28671", "x", "wide", "1069.117", "325.87"],
+         ["2", "", "1,200.5", "y", "", "", ""],
+         ["3", "n/a", "0", "z", "", "", ""]])
+    # width_ft holds no number and Top_m is already there: neither gets a new column
+    assert names == ["id", "Max_Depth_ft", "Max_Depth_m", "peak_cfs", "peak_cms", "Notes",
+                     "width_ft", "Top_ft", "Top_m"], names
+    assert rows[0] == ["1", "3.25", "0.9906", "28671", "811.9", "x", "wide", "1069.117",
+                       "325.87"], rows[0]
+    assert rows[1][:5] == ["2", "", "", "1,200.5", "33.99"], rows[1]
+    assert rows[2][:5] == ["3", "n/a", "", "0", "0"], rows[2]
+    # the US values are exactly as they were
+    assert [r[1] for r in rows] == ["3.25", "", "n/a"] and [r[3] for r in rows] == \
+        ["28671", "1,200.5", "0"]
+    assert DU.si_table(["id", "Notes"], [["1", "x"]]) == (None, None)
+
+
+def test_write_si_csv_only_under_si_and_never_touches_the_table(tmp_path=None):
+    import tempfile
+    import shutil
+    tmp = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp(prefix="si_csv_")
+    try:
+        src = _csv(os.path.join(tmp, "run", "receptors_flooded.csv"),
+                   [["id", "depth_ft", "vel_fps"], ["a", "2.0", "10"], ["b", "0.5", ""]])
+        before = open(src, "rb").read()
+        assert DU.write_si_csv(src, "us") == ""
+        assert not os.path.exists(os.path.join(tmp, "run", DU.SI_CSV_DIR))
+        out = DU.write_si_csv(src, "si")
+        assert out == os.path.join(tmp, "run", "SI_units", "receptors_flooded.csv"), out
+        assert _rows(out) == [["id", "depth_ft", "depth_m", "vel_fps", "vel_mps"],
+                              ["a", "2.0", "0.6096", "10", "3.048"],
+                              ["b", "0.5", "0.1524", "", ""]], _rows(out)
+        assert open(src, "rb").read() == before and DU.is_si_copy(out)
+        assert DU.write_si_csv(out, "si") == ""                    # never a copy of a copy
+        # a table that no longer has a unit column: the old copy goes
+        _csv(src, [["id", "note"], ["a", "x"]])
+        assert DU.write_si_csv(src, "si") == "" and not os.path.exists(out)
+        assert DU.write_si_csv(os.path.join(tmp, "missing.csv"), "si") == ""
+        assert DU.write_si_csv("", "si") == ""
+    finally:
+        if tmp_path is None:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_write_si_csvs_in_a_folder_and_of_a_tools_results(tmp_path=None):
+    import tempfile
+    import shutil
+    tmp = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp(prefix="si_csv_")
+    try:
+        run = os.path.join(tmp, "run")
+        a = _csv(os.path.join(run, "a.csv"), [["x_ft"], ["1"]])
+        _csv(os.path.join(run, "b.csv"), [["name"], ["n"]])
+        deep = _csv(os.path.join(run, "inputs", "pmf.csv"), [["q_cfs"], ["100"]])
+        made = DU.write_si_csvs_in(run, "si")
+        assert made == [os.path.join(run, "SI_units", "a.csv")], made
+        assert not os.path.exists(os.path.join(run, "inputs", "SI_units"))
+        # a second pass makes nothing new and no copy of the copies
+        assert DU.write_si_csvs_in(run, "si") == made
+        assert os.listdir(os.path.join(run, "SI_units")) == ["a.csv"]
+        assert DU.write_si_csvs_in(run, "si", recursive=True) == [
+            made[0], os.path.join(run, "inputs", "SI_units", "pmf.csv")]
+        # a table that is gone takes its copy with it
+        os.remove(a)
+        assert DU.write_si_csvs_in(run, "si") == []
+        assert not os.path.exists(os.path.join(run, "SI_units"))
+        assert DU.write_si_csvs_in(run, "us") == [] and DU.write_si_csvs_in("", "si") == []
+
+        # what a tool returned: its CSV values, and the folder of its report
+        out = os.path.join(tmp, "out")
+        summary = _csv(os.path.join(out, "Batch_Breach_Runs.csv"), [["Peak_cfs"], ["5"]])
+        rec = _csv(os.path.join(out, "model", "receptors_flooded.csv"), [["depth_ft"], ["2"]])
+        report = os.path.join(out, "model", "run_report.md")
+        open(report, "w").close()
+        dem_dir = os.path.join(tmp, "dem")
+        _csv(os.path.join(dem_dir, "tiles.csv"), [["size_ft"], ["3"]])
+        vrt = os.path.join(dem_dir, "dem.vrt")
+        open(vrt, "w").close()
+        res = {"SUMMARY": summary, "REPORT": report, "VRT": vrt, "FOLDER": dem_dir,
+               "COUNTS": "3 run", "N": 4, "NONE": None, "DEPTH": ""}
+        assert DU.write_si_csvs_of(res, "us") == []
+        made = DU.write_si_csvs_of(res, "si")
+        assert made == [os.path.join(out, "SI_units", "Batch_Breach_Runs.csv"),
+                        os.path.join(out, "model", "SI_units", "receptors_flooded.csv")], made
+        assert not os.path.exists(os.path.join(dem_dir, "SI_units"))   # not a result table
+        assert os.path.isfile(rec)
+        assert DU.write_si_csvs_of(None, "si") == [] and DU.write_si_csvs_of({}, "si") == []
+    finally:
+        if tmp_path is None:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

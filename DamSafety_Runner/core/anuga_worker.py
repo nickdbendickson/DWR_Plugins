@@ -92,10 +92,12 @@ try:                    # 3.10.50: the worker runs as a script (python anuga_wor
     from . import omp_probe
     from . import anuga_dtdiag
     from . import anuga_fine_maxima
+    from . import ckpt_sign
 except ImportError:
     import omp_probe
     import anuga_dtdiag
     import anuga_fine_maxima
+    import ckpt_sign
 
 
 def crest_vertex_values(vertex_xy, vertex_values, crest_xy, crest_z, tol=1e-3):
@@ -1080,7 +1082,8 @@ def other_checkpoints(root, fp, digests):
 
 
 class ResumeError(RuntimeError):
-    """An explicit resume (resume_from) that cannot go ahead: the worker stops."""
+    """A resume that cannot go ahead and must not turn into a fresh start: an explicit
+    resume_from, or (3.20.3) a checkpoint that is not signed by this user. The worker stops."""
 
 
 def resume_from_setting(job, environ=None):
@@ -1150,13 +1153,26 @@ def save_checkpoint(domain, ckdir, t):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
-        return ""
     except Exception as e:      # noqa: BLE001 - never stops the run
         try:
             os.remove(tmp)
         except OSError:
             pass
         return "{}: {}".format(type(e).__name__, str(e)[:200])
+    sign_checkpoint(path)
+    return ""
+
+
+def sign_checkpoint(path):
+    """3.20.3: sign a checkpoint this run wrote (ckpt_sign), so a later run of this user can
+    load it. A checkpoint that cannot be signed is kept; the log says it will not be resumed
+    without NDBREACH_ANUGA_RESUME_TRUST=1. '' when signed, else why not."""
+    err = ckpt_sign.sign(path)
+    if err:
+        print("PROGRESS 0 checkpoint {} was saved but not signed ({}); it will be resumed only "
+              "with {}=1".format(os.path.basename(path), err[:200], ckpt_sign.TRUST_ENV),
+              flush=True)
+    return err
 
 
 def write_json_atomic(path, obj):
@@ -1203,6 +1219,7 @@ def prune_checkpoints(ckdir, times, keep):
             os.remove(checkpoint_path(ckdir, t))
         except OSError:
             pass
+        ckpt_sign.remove_sig(checkpoint_path(ckdir, t))
     return times[-keep:] if keep > 0 else times
 
 
@@ -1310,14 +1327,26 @@ def find_envelope(domain, cls):
     return None
 
 
-def load_latest_checkpoint(anuga, ckdir, meta):
+def load_latest_checkpoint(anuga, ckdir, meta, refused=None):
     """(domain, t) from the newest complete checkpoint listed in checkpoint.json that loads,
-    or (None, reason)."""
+    or (None, reason). 3.20.3: a checkpoint is a pickle, so only one this user's own runs
+    signed is loaded (ckpt_sign); NDBREACH_ANUGA_RESUME_TRUST=1 loads one that does not
+    verify, and the log says so. `refused` (a list) gets the files not loaded for that
+    reason."""
     errors = []
     for t in sorted(meta.get("times") or [], reverse=True):
         p = checkpoint_path(ckdir, t)
         if not os.path.exists(p):
             errors.append("{:g} s: missing".format(t))
+            continue
+        ok, why = ckpt_sign.verify(p)
+        if not ok and ckpt_sign.trusted():
+            print("PROGRESS 0 resume: {} does not verify ({}); loaded because {}=1".format(
+                os.path.basename(p), why[:200], ckpt_sign.TRUST_ENV), flush=True)
+        elif not ok:
+            errors.append("{:g} s: {}".format(t, ckpt_sign.refusal(p, why)))
+            if refused is not None:
+                refused.append(p)
             continue
         try:
             dom = anuga.load_checkpoint_file(domain_name=DOMAIN_NAME, checkpoint_dir=ckdir,
@@ -1602,7 +1631,14 @@ def main(job_path, out_path):
                     print("PROGRESS 0 resume: {}=<that folder> resumes it after a "
                           "compatibility check".format(RESUME_FROM_ENV), flush=True)
             else:
-                dom, t_or_err = load_latest_checkpoint(anuga, ckdir, meta)
+                refused = []
+                dom, t_or_err = load_latest_checkpoint(anuga, ckdir, meta, refused)
+                if dom is None and refused:
+                    # 3.20.3: never fall through to a fresh start here - that deletes this
+                    # job's checkpoints, which may be hours of the user's own work
+                    raise ResumeError(
+                        "resume: {}. Nothing was run and the checkpoints in {} were kept. To "
+                        "start this run over instead, turn resume off.".format(t_or_err, ckdir))
                 envop = find_envelope(dom, Envelope) if dom is not None else None
                 if dom is None:
                     ckinfo["resume_skipped"] = "no checkpoint loaded: " + str(t_or_err)
@@ -1759,6 +1795,8 @@ def main(job_path, out_path):
                 saved = (ck["checkpoint"] and not ckinfo.get("checkpoint_error")
                          and float(t) not in meta["times"]
                          and os.path.exists(checkpoint_path(ckdir, t)))
+                if saved:                    # 3.20.3: ANUGA wrote this one itself; sign it
+                    sign_checkpoint(checkpoint_path(ckdir, t))
             if saved:
                 meta["times"] = prune_checkpoints(ckdir, meta["times"] + [float(t)], ck["keep"])
                 write_json_atomic(os.path.join(ckdir, META_NAME), meta)
