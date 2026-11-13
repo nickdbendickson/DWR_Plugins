@@ -9,6 +9,39 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from DamSafety_Core.damsuite import display_units as DU   # noqa: E402
 
 
+def test_no_project_object_is_made_without_a_running_qgis():
+    """suite_config must not make QGIS's project object in a plain Python: on Qt 5.15.3 (the
+    QGIS 3.34 LTR on Ubuntu 22.04) that asks for a font with no application and Qt ends the
+    process. Checked in a child process, so an abort is a failed test and not a dead suite."""
+    import subprocess
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, {root!r})\n"
+        "try:\n"
+        "    from qgis.PyQt.QtCore import QCoreApplication\n"
+        "    from qgis.core import QgsProject\n"
+        "except Exception:\n"
+        "    print('NOQGIS'); sys.exit(0)\n"
+        "made = []\n"
+        "real = QgsProject.instance\n"
+        "QgsProject.instance = staticmethod(lambda: made.append(1) or real())\n"
+        "from DamSafety_Core.damsuite import suite_config, display_units\n"
+        "assert suite_config._project() is None, 'a project without an application'\n"
+        "assert display_units.system() in ('us', 'si')\n"
+        "suite_config.source('unit_system')\n"
+        "assert not made, 'QgsProject.instance() was called without an application'\n"
+        "app = QCoreApplication([])\n"
+        "assert suite_config._project() is not None and made, 'no project with an application'\n"
+        "print('OK')\n").format(root=os.path.dirname(os.path.dirname(HERE)))
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env.pop("NDSUITE_UNITS", None)
+    r = subprocess.run([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, timeout=120)
+    out = r.stdout.decode("utf-8", "replace")
+    assert r.returncode == 0 and ("OK" in out or "NOQGIS" in out), (r.returncode, out[-1500:])
+
+
 def test_system_default_and_env(monkeypatch=None):
     old = os.environ.pop(DU.ENV, None)
     try:
