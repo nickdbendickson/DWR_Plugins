@@ -164,3 +164,119 @@ def depth(dem, filled):
     d = np.asarray(filled, float) - np.asarray(dem, float)
     d[~np.isfinite(d)] = 0.0
     return np.maximum(d, 0.0)
+
+
+# ----------------------------------------------------------------------------- pool outlets --
+# A pond on a hillside, on a terrace or at the head of a swale can drain less than the draw
+# threshold, so no draw crosses its dam however the draws are routed (Iowa's pond-dam census: at
+# 10 ac most of the missed dams had no draw within 30 m). Every POOL the DEM shows - a closed
+# depression, or a flat water surface whose rim is all higher (hydro-flattened water, or the near-
+# flat TIN a pond with no lidar returns becomes) - gets its own short line instead: from inside the
+# pool down the opened-ridge routing (the receivers the draws use), out through the pool's outlet
+# and on below it, so the fill that holds the pool is profiled whatever drains to it.
+
+
+def flat_pools(dem, cell, tol_m=0.15, min_m2=300.0, ring_tol_m=0.10, max_lower=0.10):
+    """(label grid, [label, ...]) of the flat water surfaces of a DEM: connected (8-way) cells
+    whose 3x3 neighbourhood spans at most tol_m, at least min_m2 in all, and whose 1-cell ring is
+    (almost) all higher: at most max_lower of the ring more than ring_tol_m below the flat's median
+    (a field or a terrace bench has lower ground along one side)."""
+    from scipy import ndimage as ndi
+    z = np.asarray(dem, float)
+    fin = np.isfinite(z)
+    mx = ndi.maximum_filter(np.where(fin, z, 1e9), size=3)
+    mn = ndi.minimum_filter(np.where(fin, z, -1e9), size=3)
+    lab, n = ndi.label(fin & (mx - mn <= tol_m), structure=np.ones((3, 3), bool))
+    if not n:
+        return lab, []
+    cnt = np.bincount(lab.ravel(), minlength=n + 1)
+    keep = []
+    for k, sl in enumerate(ndi.find_objects(lab), start=1):
+        if sl is None or cnt[k] * cell * cell < min_m2:
+            continue
+        r0, r1 = max(0, sl[0].start - 1), min(z.shape[0], sl[0].stop + 1)
+        c0, c1 = max(0, sl[1].start - 1), min(z.shape[1], sl[1].stop + 1)
+        m = lab[r0:r1, c0:c1] == k
+        sub = z[r0:r1, c0:c1]
+        lev = float(np.median(sub[m]))
+        ring = ndi.binary_dilation(m, structure=np.ones((3, 3), bool)) & ~m & np.isfinite(sub)
+        if ring.any() and float((sub[ring] < lev - ring_tol_m).mean()) <= max_lower:
+            keep.append(k)
+    return lab, keep
+
+
+def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=300.0, dep_min_m=0.15, dep_min_m2=100.0):
+    """(seeds [(x, y, area m2, kind)], pool mask) of the pools of a DEM (grid gt): the most interior
+    cell of every flat water surface (flat_pools; kind 'flat') and the deepest cell of every closed
+    depression at least dep_min_m deep over at least dep_min_m2 (cells more than 2 cm below their
+    spill level; kind 'depression'). dep: depth below the spill level (depth() of flow()), computed
+    when None."""
+    from scipy import ndimage as ndi
+    z = np.asarray(dem, float)
+    cell = abs(gt[1])
+    seeds = []
+    lab, keep = flat_pools(z, cell, flat_tol_m, flat_min_m2)
+    mask = np.isin(lab, keep) if keep else np.zeros(z.shape, bool)
+    objs = ndi.find_objects(lab)
+    for k in keep:
+        sl = objs[k - 1]
+        m = lab[sl] == k
+        dt = ndi.distance_transform_edt(np.pad(m, 1))[1:-1, 1:-1]
+        r, c = np.unravel_index(int(np.argmax(dt)), dt.shape)
+        r, c = r + sl[0].start, c + sl[1].start
+        seeds.append((gt[0] + (c + 0.5) * gt[1], gt[3] + (r + 0.5) * gt[5], float(m.sum() * cell * cell), "flat"))
+    if dep is None:
+        _r, _o, filled = flow(z)
+        dep = depth(z, filled)
+    dl, n = ndi.label(dep > 0.02, structure=np.ones((3, 3), bool))
+    if n:
+        idx = np.arange(1, n + 1)
+        mx = np.asarray(ndi.maximum(dep, dl, idx))
+        cnt = np.bincount(dl.ravel(), minlength=n + 1)[1:]
+        pos = ndi.maximum_position(dep, dl, idx)
+        ok = (mx >= dep_min_m) & (cnt * cell * cell >= dep_min_m2)
+        for k in np.flatnonzero(ok).tolist():
+            r, c = pos[k]
+            seeds.append((gt[0] + (c + 0.5) * gt[1], gt[3] + (r + 0.5) * gt[5], float(cnt[k] * cell * cell),
+                          "depression"))
+        mask |= np.isin(dl, np.flatnonzero(ok) + 1)
+    return seeds, mask
+
+
+def pool_lines(seeds, receiver, gt, shape, pool=None, down_m=300.0, max_m=1500.0, min_cells=5):
+    """(lines, exits): polylines [(x, y), ...] in downstream order from each seed along `receiver`
+    (flow() of the opened DEM; grid gt / shape), from the seed's cell to down_m beyond where the
+    path leaves its pool (pool: bool grid on gt; None = at the seed's own cell), at most max_m in
+    all; and for each line the distance along it (m) at which it leaves its pool. A seed in a cell
+    another seed already started from is skipped (put the biggest pools first)."""
+    h, w = shape
+    cell = abs(gt[1])
+    lines, exits, seen = [], [], set()
+    for x, y, *_ in seeds:
+        c = int(math.floor((x - gt[0]) / gt[1]))
+        r = int(math.floor((y - gt[3]) / gt[5]))
+        if not (0 <= r < h and 0 <= c < w):
+            continue
+        i = r * w + c
+        if i in seen:
+            continue
+        seen.add(i)
+        path, tot = [i], 0.0
+        out_m = None if (pool is not None and pool[r, c]) else 0.0
+        while True:
+            j = int(receiver[i])
+            if j < 0:
+                break
+            tot += cell if abs(i - j) in (1, w) else cell * SQ2
+            path.append(j)
+            i = j
+            if out_m is None and not pool[j // w, j % w]:
+                out_m = tot
+            if (out_m is not None and tot - out_m >= down_m) or tot >= max_m:
+                break
+        if len(path) >= min_cells:
+            rr, cc = np.divmod(np.asarray(path), w)
+            lines.append(list(zip((gt[0] + (cc + 0.5) * gt[1]).tolist(),
+                                  (gt[3] + (rr + 0.5) * gt[5]).tolist())))
+            exits.append(out_m if out_m is not None else tot)
+    return lines, exits

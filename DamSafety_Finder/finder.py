@@ -609,7 +609,7 @@ EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new",
               ("crest_height_ft", "float"), ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
               ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"), ("ridge_len_ft", "float"),
               ("storage_af", "float"), ("area_ac", "float"), ("pool", "str"), ("open_pool", "str"),
-              ("on_road", "str"), ("line_source", "str"), ("spillway", "str"),
+              ("on_road", "str"), ("line_source", "str"), ("rescued", "str"), ("spillway", "str"),
               ("spill_dist_ft", "float"), ("spill_width_ft", "float"), ("score", "float"),
               ("score_note", "str"),
               # Finder 0.5 evidence (core/embankments.py steps 7-10)
@@ -630,7 +630,7 @@ DUG_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new",
               ("area_ac", "float"), ("length_ft", "float"), ("width_ft", "float"),
               ("rectangularity", "float"), ("spoil_ft", "float"), ("volume_af", "float"),
               ("lat", "float"), ("lon", "float")]
-LINE_STREAM, LINE_DEM = "stream line", "DEM drainage"
+LINE_STREAM, LINE_DEM, LINE_POOL = "stream line", "DEM drainage", "DEM pool outlet"
 
 
 @_records_run("embankments")
@@ -639,7 +639,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                     road_buffer_m=6.0, hillshade=True, drainage_ac=0.0, drain_cell=10.0,
                     ridges=False, dugouts=False, dikes=True, dike_near_m=200.0,
                     ridge_params=None, model=None, contrib=True, log=print,
-                    progress=None, cancelled=None):
+                    progress=None, cancelled=None, pool_lines=None, pool_reach_m=50.0,
+                    pool_max_drain_ac=50.0, pool_margin_m=300.0, pool_opts=None):
     """Fills across the stream lines in the DEM, checked against the known structures, and (with
     `hillshade`) a multi-direction hillshade of the area beside the GeoPackage for the review.
     drainage_ac > 0: also walk every draw of the DEM draining that many acres (core/terrain.py,
@@ -653,9 +654,21 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     contrib (on by default): the contributing area at each fill (drain_ac, and drain_ratio = acres
     drained per acre-foot stored), routed at drain_cell metres over the tile and its pad (a basin
     larger than the pad reads as a minimum).
+    pool_lines (None = on whenever drainage_ac is): also walk a short line out of every pool the
+    DEM shows - a closed depression or a flat water surface (core/terrain.py pool_seeds) - through
+    its outlet, routed as the draws are, so a pond that drains less than drainage_ac still has its
+    fill profiled (line_source "DEM pool outlet"; core/embankments.py step 11). On such a line only
+    a hump starting within pool_reach_m below where the line leaves the pool is tested, it must
+    hold a pool of params.min_pool_m2 or more, not stand on a road, and drain under
+    pool_max_drain_ac at its crest (a bigger draw is walked by the draws); a pool whose seed
+    already drains pool_max_drain_ac gets no line. pool_margin_m: pools are looked for this far
+    round each tile's core; pool_opts: keyword overrides for terrain.pool_seeds. Where a pool line
+    and another line read the same fill, the other line's reading is kept.
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()
+    if pool_lines is None:
+        pool_lines = bool(drainage_ac)
     progress = progress or _noop
     cancelled = cancelled or _noop
     z_feet = check_dem_unit(dem, z_feet, log)
@@ -704,10 +717,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         def keep(xx, yy, b=core_box):
             return b[0] <= xx < b[2] and b[1] <= yy < b[3]
 
-        dl, deep, darea = [], None, None
-        if drainage_ac or ridges or dikes or contrib:
+        dl, deep, darea, pls, pex = [], None, None, [], []
+        if drainage_ac or ridges or dikes or contrib or pool_lines:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
-            if drainage_ac or contrib:
+            if drainage_ac or contrib or pool_lines:
                 # routed over the DEM with narrow raised features opened away, so a draw runs
                 # straight through a dam or a road fill (as a stream line does), not round it
                 rec, order, _f = tr.flow(tr.open_ridges(z10, abs(gt10[1]), rp.width_m))
@@ -715,6 +728,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 darea = _area_at(area, gt10)
             if drainage_ac:
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
+            if pool_lines and not cancelled():
+                pls, pex = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
+                                       pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
+                                       pool_opts or {})
             if ridges or dikes:
                 _r, _o, filled = tr.flow(z10)
                 d10 = tr.depth(z10, filled)
@@ -723,13 +740,18 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                 cc = np.clip(((gt[0] + (np.arange(z.shape[1]) + 0.5) * gt[1]) - gt10[0]) / gt10[1],
                              0, z10.shape[1] - 1).astype(int)
                 deep = d10[np.ix_(rr, cc)]
-        got = em.find(z, gt, tl + dl, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
-                      drain_area=darea)
+        lim = {len(tl) + len(dl) + i: x + pool_reach_m for i, x in enumerate(pex)} if pls else None
+        rules = dict(min_area_m2=p.min_pool_m2, skip_road=True,
+                     max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None)
+        got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
+                      drain_area=darea, line_lim=lim, pool_rules=rules)
         for e in got:
-            e.line_src = LINE_STREAM if e.line < len(tl) else LINE_DEM
+            e.line_src = (LINE_STREAM if e.line < len(tl) else
+                          LINE_DEM if e.line < len(tl) + len(dl) else LINE_POOL)
         found.extend(got)
-        msg = "tile {}/{}: {} line(s){}, {} fill(s)".format(
-            ti + 1, len(tiles), len(tl), " + {} DEM draw(s)".format(len(dl)) if drainage_ac else "", len(got))
+        msg = "tile {}/{}: {} line(s){}{}, {} fill(s)".format(
+            ti + 1, len(tiles), len(tl), " + {} DEM draw(s)".format(len(dl)) if drainage_ac else "",
+            " + {} pool outlet(s)".format(len(pls)) if pool_lines else "", len(got))
         wide = None
         if rmask is not None:                  # a road embankment's base, not just its centreline
             wide = ndi.binary_dilation(rmask, iterations=max(1, int(round(0.5 * rp.width_m / cell))))
@@ -776,6 +798,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      "storage_af": round(e.storage_m3 / AF_M3, 2), "area_ac": round(e.pool_area_m2 / AC_M2, 2),
                      "pool": "yes" if e.pool else "no", "open_pool": "yes" if e.open_pool else "no",
                      "on_road": "yes" if e.on_road else "no", "line_source": e.line_src or LINE_STREAM,
+                     "rescued": "yes" if e.rescued else "no",
                      "spillway": _spillway(e), "spill_dist_ft": round(e.spill_dist_m / FT, 0) if e.spill_xy else None,
                      "spill_width_ft": round(e.spill_width_m / FT, 0) if e.spill_xy else None,
                      "outlet_dist_ft": _rnd(e.outlet_dist_m / FT, 0),
@@ -833,7 +856,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     write_points(out_gpkg, "screening_dams", SCREEN_FIELDS, dams, epsg=WORK_EPSG)
     counts = {"kinds": em.kind_counts(found), "status": ls.status_counts(rows),
               "ridges": len(extra), "dugouts": len(dugs),
-              "dem_drainage": sum(1 for r in rows if r["line_source"] == LINE_DEM)}
+              "dem_drainage": sum(1 for r in rows if r["line_source"] == LINE_DEM),
+              "pool_outlet": sum(1 for r in rows if r["line_source"] == LINE_POOL),
+              "rescued": sum(1 for r in rows if r["rescued"] == "yes")}
     log(_summary(rows, "fill(s) across streams"))
     hs = None
     if hillshade and not cancelled():
@@ -854,6 +879,42 @@ def _rnd(v, nd):
     except (TypeError, ValueError):
         return None
     return round(v, nd) if math.isfinite(v) else None
+
+
+def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=None):
+    """(lines, exits) of one tile: the pools of the DEM z (grid gt) over the core box plus margin_m
+    (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec` (grid
+    gt10, the draws' receivers); exits = the distance along each line at which it leaves its pool.
+    A pool whose seed already drains max_area (area: the routed contributing area on gt10) gets
+    no line: the draws walk it."""
+    c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
+    c1 = min(z.shape[1], int(math.ceil((core_box[2] + margin_m - gt[0]) / gt[1])))
+    r0 = max(0, int((core_box[3] + margin_m - gt[3]) / gt[5]))
+    r1 = min(z.shape[0], int(math.ceil((core_box[1] - margin_m - gt[3]) / gt[5])))
+    if r1 <= r0 or c1 <= c0:
+        return [], []
+    sub = z[r0:r1, c0:c1]
+    gs = (gt[0] + c0 * gt[1], gt[1], 0.0, gt[3] + r0 * gt[5], 0.0, gt[5])
+    seeds, mask = tr.pool_seeds(sub, gs, **(opts or {}))
+    shape10 = area.shape
+
+    def rc10(x, y):
+        return int((y - gt10[3]) / gt10[5]), int((x - gt10[0]) / gt10[1])
+
+    if max_area:
+        def drains(sd):
+            r, c = rc10(sd[0], sd[1])
+            return area[r, c] if 0 <= r < shape10[0] and 0 <= c < shape10[1] else 0.0
+        seeds = [sd for sd in seeds if drains(sd) < max_area]
+    pool10 = np.zeros(shape10, bool)
+    rr, cc = np.nonzero(mask)
+    if len(rr):
+        R = ((gs[3] + (rr + 0.5) * gs[5] - gt10[3]) / gt10[5]).astype(int)
+        C = ((gs[0] + (cc + 0.5) * gs[1] - gt10[0]) / gt10[1]).astype(int)
+        ok = (R >= 0) & (R < shape10[0]) & (C >= 0) & (C < shape10[1])
+        pool10[R[ok], C[ok]] = True
+    seeds.sort(key=lambda sd: -sd[2])            # a seed sharing a cell with a bigger pool's is dropped
+    return tr.pool_lines(seeds, rec, gt10, shape10, pool=pool10)
 
 
 def _area_at(area, gt, snap=2):
