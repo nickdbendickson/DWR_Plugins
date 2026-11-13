@@ -306,6 +306,13 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in both["rows"]), ["dam", "dry embankment", "road fill"])
         self.assertTrue(all(r["line_source"] == "DEM drainage" for r in both["rows"]))
 
+    def test_near10_is_the_points_cell(self):
+        # the fill's position on the 10 m routing grid: the cell holding it, radius in cells
+        g = (1000.0, 10.0, 0.0, 2000.0, 0.0, -10.0)
+        self.assertEqual(self.f._near10((1015.0, 1985.0, 65.0), g), (1.0, 1.0, 6.5))
+        self.assertIsNone(self.f._near10(None, g))
+        self.assertEqual(self.f._cells10([1015.0], [1985.0], g, (5, 5)), [6])
+
     def test_a_pond_beside_a_big_draw_keeps_its_own_drainage(self):
         # a hillside pond (2.3 ac of water) whose west berm stands 16 m from the valley's draw (80 ac),
         # which runs beside it and never crosses it: only its pool line finds it, and the 50 ac cap

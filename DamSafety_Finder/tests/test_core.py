@@ -385,15 +385,36 @@ class PoolLinesAndRescue(unittest.TestCase):
                                  pool_rules=dict(max_drain_m2=50 * em.AC_M2)), [])
         got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=rules)
         self.assertEqual(len(got), 1)
-        parea = got[0].pool_area_m2                     # the pool behind the fill drains to it at least
-        self.assertAlmostEqual(got[0].drain_m2, max(2 * em.AC_M2, parea))
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
         got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
-                      pool_rules=dict(rules, line_area={0: [0.1 * parea] * two}))
-        self.assertAlmostEqual(got[0].drain_m2, parea)
-        big = parea * 3.0
-        got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
-                      pool_rules=dict(rules, pool_drain={0: big}))
-        self.assertAlmostEqual(got[0].drain_m2, big)
+                      pool_rules=dict(rules, pool_drain={0: 7 * em.AC_M2}))
+        self.assertAlmostEqual(got[0].drain_m2, 7 * em.AC_M2)
+        # the pool the fill holds (closed, its outlet at the fill): all that drains into it, read on
+        # its cells at the spill level
+        seen = []
+
+        def inflow(xs, ys, near):
+            seen.append((len(xs), near))
+            return 9 * em.AC_M2
+
+        dem2, y = valley()
+        dem2 = add_fill(dem2, y, 200, 1.7)              # low enough that its pool ends on the floor
+        dem2 = np.where((y < 197) & (dem2 < bed(200) + 1.0), bed(200) + 1.0, dem2)
+        got = em.find(dem2, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertAlmostEqual(got[0].drain_m2, 9 * em.AC_M2)
+        self.assertAlmostEqual(seen[-1][0] * CELL * CELL, got[0].pool_area_m2)
+        # only the water that leaves the pool by this fill (near it)
+        nx, ny, rad = seen[-1][1]
+        self.assertLess(math.hypot(nx - got[0].x, ny - got[0].y), CELL)
+        self.assertGreaterEqual(rad, em.FinderParams().outlet_m + 0.5 * got[0].len_m)
+        # the window cuts the pool (a valley floor, not a pond): not read
+        got = em.find(dem2, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      params=em.FinderParams(window_m=150.0), pool_rules=dict(rules, inflow=inflow))
+        self.assertTrue(got and got[0].open_pool)
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
         # its own path drains a lot at the crest: a draw walks it
         self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 0.0,
                                  pool_rules=dict(rules, line_area={0: [90 * em.AC_M2] * two})), [])
@@ -678,6 +699,12 @@ class PoolSeeds(unittest.TestCase):
         self.assertEqual(tr.pool_inflow([2, 3, 5], rec, area), 6.0)
         self.assertEqual(tr.pool_inflow([10, 11], rec, area), 4.0)
         self.assertEqual(tr.pool_inflow([7], rec, area), 1.0)
+        # near: only what leaves by a pool cell that close (row, col, radius on a 2-D grid)
+        a2 = area.reshape(2, 7)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 3, 0.5)), 2.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 4, 0.5)), 2.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 3.5, 1.0)), 4.0)
+        self.assertEqual(tr.pool_inflow([2, 3, 5], rec, a2, near=(0, 0, 1.0)), 0.0)
         # on routed terrain, against every cell's path walked out
         rng = np.random.default_rng(3)
         dem = 100.0 + np.cumsum(rng.normal(0, 0.3, (60, 60)), axis=0) * 0.1 + rng.normal(0, 0.05, (60, 60))

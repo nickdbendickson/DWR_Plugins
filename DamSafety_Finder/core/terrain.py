@@ -299,21 +299,28 @@ def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=300.0, dep_min_m=
     return (seeds, mask, own) if cells else (seeds, mask)
 
 
-def pool_inflow(pool, receiver, area, max_steps=500):
+def pool_inflow(pool, receiver, area, max_steps=500, near=None):
     """The ground that drains into a pool (m2): `pool` = the flat indices of its cells on the routing
     grid, `receiver` = flow()'s receivers there, `area` = accumulate()'s contributing area. The sum of
     the area at each cell whose water leaves the pool for good (its path down `receiver` does not come
     back into it within max_steps; a sink in the pool counts): every cell that reaches the pool passes
     its last pool cell, so each is counted once, though flat routing splits a pool's water over many
-    outlet cells and a path can step out of a ragged outline and back."""
+    outlet cells and a path can step out of a ragged outline and back. near = (row, col, radius) in
+    cells of a 2-D `area`: only the water that leaves by a pool cell that close (what passes one
+    outlet; a creek the routing takes out through a culvert elsewhere does not)."""
     S = set(int(i) for i in pool)
     rec = np.asarray(receiver).ravel()
     a = np.asarray(area, float).ravel()
+    if near is not None:
+        w = np.shape(area)[1]
+        r0, c0, rad = float(near[0]), float(near[1]), float(near[2])
     fate = {}                                   # cell off the pool -> its path comes back (bool)
     tot = 0.0
     for i in S:
         j = int(rec[i])
         if j >= 0 and j in S:
+            continue
+        if near is not None and (i // w - r0) ** 2 + (i % w - c0) ** 2 > rad * rad:
             continue
         walk, k, back = [], j, False
         while k >= 0 and len(walk) < max_steps:

@@ -748,7 +748,10 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
     least this; skip_road - not on the road mask; max_drain_m2 - drains less than this at the
     crest; line_area - {line index: contributing area (m2) at each of its points}, its own path,
     read for max_drain_m2 and the fill's drain_m2 (else drain_area); pool_drain - {line index: m2
-    draining into its pool}, the least drain_m2 of a fill on it.
+    draining into its pool}, the least drain_m2 of a fill on it; inflow(xs, ys, near) - m2 draining into
+    the cells at those points (arrays, grid CRS) whose water leaves them within near = (x, y,
+    radius m): read on the pool a fill holds (closed, its outlet at the fill) for that fill's
+    drain_m2, near the fill.
     Returns a list of Embankment, one per pool (params.one_per_pool), deduplicated, highest
     first."""
     _need_scipy()
@@ -955,10 +958,20 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             relief, slope = terrain_round(dem, rc[0], rc[1], cell, p.terrain_m)
             # a pool line's drainage is read on its own path (the routing it follows), not the
             # biggest draw within a few cells: a pond beside a creek drains the pond's own ground
-            # (and at least all that drains into the seed's pool, which flat routing can split, and
-            # the pool behind the fill itself, which can be bigger than the seed's pit)
-            drain = max(own(x, y), float((pool_rules.get("pool_drain") or {}).get(li, 0.0)), parea) \
-                if own is not None else (float(drain_area(x, y)) if drain_area is not None else float("nan"))
+            # (and at least all that drains into the seed's pool, which flat routing can split, and,
+            # when the fill holds a closed pool at its outlet, all that drains into that pool, which
+            # can be bigger than the seed's pit, counting only the water the routing takes out of it
+            # near this fill; a pool the window cuts or that gets out elsewhere is not this fill's)
+            if own is not None:
+                drain = max(own(x, y), float((pool_rules.get("pool_drain") or {}).get(li, 0.0)))
+                if pool_rules.get("inflow") is not None and not open_pool and math.isfinite(outlet) \
+                        and outlet <= p.outlet_m:
+                    pr_, pc_ = np.nonzero(pm)
+                    drain = max(drain, float(pool_rules["inflow"](
+                        gt[0] + (pc_ + c0 + 0.5) * gt[1], gt[3] + (pr_ + r0 + 0.5) * gt[5],
+                        (x, y, p.outlet_m + 0.5 * (e - s) * cl + 20.0))))
+            else:
+                drain = float(drain_area(x, y)) if drain_area is not None else float("nan")
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
                 up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cl, storage_m3=storage,

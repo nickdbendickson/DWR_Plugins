@@ -744,7 +744,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         rules = dict(min_area_m2=p.min_pool_m2, skip_road=True,
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
-                     pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)})
+                     pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
+                     inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10: tr.pool_inflow(
+                         _cells10(xs, ys, g, area.shape), rec, area, near=_near10(near, g))) if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
                       drain_area=darea, line_lim=lim, pool_rules=rules)
         for e in got:
@@ -930,6 +932,22 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     pools = [own10(*pc) for pc in pairs]
     lines, exits, index = tr.pool_lines(seeds, rec, gt10, (H10, W10), pools=pools, with_index=True)
     return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index]
+
+
+def _cells10(xs, ys, gt, shape):
+    """The flat indices of the cells of a grid (geotransform gt, shape) holding the points xs, ys."""
+    c = np.floor((np.asarray(xs, float) - gt[0]) / gt[1]).astype(np.int64)
+    r = np.floor((np.asarray(ys, float) - gt[3]) / gt[5]).astype(np.int64)
+    ok = (r >= 0) & (r < shape[0]) & (c >= 0) & (c < shape[1])
+    return np.unique(r[ok] * shape[1] + c[ok]).tolist()
+
+
+def _near10(near, gt):
+    """(x, y, radius m) -> (row, col, radius) in cells of a grid with geotransform gt (None stays)."""
+    if near is None:
+        return None
+    x, y, rad = near
+    return ((y - gt[3]) / gt[5] - 0.5, (x - gt[0]) / gt[1] - 0.5, rad / abs(gt[1]))
 
 
 def _line_area(line, area, gt):
