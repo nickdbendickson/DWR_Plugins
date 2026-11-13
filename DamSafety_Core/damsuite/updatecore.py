@@ -322,19 +322,22 @@ def download_file(http, url, path, feedback, extract=False, what=None):
 
 
 def extract_zip(zip_path, dest_dir, feedback):
-    """Verify and extract a zip archive, rejecting entries that escape dest_dir."""
+    """Verify and extract a zip archive. Entries that escape dest_dir, symbolic links and an
+    archive that unpacks to more than zipsafe.MAX_DATASET_BYTES (or more than the disk holds,
+    or is compressed harder than any real data set: a "zip bomb") are refused before anything
+    is written (zipsafe, security audit pass 3)."""
+    from . import zipsafe
     try:
         with zipfile.ZipFile(zip_path) as zf:
+            # the limits first: testzip() reads every entry in full, bomb or not
+            try:
+                zipsafe.check(zf, dest_dir, zipsafe.MAX_DATASET_BYTES)
+            except zipsafe.ZipRefused as e:
+                raise UpdateError(f"Downloaded archive was not unpacked: {e}") from e
             bad = zf.testzip()
             if bad is not None:
                 raise UpdateError(f"Downloaded archive is corrupt (bad entry: {bad})")
-            root = os.path.realpath(dest_dir)
             for member in zf.infolist():
-                target = os.path.realpath(os.path.join(dest_dir, member.filename))
-                if target != root and not target.startswith(root + os.sep):
-                    raise UpdateError(f"Archive entry outside target folder: {member.filename}")
-            members = zf.infolist()
-            for i, member in enumerate(members):
                 feedback.check_cancelled()
                 zf.extract(member, dest_dir)
     except zipfile.BadZipFile as e:
@@ -559,6 +562,46 @@ NSI_MODES = {
 }
 
 
+# What the NSI API returns is checked before it replaces the inventory in use (Core 1.4.0,
+# security audit pass 3). USACE publishes no checksum to verify a download against, so the
+# checks are on the content: every structure is a point with real coordinates inside the box
+# below, a response is not absurdly large, and a new inventory is not much smaller than the
+# one it would replace (a cut-short or wrong answer would silently drop structures from
+# every hazard classification). The SHA-256 of each response is kept in nsi_summary.json.
+ND_NSI_BOUNDS = (-104.6, 45.4, -96.0, 49.5)      # west, south, east, north: ND with a margin
+NSI_MAX_COUNTY_BYTES = 512 * 1024 * 1024         # one county, one version (real: < 60 MB)
+NSI_MAX_BAD_SHARE = 0.01                         # malformed / out-of-box points tolerated
+NSI_MAX_DROP_SHARE = 0.20                        # fewer structures than the inventory in use
+NSI_ALLOW_DROP_ENV = "NDSUITE_NSI_ALLOW_DROP"    # 1 = accept a smaller inventory this once
+
+
+def nsi_feature_ok(feat, bounds=None):
+    """True for a GeoJSON point feature with finite coordinates (inside `bounds` when given:
+    west, south, east, north) and a properties object."""
+    if not isinstance(feat, dict):
+        return False
+    props = feat.get("properties")
+    if props is not None and not isinstance(props, dict):
+        return False
+    geom = feat.get("geometry")
+    if not isinstance(geom, dict) or geom.get("type") != "Point":
+        return False
+    xy = geom.get("coordinates")
+    if not isinstance(xy, (list, tuple)) or len(xy) < 2:
+        return False
+    x, y = xy[0], xy[1]
+    if isinstance(x, bool) or isinstance(y, bool) or \
+            not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return False
+    if x != x or y != y or abs(x) > 180.0 or abs(y) > 90.0:
+        return False
+    if bounds is not None:
+        w, s, e, n = bounds
+        if not (w <= x <= e and s <= y <= n):
+            return False
+    return True
+
+
 class NsiApiSource(Source):
     """The published National Structure Inventory for North Dakota, from the NSI API.
 
@@ -592,12 +635,22 @@ class NsiApiSource(Source):
         # A different mode or match distance needs a rebuild even inside the
         # check interval.
         self.config_key = mode + (f"|{self.match_m:g}m" if mode == "merged" else "")
+        # the coordinate box applies to North Dakota counties (FIPS 38xxx) only
+        self.bounds = ND_NSI_BOUNDS if all(str(f).startswith("38") for f in self.county_fips) \
+            else None
+        self._raw_sha256 = {}
+        self._invalid = 0
 
     def remote_version(self, http, feedback):
         return None
 
     def _get_county(self, http, version, fips):
         raw = http.get_bytes(f"{self.API}/{version}/structures?fips={fips}&fmt=fc")
+        if len(raw) > NSI_MAX_COUNTY_BYTES:
+            raise UpdateError(f"{self.name}: county {fips} ({version}) returned "
+                              f"{len(raw):,} bytes, far more than a county's structures")
+        self._raw_sha256.setdefault(str(fips), {})[version] = hashlib.sha256(
+            raw if isinstance(raw, bytes) else str(raw).encode("utf-8")).hexdigest()
         try:
             data = json.loads(raw)
         except ValueError as e:
@@ -606,9 +659,63 @@ class NsiApiSource(Source):
             raise UpdateError(f"{self.name}: county {fips} ({version}) returned an "
                               "unexpected response")
         features = data.get("features") or []
+        if not isinstance(features, list):
+            raise UpdateError(f"{self.name}: county {fips} ({version}) returned an "
+                              "unexpected response")
+        # Core 1.4.0: only well-formed points inside the state's box are kept. A few bad
+        # records are dropped and counted; more than NSI_MAX_BAD_SHARE means the answer is
+        # not this county's inventory, and nothing is installed.
+        good = [f for f in features if nsi_feature_ok(f, self.bounds)]
+        bad = len(features) - len(good)
+        if bad > max(5, NSI_MAX_BAD_SHARE * len(features)):
+            raise UpdateError(
+                f"{self.name}: county {fips} ({version}): {bad:,} of {len(features):,} "
+                "structures are not points inside North Dakota; the response was not used "
+                "and the inventory in use was kept")
+        self._invalid += bad
+        features = good
         # Hash features in a stable order so an identical inventory hashes identically.
         features.sort(key=lambda f: str((f.get("properties") or {}).get("fd_id", "")))
         return features
+
+    def _previous_summary(self, staging_dir):
+        """nsi_summary.json of the inventory in use (<data folder>/<folder>), or None."""
+        live = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(staging_dir))),
+                            self.folder, "nsi_summary.json")
+        try:
+            with open(live, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    def _check_not_shrunk(self, staging_dir, n_new, counties_new, environ=None):
+        """UpdateError when the new inventory is much smaller than the one in use, of the
+        same mode: fewer structures by more than NSI_MAX_DROP_SHARE, or a county that had
+        structures and now has none. NDSUITE_NSI_ALLOW_DROP=1 accepts it."""
+        env = os.environ if environ is None else environ
+        if str(env.get(NSI_ALLOW_DROP_ENV, "")).strip().lower() in ("1", "true", "yes", "on"):
+            return
+        prev = self._previous_summary(staging_dir)
+        if not prev or prev.get("mode") != self.mode:
+            return
+        n_old = prev.get("structures")
+        if not isinstance(n_old, int):
+            return                       # written before Core 1.4.0: nothing to compare with
+        gone = sorted(set(prev.get("counties_with_structures") or []) - set(counties_new))
+        if n_old > 0 and n_new < (1.0 - NSI_MAX_DROP_SHARE) * n_old:
+            why = (f"the API returned {n_new:,} structures, {100.0 * (n_old - n_new) / n_old:.0f}"
+                   f"% fewer than the {n_old:,} of the inventory in use")
+        elif gone:
+            why = (f"{len(gone)} count{'y' if len(gone) == 1 else 'ies'} with structures in "
+                   f"the inventory in use came back empty (FIPS {', '.join(gone[:8])}"
+                   f"{' ...' if len(gone) > 8 else ''})")
+        else:
+            return
+        raise UpdateError(
+            f"{self.name}: {why}. A cut-short answer would drop structures from every hazard "
+            "classification, so the inventory in use was kept. If the smaller inventory is "
+            f"real, set {NSI_ALLOW_DROP_ENV}=1 and update again.")
 
     def fetch(self, http, staging_dir, feedback, remote_version):
         from . import nsi_merge
@@ -620,6 +727,8 @@ class NsiApiSource(Source):
         totals = {}
         per_county = {}
         total = len(self.county_fips)
+        self._raw_sha256, self._invalid = {}, 0
+        n_structures, with_structures = 0, []
         for i, fips in enumerate(self.county_fips):
             by_version = {}
             for version in versions:
@@ -648,15 +757,27 @@ class NsiApiSource(Source):
                     json.dump({"type": "FeatureCollection", "features": features}, f,
                               separators=(",", ":"))
                 written.append(path)
+                n_structures += len(features)
+                with_structures.append(str(fips))
             features = None
             feedback.fraction((i + 1) / total * (0.8 if self.merger else 1.0))
         if not written:
             raise UpdateError(f"{self.name}: the API returned no structures")
+        self._check_not_shrunk(staging_dir, n_structures, with_structures)
         with open(os.path.join(staging_dir, "nsi_summary.json"), "w", encoding="utf-8") as f:
             json.dump({"mode": self.mode, "versions": list(versions),
                        "match_m": self.match_m if self.mode == "merged" else None,
-                       "totals": totals, "counties": per_county}, f, indent=1, sort_keys=True)
+                       "totals": totals, "counties": per_county,
+                       # Core 1.4.0: what the next update is compared with, and what was
+                       # downloaded (SHA-256 of each API response, county by version)
+                       "structures": n_structures,
+                       "counties_with_structures": with_structures,
+                       "invalid_dropped": self._invalid,
+                       "response_sha256": self._raw_sha256}, f, indent=1, sort_keys=True)
         feedback.log(f"{self.name}: " + ", ".join(f"{k} {v:,}" for k, v in sorted(totals.items())))
+        if self._invalid:
+            feedback.log(f"{self.name}: {self._invalid:,} record(s) that were not points "
+                         "inside North Dakota were left out")
         if self.merger:
             feedback.log(f"{self.name}: merging {len(written)} counties into nsi_nd.gpkg")
             self.merger(written, os.path.join(staging_dir, "nsi_nd.gpkg"))

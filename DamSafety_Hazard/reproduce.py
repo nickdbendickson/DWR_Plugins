@@ -1259,6 +1259,20 @@ def _check_work_folder(work_folder):
         raise ValueError(msg)
 
 
+def _check_zip_size(zf, dest, zip_path):
+    """2.25.2 (security audit pass 3): a package someone hands the reviewer is checked before
+    it is unpacked - links, entry count, unpacked size, compression ratio and free disk space
+    (damsuite.zipsafe, DamSafety Core 1.4.0; not checked with an older Core). ValueError."""
+    try:
+        from .damsuite import zipsafe
+    except Exception:                               # noqa - Core older than 1.4.0
+        return
+    try:
+        zipsafe.check(zf, dest, zipsafe.MAX_PACKAGE_BYTES)
+    except zipsafe.ZipRefused as e:
+        raise ValueError("{} was not unpacked: {}".format(zip_path, e))
+
+
 def extract_package(zip_path, work_folder):
     """Unzip a package (submittal.build zip_it) into <work folder>/_package and
     return the package folder in it (the zip holds one top folder)."""
@@ -1271,6 +1285,7 @@ def extract_package(zip_path, work_folder):
             parts = n.replace("\\", "/").split("/")
             if n.startswith("/") or ".." in parts or re.match(r"^[A-Za-z]:", n):
                 raise ValueError("{} holds an unsafe path: {}".format(zip_path, n))
+        _check_zip_size(zf, dest, zip_path)
         zf.extractall(dest)
     tops = [d for d in os.listdir(dest) if os.path.isdir(os.path.join(dest, d))]
     if len(tops) == 1 and not os.path.isfile(os.path.join(dest, "MANIFEST.csv")):

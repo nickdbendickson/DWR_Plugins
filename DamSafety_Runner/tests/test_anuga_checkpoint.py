@@ -290,8 +290,10 @@ def anuga_checkpoint_worker_stop_flushes_partial_and_resume_matches():
         (fp,) = os.listdir(ckroot)
         meta = AW.read_meta(os.path.join(ckroot, fp))
         assert meta["times"] == [480.0, 720.0, 960.0][-2:], meta["times"]     # keep = 2
+        # 3.19.3: each checkpoint kept has its signature beside it (core/ckpt_sign.py)
         assert sorted(os.listdir(os.path.join(ckroot, fp))) == [
-            "anuga_breach_720.0.pickle", "anuga_breach_960.0.pickle", "checkpoint.json"]
+            "anuga_breach_720.0.pickle", "anuga_breach_720.0.pickle.sig",
+            "anuga_breach_960.0.pickle", "anuga_breach_960.0.pickle.sig", "checkpoint.json"]
         with np.load(os.path.join(d1, AW.PARTIAL_NAME)) as z:
             info = json.loads(str(z["info"]))
             part = z["depth"].copy()

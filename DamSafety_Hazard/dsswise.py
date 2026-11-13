@@ -90,7 +90,26 @@ def _zip_key(path):
     return h.hexdigest()[:10]
 
 
-def open_package(path, work_folder):
+MAX_ZIP_DEPTH = 3       # a zip inside a zip inside a zip; deeper ones are left as files
+
+
+def _check_zip_size(zf, dest, path):
+    """2.25.2 (security audit pass 3): the entries that will be extracted are checked first -
+    entry count, unpacked size, compression ratio, free disk space (damsuite.zipsafe,
+    DamSafety Core 1.4.0; not checked with an older Core). Raises ValueError."""
+    try:
+        from .damsuite import zipsafe
+    except Exception:                               # noqa - Core older than 1.4.0
+        return
+    try:
+        # junk and unsafe names are skipped by the loop below, so they are not counted here
+        zipsafe.check(zf, dest, zipsafe.MAX_PACKAGE_BYTES,
+                      skip=lambda n: is_junk_path(n) or bool(zipsafe.unsafe_name(n)))
+    except zipsafe.ZipRefused as e:
+        raise ValueError("{} was not unpacked: {}".format(path, e))
+
+
+def open_package(path, work_folder, _depth=1):
     """Folder holding the package contents. A zip is extracted safely into
     work_folder/package_<fingerprint>: a fresh folder for every different
     zip, so files of an earlier package imported under the same name can
@@ -103,6 +122,7 @@ def open_package(path, work_folder):
     os.makedirs(dest, exist_ok=True)
     root = os.path.realpath(dest)
     with zipfile.ZipFile(path) as zf:
+        _check_zip_size(zf, dest, path)
         for member in zf.infolist():
             if is_junk_path(member.filename):
                 continue        # v2.4.1: __MACOSX / ._* / .DS_Store not extracted
@@ -118,8 +138,13 @@ def open_package(path, work_folder):
             if f.lower().endswith(".zip") and not is_junk_path(f):
                 inner = os.path.join(dirpath, f)
                 sub = os.path.join(dirpath, os.path.splitext(f)[0])
+                if _depth >= MAX_ZIP_DEPTH:
+                    # 2.25.2: zips nested without end are how a small file fills a disk
+                    log_message("DSS-WISE: inner zip {} left as it is (zips nested more than "
+                                "{} deep are not unpacked)".format(f, MAX_ZIP_DEPTH), MSG_WARNING)
+                    continue
                 try:
-                    open_package(inner, sub)
+                    open_package(inner, sub, _depth + 1)
                 except Exception as e:
                     log_message("DSS-WISE: inner zip {} not extracted: {}".format(f, e),
                                 MSG_WARNING)
