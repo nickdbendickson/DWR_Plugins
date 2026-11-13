@@ -1374,9 +1374,9 @@ def _valid_png(path):
 
 def _svg_qt(svg, png, width, height):
     from qgis.PyQt.QtSvg import QSvgRenderer
-    from qgis.PyQt.QtGui import QImage, QPainter, QColor
+    from qgis.PyQt.QtGui import QImage, QPainter, QColor, QGuiApplication
     from qgis.PyQt.QtCore import QCoreApplication
-    if QCoreApplication.instance() is None:
+    if not isinstance(QCoreApplication.instance(), QGuiApplication):
         raise RuntimeError("no Qt application (fonts need one)")
     r = QSvgRenderer(svg)
     if not r.isValid():
