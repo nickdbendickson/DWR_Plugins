@@ -156,7 +156,7 @@ jobs:
           linux-x64/lisflood        Linux x86-64 (glibc 2.35 or newer), static libstdc++ / libgomp
           windows-x64/lisflood.exe  Windows 10/11 x64, no DLLs needed (MinGW-w64, static)
           macos-arm64/lisflood      macOS on Apple Silicon, with libomp.dylib beside it
-          Source: LISFLOOD-FP 8.3 (University of Bristol, GPL-2.0), Zenodo record 13121119,
+          Source: LISFLOOD-FP 8.3 (University of Bristol, GPL-3.0), Zenodo record 13121119,
           sha256 $LISFLOOD_ZIP_SHA256, with DamSafety_Runner/scripts/patch_lisflood.py applied
           (the inittm_depth arrival-depth keyword, NUMA optional, MinGW aligned allocation). The
           patched source of exactly these builds is the release asset lisflood-8.3-ndbreach-source.zip.
@@ -165,7 +165,7 @@ jobs:
           Options > Providers > DamSafety Runner or in DamSafety Setup wins.
           EOF
           ls -laR bin
-      - name: Corresponding source (GPL-2.0), the 8.3 source with the patch applied
+      - name: Corresponding source (GPL-3.0), the 8.3 source with the patch applied
         run: |
           cd "$RUNNER_TEMP"
           curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
