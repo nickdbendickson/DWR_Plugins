@@ -6,7 +6,7 @@
     python3 ndbreach_cli.py hydrograph config.json     breach hydrograph only
     python3 ndbreach_cli.py estimate config.json       time a test flood, estimate the run
     python3 ndbreach_cli.py run config.json            one dam, the same outputs as in QGIS
-    python3 ndbreach_cli.py batch dams.csv config.json a table of dams, one at a time
+    python3 ndbreach_cli.py batch dams.csv config.json a table of dams (--workers N: N at a time)
     python3 ndbreach_cli.py selftest                   what works on this computer
     python3 ndbreach_cli.py culvert-precheck --dam-folder DIR --out OUT
                                                        culvert inverts vs the fine ground
@@ -121,6 +121,7 @@ try:
     gdal_io = importlib.import_module(PKG + ".core.gdal_io")
     grid_mod = importlib.import_module(PKG + ".core.grid")
     units = importlib.import_module(PKG + ".core.units")
+    bworkers = importlib.import_module(PKG + ".core.batch_workers")      # 3.19.0
     sflags = importlib.import_module(PKG + ".damsuite.structure_flags")
 except Exception as _e:              # pragma: no cover
     _fail_import(_e)
@@ -1835,39 +1836,13 @@ def cmd_batch(args):
     results = []
     n = max(1, len(rows))
     base_opts = args
-    for i, row in enumerate(rows):
-        if CANCEL["flag"]:
-            break
-        vals = {}
-        for key, dk in BATCH_TO_DAM.items():
-            col = fld.get(key)
-            if not col:
-                continue
-            raw = row.get(col)
-            vals[dk] = ((raw or "").strip() or None) if dk in ("dam_id", "name") else num(raw)
-        dam_id = str(vals.get("dam_id") or dflt.get("dam_id") or "row{}".format(i + 1)).strip()
-        vals["dam_id"] = dam_id
-        folder = os.path.join(out_root, safe_name(dam_id))
-        out = dict.fromkeys(BATCH_FIELDS, "")
-        out.update({"Dam": dam_id, "Folder": folder})
-        pr = Progress(100.0 * i / n, 100.0 * (i + 1) / n)
-        flag = _flag_of(vals, row)                 # 3.10.23: a flagged structure is skipped
-        if flag:
-            out.update({"Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
-                flag.get("hazard"), flag.get("hazard_source"))})
-            if not sflags.allowed():
-                out.update({"Status": "flagged", "Message": sflags.refusal(
-                    flag, "breach run", dam_id, "{}=1".format(sflags.ENV_ALLOW))[:500]})
-                say("{}: skipped, flagged structure: {}".format(dam_id, sflags.note(flag)))
-                results.append(out)
-                continue
-            out["Structure_Flag"] += " (run allowed)"
-        if skip_done and workflow.run_finished(folder) \
-                and (cfg.get("model", "tier", workflow.TIER_LISFLOOD) != workflow.TIER_HECRAS
-                     or workflow.hecras_done(folder)):
-            out.update({"Status": "skipped", "Message": "already run (finished)"})
-            results.append(out)
-            continue
+    only_row = int(getattr(args, "only_row", 0) or 0)       # 3.19.0: a worker's one dam
+    workers = 1 if only_row else bworkers.clamp_workers(getattr(args, "workers", 1))
+    queue, seen = [], set()
+
+    def run_one(i, row, dam_id, vals, folder, out, pr):
+        """One dam in this process; True when the run was cancelled. 3.19.0: the body of the
+        loop, so the dams a worker run could not take are run here afterwards."""
         say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
         t0 = time.time()
         try:
@@ -1909,8 +1884,7 @@ def cmd_batch(args):
                 say("Check ({}): {}".format(dam_id, w))
         except lfmod.Cancelled:
             out.update({"Status": "cancelled"})
-            results.append(out)
-            break
+            return True
         except (lfmod.ModelError, brmod.BreachInputError, CliError,
                 workflow.HecRasStageError) as e:
             out.update({"Status": "failed", "Message": str(e)[:500]})
@@ -1920,8 +1894,58 @@ def cmd_batch(args):
             sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, traceback.format_exc()
                                                          if args.verbose else e))
         out["Minutes"] = round((time.time() - t0) / 60.0, 1)
+        return False
+
+    for i, row in enumerate(rows):
+        if CANCEL["flag"]:
+            break
+        if only_row and i + 1 != only_row:
+            continue
+        vals = {}
+        for key, dk in BATCH_TO_DAM.items():
+            col = fld.get(key)
+            if not col:
+                continue
+            raw = row.get(col)
+            vals[dk] = ((raw or "").strip() or None) if dk in ("dam_id", "name") else num(raw)
+        dam_id = str(vals.get("dam_id") or dflt.get("dam_id") or "row{}".format(i + 1)).strip()
+        vals["dam_id"] = dam_id
+        folder = os.path.join(out_root, safe_name(dam_id))
+        out = dict.fromkeys(BATCH_FIELDS, "")
+        out.update({"Dam": dam_id, "Folder": folder})
+        pr = Progress(100.0 * i / n, 100.0 * (i + 1) / n)
+        flag = _flag_of(vals, row)                 # 3.10.23: a flagged structure is skipped
+        if flag:
+            out.update({"Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
+                flag.get("hazard"), flag.get("hazard_source"))})
+            if not sflags.allowed():
+                out.update({"Status": "flagged", "Message": sflags.refusal(
+                    flag, "breach run", dam_id, "{}=1".format(sflags.ENV_ALLOW))[:500]})
+                say("{}: skipped, flagged structure: {}".format(dam_id, sflags.note(flag)))
+                results.append(out)
+                continue
+            out["Structure_Flag"] += " (run allowed)"
+        if skip_done and workflow.run_finished(folder) \
+                and (cfg.get("model", "tier", workflow.TIER_LISFLOOD) != workflow.TIER_HECRAS
+                     or workflow.hecras_done(folder)):
+            out.update({"Status": "skipped", "Message": "already run (finished)"})
+            results.append(out)
+            continue
+        if workers > 1 and folder in seen:                   # two workers, one folder
+            out.update({"Status": "skipped",
+                        "Message": "the same dam ID as an earlier row of the table"})
+            results.append(out)
+            continue
+        seen.add(folder)
         results.append(out)
-    path = os.path.join(out_root, "Batch_Breach_Runs.csv")
+        if workers > 1:                                      # run after the list is known
+            queue.append((i, row, dam_id, vals, folder, out, pr))
+        elif run_one(i, row, dam_id, vals, folder, out, pr):
+            break
+    if queue:
+        _batch_queue(args, cfg, out_root, queue, workers, run_one)
+    results = [r for r in results if r["Status"]]            # cancelled before its turn
+    path = getattr(args, "summary_file", "") or os.path.join(out_root, "Batch_Breach_Runs.csv")
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
         w.writeheader()
@@ -1935,6 +1959,52 @@ def cmd_batch(args):
     if counts["cancelled"] or CANCEL["flag"]:
         return 130
     return 3 if counts["failed"] else 0
+
+
+def _batch_queue(args, cfg, out_root, queue, workers, run_one):
+    """3.19.0: run the queued dams as child processes of this same command, `workers` at a
+    time (core/batch_workers.py). Each child is `batch ... --only-row N` and writes a one-row
+    summary; its rows are filled in here. With one dam, or when the first child cannot be
+    started, the dams run here one after another."""
+    if len(queue) < 2:
+        for job in queue:
+            if CANCEL["flag"] or run_one(*job):
+                break
+        return
+    used, each, text = bworkers.plan(workers, len(queue), args.threads or 0)
+    work = bworkers.work_folder(out_root)
+    say("Workers: {}; logs in {}".format(text, work))
+    base = [sys.executable, os.path.abspath(__file__), "batch", os.path.abspath(args.dams),
+            os.path.abspath(args.config), "--output", out_root, "--threads", str(each)]
+    if args.resume:
+        base.append("--resume")
+    if args.verbose:
+        base.append("--verbose")
+    for flag, value in (("--lisflood", args.lisflood), ("--anuga-python", args.anuga_python),
+                        ("--elev-datum", getattr(args, "elev_datum", None))):
+        if value:
+            base += [flag, str(value)]
+    jobs, files = [], {}
+    for i, _row, dam_id, _vals, _folder, _out, _pr in queue:
+        out_csv, log = bworkers.job_paths(work, i + 1, safe_name(dam_id))
+        try:
+            os.remove(out_csv)
+        except OSError:
+            pass
+        files[i] = (out_csv, log)
+        jobs.append({"key": i, "name": dam_id, "log": log,
+                     "cmd": base + ["--only-row", str(i + 1), "--summary-file", out_csv]})
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    results = bworkers.run_children(jobs, used, log=say, cancelled=lambda: CANCEL["flag"],
+                                    timeout_s=60.0 * float(getattr(args, "worker_timeout_min",
+                                                                   0) or 0), env=env)
+    for i, _row, dam_id, _vals, _folder, out, _pr in queue:
+        if i not in results:
+            continue
+        bworkers.fill_row(out, BATCH_FIELDS, results[i], *files[i])
+        if out["Status"] == "failed":
+            sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, out["Message"]))
 
 
 def _batch_point_to_dem(cfg, cache, crs_text, x, y):
@@ -2013,6 +2083,13 @@ def build_parser():
     p.add_argument("--output", default="")
     p.add_argument("--limit", type=int, default=0, help="only the first N dams")
     p.add_argument("--verbose", action="store_true", help="tracebacks for unexpected errors")
+    p.add_argument("--workers", type=int, default=1,
+                   help="dams run at the same time, each in its own process with an equal "
+                   "share of the cores (or --threads each). 1 (default) = one after another")
+    p.add_argument("--worker-timeout-min", type=float, default=0.0,
+                   help="stop a dam's worker after this many minutes (0 = no limit)")
+    p.add_argument("--only-row", type=int, default=0, help=argparse.SUPPRESS)
+    p.add_argument("--summary-file", default="", help=argparse.SUPPRESS)
     datum(p)
     models(p)
     p.set_defaults(func=cmd_batch)
