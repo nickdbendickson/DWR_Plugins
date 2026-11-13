@@ -196,7 +196,10 @@ _CONTAINER_DRIVERS = ("GPKG", "OpenFileGDB", "FileGDB", "KML", "LIBKML", "SQLite
 # and the FEMA_Structures file in outputs are data sets
 _SKIP_DIR_NAMES = (({d.lower() for d in _AUTODETECT_SKIP_DIRS} - {OUTPUT_FOLDER_NAME.lower()})
                    | {DOWNLOAD_FOLDER_NAME.lower(), "_reprojected", "__pycache__", "tile_cache",
-                      "__macosx", "system volume information"})
+                      "__macosx", "system volume information",
+                      # 2.25.1: the SI copies of result tables (damsuite.display_units) are
+                      # never data sets
+                      "si_units"})
 _SKIP_DIR_WORDS = ("backup", "backups", "old", "archive", "archives", "archived")
 _SKIP_DIR_PREFIXES = ("ACER_", "EAP_")          # autodetect: old result folders
 _JSON_SNIFF = re.compile(r'"type"\s*:\s*"(?:FeatureCollection|Feature)"|"geometryType"\s*:')

@@ -6,6 +6,7 @@ one, a page too big to index). Each is silent by construction: an empty index is
 index. `vor doctor` now names them, and exits non-zero on the ones that mean Vor is reading
 less than you think. No Ollama: `--library` checks need no model.
 """
+import argparse
 import importlib.util
 import io
 import os
@@ -182,6 +183,67 @@ class DoctorTest(unittest.TestCase):
         os.environ["VOR_EMBED"] = "some-other-embedder"
         m, c = self.checks()
         self.assertTrue(any("VOR_EMBED is some-other-embedder" in t for t in self.levels(c, "PROBLEM")), c)
+
+    # ------------------------------------------------------------------ files ingest never adds
+
+    def test_an_exact_copy_of_an_indexed_file_is_not_sent_to_ingest(self):
+        """Ingest goes by content and skips a second copy, so "Run: vor ingest" for it is a
+        circle: ingest adds nothing and the doctor says it again."""
+        paths = self.library("Vor", files=("a.md", "b.md"), index=("a.md", "b.md"))
+        twin = os.path.join(os.path.dirname(paths[0]), "asdso", "a-again.md")
+        os.makedirs(os.path.dirname(twin))
+        shutil.copy(paths[0], twin)
+        m = self.vor()
+        db = m.connect()
+        db.execute("UPDATE docs SET sha1=? WHERE path=?", (m.sha1_of(paths[0]), paths[0]))
+        db.commit()
+        db.close()
+        c = m.library_checks()
+        self.assertEqual(self.levels(c, "WATCH"), [], c)
+        ok = "\n".join(self.levels(c, "OK"))
+        self.assertIn("1 file(s) are exact copies of an indexed document, so ingest leaves them out "
+                      "(first: %s is the same file as a.md)" % os.path.join("asdso", "a-again.md"), ok)
+        self.assertIn("every file in the library is indexed, and none changed since", ok)
+
+    def test_a_file_over_the_size_limit_is_not_sent_to_ingest(self):
+        self.library("Vor", files=("a.md", "huge.md"), index=("a.md",))
+        m = self.vor()
+        m.MAX_FILE_BYTES = 10
+        os.utime(os.path.join(self.tmp, "Vor", "library", "a.md"), (1, 1))
+        c = m.library_checks()
+        w = [t for t in self.levels(c, "WATCH") if "not in the index" not in t or "huge" in t]
+        self.assertEqual(len(self.levels(c, "WATCH")), 1, c)
+        self.assertIn("1 file(s) are over 0 MB, which Vor does not index (first: huge.md)", w[0])
+        self.assertNotIn("Run: vor ingest", w[0])
+
+    def test_a_missing_file_outside_the_library_is_shown_with_its_folder(self):
+        """`vor ingest --prune` only looks under the library, so it is not the advice for a
+        document that was indexed from somewhere else."""
+        self.library("Vor", files=("a.md",), index=("a.md",))
+        m = self.vor()
+        away = os.path.join(self.tmp, "DamResearch", "library", "old.pdf")
+        db = m.connect()
+        db.execute("INSERT INTO docs(id, sha1, path, title, pages, notext, added) VALUES(9,'x',?,?,3,'',?)",
+                   (away, "old", "2026-11-01T10:00:00"))
+        db.commit()
+        db.close()
+        c = m.library_checks()
+        (w,) = [t for t in self.levels(c, "WATCH") if "no longer have a file" in t]
+        self.assertIn("(first: %s)" % os.path.join("~", "DamResearch", "library", "old.pdf"), w)
+        self.assertIn("List them: vor list --missing.", w)
+        self.assertIn("1 of them was indexed from outside the library", w)
+        self.assertNotIn("To drop them: vor ingest --prune", w)
+
+    def test_list_missing_shows_only_the_documents_without_a_file(self):
+        self.library("Vor", files=("a.md",), index=("a.md", "gone.md"))
+        m = self.vor()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            m.cmd_list(argparse.Namespace(missing=True))
+        said = out.getvalue()
+        self.assertIn("gone.md", said)
+        self.assertNotIn("a.md\n", said.replace("gone.md", ""))
+        self.assertIn("1 of 2 indexed documents no longer have a file", said)
 
     # ------------------------------------------------------------------ the command
 

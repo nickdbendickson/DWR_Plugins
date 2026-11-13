@@ -27,14 +27,11 @@ _USABLE_STATUS = ("complete", "partial")
 
 
 def _safe_extract(zf, dest):
-    """Extract a zip into dest, refusing any entry that leaves dest."""
-    root = os.path.realpath(dest)
-    for member in zf.infolist():
-        target = os.path.realpath(os.path.join(dest, member.filename))
-        if target != root and not target.startswith(root + os.sep):
-            raise ValueError("archive entry outside the destination: " + member.filename)
-    for member in zf.infolist():
-        zf.extract(member, dest)
+    """Extract a zip into dest, refusing any entry that leaves dest and an archive that is too
+    large to be a pack (zipsafe: size, entry count, compression ratio, free disk space).
+    Raises ValueError (zipsafe.ZipRefused)."""
+    from . import zipsafe
+    zipsafe.extract(zf, dest, zipsafe.MAX_PACKAGE_BYTES)
 
 
 def _pack_table(name):
