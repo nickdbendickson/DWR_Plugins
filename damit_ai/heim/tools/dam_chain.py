@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dam_chain.py v1.5.2 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
+# dam_chain.py v1.5.3 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
 #
 #   dam_chain.py setup                       one-time: batch profiles that point at your QGIS
 #                                            profiles "nd" and "damsafety", plugins enabled

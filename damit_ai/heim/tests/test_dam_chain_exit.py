@@ -16,8 +16,8 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PIERRE = os.path.abspath(os.path.join(HERE, ".."))
-TOOLS = os.path.join(PIERRE, "tools")
+HEIM = os.path.abspath(os.path.join(HERE, ".."))
+TOOLS = os.path.join(HEIM, "tools")
 sys.path.insert(0, TOOLS)
 import dam_chain as DC  # noqa: E402
 
@@ -154,11 +154,11 @@ class DamChainExitTest(unittest.TestCase):
 
 
 class EmbeddedToolsMatchTest(unittest.TestCase):
-    """setup-local-pierre.sh ships each tool as a heredoc. A fix applied to tools/ only would
+    """setup-local-heim.sh ships each tool as a heredoc. A fix applied to tools/ only would
     leave every installed copy unfixed, with nothing to notice it."""
 
     def test_each_embedded_tool_matches_tools(self):
-        sh = os.path.join(PIERRE, "setup-local-pierre.sh")
+        sh = os.path.join(HEIM, "setup-local-heim.sh")
         with io.open(sh, encoding="utf-8") as fh:
             lines = fh.read().splitlines(True)
         blocks, name, tag, start = {}, None, None, None
@@ -170,7 +170,7 @@ class EmbeddedToolsMatchTest(unittest.TestCase):
             if tag and line.rstrip("\n") == tag:
                 blocks[name] = "".join(lines[start:i])
                 tag = None
-        self.assertTrue(blocks, "no embedded tool blocks found in setup-local-pierre.sh")
+        self.assertTrue(blocks, "no embedded tool blocks found in setup-local-heim.sh")
         for name, body in sorted(blocks.items()):
             path = os.path.join(TOOLS, name)
             with self.subTest(tool=name):
@@ -178,7 +178,7 @@ class EmbeddedToolsMatchTest(unittest.TestCase):
                 with io.open(path, encoding="utf-8") as fh:
                     on_disk = fh.read()
                 self.assertEqual(on_disk, body,
-                                 "%s differs between tools/ and setup-local-pierre.sh -- "
+                                 "%s differs between tools/ and setup-local-heim.sh -- "
                                  "re-copy the file into its heredoc" % name)
 
 

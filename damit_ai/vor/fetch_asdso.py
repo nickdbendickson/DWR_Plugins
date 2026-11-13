@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fetch_asdso.py v1.1 — download public dam-safety reference documents listed by ASDSO
+# fetch_asdso.py v1.3 — download public dam-safety reference documents listed by ASDSO
 # (damsafety.org), plus a curated catalog of agency and state sources, into the vor library,
 # with a citation for each file.
 #
@@ -17,6 +17,9 @@
 #                                               # (USBR, USACE, NRCS, NOAA HMR, FERC ...)
 #   python3 fetch_asdso.py --catalog hazard     # one group only (hazard | design)
 #   python3 fetch_asdso.py --catalog --asdso    # catalog and the ASDSO pages in one run
+#   python3 fetch_asdso.py --urls library-urls.txt
+#                                               # write a plain-text list of every catalog source
+#                                               # and its URL; download nothing (offline)
 #
 # Then index them:  vor ingest
 #
@@ -35,7 +38,7 @@ import os, re, sys, csv, json, time, hashlib, argparse, html
 import urllib.request, urllib.error, urllib.parse, urllib.robotparser
 from datetime import datetime, timezone
 
-VERSION = "1.1"
+VERSION = "1.3"
 SITE = "https://damsafety.org"
 UA = "damit-reference-fetch/%s (+research library; polite crawler)" % VERSION
 DEFAULT_PAGES = [
@@ -54,6 +57,16 @@ MAX_BYTES = 400 * 1024 * 1024
 def say(msg):
     print(msg, flush=True)
 
+
+
+def safe_url(url):
+    """1.2: percent-encode spaces and other unsafe characters an index page links with
+    (USBR best-practices chapters: 'A6-Subjective ProbabilityAndExpertElicitation.pdf');
+    urllib refuses a URL with a raw space. Already-encoded %XX is kept."""
+    p = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(p.path, safe="/%:@!$&'()*+,;=-._~")
+    query = urllib.parse.quote(p.query, safe="=&%/:+,;@-._~")
+    return urllib.parse.urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
 
 class Fetcher:
     def __init__(self, delay, retries=3):
@@ -84,6 +97,7 @@ class Fetcher:
         self.last = time.time()
 
     def open(self, url):
+        url = safe_url(url)
         last = None
         for attempt in range(self.retries):
             self._wait()
@@ -433,6 +447,50 @@ def load_catalog(path):
     return cat.get("groups", {})
 
 
+def write_url_list(path, groups, pages):
+    """1.3: a plain-text index of every library source and its web address — no download.
+
+    Every curated-catalog entry (its title, number, and URL, plus any alternate URLs it
+    tries and any 'get by hand' note), followed by the ASDSO resource-center index pages
+    (these are crawled for their PDF links at download time, so the page URL is listed, not
+    each file). Written offline from reference_sources.json; nothing is fetched."""
+    lines = ["# Vor library — source files and web addresses",
+             "# Written by fetch_asdso.py --urls (v%s) on %s. No files were downloaded." % (
+                 VERSION, datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+             "# kind: pdf = direct download | html = web page saved as text | index = all matching",
+             "#       PDF links on the page | manual = no stable public link, get by hand.",
+             ""]
+    n = 0
+    for g, entries in groups.items():
+        lines.append("== catalog group: %s (%d sources) ==" % (g, len(entries)))
+        for e in entries:
+            if e.get("skip"):
+                continue
+            n += 1
+            num = (" [%s]" % e["number"]) if e.get("number") else ""
+            yr = (" (%s)" % e["year"]) if e.get("year") else ""
+            lines.append("%s%s%s — %s  {%s}" % (e.get("title", e["id"]), num, yr,
+                                                e.get("org", ""), e.get("kind", "pdf")))
+            lines.append("    %s" % (e.get("url") or "(no public URL — see note)"))
+            for alt in e.get("alt") or []:
+                lines.append("    alt: %s" % alt)
+            if e.get("match"):
+                lines.append("    download PDF links matching: %s" % e["match"])
+            if e.get("note"):
+                lines.append("    note: %s" % e["note"])
+            lines.append("")
+    lines.append("== ASDSO resource-center pages (crawled for PDF links at download time) ==")
+    for label, url in pages:
+        n += 1
+        lines.append("%s" % label)
+        lines.append("    %s" % url)
+        lines.append("")
+    lines.append("# %d sources listed." % n)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return n
+
+
 def _cite(entry, file_name, title=None):
     return {"file": file_name, "title": title or entry["title"], "authors": entry.get("authors", ""),
             "year": entry.get("year", ""), "org": entry.get("org", ""), "number": entry.get("number", "")}
@@ -608,8 +666,19 @@ def main():
                                                            "library", "references"),
                     help="folder for catalog downloads (default ~/Vor/library/references)")
     ap.add_argument("--asdso", action="store_true", help="with --catalog: also run the ASDSO pages")
+    ap.add_argument("--urls", nargs="?", const="library-urls.txt", metavar="FILE",
+                    help="write a plain-text list of every catalog source and its URL (default "
+                         "library-urls.txt), download nothing, and exit")
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args()
+
+    if args.urls is not None:
+        groups = load_catalog(args.catalog_file)
+        pages = [] if args.no_default_pages else list(DEFAULT_PAGES)
+        dest = os.path.abspath(os.path.expanduser(args.urls))
+        n = write_url_list(dest, groups, pages)
+        say("Wrote %d sources and their URLs to %s" % (n, dest))
+        return
 
     fetcher = Fetcher(args.delay)
     if args.catalog:
