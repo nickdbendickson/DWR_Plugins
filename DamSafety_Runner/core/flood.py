@@ -78,6 +78,23 @@ class Spillway:
         return float(self.elev_m[max(0, nz[0] - 1)]) if len(nz) else float(self.elev_m[0])
 
 
+# Core 1.2.0: shared_defaults pmf_breach_volume -> breach.VW_*
+PMF_VW = {"storage_at_start_pool": br.VW_POOL, "max_storage": br.VW_MAX_STORAGE}
+
+
+def pmf_vw_source(fi=None):
+    """The Vw rule of a PMF / flood-inflow breach: FloodInputs.vw_source when set, else the shared
+    defaults file (pmf_breach_volume), else the ND standards (storage at the starting pool)."""
+    v = getattr(fi, "vw_source", None)
+    if v in br.VW_SOURCES:
+        return v
+    try:
+        from ..damsuite import shared_defaults as SD
+        return PMF_VW.get(SD.value("pmf_breach_volume"), br.VW_POOL)
+    except Exception:                                           # noqa - no Core: the standard
+        return br.VW_POOL
+
+
 @dataclass
 class FloodInputs:
     inflow_t_s: np.ndarray
@@ -91,6 +108,9 @@ class FloodInputs:
     crest_c_us: float = CREST_C_US
     outlets: list = field(default_factory=list)      # outlets.Conduit: low-level outlet works
     spillway_schedule: Optional[list] = None          # [(t_s, fraction)] gate on the spillway rating
+    # Core 1.2.0: Vw in the breach equations (breach.VW_POOL / VW_MAX_STORAGE); None = the shared
+    # defaults file's pmf_breach_volume (damsuite.shared_defaults), else VW_POOL (ND standards)
+    vw_source: Optional[str] = None
 
     @classmethod
     def from_files(cls, inflow_csv, spillway_csv=None, **kw):
@@ -183,7 +203,8 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
         raise br.BreachInputError("{}: the normal pool elevation ({:.1f} ft) is not below the "
                                   "top of dam ({:.1f} ft)".format(dam.dam_id, pool_ft,
                                                                  dam.top_of_dam_ft))
-    c0 = br._common(dam, pool_ft * FT, "normal pool", br.VW_POOL)
+    vw_src = pmf_vw_source(fi)
+    c0 = br._common(dam, pool_ft * FT, "normal pool", vw_src)
     res, top_m = c0.res, c0.top_m
     notes = list(c0.notes)
     crest_ft = fi.crest_length_ft or dam.crest_length_ft
@@ -279,7 +300,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
     # -- 3. with breach ----------------------------------------------------------------------
     rule = "pool at breach initiation ({})".format(
         {"peak": "peak pool of the flood", "time": "user time", "wse": "trigger elevation"}[trig])
-    c = br._common(dam, wse_b, rule, br.VW_POOL)   # 3.16.4: PMF Vw per the ND standards
+    c = br._common(dam, wse_b, rule, vw_src)   # 3.16.4 / Core 1.2.0: PMF Vw, shared rule
     v_release0 = c.v_release
     tw, qw, qb, sw, vw = [t_b], [], [], [wse_b], [v_b]
     params = c.params
@@ -321,7 +342,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
         tw, qw, qb = np.asarray(tw), np.asarray(qw), np.asarray(qb)
     else:      # TR-60: peak and volume from TR-60, added to the no-breach flow
         shape = "curvilinear" if method == br.METHOD_TR60_CURVE else "triangular"
-        tri = br.tr60_hydrograph(dam, ov, shape, wse_b, rule, br.VW_POOL)
+        tri = br.tr60_hydrograph(dam, ov, shape, wse_b, rule, vw_src)
         notes += tri.notes
         params.update(tri.params)
         tt = t_b + tri.t_s

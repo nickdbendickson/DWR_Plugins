@@ -50,6 +50,8 @@ jobs:
         run: python3 tools/test_gui_lint.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
+      - name: Shared defaults file (Core 1.2.0, QGIS-free)
+        run: python3 DamSafety_Core/tests/test_shared_defaults.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
         run: python3 -W error -m unittest discover -v -s damit_ai/pierre/tests
       - name: Runner fast suite (stub Qt, numpy 2, no GDAL - its osgeo tests skip)
