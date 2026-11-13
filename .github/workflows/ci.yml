@@ -52,6 +52,9 @@ jobs:
         run: python3 tools/test_blas_selfcheck.py
       - name: Batch scripts against a stand-in dam_chain (QGIS-free)
         run: python3 -W error -m unittest discover -v -s tools/batch/tests
+      - name: Statewide Finder script, the tests that need no GDAL (tiles, time estimate, --out refusal)
+        # the same file runs whole in the two QGIS jobs below, where GDAL and the Finder plugin are
+        run: python3 tools/mac/test_run_finder_statewide.py -v
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
@@ -138,6 +141,11 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           python -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
+      - name: Statewide Finder script (tools/mac, made-up tiles and terrain, the Finder's own seam rules)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python tools/mac/test_run_finder_statewide.py -v
       - name: GUI lint on a 1080p display (xvfb, all rules incl. no sideways scroll)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome == 'success' }}
         env:
@@ -249,6 +257,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python3 -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
+      - name: Statewide Finder script (tools/mac, made-up tiles and terrain, the Finder's own seam rules)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python3 tools/mac/test_run_finder_statewide.py -v
       - name: Xvfb probe for the 1080p GUI lint
         # xvfb ships in the image (the apt line above makes sure); the probe checks that Qt5's
         # xcb plugin sees the 1920x1080 virtual screen, else the lint runs offscreen below
