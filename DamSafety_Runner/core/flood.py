@@ -8,7 +8,7 @@ routed once more with no breach. Both outflow hydrographs go to the flood
 models; the difference between the two floods is the incremental effect of the
 failure.
 
-3.18.0: the flood can also be routed with NO breach at all (`route_flood(..., breach=False)`,
+3.19.0: the flood can also be routed with NO breach at all (`route_flood(..., breach=False)`,
 workflow.SCENARIO_FLOOD_NO_BREACH): the outflow through the spillways and outlets and over the
 crest is the flood that goes downstream. `FloodInputs.aux_spillway` is an auxiliary (emergency)
 spillway given as a weir, added to the principal spillway rating in every routing.
@@ -99,7 +99,7 @@ class FloodInputs:
     crest_c_us: float = CREST_C_US
     outlets: list = field(default_factory=list)      # outlets.Conduit: low-level outlet works
     spillway_schedule: Optional[list] = None          # [(t_s, fraction)] gate on the spillway rating
-    # 3.18.0: auxiliary (emergency) spillway as a weir, added to `spillway` (never gated)
+    # 3.19.0: auxiliary (emergency) spillway as a weir, added to `spillway` (never gated)
     aux_spillway: Optional[Spillway] = None
     aux_text: str = ""                                # "crest 1612.0 ft, 80 ft long, C 2.6"
 
@@ -287,7 +287,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0, br
                          peak_stage_ft, peak_stage_ft - dam.top_of_dam_ft))
 
     if not breach:
-        # 3.18.0: the flood with no failure. The routed outflow is the flood downstream.
+        # 3.19.0: the flood with no failure. The routed outflow is the flood downstream.
         i_q = int(np.argmax(qs))
         q_aux = np.array([aux.q(float(w)) for w in wse_nb]) if aux is not None else None
         if qs[-1] > 0:

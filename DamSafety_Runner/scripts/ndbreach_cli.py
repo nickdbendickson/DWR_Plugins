@@ -183,7 +183,7 @@ TIER_ALIASES = {"both": workflow.TIER_BOTH, "anuga": workflow.TIER_BOTH,
                 "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD,
                 "hecras": workflow.TIER_HECRAS}
 SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam",
-                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.18.0, appended
+                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.19.0, appended
 READERS = ("auto", "gdal", "asc")
 
 # --------------------------------------------------------------------------------------
@@ -241,7 +241,7 @@ SECTIONS = {
                  "trigger": ("enum", floodmod.TRIGGERS), "trigger_value": ("num", None, None),
                  "baseline_csv": ("path",), "baseline": ("bool",),
                  "incr_thresholds_ft": ("nums",),
-                 # 3.18.0: sunny-day starting pool and the auxiliary spillway weir
+                 # 3.19.0: sunny-day starting pool and the auxiliary spillway weir
                  "start_pool": ("enum", brmod.START_POOLS), "start_wse_ft": ("num", None, None),
                  "aux_crest_ft": ("num", None, None), "aux_length_ft": ("num", 0.0, None),
                  "aux_c": ("num", 0.1, 4.5)},
@@ -1166,7 +1166,7 @@ def build_flood(cfg, dam, files, pool_ft=None):
     fi = floodmod.FloodInputs.from_files(
         inflow, spill or None, normal_pool_ft=pool, crest_length_ft=dam.crest_length_ft,
         trigger=trig, trigger_value=val, baseline_csv=base or None)
-    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.18.0
+    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.19.0
     return fi
 
 
@@ -1399,7 +1399,7 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         scen = workflow.SCENARIO_FLOOD if "pmf_inflow" in files or cfg.get_path(
             "scenario", "inflow_csv") else workflow.SCENARIO_SUNNY
     st.scenario = scen
-    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.18.0
+    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.19.0
         raise brmod.BreachInputError(workflow.no_breach_tier_problem(st.scenario, st.tier))
     if files.get("breach"):
         st.user_hydrograph = files["breach"]
@@ -1420,7 +1420,7 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
     notes += apply_layers(st, cfg, setup, dam_xy, layers or LayerCache(), dem_projected)
     if st.scenario in workflow.FLOOD_SCENARIOS:
         st.flood = build_flood(cfg, dam, files, pool_ft)
-    else:                                                    # 3.18.0: sunny-day starting pool
+    else:                                                    # 3.19.0: sunny-day starting pool
         sc = cfg.section("scenario")
         kind = sc.get("start_pool") or brmod.START_TOP
         if kind != brmod.START_TOP:

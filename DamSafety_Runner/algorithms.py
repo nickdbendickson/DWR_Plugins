@@ -65,11 +65,11 @@ SCENARIOS = [(workflow.SCENARIO_SUNNY, "Sunny day: no inflow, breach at the top 
                                         "(ND 5.1.1)"),
              (workflow.SCENARIO_FLOOD, "Flood: PMF inflow, with the breach and without it "
                                        "(incremental damage, ND 6.4)"),
-             # 3.18.0, appended (indices 0-1 unchanged)
+             # 3.19.0, appended (indices 0-1 unchanged)
              (workflow.SCENARIO_FLOOD_NO_BREACH,
               "Flood, NO breach: PMF inflow through the spillways and outlets and over the "
               "crest; the dam stands")]
-# 3.18.0: where the pool stands when a sunny-day breach starts. Top of dam is ND 5.1.1 and the
+# 3.19.0: where the pool stands when a sunny-day breach starts. Top of dam is ND 5.1.1 and the
 # default; the others are the engineer's choice and say so in the report.
 START_POOL_CHOICES = [(brmod.START_TOP, "Top of dam (ND 5.1.1; the default)"),
                       (brmod.START_NORMAL, "Normal pool (give the normal pool elevation)"),
@@ -522,7 +522,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    "pairs like '0:1, 6:0.5' (steps)", advanced=True)
 
     def add_aux_params(self):
-        """3.18.0: an auxiliary (emergency) spillway as a weir, for the flood scenarios."""
+        """3.19.0: an auxiliary (emergency) spillway as a weir, for the flood scenarios."""
         self._num("AUX_CREST_FT", "Flood scenario: auxiliary spillway crest elevation (ft; "
                   "datum as the top of dam; empty = none)", optional=True)
         self._num("AUX_LENGTH_FT", "Flood scenario: auxiliary spillway crest length (ft)",
@@ -532,7 +532,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   floodmod.AUX_C_US, minimum=0.1, maximum=4.5, advanced=True)
 
     def start_pool(self, parameters, context, dam, top_ft, pool_ft=None, log=None):
-        """3.18.0: set the dam's sunny-day starting pool from START_POOL. top_ft is the top of
+        """3.19.0: set the dam's sunny-day starting pool from START_POOL. top_ft is the top of
         dam the user gave (the pool is held as its depth below it); pool_ft the normal pool
         when the caller has it from a field."""
         if self.parameterDefinition("START_POOL") is None:
@@ -923,7 +923,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         scen = SCENARIOS[min(len(SCENARIOS) - 1,
                              self.parameterAsEnum(parameters, "SCENARIO", context))][0] \
             if self.parameterDefinition("SCENARIO") is not None else workflow.SCENARIO_SUNNY
-        if workflow.no_breach_tier_problem(scen, tier):      # 3.18.0
+        if workflow.no_breach_tier_problem(scen, tier):      # 3.19.0
             raise QgsProcessingException(workflow.no_breach_tier_problem(scen, tier))
         st = workflow.RunSettings(
             tier=tier, breach_method=method or METHODS[self.parameterAsEnum(
@@ -1071,7 +1071,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             fi.outlets = outmod.parse_outlets(self._str(parameters, "OUTLETS", context))
             fi.spillway_schedule = outmod.parse_schedule(
                 self._str(parameters, "SPILLWAY_GATE", context))
-        if self.parameterDefinition("AUX_CREST_FT") is not None:      # 3.18.0
+        if self.parameterDefinition("AUX_CREST_FT") is not None:      # 3.19.0
             fi.set_aux_weir(self._opt(parameters, "AUX_CREST_FT", context),
                             self._opt(parameters, "AUX_LENGTH_FT", context),
                             self._opt(parameters, "AUX_C", context))
@@ -1849,7 +1849,7 @@ class RunDamAlgorithm(_Base):
             if st.scenario in workflow.FLOOD_SCENARIOS:
                 st.flood = self.flood_inputs(parameters, context, dam,
                                              nd_data.dam_input_files(folder))
-            else:                                            # 3.18.0: sunny-day starting pool
+            else:                                            # 3.19.0: sunny-day starting pool
                 self.start_pool(parameters, context, dam, dam.top_of_dam_ft,
                                 log=feedback.pushInfo)
         except brmod.BreachInputError as e:
@@ -2099,8 +2099,8 @@ def _batch_metrics(s):
     return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day",
-                   SCENARIOS[2][1]]            # 3.18.0, appended (indices 0-2 unchanged)
-# 3.18.0: the batch has no per-dam elevation to state, so the choice is the rule or the field
+                   SCENARIOS[2][1]]            # 3.19.0, appended (indices 0-2 unchanged)
+# 3.19.0: the batch has no per-dam elevation to state, so the choice is the rule or the field
 BATCH_START_POOLS = [START_POOL_CHOICES[0],
                      (brmod.START_NORMAL, "Normal pool (the normal pool elevation field)")]
 # 3.12.0: the source datum of the dam elevations (core/vdatum_run.py; damsuite/vdatum.py)
@@ -2356,7 +2356,7 @@ class BatchAlgorithm(_Base):
                 if workflow.no_breach_tier_problem(st.scenario, st.tier):
                     raise brmod.BreachInputError(
                         workflow.no_breach_tier_problem(st.scenario, st.tier))
-                if not flood:                                # 3.18.0: sunny-day starting pool
+                if not flood:                                # 3.19.0: sunny-day starting pool
                     self.start_pool(parameters, context, dam, vals["TOP_FT"],
                                     pool_ft=val(feat, "F_POOL"),
                                     log=lambda m, i=dam_id: feedback.pushInfo("{}: {}".format(i, m)))
@@ -2420,7 +2420,7 @@ class BatchAlgorithm(_Base):
                                 "Runs": s["lisflood_runs"],
                                 "Domain_mi": "{} x {}".format(*s["domain_mi"]),
                                 "Warnings": " | ".join(res.warnings)})
-                    if s.get("no_breach_scenario"):          # 3.18.0
+                    if s.get("no_breach_scenario"):          # 3.19.0
                         row["Message"] = ("no breach modelled: the flood is the routed PMF "
                                           "outflow; Peak_Breach_cfs is its peak")
                 for w in res.warnings:
@@ -2611,7 +2611,7 @@ class HydrographAlgorithm(_Base):
         self._num("PMF_FT", "Maximum reservoir level in the PMF (ft)", optional=True)
         self._num("BOTTOM_FT", "Breach bottom elevation (ft)", optional=True)
         self._num("START_WSE_FT", "Starting pool elevation (ft; empty = top of dam, ND 5.1.1)",
-                  optional=True)                             # 3.18.0
+                  optional=True)                             # 3.19.0
         self.add_breach_params(per_dam=True)
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUTPUT", "Hydrograph CSV", "CSV files (*.csv)"))
@@ -2634,7 +2634,7 @@ class HydrographAlgorithm(_Base):
             vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
         method = METHODS[self.parameterAsEnum(parameters, "METHOD", context)][0]
         try:
-            if o("START_WSE_FT") is not None:                # 3.18.0
+            if o("START_WSE_FT") is not None:                # 3.19.0
                 brmod.set_start_pool(dam, brmod.START_STATED, o("START_WSE_FT"))
             hy = brmod.make_hydrograph(dam, method, ov,
                                        self.parameterAsFile(parameters, "USER_CSV", context))
