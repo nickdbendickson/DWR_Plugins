@@ -1,0 +1,35 @@
+name: Engine sync
+
+# crest's engine files (engine.ts, spread.ts, outline.ts, routing.ts, warnings.ts) must match DamIT's damit_crest copy
+# line for line, apart from the pairs in scripts/engine-sync-allow.json. Runs on every crest change, and daily so a
+# change landed on the damit side shows up here too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out damit (damit_crest engine only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nickdbendickson/damit
+          ref: main
+          path: .damit
+          sparse-checkout: damit_crest/src/lib/crest
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Compare engine files with damit_crest
+        run: node scripts/check-engine-sync.mjs --other .damit

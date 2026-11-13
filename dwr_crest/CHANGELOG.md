@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-13
+
+- **Engine sync check across crest and DamIT.** The old `check-engine-parity.mjs` hashed `engine.ts` and
+  `warnings.ts` against a pin kept in the same repo, so it never compared crest with `damit_crest` (the two repos'
+  pins already differed), was not run by CI, and did not cover `spread.ts`, `outline.ts` or `routing.ts`.
+  `scripts/check-engine-sync.mjs` reads both copies and compares them line for line; the only allowed differences are
+  the four line pairs in `scripts/engine-sync-allow.json` (the VERTCON grid import, the disclaimer wording, two comment
+  lines), each with its reason. An allow entry whose line has gone fails the check, so the list cannot rot. The
+  `Engine sync` workflow runs it on every push / PR and daily (so a damit-side change shows up), checking damit out
+  sparsely. The same script and allow list go into damit. Tests: `scripts/check-engine-sync.test.mjs`.
+
 ## 2026-11-08
 
 - **README starts with how to run Crest.** The first user instruction sat at line 192, after the scripts table and
