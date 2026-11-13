@@ -992,5 +992,580 @@ class Runs(unittest.TestCase):
         self.assertIsInstance([r for r in back if r["find_id"] == "F2"][0]["height_ft"], float)
 
 
+# ------------------------------------------------------------------ evidence on the review cards --
+N_CARDS = 30
+QUIET = lambda *_: None                                         # noqa: E731
+
+
+def card_x(i):
+    return X0 + 100.0 * i
+
+
+class Resp:
+    """What urllib.request.urlopen answers with, for a faked image service."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.data
+
+
+def service_tiff(url, wet_every):
+    """A 4-band GeoTIFF (R, G, B, NIR) for an exportImage request: open water (low NIR) over the
+    whole tile when the card under it (cards are 100 m apart) has an index divisible by wet_every."""
+    import urllib.parse
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+    w, h = (int(v) for v in q["size"][0].split(","))
+    wet = int(round(((x0 + x1) / 2.0 - X0) / 100.0)) % wet_every == 0
+    mem = "/vsimem/card_svc_{}.tif".format(abs(hash(url)))
+    ds = gdal.GetDriverByName("GTiff").Create(mem, w, h, 4, gdal.GDT_Byte)
+    ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+    ds.SetProjection(srs(5070).ExportToWkt())
+    for k, v in enumerate((60, 90, 50, 20 if wet else 150)):
+        ds.GetRasterBand(k + 1).WriteArray(np.full((h, w), v, np.uint8))
+    ds = None
+    fh = gdal.VSIFOpenL(mem, "rb")
+    gdal.VSIFSeekL(fh, 0, 2)
+    n = gdal.VSIFTellL(fh)
+    gdal.VSIFSeekL(fh, 0, 0)
+    data = gdal.VSIFReadL(1, n, fh)
+    gdal.VSIFCloseL(fh)
+    gdal.Unlink(mem)
+    return bytes(data)
+
+
+@unittest.skipIf(gdal is None, "no GDAL (osgeo) in this Python")
+class Cards(unittest.TestCase):
+    """The water evidence on the review cards, and review_order from the evidence tool. Every
+    test is offline: imagery is a local GeoTIFF or a faked urllib.request.urlopen."""
+
+    def setUp(self):
+        from .. import finder
+        self.f = finder
+        self.tmp = tempfile.mkdtemp(prefix="cards_")
+        self.out = os.path.join(self.tmp, "rb.gpkg")
+        self.rows = [{"x": card_x(i), "y": Y0, "find_id": "FIND-{:08X}".format(i), "kind": "dam", "status": "new",
+                      "area_ac": 0.5, "height_ft": 5.0 + i, "storage_af": 2.0, "score": round(0.02 + 0.03 * i, 3),
+                      "length_ft": 120.0} for i in range(N_CARDS)]
+        self.fields = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("area_ac", "float"),
+                       ("height_ft", "float"), ("storage_af", "float"), ("score", "float"), ("length_ft", "float")]
+        self.fills = self.layer("fills.gpkg", self.rows, self.fields)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def layer(self, name, rows, fields):
+        path = os.path.join(self.tmp, name)
+        self.f.write_points(path, "embankments", fields, rows)
+        return path + "|layername=embankments"
+
+    def image(self, name, wet_every):
+        """A 4-band 1 m image over every card: open water within 30 m of each wet_every-th card."""
+        path = os.path.join(self.tmp, name)
+        nx, ny = 100 * N_CARDS + 200, 400
+        ds = gdal.GetDriverByName("GTiff").Create(path, nx, ny, 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 - 100.0, 1.0, 0.0, Y0 + 200.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        x, y = X0 - 100.0 + xx + 0.5, Y0 + 200.0 - yy - 0.5
+        wet = np.zeros((ny, nx), bool)
+        for i in range(0, N_CARDS, wet_every):
+            wet |= (x - card_x(i)) ** 2 + (y - Y0) ** 2 < 30.0 ** 2
+        for b, a in ((1, np.full(wet.shape, 60)), (2, np.full(wet.shape, 90)), (3, np.full(wet.shape, 50)),
+                     (4, np.where(wet, 20, 150))):
+            ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+        ds = None
+        return path
+
+    def two_years(self):
+        return "2014 | {} | red=1 green=2 blue=3 nir=4\n2018 | {} | red=1 green=2 blue=3 nir=4".format(
+            self.image("y2014.tif", 2), self.image("y2018.tif", 3))
+
+    def nwi_layer(self, epsg=4326):
+        return write_layer(os.path.join(self.tmp, "nwi{}.gpkg".format(epsg)), "nwi", [
+            ("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+                a=card_x(i) - 20.0, b=card_x(i) + 20.0, c=Y0 - 20.0, d=Y0 + 20.0), {"ATTRIBUTE": "PABFh"})
+            for i in range(0, N_CARDS, 3)], epsg=epsg, fields=("ATTRIBUTE",))
+
+    def batch(self, **kw):
+        kw.setdefault("log", QUIET)
+        kw.setdefault("n", 10)
+        kw.setdefault("per_tile_cap", 10)
+        return self.f.run_review_batch(self.fills, self.out, **kw)
+
+    def on_disk(self, path=None):
+        ds = ogr.Open(path or self.out)
+        lyr = ds.GetLayerByName("review_batch")
+        d = lyr.GetLayerDefn()
+        names = [d.GetFieldDefn(j).GetName() for j in range(d.GetFieldCount())]
+        return names, [f.items() for f in lyr]
+
+    def run_info(self, path=None):
+        ds = ogr.Open(path or self.out)
+        return {f.GetField("key"): f.GetField("value") for f in ds.GetLayerByName("run_info")}
+
+    def pick(self, rows):
+        return [tuple(r.get(k) for k in self.f.PICK_FIELDS) for r in rows]
+
+    # ------------------------------------------------------------------ what the card carries --
+    def test_cards_carry_water_years_nwi_and_lidar(self):
+        import csv
+        nwi = self.nwi_layer()
+        a = np.full((400, 100 * N_CARDS + 200), 6, np.int32)                # 6 returns a cell ...
+        yy, xx = np.mgrid[0:a.shape[0], 0:a.shape[1]]
+        for i in range(0, N_CARDS, 4):                                      # ... and a pond void
+            a[(X0 - 100.0 + xx + 0.5 - card_x(i)) ** 2 + (200.0 - yy - 0.5) ** 2 < 22.0 ** 2] = 0
+        tif = os.path.join(self.tmp, "points.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, a.shape[1], a.shape[0], 1, gdal.GDT_Int32)
+        ds.SetGeoTransform((X0 - 100.0, 1.0, 0.0, Y0 + 200.0, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetNoDataValue(0)
+        ds.GetRasterBand(1).WriteArray(a)
+        ds = None
+        vrt = os.path.join(self.tmp, "point_count.vrt")
+        gdal.BuildVRT(vrt, [tif])
+        res = self.batch(images=self.two_years(), nwi=nwi, lidar_points=vrt)
+        self.assertEqual(len(res["rows"]), 10)
+        self.assertTrue(any(r["nwi_code"] for r in res["rows"]))             # so the checks below can fail
+        self.assertTrue(any(r["lidar_pool_empty"] for r in res["rows"]))
+        for r in res["rows"]:
+            i = int(r["find_id"][-8:], 16)
+            want = int(i % 2 == 0) + int(i % 3 == 0)
+            self.assertEqual(r["water_years"], "{} of 2".format(want), r["find_id"])
+            self.assertEqual((r["wet_years"], r["img_years"]), (want, 2))
+            self.assertEqual(r["nwi_code"], "PABFh" if i % 3 == 0 else "")
+            self.assertEqual(r["nwi_h"], "yes" if i % 3 == 0 else "no")
+            if i % 4 == 0:
+                self.assertGreater(r["lidar_pool_empty"], 0.5)
+            else:
+                self.assertEqual(r["lidar_pool_empty"], 0.0)
+            self.assertEqual(r["evid_note"], "")
+            # the card shows CARD_FIELDS, not every field the evidence tool writes
+            for k in ("first_wet", "bare_share", "nwi_regime", "lidar_ring_empty", "lidar_class9", "permit_check"):
+                self.assertNotIn(k, r)
+        self.assertEqual(res["evidence"]["cards"], 10)
+        self.assertEqual(res["evidence"]["requests"], 0)                    # local files: nothing asked
+        # on disk: the evidence right after the batch's own fields, in the layer and in the CSV
+        names, feats = self.on_disk()
+        k = len(self.f.REVIEW_FIELDS)
+        self.assertEqual(names[:k], [n for n, _t in self.f.REVIEW_FIELDS])
+        self.assertEqual(names[k:k + len(self.f.CARD_FIELDS)], [n for n, _t in self.f.CARD_FIELDS])
+        self.assertEqual(len(feats), 10)
+        with open(res["csv"], newline="", encoding="utf-8") as fh:
+            back = list(csv.DictReader(fh))
+        self.assertEqual([r["water_years"] for r in back], [r["water_years"] for r in res["rows"]])
+        self.assertIn("length_ft", back[0])                                 # the fill's own fields still ride along
+        # run_info says this batch showed the evidence (its marks are not a blind test of it)
+        self.assertEqual(self.run_info()["evidence"], "True")
+        # the card's reading is the evidence tool's, by the same reader: same water, NWI and LiDAR
+        ev = self.f.run_evidence(self.fills, os.path.join(self.tmp, "ev.gpkg"), images=self.two_years(), nwi=nwi,
+                                 lidar_points=vrt, log=QUIET)
+        tool = {r["find_id"]: r for r in ev["rows"]}
+        for r in res["rows"]:
+            t = tool[r["find_id"]]
+            for key in ("wet_years", "img_years", "wet_share", "wet_list", "nwi_code", "nwi_h", "nwi_x",
+                        "lidar_pool_empty", "lidar_contrast"):
+                self.assertEqual(r[key], t[key], (r["find_id"], key))
+        # an NWI layer in another CRS (UTM) is asked the same boxes
+        utm = self.batch(nwi=self.nwi_layer(26914))["rows"]
+        self.assertEqual([r["nwi_code"] for r in utm], [r["nwi_code"] for r in res["rows"]])
+        self.assertTrue(any(r["nwi_code"] for r in utm))
+
+    def test_an_nwi_layer_that_cannot_be_read_is_a_note(self):
+        said = []
+        res = self.batch(images=self.two_years(), nwi=os.path.join(self.tmp, "nowhere.gpkg"), log=said.append)
+        self.assertTrue(all(r["water_years"] for r in res["rows"]))
+        self.assertTrue(all("the NWI layer could not be read" in r["evid_note"] for r in res["rows"]))
+        self.assertTrue(all(r.get("nwi_code") is None for r in res["rows"]))
+        self.assertEqual(sum(1 for m in said if "the NWI layer could not be read" in m), 1)
+
+    # ---------------------------------------------------------------- evidence never picks --
+    def test_evidence_never_moves_the_pick(self):
+        plain = self.batch(evidence=False)["rows"]
+        with_ev = self.batch(images=self.two_years())["rows"]
+        self.assertTrue(any(r.get("water_years") for r in with_ev))         # so the check below can fail
+        self.assertEqual(self.pick(plain), self.pick(with_ev))
+        # fills that already carry evidence (an 'evidence' layer as FILLS): water and buildings
+        # on the lowest-scored cards change no card, rank or chance - with the evidence shown or not
+        loaded = [dict(r, wet_share=1.0 if i < 5 else 0.0, wet_years=10 if i < 5 else 0, img_years=10,
+                       nwi_code="PABFh" if i < 5 else "", nwi_h="yes" if i < 5 else "no",
+                       lidar_contrast=0.9 if i < 5 else 0.0, conseq=50.0 if i < 5 else 0.0, bld_1mi=9 if i < 5 else 0,
+                       review_order=i + 1)
+                  for i, r in enumerate(self.rows)]
+        self.fills = self.layer("with_evidence.gpkg", loaded, self.fields + [
+            ("wet_share", "float"), ("wet_years", "int"), ("img_years", "int"), ("nwi_code", "str"), ("nwi_h", "str"),
+            ("lidar_contrast", "float"), ("conseq", "float"), ("bld_1mi", "int"), ("review_order", "int")])
+        self.assertEqual(self.pick(plain), self.pick(self.batch(evidence=False)["rows"]))
+        self.assertEqual(self.pick(plain), self.pick(self.batch()["rows"]))
+
+    def test_the_score_reads_no_evidence_field(self):
+        from ..core import score as sc
+        seen = set()
+
+        class Row(dict):
+            def get(self, k, d=None):
+                seen.add(k)
+                return dict.get(self, k, d)
+
+            def __getitem__(self, k):
+                seen.add(k)
+                return dict.__getitem__(self, k)
+        evid = ({n for n, _t in self.f.EVID_FIELDS} | {n for n, _t in self.f.CARD_FIELDS}
+                | {n for n, _t in self.f.BELOW_FIELDS} | {self.f.ORDER_FIELD[0]})
+        base = dict(self.rows[7], pool="yes", crest_height_ft=9.0, head_ft=6.0, relief_ft=30.0, drain_ac=40.0)
+        loud = dict(base, wet_share=1.0, wet_years=10, img_years=10, wet_list="2009,2010", water_years="10 of 10",
+                    nwi_code="PUBHh", nwi_h="yes", nwi_x="yes", lidar_pool_empty=1.0, lidar_contrast=1.0,
+                    lidar_class9=1.0, bare_share=1.0, conseq=99.0, bld_1mi=50, roads_1mi=4, review_order=1,
+                    evid_note="x")
+        folder = os.path.dirname(os.path.abspath(self.f.__file__))
+        for name in sorted(os.listdir(os.path.join(folder, "models"))):
+            model = sc.load(os.path.join(folder, "models", name))
+            seen.clear()
+            a = sc.score_detail(model, [Row(base)])
+            b = sc.score_detail(model, [Row(loud)])
+            self.assertEqual(a, b, name)
+            self.assertTrue(seen, name)
+            self.assertEqual(seen & evid, set(), name)
+        # every feature the score could be trained on, whether or not a shipped model uses it
+        seen.clear()
+        for name, fn in sc._FN.items():
+            fn(Row(loud))
+            self.assertEqual(seen & evid, set(), name)
+        sc.terrain_group(Row(loud))
+        self.assertEqual(seen & evid, set())
+
+    def test_a_changed_pick_is_refused(self):
+        from unittest import mock
+
+        def meddle(rows, **_k):
+            rows[0]["incl_prob"] = 1.0
+            rows[0]["rank"] = 1
+            return {}
+        with mock.patch.object(self.f, "_fill_evidence", meddle):
+            with self.assertRaises(RuntimeError):
+                self.batch(images=self.two_years())
+        names, feats = self.on_disk()                                       # the batch as picked is on disk
+        self.assertEqual(len(feats), 10)
+        self.assertNotIn("water_years", names)
+
+    # ------------------------------------------------------------------- offline / failures --
+    def hub_lines(self, hosts=("hub.test",), years=(2009, 2010, 2012, 2014, 2015)):
+        return "\n".join("{} | https://{}/svc{}/ImageServer | red=1 green=2 blue=3 nir=4".format(y, h, y)
+                         for h in hosts for y in years)
+
+    def test_offline_the_batch_is_still_written(self):
+        from unittest import mock
+        import urllib.error
+        asked, said = [], []
+
+        def dead(url, timeout=None):
+            asked.append((url, timeout))
+            raise urllib.error.URLError("no network")
+        with mock.patch("urllib.request.urlopen", dead):
+            res = self.batch(images=self.hub_lines(), image_timeout=7.0, log=said.append)
+        names, feats = self.on_disk()
+        self.assertEqual(len(feats), 10)
+        self.assertEqual([f["find_id"] for f in feats], [r["find_id"] for r in res["rows"]])
+        self.assertTrue(all(f["water_years"] is None and f["wet_years"] is None for f in feats))   # not '0 of 0'
+        self.assertTrue(all("no image year could be read" in f["evid_note"] for f in feats))
+        # the service is given up on after the first card: 5 requests, not 5 x 10 cards
+        self.assertEqual(len(asked), 5)
+        self.assertEqual(res["evidence"]["requests"], 5)
+        self.assertEqual({t for _u, t in asked}, {7.0})                     # the batch's own short time-out
+        self.assertEqual(sum(1 for m in said if "not asked again this run" in m), 1)
+        self.assertEqual(sum(1 for m in said if "no image" in m), 5)        # the first card's years, no more
+        self.assertEqual(res["evidence"]["dead_services"], ["hub.test"])
+        # the pick is the pick of a batch with the evidence off
+        self.assertEqual(self.pick(res["rows"]), self.pick(self.batch(evidence=False)["rows"]))
+
+    def test_an_error_page_is_no_image_and_one_dead_service_leaves_the_other(self):
+        from unittest import mock
+
+        def half(url, timeout=None):
+            if "dead.test" in url:
+                return Resp(b"<html>Error 500</html>")
+            return Resp(service_tiff(url, 2))
+        with mock.patch("urllib.request.urlopen", half):
+            res = self.batch(images=self.hub_lines(hosts=("dead.test", "live.test"), years=(2014, 2015, 2016)))
+        for r in res["rows"]:
+            i = int(r["find_id"][-8:], 16)
+            self.assertEqual(r["water_years"], "{} of 3".format(3 if i % 2 == 0 else 0))
+        self.assertEqual(res["evidence"]["dead_services"], ["dead.test"])
+
+    def test_one_broken_year_never_stops_a_host_that_answers(self):
+        from unittest import mock
+        asked = []
+
+        def svc(url, timeout=None):
+            asked.append(url)
+            if "/svc2012/" in url or "/svc2014/" in url or "/svc2015/" in url:      # three years in a row are down
+                raise OSError("HTTP Error 500")
+            return Resp(service_tiff(url, 2))
+        with mock.patch("urllib.request.urlopen", svc):
+            res = self.batch(images=self.hub_lines())
+        self.assertEqual(res["evidence"]["dead_services"], [])
+        self.assertEqual(len(asked), 5 * 10)                                # every card asked every year
+        for r in res["rows"]:
+            i = int(r["find_id"][-8:], 16)
+            self.assertEqual(r["water_years"], "{} of 2".format(2 if i % 2 == 0 else 0))
+
+    def test_a_long_run_asks_a_silent_host_again_after_a_while(self):
+        # the evidence tool's rule (retry_s): the host is down for the first two fills, then back
+        from unittest import mock
+        import urllib.error
+        state = {"down": True, "asked": 0}
+
+        def svc(url, timeout=None):
+            state["asked"] += 1
+            if state["down"]:
+                raise urllib.error.URLError("no network")
+            return Resp(service_tiff(url, 2))
+
+        def read(retry_s, name):
+            rows = [dict(r) for r in self.rows[:6]]
+            state.update(down=True, asked=0)
+            said = []
+
+            def progress(pct):
+                if pct >= 100.0 * 2 / 6 - 1e-6:                             # two fills read: the network is back
+                    state["down"] = False
+            with mock.patch("urllib.request.urlopen", svc):
+                c = self.f._fill_evidence(rows, images=self.hub_lines(), cache=os.path.join(self.tmp, name),
+                                          retry_s=retry_s, log=said.append, progress=progress)
+            return rows, c, said
+        rows, c, said = read(None, "never")                                 # the batch: not asked again this run
+        self.assertEqual([r["img_years"] for r in rows], [0] * 6)
+        self.assertEqual((state["asked"], c["dead_services"]), (5, ["hub.test"]))
+        rows, c, said = read(0.0, "again")                                  # asked again once the wait is over
+        self.assertEqual([r["img_years"] for r in rows], [0, 0, 5, 5, 5, 5])
+        self.assertEqual(c["dead_services"], [])
+        self.assertEqual(sum(1 for m in said if "not asked again" in m), 1)
+        self.assertEqual(sum(1 for m in said if "answers again" in m), 1)
+        rows, c, said = read(3600.0, "later")                               # the wait is not over: left alone
+        self.assertEqual([r["img_years"] for r in rows], [0] * 6)
+        self.assertEqual(state["asked"], 5)
+
+    def test_a_rerun_reads_the_tiles_it_has(self):
+        from unittest import mock
+        asked = []
+
+        def svc(url, timeout=None):
+            asked.append(url)
+            return Resp(service_tiff(url, 2))
+        with mock.patch("urllib.request.urlopen", svc):
+            first = self.batch(images=self.hub_lines())
+            n1 = len(asked)
+            again = self.batch(images=self.hub_lines())
+        self.assertEqual(n1, 5 * 10)
+        self.assertEqual(first["evidence"]["requests"], 50)
+        self.assertEqual(len(asked), n1)                                    # nothing downloaded twice
+        self.assertEqual(again["evidence"]["requests"], 0)
+        self.assertEqual([r["water_years"] for r in first["rows"]], [r["water_years"] for r in again["rows"]])
+        self.assertTrue(os.path.isdir(os.path.splitext(self.out)[0] + "_imagery"))     # kept beside the output
+
+    def test_evidence_off_is_todays_batch_and_asks_nothing(self):
+        from unittest import mock
+
+        def never(url, timeout=None):
+            raise AssertionError("the network was asked: {}".format(url))
+        with mock.patch("urllib.request.urlopen", never):
+            self.batch(evidence=False, images=self.hub_lines())
+            names, feats = self.on_disk()
+            self.assertEqual(self.run_info()["evidence"], "False")
+            # and with no source at all, the default of the finder function (the brand's image list is
+            # the default of the QGIS tool, not of finder.run_review_batch: scripts and tests stay offline)
+            res = self.batch()
+            names2, _f = self.on_disk()
+        self.assertIsNone(res["evidence"])
+        # the batch of Finder 0.6: its own fields, then the fill's
+        want = [n for n, _t in self.f.REVIEW_FIELDS] + ["length_ft"]
+        self.assertEqual(names, want)
+        self.assertEqual(names2, want)
+        self.assertEqual(len(feats), 10)
+        import inspect
+        sig = inspect.signature(self.f.run_review_batch).parameters
+        self.assertEqual((sig["evidence"].default, sig["images"].default, sig["image_timeout"].default),
+                         (True, None, 30.0))
+
+    def test_a_crash_in_the_evidence_step_leaves_the_batch(self):
+        from unittest import mock
+        said = []
+        with mock.patch.object(self.f, "_fill_evidence", side_effect=MemoryError("boom")):
+            res = self.batch(images=self.two_years(), log=said.append)
+        names, feats = self.on_disk()
+        self.assertEqual(len(feats), 10)
+        self.assertNotIn("water_years", names)
+        self.assertTrue(any("the batch is written without it" in m for m in said))
+        self.assertIsNone(res["evidence"])
+        self.assertNotIn("water_years", res["rows"][0])
+        # an image line that cannot be read is the same: a warning, the batch as picked
+        said = []
+        res = self.batch(images="2018 | x.tif | red=1", log=said.append)
+        self.assertTrue(any("the batch is written without it" in m and "green= and nir=" in m for m in said))
+        self.assertEqual(len(self.on_disk()[1]), 10)
+
+    def test_a_cancel_during_the_evidence_keeps_every_card(self):
+        calls = []
+
+        def cancelled():
+            calls.append(1)
+            return len(calls) > 3
+        res = self.batch(images=self.two_years(), cancelled=cancelled)
+        names, feats = self.on_disk()
+        self.assertEqual(len(feats), 10)
+        self.assertEqual(sum(1 for f in feats if f["water_years"]), 3)
+        self.assertEqual(res["evidence"]["cards"], 3)
+        self.assertTrue(res["cancelled"])
+        self.assertEqual(self.run_info()["cancelled"], "True")
+
+    def test_a_card_with_a_water_history_keeps_it(self):
+        from unittest import mock
+        loaded = [dict(r, wet_years=7, img_years=10, wet_share=0.7, wet_list="2009,2010") for r in self.rows]
+        self.fills = self.layer("ev.gpkg", loaded, self.fields + [("wet_years", "int"), ("img_years", "int"),
+                                                                  ("wet_share", "float"), ("wet_list", "str")])
+
+        def never(url, timeout=None):
+            raise AssertionError("asked for an image the card already has")
+        with mock.patch("urllib.request.urlopen", never):
+            res = self.batch(images=self.hub_lines())
+            self.assertTrue(all(r["water_years"] == "7 of 10" for r in res["rows"]))
+            # and with no source given at all: what the fills carry is still put on the card
+            res = self.batch()
+        self.assertTrue(all(r["water_years"] == "7 of 10" for r in res["rows"]))
+        names, _f = self.on_disk()
+        k = len(self.f.REVIEW_FIELDS)
+        self.assertEqual(names[k:k + len(self.f.CARD_FIELDS)], [n for n, _t in self.f.CARD_FIELDS])
+
+    def test_the_brands_default_image_list_parses(self):
+        from .. import brand
+        got = self.f.parse_images(brand.EVIDENCE_IMAGES)
+        self.assertTrue(got)
+        self.assertTrue(all(self.f.is_service(d["src"]) and "green" in d and "nir" in d for d in got))
+
+    # ------------------------------------------------------- what is below: shown, never used --
+    def below_fills(self):
+        """Fills as the evidence tool leaves them when it had a DEM and buildings: the LOWEST scores
+        have the most below them."""
+        loaded = [dict(r, bld_1mi=N_CARDS - i, bld_3mi=0, roads_1mi=i % 3, conseq=3.0 * (N_CARDS - i) + i % 3)
+                  for i, r in enumerate(self.rows)]
+        return self.layer("below.gpkg", loaded, self.fields + [("bld_1mi", "int"), ("bld_3mi", "int"),
+                                                                ("roads_1mi", "int"), ("conseq", "float")])
+
+    def test_what_is_below_is_shown_on_the_card_and_never_picks(self):
+        from unittest import mock
+        plain = self.batch(evidence=False)["rows"]
+        self.fills = self.below_fills()
+        with mock.patch.object(self.f, "_consequences", side_effect=AssertionError("the batch computed what is below")):
+            res = self.batch(images=self.two_years())
+        self.assertEqual(self.pick(res["rows"]), self.pick(plain))          # same cards, ranks and chances
+        names, feats = self.on_disk()
+        k = len(self.f.REVIEW_FIELDS) + len(self.f.CARD_FIELDS)
+        self.assertEqual(names[k:k + 3], ["bld_1mi", "roads_1mi", "conseq"])
+        self.assertIn("bld_3mi", names[k + 3:])                             # the rest ride along as before
+        for f in feats:
+            i = int(f["find_id"][-8:], 16)
+            self.assertEqual((f["bld_1mi"], f["roads_1mi"], f["conseq"]), (N_CARDS - i, i % 3, 3.0 * (N_CARDS - i) + i % 3))
+        # the cards are not in the order of what is below them (the batch is shuffled)
+        self.assertNotEqual([f["conseq"] for f in feats], sorted((f["conseq"] for f in feats), reverse=True))
+        # fills with nothing below computed: the three fields are not on the card
+        self.fills = self.layer("fills2.gpkg", self.rows, self.fields)
+        self.batch(images=self.two_years())
+        self.assertNotIn("conseq", self.on_disk()[0])
+
+    def test_evidence_tool_writes_review_order(self):
+        import csv
+        # scores in three bands; inside a band the fill with more below it comes first
+        rows = []
+        for i, (score, conseq) in enumerate(((0.95, 0.0), (0.91, 6.0), (0.84, 40.0), (0.31, 2.0), (0.39, 0.0),
+                                             (0.30, 9.0), (None, 99.0))):
+            rows.append(dict(self.rows[i], score=score, conseq=conseq, bld_1mi=int(conseq // 3)))
+        fills = self.layer("scored.gpkg", rows, self.fields + [("conseq", "float"), ("bld_1mi", "int")])
+        said = []
+        out = os.path.join(self.tmp, "ev.gpkg")
+        ev = self.f.run_evidence(fills, out, log=said.append)
+        self.assertEqual([r["review_order"] for r in ev["rows"]], [2, 1, 3, 5, 6, 4, 7])
+        self.assertTrue(any("review_order" in m and "the layer keeps the fills' own order" in m for m in said))
+        # the layer keeps the fills' order; the CSV is in review order
+        ds = ogr.Open(out)
+        lyr = ds.GetLayerByName("evidence")
+        d = lyr.GetLayerDefn()
+        self.assertEqual(d.GetFieldDefn(d.GetFieldCount() - 1).GetName(), "review_order")
+        self.assertEqual([f["find_id"] for f in lyr], [r["find_id"] for r in rows])
+        ds = None
+        with open(ev["csv"], newline="", encoding="utf-8") as fh:
+            back = list(csv.DictReader(fh))
+        self.assertEqual([int(r["review_order"]) for r in back], [1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual([r["find_id"] for r in back], [rows[i]["find_id"] for i in (1, 0, 2, 5, 3, 4, 6)])
+        # the evidence layer back in: the order is worked out again, not carried, and a review
+        # batch from it is the batch of the plain fills
+        ev2 = self.f.run_evidence(out + "|layername=evidence", os.path.join(self.tmp, "ev2.gpkg"), log=QUIET)
+        self.assertEqual([r["review_order"] for r in ev2["rows"]], [2, 1, 3, 5, 6, 4, 7])
+        # fills with no score: no order, the CSV as the layer
+        noscore = self.layer("plain.gpkg", [dict(r, score=None) for r in rows], self.fields + [("conseq", "float")])
+        ev3 = self.f.run_evidence(noscore, os.path.join(self.tmp, "ev3.gpkg"), log=QUIET)
+        self.assertNotIn("review_order", ev3["rows"][0])
+        with open(ev3["csv"], newline="", encoding="utf-8") as fh:
+            back = list(csv.DictReader(fh))
+        self.assertNotIn("review_order", back[0])
+        self.assertEqual([r["find_id"] for r in back], [r["find_id"] for r in rows])
+
+    def test_layers_are_read_through_their_index(self):
+        # the buildings and roads of the consequence pass: the same features as a whole read
+        pts = [("POINT ({} {})".format(card_x(i), Y0 + 37.0 * (i % 5)), {}) for i in range(N_CARDS)]
+        foot = [("POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=card_x(i) + 40.0, b=card_x(i) + 52.0, c=Y0 + 300.0, d=Y0 + 310.0), {}) for i in range(N_CARDS)]
+        lines = [("LINESTRING ({} {}, {} {})".format(card_x(i), Y0 - 500.0, card_x(i) + 30.0, Y0 + 500.0), {})
+                 for i in range(N_CARDS)]
+        for epsg in (4326, 26914):
+            vec = os.path.join(self.tmp, "idx{}.gpkg".format(epsg))
+            b = write_layer(vec, "b", pts + foot, epsg=epsg)
+            r = write_layer(vec, "r", lines, epsg=epsg)
+            box = (card_x(4) - 5.0, Y0 - 50.0, card_x(11) + 5.0, Y0 + 400.0)
+            got = self.f._points_of(b, box)
+            self.assertEqual(len(got), 8 + 7)                               # points 4..11, outlines 4..10
+            self.assertEqual(self.f._lines_in(r, box), self.f.read_lines(r, box))
+            self.assertEqual(len(self.f._lines_in(r, box)), 8)              # roads 4..11 meet the box
+            self.assertEqual(self.f._lines_in(r, (X0 - 9000.0, Y0, X0 - 8000.0, Y0 + 10.0)), [])
+
+    def test_buildings_and_roads_default_to_the_data_pack(self):
+        import json
+        from unittest import mock
+        from .. import brand
+        if not hasattr(brand, "pack_layer"):
+            self.skipTest("this brand has no offline data pack")
+        try:
+            from DamSafety_Core.damsuite import offline_pack, suitedata  # noqa: F401
+        except ImportError:
+            self.skipTest("DamSafety Core is not beside this plugin")
+        pack = os.path.join(self.tmp, "ND_Dam_Suite_Pack")
+        os.makedirs(os.path.join(pack, "roads"))
+        os.makedirs(os.path.join(pack, "structures"))
+        write_layer(os.path.join(pack, "roads", "ND_county_roads.gpkg"), "ND_county_roads",
+                    [("LINESTRING ({} {}, {} {})".format(X0, Y0, X0 + 50.0, Y0), {})])
+        write_layer(os.path.join(pack, "structures", "USA_Structures.gpkg"), "USA_Structures",
+                    [("POINT ({} {})".format(X0, Y0), {})])
+        with open(os.path.join(pack, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"format": offline_pack.PACK_FORMAT, "format_version": 2, "layout": "gpkg", "datasets": {
+                "ND_county_roads": {"file": "roads/ND_county_roads.gpkg"},
+                "USA_Structures": {"file": "structures/USA_Structures.gpkg"},
+                "NSI_structures": {"file": "structures/NSI_structures.gpkg"}}}, fh)     # listed, but not there
+        with mock.patch.dict(os.environ, {"NDSUITE_PACK": pack, "NDSUITE_SOURCE": "pack"}):
+            # the first data set of the brand's list that the pack really holds
+            self.assertEqual(brand.pack_layer(brand.PACK_BUILDINGS), os.path.join(pack, "structures", "USA_Structures.gpkg"))
+            self.assertEqual(brand.pack_layer(brand.PACK_ROADS), os.path.join(pack, "roads", "ND_county_roads.gpkg"))
+            self.assertEqual(brand.pack_layer(("no_such_layer",)), "")
+        with mock.patch.dict(os.environ, {"NDSUITE_PACK": os.path.join(self.tmp, "nowhere"), "NDSUITE_SOURCE": "pack",
+                                          "NDSUITE_DATA": os.path.join(self.tmp, "nowhere")}):
+            self.assertEqual(brand.pack_layer(brand.PACK_BUILDINGS), "")    # no pack: no default, no error
+
+
 if __name__ == "__main__":
     unittest.main()
