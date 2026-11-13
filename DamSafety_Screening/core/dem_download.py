@@ -13,7 +13,7 @@ from .warp_opts import no_overviews, no_vshift
 
 
 # One LiDAR tile zip is tens of MB. A download or an archive far past that is not a tile:
-# stopped before it fills the disk (0.19.8, security audit pass 3; NDSUITE_ZIP_MAX_GB raises
+# stopped before it fills the disk (0.20.1, security audit pass 3; NDSUITE_ZIP_MAX_GB raises
 # both limits).
 MAX_TILE_DOWNLOAD_BYTES = 4 * 1024 ** 3
 MAX_TILE_UNPACKED_BYTES = 8 * 1024 ** 3
@@ -24,16 +24,16 @@ class TileTooLarge(IOError):
 
 
 def _zipsafe():
-    """damsuite.zipsafe (DamSafety Core 1.4.0), or None with an older Core."""
+    """damsuite.zipsafe (DamSafety Core 1.5.0), or None with an older Core."""
     try:
         from ..damsuite import zipsafe
         return zipsafe
-    except Exception:                                            # noqa - Core older than 1.4.0
+    except Exception:                                            # noqa - Core older than 1.5.0
         return None
 
 
 def _safe_extract(zf, dest):
-    """Extract a zip into dest, refusing any entry that leaves dest and (0.19.8) an archive
+    """Extract a zip into dest, refusing any entry that leaves dest and (0.20.1) an archive
     that is too large to be a LiDAR tile: unpacked size, entry count, compression ratio and
     free disk space are checked before anything is written. Raises ValueError."""
     zs = _zipsafe()
@@ -628,7 +628,7 @@ def _open_index(cache_dir, feedback=None):
 
 def _https_get(url, local, retries=3, timeout=120):
     """Download url to local through local.part, so a cut transfer is never kept. A body
-    past the tile size limit is stopped at once and not tried again (0.19.8)."""
+    past the tile size limit is stopped at once and not tried again (0.20.1)."""
     import time
     import urllib.request
     part = local + ".part"

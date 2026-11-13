@@ -1,4 +1,4 @@
-"""Bounded, contained zip extraction and bounded downloads (Core 1.4.0, security audit pass 3).
+"""Bounded, contained zip extraction and bounded downloads (Core 1.5.0, security audit pass 3).
 
 A zip that a tool downloads or that someone hands the user is checked before a byte of it is
 written:

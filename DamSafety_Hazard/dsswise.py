@@ -96,10 +96,10 @@ MAX_ZIP_DEPTH = 3       # a zip inside a zip inside a zip; deeper ones are left 
 def _check_zip_size(zf, dest, path):
     """2.25.2 (security audit pass 3): the entries that will be extracted are checked first -
     entry count, unpacked size, compression ratio, free disk space (damsuite.zipsafe,
-    DamSafety Core 1.4.0; not checked with an older Core). Raises ValueError."""
+    DamSafety Core 1.5.0; not checked with an older Core). Raises ValueError."""
     try:
         from .damsuite import zipsafe
-    except Exception:                               # noqa - Core older than 1.4.0
+    except Exception:                               # noqa - Core older than 1.5.0
         return
     try:
         # junk and unsafe names are skipped by the loop below, so they are not counted here

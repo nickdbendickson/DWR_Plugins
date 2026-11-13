@@ -562,7 +562,7 @@ NSI_MODES = {
 }
 
 
-# What the NSI API returns is checked before it replaces the inventory in use (Core 1.4.0,
+# What the NSI API returns is checked before it replaces the inventory in use (Core 1.5.0,
 # security audit pass 3). USACE publishes no checksum to verify a download against, so the
 # checks are on the content: every structure is a point with real coordinates inside the box
 # below, a response is not absurdly large, and a new inventory is not much smaller than the
@@ -662,7 +662,7 @@ class NsiApiSource(Source):
         if not isinstance(features, list):
             raise UpdateError(f"{self.name}: county {fips} ({version}) returned an "
                               "unexpected response")
-        # Core 1.4.0: only well-formed points inside the state's box are kept. A few bad
+        # Core 1.5.0: only well-formed points inside the state's box are kept. A few bad
         # records are dropped and counted; more than NSI_MAX_BAD_SHARE means the answer is
         # not this county's inventory, and nothing is installed.
         good = [f for f in features if nsi_feature_ok(f, self.bounds)]
@@ -701,7 +701,7 @@ class NsiApiSource(Source):
             return
         n_old = prev.get("structures")
         if not isinstance(n_old, int):
-            return                       # written before Core 1.4.0: nothing to compare with
+            return                       # written before Core 1.5.0: nothing to compare with
         gone = sorted(set(prev.get("counties_with_structures") or []) - set(counties_new))
         if n_old > 0 and n_new < (1.0 - NSI_MAX_DROP_SHARE) * n_old:
             why = (f"the API returned {n_new:,} structures, {100.0 * (n_old - n_new) / n_old:.0f}"
@@ -768,7 +768,7 @@ class NsiApiSource(Source):
             json.dump({"mode": self.mode, "versions": list(versions),
                        "match_m": self.match_m if self.mode == "merged" else None,
                        "totals": totals, "counties": per_county,
-                       # Core 1.4.0: what the next update is compared with, and what was
+                       # Core 1.5.0: what the next update is compared with, and what was
                        # downloaded (SHA-256 of each API response, county by version)
                        "structures": n_structures,
                        "counties_with_structures": with_structures,

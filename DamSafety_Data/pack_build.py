@@ -51,7 +51,7 @@ from .damsuite import abi as A
 from .damsuite import gpkgpack as GP
 try:
     from .damsuite import sample_dam as SD
-except ImportError:                          # DamSafety Core before 1.2.0: no sample dam
+except ImportError:                          # DamSafety Core before 1.3.0: no sample dam
     SD = None
 
 PACK2 = GP.PACK_FOLDER                       # ND_Dam_Suite_Pack
@@ -405,7 +405,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
 # --------------------------------------------------------------- sample dam --
 def sample_in_area(bbox, sample_id=None):
     """True when the sample dam lies in the pack's lon / lat box (False with a DamSafety Core
-    older than 1.2.0, which has no sample dam)."""
+    older than 1.3.0, which has no sample dam)."""
     if SD is None:
         return False
     try:
@@ -427,7 +427,7 @@ def _sample(p2, sample_id, fetch, log, cancel, refresh=False):
     """Write the sample dam into the pack p2; never raises (see build)."""
     try:
         if SD is None:
-            raise PackBuildError("it needs DamSafety Core 1.2.0 or newer (update DamSafety Core)")
+            raise PackBuildError("it needs DamSafety Core 1.3.0 or newer (update DamSafety Core)")
         folder = SD.build(p2, sample_id=sample_id, fetch=fetch, log=log, cancel=cancel,
                           refresh=refresh)
         return {"sample": folder, "sample_error": ""}

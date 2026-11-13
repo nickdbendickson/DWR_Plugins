@@ -308,7 +308,7 @@ def run_detail(folder):
             or summ.get("final_model") == "none":
         parts.append("no breach")
     else:
-        if summ.get("no_breach_scenario"):                   # 3.18.0: a routed flood, no failure
+        if summ.get("no_breach_scenario"):                   # 3.19.0: a routed flood, no failure
             parts.append("flood with no breach")
         if summ.get("final_model"):
             parts.append("final {}".format(summ["final_model"]))

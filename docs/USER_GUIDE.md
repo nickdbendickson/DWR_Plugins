@@ -702,7 +702,7 @@ When a structure, road or rail receptor sits on a NoData cell next to water, the
 
 The path, the 20 m threshold and the cell size are written to the existing Sampling / Notes fields (no new CSV columns). The same rule is used in Hazard, the Screening/Runner `nd_hazard` sampler, Runner receptor summaries, and Hazard Lite.
 
-## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.18.0)
+## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.19.0)
 
 Nothing changes unless you choose it: a sunny-day run starts at the top of dam with a piping
 breach (ND 5.1.1).
@@ -728,7 +728,7 @@ breach (ND 5.1.1).
   pool field; a dam with no normal pool or no top of dam fails with a message instead of
   running from the top of dam.
 
-## Running several dams at the same time (Runner 3.19.0)
+## Running several dams at the same time (Runner 3.20.0)
 
 One dam gains little from more model threads, so the way to shorten a long batch is to run dams side by side.
 
@@ -750,7 +750,7 @@ When workers cannot be used the log says why in one line and the batch runs one 
 
 The batch chain (Screening to Runner to HEC-RAS to Hazard) still takes one dam at a time.
 
-## Try the sample dam (Core 1.2.0, Data 1.11.0, Runner 3.19.1)
+## Try the sample dam (Core 1.3.0, Data 1.11.0, Runner 3.20.1)
 
 The quickest way to see the suite work is to run it on the dam it ships with.
 
@@ -772,7 +772,7 @@ The quickest way to see the suite work is to run it on the dam it ships with.
 
 A run of the sample is for learning the tools. It is not a hazard determination for this dam.
 
-## SI units in the result tables (Core 1.3.0, Runner 3.19.2, Hazard 2.25.1)
+## SI units in the result tables (Core 1.4.0, Runner 3.20.2, Hazard 2.25.1)
 
 The suite computes and stores in US customary units. *DamSafety Setup → Suite setup / status → Units shown in windows* switches what you **see** to SI: the windows, the run report, the Hazard report and (from these versions) the result tables and three more Runner reports.
 
@@ -801,14 +801,14 @@ Things to know:
 
 **Reports.** `Nested_Report.md`, `Cascade_Report.md` and `Probabilistic_Report.md` / `.html` are now in SI when SI is chosen, like `run_report.md`. Each says so in a "Units: SI" line at the top. The sensitivity, benchmark and verification HTML reports are not converted yet. `Hazard_Classification_Summary.txt` stays US because other tools read it.
 
-## Files from somewhere else: checkpoints, zips and downloads (Runner 3.19.3, Core 1.4.0, Screening 0.19.8, Hazard 2.25.2)
+## Files from somewhere else: checkpoints, zips and downloads (Runner 3.20.3, Core 1.5.0, Screening 0.20.1, Hazard 2.25.2)
 
 Three kinds of file can reach the suite from outside your computer: an ANUGA checkpoint in a dam folder someone gave you, a zip (a LiDAR tile, an updater data set, a submittal or DSS-WISE package), and the NSI structures the updater downloads. Each is now checked before it is used. Nothing here changes a result.
 
 **Resuming an ANUGA run.** A checkpoint is a saved copy of the whole model, and opening one can run code that was put in the file. So the Runner only resumes checkpoints its own runs wrote for you, on this computer:
 
 - Each checkpoint has a small `.sig` file beside it. Leave it there; a checkpoint without it will not resume.
-- A dam folder you copied from a colleague, a shared drive or a download will not resume. The run stops and says why. The checkpoints are kept. Either turn resume off to start that run over, or, **if you know the checkpoint is your own** (made before Runner 3.19.3, or on your other computer), set `NDBREACH_ANUGA_RESUME_TRUST=1` for that one run. The log says it was loaded unverified.
+- A dam folder you copied from a colleague, a shared drive or a download will not resume. The run stops and says why. The checkpoints are kept. Either turn resume off to start that run over, or, **if you know the checkpoint is your own** (made before Runner 3.20.3, or on your other computer), set `NDBREACH_ANUGA_RESUME_TRUST=1` for that one run. The log says it was loaded unverified.
 - The signing key is one small file in your own settings folder (`%APPDATA%\DamSafety` on Windows, `~/Library/Application Support/DamSafety` on a Mac, `~/.config/DamSafety` on Linux), named `anuga_checkpoint.key`. It is made the first time a checkpoint is saved. To resume your own runs on a second computer without the override, copy that file there, or point `NDBREACH_CKPT_KEY_FILE` at a copy both computers can read. Do not put it in a dam folder or share it.
 - Never set `NDBREACH_ANUGA_RESUME_TRUST=1` for a folder you did not make.
 

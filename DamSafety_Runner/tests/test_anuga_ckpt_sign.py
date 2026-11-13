@@ -1,4 +1,4 @@
-"""Runner 3.19.3 (security audit pass 3): ANUGA checkpoints are signed, and only a checkpoint
+"""Runner 3.20.3 (security audit pass 3): ANUGA checkpoints are signed, and only a checkpoint
 this user's own runs signed is loaded.
 
 A checkpoint is a pickle of the domain, and loading a pickle runs the code in it. The worker
@@ -174,7 +174,7 @@ def ckpt_sign_worker_never_unpickles_an_unsigned_or_foreign_checkpoint():
         assert not os.path.exists(marker), "the planted pickle was loaded"
         assert sorted(os.listdir(ckdir)) == before          # nothing deleted, no fresh start
         assert not os.path.exists(os.path.join(d1, "anuga_result.npz"))
-        # 2. the same with no signature at all (a checkpoint from before 3.19.3)
+        # 2. the same with no signature at all (a checkpoint from before 3.20.3)
         for t in times:
             CS.remove_sig(AW.checkpoint_path(ckdir, t))
         try:

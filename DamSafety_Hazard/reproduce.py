@@ -1262,10 +1262,10 @@ def _check_work_folder(work_folder):
 def _check_zip_size(zf, dest, zip_path):
     """2.25.2 (security audit pass 3): a package someone hands the reviewer is checked before
     it is unpacked - links, entry count, unpacked size, compression ratio and free disk space
-    (damsuite.zipsafe, DamSafety Core 1.4.0; not checked with an older Core). ValueError."""
+    (damsuite.zipsafe, DamSafety Core 1.5.0; not checked with an older Core). ValueError."""
     try:
         from .damsuite import zipsafe
-    except Exception:                               # noqa - Core older than 1.4.0
+    except Exception:                               # noqa - Core older than 1.5.0
         return
     try:
         zipsafe.check(zf, dest, zipsafe.MAX_PACKAGE_BYTES)

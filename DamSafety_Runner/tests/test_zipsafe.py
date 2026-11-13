@@ -1,4 +1,4 @@
-"""Core 1.4.0 (security audit pass 3): damsuite.zipsafe - a zip is checked before a byte of it
+"""Core 1.5.0 (security audit pass 3): damsuite.zipsafe - a zip is checked before a byte of it
 is written. Entries that leave the destination, symbolic links, too many entries, an unpacked
 size over the caller's limit, a "zip bomb" compression ratio and a disk that is too small are
 all refused, and nothing is extracted. A download past its limit is stopped."""

@@ -13,7 +13,7 @@ import tempfile
 TESTS = []
 MODEL_TESTS = []
 
-# 3.19.3: checkpoints are signed with a key in the user's settings folder (core/ckpt_sign.py).
+# 3.20.3: checkpoints are signed with a key in the user's settings folder (core/ckpt_sign.py).
 # The tests sign with a key of their own in a temporary folder, never the user's, and the
 # worker processes they start inherit it.
 if not os.environ.get("NDBREACH_CKPT_KEY_FILE"):

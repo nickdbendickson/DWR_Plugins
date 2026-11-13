@@ -1,4 +1,4 @@
-"""Signed ANUGA checkpoints (Runner 3.19.3, security audit pass 3).
+"""Signed ANUGA checkpoints (Runner 3.20.3, security audit pass 3).
 
 An ANUGA checkpoint is a pickle of the whole domain (ANUGA writes it with dill), and loading a
 pickle runs whatever code the file holds. A checkpoint folder that came from somewhere else -
@@ -11,7 +11,7 @@ worker loads only checkpoints it can prove this user's own runs wrote:
 * before a checkpoint is loaded its signature is checked. No signature, a signature made with
   another key (another computer or user), or a file changed since it was signed: not loaded.
 
-A checkpoint the user knows is their own (made before 3.19.3, or on their other computer) can
+A checkpoint the user knows is their own (made before 3.20.3, or on their other computer) can
 still be resumed by setting NDBREACH_ANUGA_RESUME_TRUST=1 for that run; the worker says so in
 the log. Pure Python, no ANUGA, no QGIS.
 """
@@ -130,7 +130,7 @@ def verify(path, environ=None):
         with open(sig_path(path), encoding="utf-8") as f:
             sig = json.load(f)
     except OSError:
-        return False, "it has no signature (written before Runner 3.19.3, or not by the Runner)"
+        return False, "it has no signature (written before Runner 3.20.3, or not by the Runner)"
     except ValueError:
         return False, "its signature file cannot be read"
     if not isinstance(sig, dict) or sig.get("alg") != ALG or not isinstance(sig.get("mac"), str):

@@ -1,4 +1,4 @@
-"""Core 1.2.0: "Try the sample dam" in the Dam suite home (DamSafety_Core/ui/suite_home.py),
+"""Core 1.3.0: "Try the sample dam" in the Dam suite home (DamSafety_Core/ui/suite_home.py),
 with the real Qt of QGIS and the real Runner window.
 
 The button puts the suite's sample dam (damsuite.sample_dam) in the Dams folder: from the

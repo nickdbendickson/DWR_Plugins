@@ -439,7 +439,7 @@ def report_note(system_value=None):
             "values the tools compute and store; the data files keep US units.")
 
 
-# -- CSV files (Core 1.3.0) ----------------------------------------------------------------------
+# -- CSV files (Core 1.4.0) ----------------------------------------------------------------------
 # A result CSV keeps its US columns and its name: other tools read it back. Under SI a copy is
 # written in the sub-folder SI_units beside it, under the same file name, with an SI column
 # right after every column whose name says its unit ('Max_Depth_ft' -> 'Max_Depth_m',

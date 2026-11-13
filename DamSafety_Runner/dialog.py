@@ -1017,7 +1017,7 @@ class NDBreachRunnerDialog(QDialog):
             self.status_label.setText("No folder for dam {} in the Dams folder yet - the first run "
                                       "creates it.".format(s["dam_id"]))
         else:
-            # 3.19.1: an empty window says where the sample dam is (Dam suite home, Core 1.2.0)
+            # 3.20.1: an empty window says where the sample dam is (Dam suite home, Core 1.3.0)
             self.status_label.setText("Choose the Dams folder and the dam ID.\n" + SAMPLE_HINT)
         text, code, has_json = pl.dam_record_info(folder) if have else ("", "", False)
         self.record_label.setText(text)

@@ -1,4 +1,4 @@
-"""Screening 0.19.8 (security audit pass 3): a LiDAR tile download and its zip are bounded.
+"""Screening 0.20.1 (security audit pass 3): a LiDAR tile download and its zip are bounded.
 
   1. _safe_extract: an ordinary tile zip unpacks; one that unpacks past the tile limit, holds a
      symbolic link or climbs out of the folder is refused (ValueError) and nothing is written
@@ -60,7 +60,7 @@ def files(folder):
 
 
 try:
-    ok(dd._zipsafe() is ZS, "the tile reader uses damsuite.zipsafe (DamSafety Core 1.4.0)")
+    ok(dd._zipsafe() is ZS, "the tile reader uses damsuite.zipsafe (DamSafety Core 1.5.0)")
     ok(dd.MAX_TILE_UNPACKED_BYTES == 8 * 1024 ** 3 and dd.MAX_TILE_DOWNLOAD_BYTES == 4 * 1024 ** 3,
        "tile limits: 4 GB downloaded, 8 GB unpacked")
 

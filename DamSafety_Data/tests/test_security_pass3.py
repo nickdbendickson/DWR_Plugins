@@ -1,4 +1,4 @@
-"""Core 1.4.0 / Data 1.11.1 (security audit pass 3): what the updater downloads is checked
+"""Core 1.5.0 / Data 1.11.1 (security audit pass 3): what the updater downloads is checked
 before it replaces the data in use.
 
 * NSI: USACE publishes no checksum, so the content is checked. Records that are not points
