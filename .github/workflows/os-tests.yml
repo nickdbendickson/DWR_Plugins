@@ -42,8 +42,8 @@ jobs:
         include:
           - os: windows-latest
             name: Windows
-          - os: macos-14          # Apple Silicon (arm64), as release.yml's LISFLOOD-FP build
-            name: macOS
+          - os: macos-latest      # Apple Silicon (arm64). Not a numbered label: GitHub stopped
+            name: macOS           # offering macos-14 (13 Nov 2026: "not supported", job cancelled)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     defaults:
@@ -53,7 +53,14 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: "0"             # on purpose: a Windows user's Python reads files in the code page
       PYTHONIOENCODING: utf-8     # only the test output; a non-ASCII test name must not end a step
+      PYTHONUNBUFFERED: "1"       # a suite that dies part-way still shows its last test
     steps:
+      - name: Keep the line ends of the repository (Windows)
+        # Git for Windows rewrites text files with CR LF on checkout; DamSafety Core's file list
+        # (damsuite/FILES.json) holds the hashes of the files as they are in the zip, with LF
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - name: Provision QGIS (newest conda-forge, Qt6) + scipy
         id: provision
@@ -62,6 +69,10 @@ jobs:
           environment-name: qgis
           create-args: >-
             python=3.12 qgis numpy scipy gdal pytest
+      - name: Make QGIS importable (conda-forge on Windows keeps it outside Python's folders)
+        run: |
+          ls "$CONDA_PREFIX/etc/conda/activate.d" 2>/dev/null || true
+          python tools/ci_qgis_env.py >> "$GITHUB_ENV"
       - name: Versions in this environment
         run: |
           python -c "import sys, platform, numpy, scipy; print(sys.version); print(platform.platform()); print('numpy', numpy.__version__, 'scipy', scipy.__version__)"

@@ -176,7 +176,7 @@ plugin's archived section's code block (`tools/test_ci_checks.py` has the cases)
 ## Windows and macOS
 
 `ci.yml` runs every job on Ubuntu. `.github/workflows/os-tests.yml` runs the suites of the
-`plugin-suites` job on `windows-latest` and on `macos-14` (Apple Silicon), with the newest
+`plugin-suites` job on `windows-latest` and on `macos-latest` (Apple Silicon), with the newest
 conda-forge QGIS (Qt6, numpy 2): the fast checks, Screening, the Runner fast suite, Hazard,
 Hazard Lite, Finder, the GUI lint offscreen, the Runner wizard and batch chain, the Suite dam
 data / Setup / Data pytest files and PMP. What it is for: a path with a backslash or a drive
@@ -200,6 +200,17 @@ Not covered on Windows and macOS: the Runner's `--models` suite (real LISFLOOD-F
 runs; Linux only, `model-tests`), the 1080p GUI lint (it needs xvfb) and the QGIS 3.34 LTR / Qt5
 leg. The Windows LISFLOOD-FP build is started once in `release.yml` (`lisflood-windows-check`).
 
+What the first runs found (13 November 2026), and what was done:
+
+| Found | What it was | Done |
+|---|---|---|
+| The macOS job was cancelled at once: "The configuration 'macos-14-arm64-us-default' is not supported" | GitHub no longer offers the `macos-14` label | `os-tests.yml` uses `macos-latest`. **`release.yml`'s `lisflood-macos` job still names `macos-14` and would stop a release the same way.** It is left as it is on purpose: a newer runner bundles a newer Homebrew `libomp`, which raises the oldest macOS the bundled engine starts on. Decide the runner (and the oldest macOS to support) before the next tag. |
+| Windows: `No module named 'qgis'` in every suite that uses the real QGIS | conda-forge's Windows package keeps QGIS's Python under `Library/python`, which Python does not search (its own start script sets the path, for `cmd`, not for the job's bash) | step "Make QGIS importable": `tools/ci_qgis_env.py` writes `PYTHONPATH` and `QGIS_PREFIX_PATH` for the later steps |
+| Windows: `damsuite/FILES.json is stale` | Git for Windows checked the `.py` files out with CR LF; the list holds the hashes of the files as zipped (LF) | `core.autocrlf false` before the checkout. A release zip is built on Linux and is not affected |
+| Windows: the Runner's installer and Linux-build tests failed with "Windows Subsystem for Linux has no installed distributions" | they run `install_macos.sh` and `build_lisflood_linux.sh`; on Windows `bash` is WSL's launcher | those tests do not apply on Windows and say so (`bash_available()`); they run on Linux and macOS as before |
+| Windows: two tests could not delete or rewrite a file | the test still held it open (a memory-mapped `.npy`, an open DEM); Linux allows that, Windows does not. The product code does not keep either open | the tests let go of the file first |
+| Windows: the Runner suite ended part-way with exit status 127 and no message | not yet known: the output was buffered, so the log does not show the last test | `PYTHONUNBUFFERED=1` in the workflow; the next run names the test |
+
 ## Release: GitHub Release + QGIS plugin repository
 
 `.github/workflows/release.yml` runs when a tag `v*` is pushed (`git tag v2026.11.07 && git push
@@ -209,7 +220,7 @@ after the commit and publishes nothing to QGIS).
 | Job | What it does |
 |---|---|
 | `lisflood-linux` | `ubuntu-22.04`: downloads LISFLOOD-FP 8.3 from Zenodo (md5 and sha256 checked, the same file CI's `model-tests` builds), runs `DamSafety_Runner/scripts/build_lisflood_linux.sh` with `LISFLOOD_STATIC=1` (static libstdc++ / libgcc / libgomp; glibc 2.35 or newer at run time). |
-| `lisflood-macos` | `macos-14` (Apple Silicon): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
+| `lisflood-macos` | `macos-14` (Apple Silicon; **the label is no longer offered, see "Windows and macOS" above**): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
 | `lisflood-windows` | `ubuntu-latest`: `DamSafety_Runner/scripts/build_lisflood_windows_cross.sh` cross-compiles with `g++-mingw-w64-x86-64-posix`, `-static` (libgomp, winpthread, libstdc++ and libgcc inside the .exe; `objdump -p` confirms no such DLL is imported). The MinGW edits (`_aligned_malloc` / `_aligned_free`) are part of `scripts/patch_lisflood.py`, so the Linux and macOS builds get them too, guarded by `_WIN32`. |
 | `lisflood-windows-check` | `windows-latest`: starts the cross-compiled `lisflood.exe` once on a real Windows (`tools/lisflood_smoke.py`: one second on a 5 by 5 grid, the check the Runner makes before every dam). The build job runs on Linux and cannot start it. |
 | `os-tests` | Calls `os-tests.yml`: the plugin suites on Windows and macOS (see "Windows and macOS" below). |
