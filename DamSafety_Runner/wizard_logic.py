@@ -265,17 +265,44 @@ def dam_dem_candidates(dams_folder, dam_id, limit=12, point_stem=""):
     return out[:limit]
 
 
+def _shared_start():
+    """Core 1.2.0: the wizard's starting breach method and Manning's n from the shared defaults
+    file (damsuite.shared_defaults); the Runner's own values when Core is older or has none."""
+    method, n = brmod.METHOD_PIPING, 0.06
+    try:
+        from .damsuite import shared_defaults as SD
+        vals = SD.load().values
+        method = SD.runner_method(vals) or method
+        n = float(vals.get("manning_n", n))
+    except Exception:                                            # noqa
+        pass
+    return method, n
+
+
+def _shared_start_pool():
+    """3.19.0: the wizard's starting sunny-day pool from the shared defaults file (top of dam
+    unless the file says normal pool)."""
+    try:
+        from .damsuite import shared_defaults as SD
+        if SD.load().values.get("sunny_day_start_pool") == "normal_pool":
+            return brmod.START_NORMAL
+    except Exception:                                            # noqa
+        pass
+    return brmod.START_TOP
+
+
 def default_answers(dams_folder=""):
+    method, n = _shared_start()
     return {
         "layer_id": "", "feature_id": None, "mapping": {}, "dam": {},
         "point": None,                      # (x, y, authid) of the crest
-        "dem_id": "", "z_units": "auto", "nlcd_id": "", "manning_id": "", "manning_n": 0.06,
+        "dem_id": "", "z_units": "auto", "nlcd_id": "", "manning_id": "", "manning_n": n,
         "dams_folder": dams_folder,
-        "method": brmod.METHOD_PIPING, "scenario": workflow.SCENARIO_SUNNY,
+        "method": method, "scenario": workflow.SCENARIO_SUNNY,
         "inflow_csv": "", "spillway_csv": "", "normal_pool_ft": None,
         "trigger": floodmod.TRIGGER_PEAK, "trigger_value": None,
         # 3.19.0: sunny-day starting pool (top of dam unless changed) and the auxiliary spillway
-        "start_pool": brmod.START_TOP, "start_wse_ft": None,
+        "start_pool": _shared_start_pool(), "start_wse_ft": None,
         "aux_crest_ft": None, "aux_length_ft": None,
         "tier": workflow.TIER_LISFLOOD, "cell_m": 10.0,
     }

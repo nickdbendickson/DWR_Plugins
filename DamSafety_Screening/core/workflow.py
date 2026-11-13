@@ -189,6 +189,27 @@ for _k, _l, _p in LAYER_SLOTS:
     DEFAULT_SETTINGS[_k] = ""
 
 
+def shared_window_defaults():
+    """Core 1.2.0: the window choices the shared defaults file sets (damsuite.shared_defaults):
+    tool 7's scenario from sunny_day_start_pool (0 td = maximum pool, 1 sd = normal pool). {}
+    when Core is older or the file has no usable value."""
+    try:
+        from ..damsuite import shared_defaults as SD
+        pool = SD.value("sunny_day_start_pool")
+    except Exception:                                            # noqa
+        return {}
+    i = {"max_pool": 0, "normal_pool": 1}.get(pool)
+    return {} if i is None else {"scenario": i}
+
+
+def default_settings():
+    """DEFAULT_SETTINGS with the shared defaults file's window choices (read each time, so a
+    change in the Shared defaults window reaches the next window opened)."""
+    S = dict(DEFAULT_SETTINGS)
+    S.update(shared_window_defaults())
+    return S
+
+
 # ------------------------------------------------------------------ paths --
 def path(work, step, param):
     """Absolute path of a step's output in the work folder."""
@@ -436,7 +457,7 @@ def _one_proposed_dem(work):
 def defaults(step, work, settings):
     """The parameters to fill in for tool `step` (only values that are known; a parameter
     left out keeps its own default)."""
-    S = dict(DEFAULT_SETTINGS)
+    S = default_settings()
     S.update(settings or {})
     p = {}
 
@@ -791,7 +812,7 @@ def dam_choices(work, settings, read_rows):
     fields)` returns [(v1, v2, ...)] of a layer (the window reads QGIS layers, the tests files).
     From 1_dams.gpkg when it exists, else the DWR layer (structure_ / dam_name), else the pond
     layer; [] when nothing can be read."""
-    S = dict(DEFAULT_SETTINGS)
+    S = default_settings()
     S.update(settings or {})
     found = []
     dams = out(work, "1") if work else None
@@ -860,13 +881,14 @@ def window_settings_to(sf, settings, defaults=True):
     (the window's autosave into a file that exists): a choice still at its default and not yet
     stored is left out, so only what the engineer changed goes into the shared file; a stored
     choice is updated as usual. A run's record (write_run_settings) keeps every choice."""
-    S = dict(DEFAULT_SETTINGS)
+    base = default_settings()          # Core 1.2.0: a shared default is not "changed" either
+    S = dict(base)
     S.update(settings or {})
     for k in WINDOW_KEYS:
         v = S.get(k)
         if k == "chain":
             v = ",".join(v or [])
-        d = DEFAULT_SETTINGS.get(k)
+        d = base.get(k)
         if k == "chain":
             d = ",".join(d or [])
         if v in (None, "") or (not defaults and v == d
