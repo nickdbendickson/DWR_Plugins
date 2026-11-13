@@ -227,7 +227,7 @@ def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None, hidden=
             self._nd_applied, self._nd_refused = apply_file_defaults(self, plugin, group_of)
         except Exception as e:                                   # noqa - never stop a tool
             self._nd_applied, self._nd_refused = [], []
-            # Pierre 2.26.1: say so - the tool opens with its built-in defaults
+            # Heim 2.26.1: say so - the tool opens with its built-in defaults
             self._nd_problem = not_applied_text(e)
             _log_warning("{}: {}".format(_safe_tool_name(self), self._nd_problem))
 
