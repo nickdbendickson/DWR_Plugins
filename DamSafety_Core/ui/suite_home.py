@@ -10,7 +10,7 @@ plugin that does it, and buttons that open that plugin's window with the dam fil
 window has a field for it (the Runner: Dams folder + dam ID; Screening: the Dams folder; ND Dam
 Hazard: the dam folder).
 
-Core 1.2.0: "Try the sample dam" puts the suite's sample dam (damsuite.sample_dam) in the Dams
+Core 1.3.0: "Try the sample dam" puts the suite's sample dam (damsuite.sample_dam) in the Dams
 folder, from the offline pack when the pack has it and from the USGS elevation service when it
 does not, and opens the Runner with the dam and its terrain filled in. It is the one thing in
 this window that writes a file.

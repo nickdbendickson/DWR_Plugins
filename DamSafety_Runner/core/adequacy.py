@@ -204,7 +204,7 @@ def route_no_breach(res, fi, top_m, start_m, max_hours=240.0, dt_s=30.0, mult=1.
         q = spill.q(wse) if spill is not None else 0.0
         if spill is not None and fi.spillway_schedule:
             q *= outmod.schedule_factor(fi.spillway_schedule, t)
-        if getattr(fi, "aux_spillway", None) is not None:     # 3.18.0: auxiliary spillway weir
+        if getattr(fi, "aux_spillway", None) is not None:     # 3.19.0: auxiliary spillway weir
             q += fi.aux_spillway.q(wse)
         if fi.outlets:
             q += outmod.q_total(fi.outlets, wse, t)

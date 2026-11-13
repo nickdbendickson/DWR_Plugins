@@ -1006,7 +1006,7 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
     out.seed, out.n = int(seed), n
 
     # --- the base run: its plan (domain, inflow point, duration) is every run's -----------
-    workflow.require_breach(st, "The probabilistic analysis")          # 3.18.0
+    workflow.require_breach(st, "The probabilistic analysis")          # 3.19.0
     base_st = copy.copy(st)
     base_st.grid_refine = False          # 3.15.0: every run of this tool keeps its own cell
     base_st.keep_arrays = False

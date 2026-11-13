@@ -121,7 +121,7 @@ try:
     gdal_io = importlib.import_module(PKG + ".core.gdal_io")
     grid_mod = importlib.import_module(PKG + ".core.grid")
     units = importlib.import_module(PKG + ".core.units")
-    bworkers = importlib.import_module(PKG + ".core.batch_workers")      # 3.19.0
+    bworkers = importlib.import_module(PKG + ".core.batch_workers")      # 3.20.0
     sflags = importlib.import_module(PKG + ".damsuite.structure_flags")
 except Exception as _e:              # pragma: no cover
     _fail_import(_e)
@@ -184,7 +184,7 @@ TIER_ALIASES = {"both": workflow.TIER_BOTH, "anuga": workflow.TIER_BOTH,
                 "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD,
                 "hecras": workflow.TIER_HECRAS}
 SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam",
-                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.18.0, appended
+                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.19.0, appended
 READERS = ("auto", "gdal", "asc")
 
 # --------------------------------------------------------------------------------------
@@ -242,7 +242,7 @@ SECTIONS = {
                  "trigger": ("enum", floodmod.TRIGGERS), "trigger_value": ("num", None, None),
                  "baseline_csv": ("path",), "baseline": ("bool",),
                  "incr_thresholds_ft": ("nums",),
-                 # 3.18.0: sunny-day starting pool and the auxiliary spillway weir
+                 # 3.19.0: sunny-day starting pool and the auxiliary spillway weir
                  "start_pool": ("enum", brmod.START_POOLS), "start_wse_ft": ("num", None, None),
                  "aux_crest_ft": ("num", None, None), "aux_length_ft": ("num", 0.0, None),
                  "aux_c": ("num", 0.1, 4.5)},
@@ -1167,7 +1167,7 @@ def build_flood(cfg, dam, files, pool_ft=None):
     fi = floodmod.FloodInputs.from_files(
         inflow, spill or None, normal_pool_ft=pool, crest_length_ft=dam.crest_length_ft,
         trigger=trig, trigger_value=val, baseline_csv=base or None)
-    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.18.0
+    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.19.0
     return fi
 
 
@@ -1400,7 +1400,7 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         scen = workflow.SCENARIO_FLOOD if "pmf_inflow" in files or cfg.get_path(
             "scenario", "inflow_csv") else workflow.SCENARIO_SUNNY
     st.scenario = scen
-    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.18.0
+    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.19.0
         raise brmod.BreachInputError(workflow.no_breach_tier_problem(st.scenario, st.tier))
     if files.get("breach"):
         st.user_hydrograph = files["breach"]
@@ -1421,7 +1421,7 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
     notes += apply_layers(st, cfg, setup, dam_xy, layers or LayerCache(), dem_projected)
     if st.scenario in workflow.FLOOD_SCENARIOS:
         st.flood = build_flood(cfg, dam, files, pool_ft)
-    else:                                                    # 3.18.0: sunny-day starting pool
+    else:                                                    # 3.19.0: sunny-day starting pool
         sc = cfg.section("scenario")
         kind = sc.get("start_pool") or brmod.START_TOP
         if kind != brmod.START_TOP:
@@ -1836,12 +1836,12 @@ def cmd_batch(args):
     results = []
     n = max(1, len(rows))
     base_opts = args
-    only_row = int(getattr(args, "only_row", 0) or 0)       # 3.19.0: a worker's one dam
+    only_row = int(getattr(args, "only_row", 0) or 0)       # 3.20.0: a worker's one dam
     workers = 1 if only_row else bworkers.clamp_workers(getattr(args, "workers", 1))
     queue, seen = [], set()
 
     def run_one(i, row, dam_id, vals, folder, out, pr):
-        """One dam in this process; True when the run was cancelled. 3.19.0: the body of the
+        """One dam in this process; True when the run was cancelled. 3.20.0: the body of the
         loop, so the dams a worker run could not take are run here afterwards."""
         say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
         t0 = time.time()
@@ -1962,7 +1962,7 @@ def cmd_batch(args):
 
 
 def _batch_queue(args, cfg, out_root, queue, workers, run_one):
-    """3.19.0: run the queued dams as child processes of this same command, `workers` at a
+    """3.20.0: run the queued dams as child processes of this same command, `workers` at a
     time (core/batch_workers.py). Each child is `batch ... --only-row N` and writes a one-row
     summary; its rows are filled in here. With one dam, or when the first child cannot be
     started, the dams run here one after another."""

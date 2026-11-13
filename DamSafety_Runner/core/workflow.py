@@ -81,7 +81,7 @@ TIERS = (TIER_LISFLOOD, TIER_BOTH, TIER_HECRAS)
 
 SCENARIO_SUNNY = "sunny"
 SCENARIO_FLOOD = "flood"
-# 3.18.0: the flood (PMF) inflow routed through the spillways, the outlets and over the crest
+# 3.19.0: the flood (PMF) inflow routed through the spillways, the outlets and over the crest
 # with NO breach; that outflow is the flood modelled downstream
 SCENARIO_FLOOD_NO_BREACH = "flood_no_breach"
 FLOOD_SCENARIOS = (SCENARIO_FLOOD, SCENARIO_FLOOD_NO_BREACH)
@@ -432,7 +432,7 @@ class RunSettings:
                                  c.schedule) for c in (v.outlets or [])],
                     "spillway_schedule": v.spillway_schedule}
                 if v is not None and getattr(v, "aux_spillway", None) is not None:
-                    d[k]["aux_spillway"] = v.aux_text       # 3.18.0 (only when one is given)
+                    d[k]["aux_spillway"] = v.aux_text       # 3.19.0 (only when one is given)
             elif k == "receptors":
                 d[k] = None if v is None else len(v)
             elif k == "structures":
@@ -2780,7 +2780,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             "the start of the inflow" if no_breach else "breach initiation"),
     }
     if no_breach:
-        # 3.18.0: a flood WAS modelled (final_model is set), but the dam does not fail in it.
+        # 3.19.0: a flood WAS modelled (final_model is set), but the dam does not fail in it.
         # breach_occurs False keeps ND Dam Hazard's model gate and the dam record from reading
         # these rasters as a failure flood.
         summary["no_breach_scenario"] = True
@@ -3263,7 +3263,7 @@ def _safe(name):
 
 
 def require_breach(st, what):
-    """3.18.0: tools that vary or compare the breach (sensitivity, probabilistic) have nothing
+    """3.19.0: tools that vary or compare the breach (sensitivity, probabilistic) have nothing
     to do in the no-breach flood scenario."""
     if getattr(st, "scenario", None) == SCENARIO_FLOOD_NO_BREACH:
         raise brmod.BreachInputError(
@@ -3278,7 +3278,7 @@ def _flood_hydrographs(dam, st, warnings):
     if fi is None:
         raise brmod.BreachInputError("the flood scenario needs the inflow hydrograph")
     if st.scenario == SCENARIO_FLOOD_NO_BREACH:
-        # 3.18.0: the routed outflow with no failure is the flood. It comes back as the first
+        # 3.19.0: the routed outflow with no failure is the flood. It comes back as the first
         # hydrograph (what the models run) with no baseline: there is nothing to subtract.
         fr = floodmod.route_flood(dam, st.breach_method, st.overrides, fi, breach=False)
         warnings.append(

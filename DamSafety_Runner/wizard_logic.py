@@ -274,7 +274,7 @@ def default_answers(dams_folder=""):
         "method": brmod.METHOD_PIPING, "scenario": workflow.SCENARIO_SUNNY,
         "inflow_csv": "", "spillway_csv": "", "normal_pool_ft": None,
         "trigger": floodmod.TRIGGER_PEAK, "trigger_value": None,
-        # 3.18.0: sunny-day starting pool (top of dam unless changed) and the auxiliary spillway
+        # 3.19.0: sunny-day starting pool (top of dam unless changed) and the auxiliary spillway
         "start_pool": brmod.START_TOP, "start_wse_ft": None,
         "aux_crest_ft": None, "aux_length_ft": None,
         "tier": workflow.TIER_LISFLOOD, "cell_m": 10.0,

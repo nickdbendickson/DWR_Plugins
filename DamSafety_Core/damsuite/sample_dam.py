@@ -1,4 +1,4 @@
-"""damsuite.sample_dam (Core 1.2.0): a ready-made dam to try the suite on.
+"""damsuite.sample_dam (Core 1.3.0): a ready-made dam to try the suite on.
 
 A new user has no dam folder, no terrain and no idea what a finished run looks like. The sample
 is one real North Dakota dam with everything a first run needs:
@@ -9,7 +9,7 @@ is one real North Dakota dam with everything a first run needs:
     <root>/sample_dam/<dam ID>/README.txt
 
 `<root>` is the offline pack folder: the pack builder writes the sample as its last step. A
-window never writes into a pack, so for a pack built before 1.2.0 the home window's "Try the
+window never writes into a pack, so for a pack built before 1.3.0 the home window's "Try the
 sample dam" downloads the terrain itself, straight into the Dams folder.
 
 "Try the sample dam" copies the sample to <Dams folder>/<dam ID>/. The terrain keeps the name
