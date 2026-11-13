@@ -839,7 +839,9 @@ class ReviewBatch(_Base):
                 "after the batch is picked and written, the water evidence of the picked cards is read "
                 "and put right after the batch's own fields: <tt>water_years</tt> (years with open water "
                 "of the image years read), the NWI code and the LiDAR drop-out when you give those "
-                "layers, and <tt>evid_note</tt> (in words, why something is blank). The evidence never "
+                "layers, and <tt>evid_note</tt> (in words, why something is blank or short; when it says "
+                "image years could not be read, run the tool again with the same settings: the same cards "
+                "are picked and only the missing images are asked for). The evidence never "
                 "picks a card or changes its chance. Once it is on the card, the reviewer's marks are no "
                 "longer an independent test of that evidence (the run_info table records evidence = "
                 "True). " + getattr(brand, "CARD_IMAGES_HELP", ""))
