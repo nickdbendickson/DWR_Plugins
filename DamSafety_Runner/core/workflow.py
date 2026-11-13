@@ -3271,6 +3271,39 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
             f.write("\n" + "\n".join(damjson.report_lines(report["dam_record"])) + "\n")
 
 
+def _assumptions(st, version, log, warnings):
+    """Core 1.2.0: the suite-wide assumptions this run used (damsuite.shared_defaults keys), for
+    dam.json's "assumptions" entry, so a Crest hand-off and a Runner run of the same dam can be
+    checked against the same starting values. Where the run differs from the shared defaults
+    file it is logged (a per-run choice is allowed; it is just said). None when Core is too old."""
+    try:
+        from ..damsuite import shared_defaults as SD
+    except Exception:                                            # noqa - Core < 1.2.0
+        return None
+    flood_mode = st.scenario == SCENARIO_FLOOD
+    mode, method = SD.from_runner_method(st.breach_method)
+    used = {"failure_mode": mode, "breach_method": method, "manning_n": float(st.manning_n)}
+    if flood_mode:
+        vw = floodmod.pmf_vw_source(st.flood)
+        used["pmf_breach_volume"] = {v: k for k, v in floodmod.PMF_VW.items()}.get(vw)
+    else:
+        used["sunny_day_start_pool"] = "max_pool"     # this Runner's sunny day: top of dam
+    entry = SD.assumptions(used, "ndbreach", version,
+                           note="manning_n is the n where there is no n raster / NLCD class")
+    for line in SD.differs_text(entry):
+        log("Shared defaults: " + line)
+    if not flood_mode and entry["shared_values"].get("sunny_day_start_pool") == "normal_pool":
+        w = ("The shared defaults file says a sunny-day breach starts at the normal pool; this "
+             "Runner starts a sunny-day breach at the top of dam (maximum pool) only. Use the "
+             "flood scenario with the normal pool, or change the shared defaults.")
+        log(w)
+        if w not in warnings:
+            warnings.append(w)
+    for p in SD.load().problems:
+        log("Shared defaults: " + p)
+    return entry
+
+
 def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, warnings, log,
                 grid=None, depth=None, cut_off=None, crest_from=""):
     """v3.2.0: write what the run used into <dam folder>/dam.json (damjson.record_run) and add
@@ -3308,12 +3341,16 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
                           "estimated by this plugin from the {}; not a surveyed or as-built "
                           "crest")
             dem_note = fmt.format(crest_from or "DEM near the dam point")
+        extra = {"vertical_datum": vdrun.VD.public(vrec)} if vrec else {}
+        assume = _assumptions(st, damjson.plugin_version(), log, warnings)
+        if assume:
+            extra["assumptions"] = assume
         info = damjson.record_run(out_folder, vals, result, dr.get("read"),
-                                  dem_top_note=dem_note,
-                                  extra={"vertical_datum": vdrun.VD.public(vrec)}
-                                  if vrec else None)
+                                  dem_top_note=dem_note, extra=extra or None)
         if vnote:
             info["datum_note"] = vnote
+        if assume:
+            info["assumptions"] = assume
     except Exception as e:           # the record is an extra; never lose the run for it
         info = {"error": "dam.json not updated: {}: {}".format(type(e).__name__, e),
                 "warnings": [], "read": list(dr.get("read") or [])}

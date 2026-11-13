@@ -2,7 +2,7 @@
 """One store for suite setup. Computer settings, optional project override, then env.
 
 Keys: data_folder, dams_folder, lisflood_exe, anuga_python, settings_file,
-offline_only, setup_version, unit_system.
+offline_only, setup_version, unit_system, defaults_file.
 """
 import os
 
@@ -10,6 +10,7 @@ KEYS = (
     "data_folder", "dams_folder", "lisflood_exe", "anuga_python",
     "settings_file", "offline_only", "setup_version",
     "unit_system",                  # 1.1.0: 'us' (default) or 'si' - display_units.py
+    "defaults_file",                # 1.2.0: your shared defaults file - shared_defaults.py
 )
 ENV = {
     "data_folder": "NDSUITE_DATA_FOLDER",
@@ -19,6 +20,7 @@ ENV = {
     "settings_file": "NDSUITE_SETTINGS",
     "offline_only": "NDSUITE_OFFLINE_ONLY",
     "unit_system": "NDSUITE_UNITS",
+    "defaults_file": "NDSUITE_DEFAULTS",
 }
 PREFIX = "ndsuite/"
 
