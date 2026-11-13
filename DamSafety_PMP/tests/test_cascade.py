@@ -3,9 +3,8 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not all(_os.path.exists(p) for p in ['medina_pmp/hyetographs', 'pothole_ws/pothole_network.json']):
     print("SKIP: needs medina_pmp/hyetographs and pothole_ws/pothole_network.json in the working folder")
     _sys.exit(77)
-import sys, json, glob, numpy as np
+import json, numpy as np
 from core.hydro import HydroConfig, run_folder
-from core import cascade as C
 hy = ["medina_pmp/hyetographs/general_72hr_GS_72HR_GENERAL_SYNTHETIC.csv",
       "medina_pmp/hyetographs/local_06hr_LS_6HR_SYNTHETIC.csv",
       "medina_pmp/hyetographs/coolseason_72hr_CS_72HR_GENERAL_SYNTHETIC.csv"]

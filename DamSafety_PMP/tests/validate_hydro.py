@@ -4,7 +4,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not all(_os.path.exists(p) for p in ['NOAA_Dist_C.xlsx', 'out_small_geo/hyetographs']):
     print("SKIP: needs NOAA_Dist_C.xlsx (HEC-HMS published example) and run_core.py outputs (out_small_geo/) in the working folder")
     _sys.exit(77)
-import sys, json, os, openpyxl
+import json, openpyxl
 import numpy as np
 from core.hydro import *
 R = {}

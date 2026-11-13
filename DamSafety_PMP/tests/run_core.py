@@ -3,7 +3,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not _os.environ.get("ND_PMP_DATA_HOME") or not all(_os.path.exists(p) for p in ['small_geo.shp', 'two_sub_utm.shp']):
     print("SKIP: needs ND_PMP_DATA_HOME (the PMP_Evaluation_Tool folder) and small_geo.shp/two_sub_utm.shp in the working folder")
     _sys.exit(77)
-import sys, json, time
+import json, time
 from core import run_pmp, PMPConfig
 HOME = _os.environ.get("ND_PMP_DATA_HOME", "")
 out = {}
