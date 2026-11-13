@@ -1,6 +1,6 @@
 # Batch runs: many dams, headless
 
-Three scripts that run dams through `dam_chain.py` one after another or side by side, and a
+Four scripts that run dams through `dam_chain.py` one after another or side by side, and a
 watcher that checks each finished dam by rule. They lived in zip files until 2026-11-13; this
 folder is now the copy to use, and `tools/mac/use_local_terrain.sh` looks here first.
 
@@ -8,6 +8,7 @@ folder is now the copy to use, and `tools/mac/use_local_terrain.sh` looks here f
 |---|---|
 | `run_lisflood_44.py` | The 44 dams in `dams_44.csv` through the full ND chain (Get data, Screening, Runner with LISFLOOD-FP, Hazard classification), profile `nd`. |
 | `run_anuga_culverts_44.py` | The same 44 through the DamSafety Runner only, LISFLOOD-FP for the extent and ANUGA for the final results, with culverts cut into the terrain, profile `damsafety`. |
+| `run_settings_study_44.py` | The 44 dams through the whole DamSafety chain once per model setting (two cell sizes, two engines), and one page that says for which dams the class depends on the setting. |
 | `run_county.py` | Every DWR dam or dugout in one county, several, or the State, in either of those two modes. |
 | `batch_watch.py` | Watches a run folder and writes findings as dams finish. Rules only unless you ask for the model. |
 | `batch_common.py` | What the three share: finding `dam_chain.py`, reading a dam's state, the data files, the watcher. |
@@ -24,7 +25,7 @@ State's dam records (the full DWR record, about 8 MB together).
 
 | File | Needed by | Comes from |
 |---|---|---|
-| `dams_44.gpkg` | `run_anuga_culverts_44.py` | the batch-44-dams package |
+| `dams_44.gpkg` | `run_anuga_culverts_44.py`, `run_settings_study_44.py` | the batch-44-dams package |
 | `nd_dams_dugouts.csv` | `run_county.py` | the county-batch package |
 | `nd_dams_dugouts.gpkg` | `run_county.py --mode anuga` | the county-batch package |
 
@@ -77,6 +78,47 @@ DEM at their inventory size; unmatched ones as **guessed, unverified** 1.2 x 0.9
 named `guess:` in the report. Screening, Hazard and HEC-RAS are skipped. ANUGA needs the
 `ndanuga` env and takes hours per dam; `--parallel N` runs N groups, each in its own `partN`
 folder. Results: `~/DamSafety/Dams44_ANUGA/<dam>/`.
+
+## Do the settings change the class?
+
+    python3 run_settings_study_44.py --dry-run
+    python3 run_settings_study_44.py --only DWR-2801,DWR-3034
+    python3 run_settings_study_44.py --parallel 4
+    python3 run_settings_study_44.py --variants all --parallel 4
+    python3 run_settings_study_44.py --report-only
+
+Each dam goes through the whole DamSafety chain (Screening, Runner, Hazard classification,
+profile `damsafety`) once per setting, each setting in its own folder under
+`~/DamSafety/Settings_Study_44/`. It needs `dams_44.gpkg` (above) and a DEM that covers the dams
+(`--dem`, or the statewide VRT in the suite data folder).
+
+| Setting | Engine | Cell | Also |
+|---|---|---|---|
+| `lf10` | LISFLOOD-FP | 10 m | The recommended settings. Every other one is compared to it. |
+| `lf20` | LISFLOOD-FP | 20 m | `GRID_REFINE=false`: with it on, a 20 m run that over-spreads is re-run at 10 m and the comparison is gone. |
+| `an10` | ANUGA for the final results, on LISFLOOD-FP's extent | 10 m | Triangles up to 100 m² near the dam, 1,000 m² elsewhere (the Runner's defaults). |
+| `an20` | ANUGA, the same way | 20 m | Triangles up to 400 m² and 4,000 m². `GRID_REFINE=false`. |
+
+The default is `lf10,lf20`: hours for the 44 dams. ANUGA takes hours **per dam**, so `--variants
+all` is days. Try a few dams with `--only` first. A dam that finished under a setting is skipped
+next time, so the study can be stopped and started again and the ANUGA settings added later;
+the report always covers every setting that has been run.
+
+Results in the study folder:
+
+| File | What it is |
+|---|---|
+| `Settings_Study.html` | One page. How many dams keep their class under every setting, what moves it (cell size or engine, and which way), then the dams whose class changes, the dams that cannot be judged yet (a setting failed or has not run), and the rest. |
+| `Settings_Study.csv` | One row per dam: per setting the class, the TM11 class, flooded structures, people in them, the deepest of them, the life-loss index, minutes, and the message of a failed run. |
+| `<setting>/<dam>/` | Each run, complete, as the chain leaves it. |
+
+A class that changes with the settings is not an error in either run. It marks a dam whose class
+rests on something the model does not pin down. Nothing here decides a class. The script exits 1
+while any dam is missing a result under a setting that was asked for.
+
+**Not run here.** The script and its report are tested against a stand-in chain
+(`tests/test_settings_study.py`). The study itself needs the offline pack, the terrain and, for
+the ANUGA settings, the `ndanuga` env, so no real result exists yet.
 
 ## A county
 
