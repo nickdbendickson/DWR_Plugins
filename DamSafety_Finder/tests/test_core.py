@@ -597,6 +597,30 @@ class PoolLinesAndRescue(unittest.TestCase):
         self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 0.0,
                                  pool_rules=dict(rules, line_area={0: [90 * em.AC_M2] * two})), [])
 
+    def test_a_long_fills_drainage_on_a_pool_line(self):
+        # Finder 0.7 looked at giving long fills less drainage (not taking the seed's pool when the
+        # held pool's inflow was read) and left the rule alone: a bank right across the valley
+        # (1.2 km: a long fill) holding a closed pool gets the most of its own path, the seed's
+        # pool and the held pool's inflow, as a dam does - and the reading decides nothing: the
+        # same fill, kind and height whatever it is
+        dem, y = valley()
+        dem = np.where(np.abs(y - 200) <= 4, dem + 1.7, dem)
+        dem = np.where((y < 196) & (dem < bed(200) + 1.0), bed(200) + 1.0, dem)
+        lim = {0: (197 - 150) * CELL + 50.0}
+        creek = lambda x, y: 800 * em.AC_M2                  # a big draw beside it: not its drainage
+        rules = dict(max_drain_m2=50 * em.AC_M2, line_area={0: [2 * em.AC_M2] * len(self.POOL_LINE)})
+        held = lambda xs, ys, near: 9 * em.AC_M2
+        seen = []
+        for extra, want in (({}, 2), ({"pool_drain": {0: 7 * em.AC_M2}}, 7),
+                            ({"pool_drain": {0: 7 * em.AC_M2}, "inflow": held}, 9),
+                            ({"pool_drain": {0: 12 * em.AC_M2}, "inflow": held}, 12)):
+            got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=dict(rules, **extra))
+            self.assertEqual([e.kind for e in got], [em.K_LONG])
+            self.assertFalse(got[0].open_pool)
+            self.assertAlmostEqual(got[0].drain_m2, want * em.AC_M2)
+            seen.append((got[0].x, got[0].y, got[0].height_m, got[0].storage_m3, got[0].ridge_len_m))
+        self.assertEqual(len(set(seen)), 1)
+
     def test_a_pool_line_toe_stays_near_the_fill(self):
         # a flat pad on a hillside: the ground below its lip falls 10 % for 400 m, steeper than the
         # 8 degree face test, so an ordinary toe walk runs on down the hill (150 m) and takes its

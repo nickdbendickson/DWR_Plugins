@@ -87,7 +87,20 @@ and a path can step out of the pool and back), and, when the fill holds a closed
 outlet, all the ground draining into that pool whose water the routing takes out near this fill
 (a creek the routing sends out through a culvert elsewhere is not this fill's; a pool the window
 cuts is not read). A pool covers a 10 m routing cell only where it holds at least 40 % of it, so a
-creek or another pond beside it is not part of its pool. Where a draw and a pool line read the
+creek or another pond beside it is not part of its pool. So `drain_ac` on a pool line is the
+ground that feeds the pool, not the flow at one point, and it can differ from the flow over the
+crest either way. It is written and it feeds the score; it does not decide whether a fill is
+kept or what kind it is. For 0.7.0 a change was looked at for long fills (road, rail, canal
+or levee), whose drainage looked too big: leave out the seed's pool when the held pool was read.
+It was **not** made. On two ND tiles (`z14x48y523` and `z14x63y516`, 574 long fills on pool
+lines) 20 long fills (3.5 %) have a `drain_ac` over twice the largest flow within two routing
+cells of the crest and more than 1 acre above it; in 17 of the 20 that comes from the pool the
+fill holds (a road ponds water from more ground than runs over any one point of it), which the
+change would have kept, and in 3 from the seed's pool. The change would have altered 17 of the
+574, most by under an acre, and left 2 under half the flow at the crest. Many more long fills
+read low than high (74 of the 574 under half the largest flow near the crest, which is often a
+draw beside the pool and not its own water). The limit stands: on a pool line `drain_ac` is good
+to tell a few acres from a few hundred, not to size a pipe. Where a draw and a pool line read the
 same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The flat-water rim test
 reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water
 (`max_lower` in `terrain.flat_pools`). That cut is a known limit and is left as it is in 0.7.0: a
