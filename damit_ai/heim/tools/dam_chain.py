@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dam_chain.py v1.5.1 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
+# dam_chain.py v1.5.2 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
 #
 #   dam_chain.py setup                       one-time: batch profiles that point at your QGIS
 #                                            profiles "nd" and "damsafety", plugins enabled
@@ -522,7 +522,7 @@ def run_nd(args):
     qp = QP(args, "nd")
     logs = os.path.join(dams, "_chain_logs", _stamp())
     summary = os.path.join(dams, "Chain_Summary_ND.csv")
-    rows = []
+    rows, not_tried = [], 0
     flags = {"SCREEN": str(not args.no_screen).lower(), "BREACH": str(not args.no_breach).lower(),
              "CLASSIFY": str(not args.no_classify).lower()}
     _env = {"SCREEN_PARAMETERS": "DAMCHAIN_SCREEN_PARAM",
@@ -588,9 +588,24 @@ def run_nd(args):
                                                  "when": _stamp()}, indent=1))
             _write_summary(summary, rows)
         if status != "done" and args.stop_on_error:
+            not_tried = len(ids) - n
             break
-    if not args.dry_run:
-        print("\nSummary: %s" % summary)
+    if args.dry_run:
+        return
+    print("\nSummary: %s" % summary)
+    # v1.5.2: a failed dam has to reach the shell. This returned None whatever happened, so
+    # `dam_chain.py run --set nd` exited 0 on a chain that failed every dam, and a script that
+    # tested $? was told the run was fine -- run_lisflood_44.py and run_county.py both reported
+    # "ok" for dams that had failed, and now read state.json to work around it. run_dwr has
+    # always exited 1 on failure; this makes the two sets agree.
+    bad = [r for r in rows if not r[1].startswith("done")]
+    if bad:
+        print("FAILED %d of %d dam(s): %s%s" % (
+            len(bad), len(rows), ", ".join("%s [%s]" % (r[0], r[1]) for r in bad[:6]),
+            ", ..." if len(bad) > 6 else ""))
+        if not_tried:
+            print("stopped on the first failure; %d dam(s) were not attempted" % not_tried)
+    sys.exit(1 if bad else 0)
 
 
 def _write_summary(path, rows):

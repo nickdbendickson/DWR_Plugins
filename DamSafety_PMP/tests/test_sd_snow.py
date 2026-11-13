@@ -3,7 +3,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 if not _os.environ.get("ND_PMP_DATA_HOME") or not all(_os.path.exists(p) for p in ['medina_pmp', 'dem_watershed_basin.gpkg']):
     print("SKIP: needs ND_PMP_DATA_HOME, medina_pmp/ and dem_watershed_basin.gpkg")
     _sys.exit(77)
-import sys, json, glob
+import json, glob
 from core import spatial as S, snowmelt as M
 home = _os.environ.get("ND_PMP_DATA_HOME", ""); B = "dem_watershed_basin.gpkg"
 R = {"spatial": {}}
