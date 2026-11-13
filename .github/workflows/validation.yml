@@ -1,0 +1,107 @@
+name: Validation (real dam failures)
+
+# The Runner against a dam failure that was surveyed, with the real LISFLOOD-FP (built from
+# the official source, as model-tests in ci.yml does). It is a report, not a gate: the job is
+# red only when a run does not finish or the case cannot be built. How close the flood comes
+# to the surveyed marks is in the job summary and in the "lake-delhi-2010-score" artifact.
+#
+# Runs by hand (Actions > Validation > Run workflow) and on a pull request that changes the
+# case or this file. It downloads 21 MB of USGS 3DEP terrain.
+on:
+  workflow_dispatch:
+    inputs:
+      cell:
+        description: Model cell, m
+        default: "30"
+  pull_request:
+    paths:
+      - "tools/validation/**"
+      - ".github/workflows/validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lake-delhi-2010:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      CELL: ${{ github.event.inputs.cell || '30' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      # the same key as model-tests in ci.yml, so the two share one build
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      - name: The case's own tests
+        run: python -W error tools/validation/lake_delhi_2010/test_case.py
+      - name: Build the case (terrain from USGS 3DEP, inflow, gate rating)
+        run: |
+          python tools/validation/lake_delhi_2010/build_case.py \
+            --out "$RUNNER_TEMP/delhi" --cell "$CELL" --threads 2
+      # the two runs side by side, two threads each (a runner has four cores)
+      - name: Run both breaches with LISFLOOD-FP
+        run: |
+          cd "$RUNNER_TEMP/delhi"
+          cli="$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py"
+          for run in blind as_observed; do
+            ( python "$cli" run "$run.json" --lisflood "$HOME/lisflood-nd/lisflood" \
+                > "$run.log" 2>&1; echo "$?" > "$run.rc" ) &
+          done
+          wait
+          bad=0
+          for run in blind as_observed; do
+            echo "::group::$run (exit $(cat "$run.rc"))"
+            grep -v "^\[ *[0-9]*%\]" "$run.log" | tail -n 60
+            echo "::endgroup::"
+            [ "$(cat "$run.rc")" = "0" ] || bad=1
+          done
+          exit "$bad"
+      - name: Score against the surveyed high-water marks
+        if: always()
+        run: |
+          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi"
+          cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md"
+          cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the score, the reports and the flow at each bridge
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-delhi-2010-score
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/delhi/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/delhi/*.json
+            ${{ runner.temp }}/delhi/*.log
+            ${{ runner.temp }}/delhi/runs/*/*/_breach_model/run_report.*
+            ${{ runner.temp }}/delhi/runs/*/*/_breach_model/gauge_*.csv
+            ${{ runner.temp }}/delhi/runs/*/*/_breach_model/breach_hydrograph.csv
+            ${{ runner.temp }}/delhi/runs/*/*/WSE (Max).tif

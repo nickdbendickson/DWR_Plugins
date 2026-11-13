@@ -52,6 +52,8 @@ jobs:
         run: python3 tools/test_blas_selfcheck.py
       - name: Batch scripts against a stand-in dam_chain (QGIS-free)
         run: python3 -W error -m unittest discover -v -s tools/batch/tests
+      - name: Lake Delhi 2010 validation case (published numbers, inputs, the Runner's routing, scoring)
+        run: python3 -W error tools/validation/lake_delhi_2010/test_case.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
