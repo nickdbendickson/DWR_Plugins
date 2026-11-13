@@ -84,6 +84,26 @@ damchain research ask "..."                    # same thing through damchain
 damresearch doctor                             # checks Ollama, both models, the library
 ```
 
+**Do not name the publication inside the question.** "...in FEMA P-946" does not narrow
+anything: the words go into the search like any others, and "FEMA" matches every FEMA
+document in the library. Use `--doc`, which `search`, `ask`, `research` and `chat` all take:
+
+```zsh
+damresearch list | grep -i 946                 # find it: the number on the left is its id
+damresearch search "minimum depth at the edge of the mapped inundation area" --doc P-946
+damresearch ask "What depth defines the inundation boundary?" --doc P-946
+damresearch research "How is the inundation boundary defined?" --doc "P-946,P-1025"
+```
+
+`--doc` takes the id, or part of the file name, title or report number; punctuation is
+ignored, so `P-946` finds a file named `... P946.pdf`, and several keys can be separated by
+commas. The run prints which documents it scoped to, so an over-broad key is visible.
+
+Passages from any one publication are capped at 3 by default, which stops one chatty source
+filling the window. **`--doc` lifts that cap** (a 145-page guideline can then give up all `-k`
+passages); set `--per-doc N` to put a cap back. Start with `search`, which uses no model and
+answers instantly, to see whether the passage is reachable at all before spending a model run.
+
 ### Getting the ASDSO / FEMA reference set
 
 `fetch_asdso.py` downloads the reference documents that ASDSO (damsafety.org) publishes openly. That
