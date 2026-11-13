@@ -129,6 +129,21 @@ class Embankments(unittest.TestCase):
         got = em.find(dem, GT, [LINE], params=em.FinderParams(min_height_m=0.5, dedupe_m=1.0))
         b = [e for e in got if abs((N * CELL - e.y) / CELL - 182) < 3][0]
         self.assertAlmostEqual(b.orig_m, bed(182), delta=0.15)
+        # nor ordinary micro-relief on the floor (8 cm): a 4 m valley dam whose pool runs off the
+        # grid is not 'dug' (the fit used to stop at the first 15 cm bump, on the face remnant)
+        from scipy import ndimage as ndi_
+        for seed in range(6):
+            dem, y = valley()
+            dem = fill(dem, y, 200, 4.0)
+            noise = ndi_.gaussian_filter(np.random.default_rng(seed).normal(0, 1, dem.shape), 2.0)
+            dem = dem + 0.08 * noise / noise.std()
+            lvl = bed(200) + 3.0
+            dem = np.where((y < 197) & (dem < lvl), lvl, dem)
+            got = em.find(dem, GT, [LINE], params=em.FinderParams(min_height_m=0.5, dedupe_m=1.0))
+            d = [e for e in got if abs((N * CELL - e.y) / CELL - 200) < 4]
+            self.assertTrue(d, seed)
+            self.assertFalse(any("(dug)" in n for n in d[0].notes), (seed, d[0].below_frac))
+            self.assertLess(d[0].below_frac, 0.3, seed)
 
     def test_profile_measures_do_not_depend_on_the_line_angle(self):
         # a 3 m fill with 3:1 faces across a 0.5 % valley, the stream line at several angles to
@@ -209,8 +224,62 @@ class Embankments(unittest.TestCase):
             kd3, open3 = em.face_toe(zz, e - 3, int(150 / cell), cell, 8.0)
             crest = zz[int(np.argmax(fill))]
             self.assertLess(crest - zz[kd3], 3.0 + slope * 20 + 0.6, (slope, cell))
+            # ... and at the foot, not a sample up the face (the window that stops the walk)
+            self.assertGreater(crest - zz[kd3], crest - (200.0 - slope * 101.0) - 0.35, (slope, cell))
             self.assertLess(x[kd3] - x[e], 25.0)
             self.assertFalse(open3)
+
+    def draw_dam(self, slope, h, phase, pool_below=0.6, face=3.0, n=300, cell=3.0):
+        """A fill with `face`:1 faces and a 4 m top across a draw falling `slope`, a flat pool
+        pool_below m under the crest behind it; the fill centre shifted by phase of a cell."""
+        y, x = np.mgrid[0:n, 0:n]
+        yc, xm = (y + 0.5) * cell, (n // 2 + 0.5) * cell
+        dem = 100.0 - yc * slope + np.abs((x + 0.5) * cell - xm) * 0.03
+        y0 = 150 * cell + phase * cell
+        b0 = 100.0 - y0 * slope
+        dem = np.maximum(dem, b0 + h - np.maximum(0.0, np.abs(yc - y0) - 2.0) / face)
+        if pool_below is not None:
+            lvl = b0 + h - pool_below
+            dem = np.where((yc < y0) & (dem < lvl), lvl, dem)
+        gt = (0.0, cell, 0.0, n * cell, 0.0, -cell)
+        line = [(xm, n * cell - 1.0), (xm, 1.0)]
+        return dem, gt, line, b0 - slope * (2.0 + face * h)
+
+    def test_a_pooled_dam_on_a_gentle_draw_keeps_its_height(self):
+        # 3:1 faces on a 2 % draw at 3 m cells: the toe used to stop a sample up the face, so a
+        # 7-8 ft dam fell under the 5 ft minimum on some sample phases
+        for h in (2.3, 3.0):
+            for phase in (0.0, 0.2, 0.4, 0.6, 0.8):
+                dem, gt, line, foot = self.draw_dam(0.02, h, phase)
+                got = em.find(dem, gt, [line])
+                self.assertEqual(len(got), 1, (h, phase))
+                true = (100.0 - (150 + phase) * 3.0 * 0.02 + h) - foot
+                self.assertAlmostEqual(got[0].crest_height_m, true, delta=0.4, msg=(h, phase))
+
+    def test_side_slopes_of_a_full_pond_are_not_read_flatter(self):
+        # the pool 0.6-1.0 m under the crest leaves a face about a sample long: NaN or near the
+        # true 3:1 + 3:1, never much flatter
+        for below in (0.6, 1.0):
+            for phase in (0.0, 0.25, 0.5, 0.75):
+                dem, gt, line, _f = self.draw_dam(0.004, 3.0, phase, pool_below=below)
+                e = em.find(dem, gt, [line])[0]
+                if math.isfinite(e.side_sum):
+                    self.assertLess(e.side_sum, 7.0, (below, phase))
+                    self.assertGreater(e.side_sum, 5.0, (below, phase))
+        dem, gt, line, _f = self.draw_dam(0.004, 3.0, 0.0, pool_below=None)
+        self.assertAlmostEqual(em.find(dem, gt, [line])[0].side_sum, 6.0, delta=0.3)
+
+    def test_a_line_that_leaves_the_grid_and_comes_back(self):
+        # the stretch off the grid is not profile spacing: a 4:1 fill on such a line is still found,
+        # with the same length as on a straight line
+        dem, gt, line, _f = self.draw_dam(0.004, 3.0, 0.0, pool_below=1.0, face=4.0)
+        xm = line[0][0]
+        top, bot = line[0][1], line[1][1]
+        out = [(xm, top), (xm, top - 60 * 3.0), (xm + 2000.0, top - 62 * 3.0), (xm, top - 64 * 3.0), (xm, bot)]
+        a, b = em.find(dem, gt, [line]), em.find(dem, gt, [out])
+        self.assertEqual((len(a), len(b)), (1, 1))
+        self.assertAlmostEqual(a[0].len_m, b[0].len_m, delta=1.0)
+        self.assertAlmostEqual(a[0].height_m, b[0].height_m, delta=0.05)
 
     def test_low_fill_left_out_and_threshold_is_yours(self):
         dem, y = valley()

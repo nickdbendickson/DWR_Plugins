@@ -291,6 +291,11 @@ def face_toe(z, e, toe_k, cell, face_deg, m=3, bench_m=40.0):
             continue
         cut = k + bench > end                           # the look-ahead ran into the search end
         break                                           # the valley floor / outlet channel: stop
+    # the m-sample window that stopped the walk can still hold the last steep sample(s) of the
+    # face: finish it one sample at a time (a draw under tan(face_deg) falls less than this a sample)
+    one = cell * math.tan(math.radians(face_deg))
+    while k < end and np.isfinite(z[k]) and np.isfinite(z[k + 1]) and z[k] - z[k + 1] >= one:
+        k += 1
     seg = z[e:k + 1]
     if not np.isfinite(seg).any():
         return None, False
@@ -472,7 +477,7 @@ def upstream_slope(z, ku, n, cell):
     return max(0.0, float(z[a] - z[ku]) / ((ku - a) * cell))
 
 
-def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0, tol_m=0.15, beyond_m=60.0):
+def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0, tol_m=0.15, beyond_m=60.0, hump_m=0.5):
     """(original ground at the crest index kc, its rise per metre going upstream, how it was
     found) of a downstream-ordered profile z whose hump starts at ks and has its toe at kd and
     spill level `spill`. At the crest: a straight line from where the pool's water line meets the
@@ -482,23 +487,34 @@ def original_ground(z, ks, kc, kd, spill, cell, down_m=150.0, tol_m=0.15, beyond
     crest-to-toe distance. The rise carried on upstream is the smaller of that line's and the
     valley's own fall below the toe (the pool can end on another fill upstream, which is not
     ground). Never reads the pool surface: both ends are ground the water does not cover.
-    The fall below the toe is fitted only up to the next hump (another fill or a road below this
-    one is not the valley); a pool end whose ground drops back below the water line within
-    beyond_m further up is the face of another fill, not the valley side, and is not used.
+    The fall below the toe is fitted from the foot of the face (the toe can sit a sample up it) to
+    the next hump at least hump_m high, less that hump's lower face (another fill or a road below
+    this one is not the valley; floor micro-relief is not a hump); a pool end whose ground drops
+    back below the water line within beyond_m further up is the face of another fill, not the
+    valley side, and is not used.
     (NaN, 0, "") when neither can be had."""
     toe = float(z[kd])
     fall = None
     n = max(3, int(round(down_m / cell)))
     seg = z[kd:min(len(z), kd + n + 1)]
+    head, j0 = seg[:4], 0                               # kd can sit one sample up the face
+    if np.isfinite(head).any():
+        low = np.nanmin(head)
+        j0 = next(i for i, v in enumerate(head) if np.isfinite(v) and v <= low + tol_m)
     run, stop = np.inf, len(seg)
-    for i, v in enumerate(seg):
+    for i in range(j0, len(seg)):
+        v = seg[i]
         if not np.isfinite(v):
             continue
-        if v > run + tol_m:                             # the next hump starts: stop the fit
+        if v > run + hump_m:                            # a real hump (a fill, a road): stop the fit
             stop = i
             break
         run = min(run, v)
-    seg = seg[:stop]
+    if stop < len(seg):                                 # and leave out that hump's lower face
+        while stop - 1 > j0 and np.isfinite(seg[stop - 1]) and \
+                seg[stop - 1] > np.nanmin(seg[j0:stop]) + tol_m:
+            stop -= 1
+    seg = seg[j0:stop]
     f = np.isfinite(seg)
     if f.sum() >= 3:
         xs = np.flatnonzero(f) * cell
@@ -583,9 +599,10 @@ def fill_profile(z, s, kc, kd, crest, up, toe, cell, top_tol=0.15, d=None):
     over crest - upstream level) plus the downstream face (crest to toe, over crest - toe). A
     line crossing the fill on the skew reads both wider / flatter than square across. d: the
     distance along the line of each sample (line_cells with_dist); without it, index x cell."""
-    # positions are interpolated where the profile crosses each level, so the answer does not
-    # depend on where the samples happen to fall on the face; each face's slope is read over its
-    # middle half (25 % to 75 % of its height), clear of the rounded top and the toe
+    # the top's edges are interpolated where the profile crosses crest - top_tol; each face's slope
+    # is read from samples ON the face (above its base, below the flat top; its middle half when
+    # two or more samples are there): interpolating across the waterline or the top edge reads a
+    # face about one sample long flatter on every sample phase. NaN when a face is not resolved.
     def cross(level, step, stop):
         j = kc
         while j != stop:
@@ -606,13 +623,30 @@ def fill_profile(z, s, kc, kd, crest, up, toe, cell, top_tol=0.15, d=None):
     lo, hi = max(s - 1, 0), kd
     ta, tb = cross(crest - top_tol, -1, lo), cross(crest - top_tol, 1, hi)
     top = run(ta, tb) if ta is not None and tb is not None else float("nan")
+    def face(base, h, step, stop):
+        mid, on, j = [], [], kc
+        while j != stop:
+            v = z[j]
+            if not np.isfinite(v):
+                return None
+            if v <= base + top_tol:
+                break
+            if v < crest - top_tol:
+                on.append(j)
+                if base + 0.25 * h < v < base + 0.75 * h:
+                    mid.append(j)
+            j += step
+        use = mid if len(mid) >= 2 else on
+        if len(use) < 2 or z[use[0]] <= z[use[-1]]:
+            return None                                 # the face is not resolved at this spacing
+        return run(use[0], use[-1]) / (z[use[0]] - z[use[-1]])
+
     hu, hd = crest - up, crest - toe
     side = float("nan")
     if hu > 0.2 and hd > 0.2:
-        u75, u25 = cross(up + 0.75 * hu, -1, lo), cross(up + 0.25 * hu, -1, lo)
-        d75, d25 = cross(toe + 0.75 * hd, 1, hi), cross(toe + 0.25 * hd, 1, hi)
-        if None not in (u75, u25, d75, d25):
-            side = run(u25, u75) / (0.5 * hu) + run(d75, d25) / (0.5 * hd)
+        fu, fd = face(up, hu, -1, lo), face(toe, hd, 1, hi)
+        if fu is not None and fd is not None:
+            side = fu + fd
     return top, side
 
 
@@ -690,12 +724,15 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
         cells, dist = line_cells(xy, gt, dem.shape, with_dist=True)
         if len(cells) < 5:
             continue
-        # metres between profile samples on this line (1 to 1.41 cells, by its angle to the grid)
-        cl = (dist[-1] - dist[0]) / (len(cells) - 1)
-        cl = cl if cl > 0 else cell
+        # metres between profile samples on this line (1 to 1.41 cells, by its angle to the grid),
+        # leaving out the jump where the line runs off the grid and comes back
+        st = np.diff(np.asarray(dist, float))
+        ok = st <= 2.0 * cell
+        cl = float(st[ok].mean()) if ok.any() and st[ok].mean() > 0 else cell
         max_len = max(1, int(round(p.max_len_m / cl)))
         toe_k = max(1, int(round(p.toe_search_m / cl)))
         z = np.array([dem[r, c] for r, c in cells])
+        z[np.flatnonzero(~ok) + 1] = np.nan             # no hump or toe walk across such a gap
         if orient_down(z):
             cells, z, dist = cells[::-1], z[::-1], dist[::-1]
         dist = np.asarray(dist, float)
