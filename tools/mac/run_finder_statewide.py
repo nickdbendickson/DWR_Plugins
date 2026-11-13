@@ -1,0 +1,2005 @@
+#!/usr/bin/env python3
+"""run_finder_statewide.py 1.0 - the DamSafety Finder's "fills across streams and draws" over all of
+North Dakota, from the statewide 1 m terrain VRT, tile by tile, resumable.
+
+    bash run_finder_statewide.sh --dry-run        # what would run, how long, how much disk; writes nothing
+    bash run_finder_statewide.sh --limit 4        # a trial: the first 4 tiles, then the merge
+    bash run_finder_statewide.sh                  # the whole state (run it again to go on after a stop)
+    bash run_finder_statewide.sh --merge-only     # merge what is finished so far
+
+It reads the terrain VRT and the ND data pack and writes ONLY into --out (default ~/ND_Finder_Statewide).
+It never writes, moves or deletes anything in the suite data folder, the pack, the terrain folder or
+the plugins folder, and it downloads nothing. It needs only what the suite's QGIS Python has
+(GDAL / OGR, numpy, scipy) and the DamSafety Finder plugin (0.6.0 or later).
+
+HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does, Finder 0.6.0)
+
+  * run_embankments(bbox=...) cuts its box into 5 km squares starting at the box's south-west
+    corner. For each square it reads the DEM over the square plus a 3 km pad on every side (the pad
+    is 3 km whenever the DEM draws are on, drainage_ac > 0), finds the fills, and keeps a fill only
+    when its crest point lies in the square itself (west and south edges in, east and north edges
+    out). Then it applies two rules to everything it kept: one fill per pool (fills whose pools get
+    out at the same spill point) and no two fills within 60 m of each other.
+  * So this script cuts the state into squares of --tile-km (10 km by default, always a multiple of
+    5 km) on a fixed lattice in EPSG:5070 (the engine's working CRS): tile corners are whole
+    multiples of the tile size. Tiles touch and do not overlap. Every 5 km square the engine works
+    on is then the same square, with the same DEM window, that ONE run_embankments call over the
+    whole state would use, so a fill is found the same way whichever tile holds it, and because a
+    crest point lies in exactly one square, no tile drops a fill and no two tiles keep the same one.
+    The 3 km of terrain a tile needs beyond its edge comes from the VRT, not from a neighbour's run.
+  * What a single statewide call does after its squares - the two rules above, across squares - is
+    done here in the merge, across tile seams, by calling the engine's own one_per_pool and dedupe
+    on the fills that lie close to a fill of another tile. (They read the values the tiles wrote,
+    which are rounded to 0.1 ft; a tie can fall the other way, the fill is the same embankment.)
+  * One difference from a single call is left: stream lines that lie wholly outside a tile are not
+    read for that tile. A line that does not enter the tile has no crest point in it, so the fills
+    are not affected; only the side layer of channel-side dikes ('ridges') can miss a dike within
+    200 m of a tile edge whose only nearby channel is a mapped stream outside the tile that the
+    DEM draws do not also trace.
+  * To keep every tile small and quick, the tile's process reads its streams, roads, rails and
+    known structures from small extracts cut from the pack into --out (features that reach within
+    4 km of the tile, in the pack's own order, with their ids), and the terrain through a window VRT
+    of the big VRT (the tile plus 3.6 km). Both hold exactly what the engine would have read.
+
+TWO THINGS THE ENGINE DOES NOT DO YET, HANDLED HERE
+
+  * Fills outside North Dakota (the terrain covers a rim of the neighbouring states): every fill
+    gets in_state = yes / no, and tiles wholly outside the state are not run. The outline is, in
+    this order: --state-outline FILE (any polygon file), the pack's county boundaries
+    (boundaries/ND_counties.gpkg) when the pack has them, else a simple built-in outline (see
+    BUILTIN_ND below). "--state-outline none" switches the test off.
+  * A fill within about 150 m of missing terrain is a false dam (NoData acts as a wall): every fill
+    gets edge_ft (the distance to the nearest missing terrain within 200 m, read from the DEM at
+    full resolution; holes smaller than 100 m2 are ignored) and at_data_edge = yes when that is
+    within --edge-m (150 m). Such fills stay in the raw layer and are left out of the ranked list.
+
+WHAT IT WRITES (all in --out)
+
+  tiles/<tile>/                    one folder per finished tile: the engine's GeoPackage and CSVs,
+                                   the tile's log, and done.json (the marker; a tile without it is
+                                   not finished and runs again)
+  ND_finder_fills.gpkg             every fill ('embankments', scored), the ranked candidates
+                                   ('candidates'), the spill points, the channel-side dikes, run_info
+  ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates, highest score first
+  ND_finder_summary.txt            counts, tiles run / skipped / failed, versions, settings, checksums
+  ND_finder_review_batch.gpkg/.csv only with --review-batch N: a review batch drawn from the candidates
+  logs/run_<time>.log              one log per run; failed/<tile>.log for a tile that failed
+
+Python 3.9 or later. No QGIS imports.
+"""
+import argparse
+import array
+import collections
+import csv
+import datetime
+import hashlib
+import json
+import math
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import traceback
+import types
+import warnings
+import xml.etree.ElementTree as ET
+
+sys.dont_write_bytecode = True          # never leave .pyc files in the plugins folder
+warnings.filterwarnings("ignore", category=FutureWarning)   # GDAL's note about its exception mode (not switched)
+
+SCRIPT_VERSION = "1.0"
+DEFAULT_DEM = "/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt"
+DEFAULT_OUT = os.path.join("~", "ND_Finder_Statewide")
+ENGINE = "DamSafety_Finder"
+MODEL_NAME = "nd_fill_score_trees_2026-11.json"
+WORK_EPSG = 5070
+ENGINE_TILE_M = 5000.0                  # run_embankments tile_m (its default; not changed here)
+ENGINE_PAD_M = 3000.0                   # the pad run_embankments reads round each 5 km square
+WINDOW_MARGIN_M = 600.0                 # the terrain window is the tile + pad + this
+EXTRACT_M = 4000.0                      # the vector extracts reach this far beyond the tile
+# The call the cloud test runs used (train6/run.py): Finder 0.6.0 defaults except these.
+CALL = {"cell": 3.0, "z_feet": False, "match_ft": 1000.0, "drainage_ac": 10.0, "hillshade": False}
+STREAMS = "hydro/3DHP_flowlines.gpkg"
+ROADS = "roads/ND_roads_NG911.gpkg"
+RAILS = "railroads/NARN_rail_lines.gpkg"
+KNOWN = (("dwr/DWR_dams.gpkg", "DWR dams"), ("dwr/DWR_dam_lines.gpkg", "DWR dam lines"),
+         ("dwr/DWR_dugouts.gpkg", "DWR dugouts"), ("dwr/DWR_unknown_structures.gpkg", "DWR unknown"),
+         ("hydro/NID_dams.gpkg", "NID dams"), ("barriers/SARP_dams.gpkg", "SARP dams"))
+COUNTIES = "boundaries/ND_counties.gpkg"
+PACK_NAMES = ("ND_Dam_Suite_Pack",)
+EDGE_SEARCH_M = 200.0                   # missing terrain is looked for this far from a fill
+EDGE_SPECK_M2 = 100.0                   # a hole in the terrain smaller than this is not an edge
+FT = 0.3048
+OUT_GPKG = "ND_finder_fills.gpkg"
+OUT_CSV = "ND_finder_candidates_ranked.csv"
+OUT_SUMMARY = "ND_finder_summary.txt"
+EXTRA_FIELDS = [("tile", "str"), ("edge_ft", "float"), ("at_data_edge", "str"), ("in_state", "str"),
+                ("id_clash", "str")]
+# Measured 2026-11-13 on the 4-core cloud test box (see RUN-FINDER-STATEWIDE.md): processor time
+# of a 10 km tile full of terrain (9 tiles over 300 km2 of terrain took 780 CPU-seconds), the peak
+# memory of one tile process, and the size of the results. The Mac has not been timed; a run times
+# its own tiles, and the dry run uses those once 3 tiles are finished in --out.
+EST_SEC_PER_TILE = 270.0                # per 100 km2 of terrain, one core
+EST_PEAK_GB = 1.3                       # one tile process (measured 1.2 GB)
+EST_TILE_MB = 0.105                     # a tile folder with no fills
+EST_TILE_KB_PER_FILL = 1.8              # ... plus this per fill
+EST_MERGED_KB_PER_FILL = 2.0            # the merged GeoPackage and the ranked CSV
+EST_FILLS_PER_KM2 = 2.5                 # 14,400 fills on 66 test tiles of 88 km2
+GDAL_CACHE_MB = "512"                   # per tile process (GDAL's own default is 5 % of the RAM)
+
+# The built-in fallback outline of North Dakota (lon, lat; NAD83 / WGS84). West, south and north
+# are straight lines just outside the surveyed borders (104.0505 W, 45.9350 N, 49.0006 N); the east
+# side is the Bois de Sioux River and the Red River of the North, taken from the pack's own 3DHP
+# flowlines (USGS, public domain) and simplified to about 400 m. It is used with a 600 m allowance
+# (--state-buffer-m), so it never drops a fill that is in North Dakota; within about 1 km of the
+# border it can keep one that is not. Give --state-outline for an exact test.
+BUILTIN_W, BUILTIN_S, BUILTIN_N = -104.0505, 45.9350, 49.0006
+BUILTIN_BUFFER_M = 600.0
+BUILTIN_EAST = (
+    (-96.5612, 45.9415), (-96.5708, 45.9641), (-96.5779, 46.0273), (-96.5591, 46.0585), (-96.5544, 46.0841),
+    (-96.5632, 46.1087), (-96.5602, 46.1164), (-96.5671, 46.1200), (-96.5803, 46.1511), (-96.5767, 46.1744),
+    (-96.5892, 46.1814), (-96.5905, 46.1905), (-96.5851, 46.1945), (-96.5912, 46.1957), (-96.5846, 46.1975),
+    (-96.5890, 46.2049), (-96.5838, 46.2082), (-96.5911, 46.2087), (-96.5987, 46.2423), (-96.5837, 46.2498),
+    (-96.5923, 46.2503), (-96.6004, 46.2618), (-96.5950, 46.2743), (-96.6003, 46.2811), (-96.5948, 46.2860),
+    (-96.6018, 46.2860), (-96.5964, 46.2912), (-96.6057, 46.2937), (-96.5973, 46.2976), (-96.6036, 46.3025),
+    (-96.5968, 46.3171), (-96.6000, 46.3268), (-96.6061, 46.3266), (-96.5994, 46.3300), (-96.6202, 46.3402),
+    (-96.6167, 46.3474), (-96.6294, 46.3543), (-96.6452, 46.3507), (-96.6484, 46.3581), (-96.6432, 46.3619),
+    (-96.6671, 46.3756), (-96.6677, 46.3912), (-96.6751, 46.3910), (-96.6805, 46.4071), (-96.6891, 46.4068),
+    (-96.6854, 46.4142), (-96.7015, 46.4151), (-96.6922, 46.4161), (-96.6933, 46.4221), (-96.7046, 46.4180),
+    (-96.6989, 46.4264), (-96.7077, 46.4298), (-96.7032, 46.4373), (-96.7154, 46.4340), (-96.7219, 46.4398),
+    (-96.7123, 46.4413), (-96.7218, 46.4488), (-96.7131, 46.4502), (-96.7176, 46.4544), (-96.7116, 46.4598),
+    (-96.7187, 46.4619), (-96.7132, 46.4665), (-96.7231, 46.4667), (-96.7146, 46.4723), (-96.7389, 46.4787),
+    (-96.7325, 46.4829), (-96.7397, 46.4867), (-96.7334, 46.4970), (-96.7424, 46.4999), (-96.7335, 46.5035),
+    (-96.7404, 46.5111), (-96.7342, 46.5121), (-96.7452, 46.5202), (-96.7367, 46.5241), (-96.7453, 46.5250),
+    (-96.7462, 46.5349), (-96.7380, 46.5346), (-96.7427, 46.5381), (-96.7383, 46.5393), (-96.7501, 46.5408),
+    (-96.7387, 46.5432), (-96.7505, 46.5441), (-96.7406, 46.5468), (-96.7492, 46.5496), (-96.7460, 46.5561),
+    (-96.7544, 46.5568), (-96.7417, 46.5640), (-96.7528, 46.5714), (-96.7466, 46.5755), (-96.7575, 46.5778),
+    (-96.7473, 46.5820), (-96.7609, 46.5818), (-96.7508, 46.5852), (-96.7626, 46.5893), (-96.7560, 46.5954),
+    (-96.7716, 46.5962), (-96.7682, 46.6063), (-96.7788, 46.6075), (-96.7708, 46.6153), (-96.7812, 46.6154),
+    (-96.7755, 46.6212), (-96.7873, 46.6194), (-96.7783, 46.6254), (-96.7913, 46.6250), (-96.7822, 46.6314),
+    (-96.7982, 46.6296), (-96.7857, 46.6406), (-96.7992, 46.6543), (-96.7955, 46.6664), (-96.8021, 46.6678),
+    (-96.7914, 46.6724), (-96.7989, 46.6785), (-96.7874, 46.6771), (-96.7947, 46.6833), (-96.7839, 46.6857),
+    (-96.7906, 46.6894), (-96.7841, 46.7014), (-96.7912, 46.7035), (-96.7839, 46.7059), (-96.7894, 46.7095),
+    (-96.7821, 46.7170), (-96.7912, 46.7185), (-96.7791, 46.7268), (-96.7845, 46.7319), (-96.7804, 46.7418),
+    (-96.7874, 46.7432), (-96.7804, 46.7456), (-96.7893, 46.7520), (-96.7827, 46.7541), (-96.7897, 46.7567),
+    (-96.7778, 46.7617), (-96.7892, 46.7656), (-96.7754, 46.7666), (-96.7889, 46.7708), (-96.7839, 46.7782),
+    (-96.7971, 46.7765), (-96.7871, 46.7855), (-96.8018, 46.7967), (-96.7956, 46.8014), (-96.8031, 46.8051),
+    (-96.7957, 46.8074), (-96.8026, 46.8115), (-96.7922, 46.8274), (-96.7803, 46.8252), (-96.7940, 46.8333),
+    (-96.7844, 46.8335), (-96.7869, 46.8411), (-96.7748, 46.8393), (-96.7817, 46.8460), (-96.7734, 46.8515),
+    (-96.7855, 46.8543), (-96.7760, 46.8545), (-96.7840, 46.8620), (-96.7759, 46.8743), (-96.7812, 46.8796),
+    (-96.7689, 46.8785), (-96.7674, 46.8843), (-96.7745, 46.8887), (-96.7694, 46.8929), (-96.7763, 46.8969),
+    (-96.7597, 46.9166), (-96.7545, 46.9145), (-96.7629, 46.9234), (-96.7528, 46.9240), (-96.7651, 46.9269),
+    (-96.7563, 46.9287), (-96.7625, 46.9348), (-96.7769, 46.9257), (-96.7912, 46.9276), (-96.7915, 46.9455),
+    (-96.8040, 46.9469), (-96.7988, 46.9515), (-96.8040, 46.9576), (-96.7952, 46.9659), (-96.8103, 46.9639),
+    (-96.8228, 46.9703), (-96.8201, 46.9798), (-96.8263, 46.9881), (-96.8210, 47.0033), (-96.8393, 47.0070),
+    (-96.8288, 47.0220), (-96.8149, 47.0240), (-96.8272, 47.0317), (-96.8124, 47.0387), (-96.8226, 47.0369),
+    (-96.8176, 47.0471), (-96.8275, 47.0464), (-96.8176, 47.0522), (-96.8303, 47.0606), (-96.8197, 47.0617),
+    (-96.8244, 47.0717), (-96.8196, 47.0753), (-96.8293, 47.0743), (-96.8159, 47.0791), (-96.8206, 47.0834),
+    (-96.8155, 47.0880), (-96.8271, 47.0890), (-96.8172, 47.0924), (-96.8210, 47.1005), (-96.8162, 47.1085),
+    (-96.8375, 47.1224), (-96.8258, 47.1232), (-96.8205, 47.1304), (-96.8305, 47.1293), (-96.8264, 47.1349),
+    (-96.8346, 47.1439), (-96.8286, 47.1464), (-96.8412, 47.1519), (-96.8224, 47.1563), (-96.8320, 47.1594),
+    (-96.8193, 47.1638), (-96.8251, 47.1673), (-96.8225, 47.1731), (-96.8335, 47.1766), (-96.8216, 47.1843),
+    (-96.8346, 47.1837), (-96.8264, 47.1915), (-96.8448, 47.1936), (-96.8338, 47.2036), (-96.8272, 47.2012),
+    (-96.8371, 47.2072), (-96.8303, 47.2103), (-96.8372, 47.2159), (-96.8340, 47.2219), (-96.8456, 47.2193),
+    (-96.8315, 47.2267), (-96.8415, 47.2332), (-96.8287, 47.2333), (-96.8365, 47.2424), (-96.8437, 47.2396),
+    (-96.8322, 47.2474), (-96.8444, 47.2511), (-96.8385, 47.2563), (-96.8453, 47.2585), (-96.8360, 47.2625),
+    (-96.8474, 47.2626), (-96.8346, 47.2672), (-96.8477, 47.2711), (-96.8401, 47.2756), (-96.8438, 47.2931),
+    (-96.8306, 47.3057), (-96.8365, 47.3115), (-96.8430, 47.3088), (-96.8469, 47.3163), (-96.8288, 47.3280),
+    (-96.8458, 47.3280), (-96.8306, 47.3388), (-96.8471, 47.3477), (-96.8374, 47.3555), (-96.8505, 47.3571),
+    (-96.8484, 47.3646), (-96.8582, 47.3675), (-96.8371, 47.3713), (-96.8546, 47.3738), (-96.8437, 47.3758),
+    (-96.8500, 47.3816), (-96.8392, 47.3812), (-96.8375, 47.3895), (-96.8489, 47.3936), (-96.8391, 47.3994),
+    (-96.8527, 47.4061), (-96.8421, 47.4117), (-96.8568, 47.4097), (-96.8610, 47.4177), (-96.8718, 47.4190),
+    (-96.8553, 47.4243), (-96.8647, 47.4281), (-96.8528, 47.4320), (-96.8629, 47.4364), (-96.8559, 47.4392),
+    (-96.8593, 47.4517), (-96.8543, 47.4545), (-96.8636, 47.4570), (-96.8539, 47.4604), (-96.8610, 47.4726),
+    (-96.8519, 47.4791), (-96.8685, 47.4785), (-96.8522, 47.4864), (-96.8650, 47.4917), (-96.8488, 47.4981),
+    (-96.8525, 47.5075), (-96.8423, 47.5086), (-96.8536, 47.5115), (-96.8424, 47.5161), (-96.8609, 47.5155),
+    (-96.8712, 47.5272), (-96.8535, 47.5362), (-96.8623, 47.5412), (-96.8457, 47.5384), (-96.8604, 47.5459),
+    (-96.8498, 47.5532), (-96.8617, 47.5593), (-96.8475, 47.5662), (-96.8631, 47.5625), (-96.8689, 47.5670),
+    (-96.8516, 47.5687), (-96.8605, 47.5750), (-96.8499, 47.5908), (-96.8589, 47.5957), (-96.8510, 47.5985),
+    (-96.8570, 47.6107), (-96.8797, 47.6193), (-96.8759, 47.6234), (-96.8805, 47.6260), (-96.8744, 47.6278),
+    (-96.8882, 47.6389), (-96.8824, 47.6427), (-96.8899, 47.6697), (-96.8852, 47.6739), (-96.8962, 47.6742),
+    (-96.8993, 47.6896), (-96.9095, 47.6892), (-96.9120, 47.7015), (-96.9209, 47.7000), (-96.9119, 47.7068),
+    (-96.9199, 47.7104), (-96.9198, 47.7169), (-96.9310, 47.7155), (-96.9184, 47.7240), (-96.9328, 47.7375),
+    (-96.9292, 47.7504), (-96.9397, 47.7548), (-96.9289, 47.7553), (-96.9383, 47.7608), (-96.9349, 47.7672),
+    (-96.9563, 47.7751), (-96.9524, 47.7794), (-96.9591, 47.7806), (-96.9580, 47.7857), (-96.9651, 47.7835),
+    (-96.9570, 47.7910), (-96.9665, 47.7996), (-96.9763, 47.7978), (-96.9723, 47.8028), (-96.9916, 47.8082),
+    (-96.9787, 47.8099), (-96.9805, 47.8219), (-96.9741, 47.8235), (-96.9871, 47.8256), (-96.9816, 47.8296),
+    (-96.9863, 47.8371), (-96.9983, 47.8419), (-96.9940, 47.8460), (-97.0059, 47.8644), (-97.0018, 47.8681),
+    (-97.0231, 47.8741), (-97.0180, 47.8787), (-97.0254, 47.8848), (-97.0188, 47.8904), (-97.0250, 47.8952),
+    (-97.0198, 47.9013), (-97.0252, 47.9077), (-97.0153, 47.9067), (-97.0238, 47.9156), (-97.0179, 47.9199),
+    (-97.0364, 47.9308), (-97.0363, 47.9395), (-97.0553, 47.9475), (-97.0525, 47.9574), (-97.0618, 47.9647),
+    (-97.0531, 47.9906), (-97.0643, 47.9985), (-97.0630, 48.0148), (-97.0724, 48.0193), (-97.0724, 48.0478),
+    (-97.1046, 48.0726), (-97.0998, 48.0851), (-97.1099, 48.0921), (-97.1025, 48.0970), (-97.1113, 48.1059),
+    (-97.1237, 48.1071), (-97.1210, 48.1154), (-97.1336, 48.1369), (-97.1229, 48.1398), (-97.1467, 48.1425),
+    (-97.1211, 48.1595), (-97.1421, 48.1601), (-97.1476, 48.1706), (-97.1360, 48.1772), (-97.1500, 48.1838),
+    (-97.1357, 48.1970), (-97.1410, 48.2040), (-97.1290, 48.2086), (-97.1394, 48.2161), (-97.1178, 48.2096),
+    (-97.1378, 48.2216), (-97.1521, 48.2193), (-97.1374, 48.2269), (-97.1207, 48.2247), (-97.1442, 48.2326),
+    (-97.1336, 48.2389), (-97.1467, 48.2442), (-97.1256, 48.2498), (-97.1307, 48.2587), (-97.1231, 48.2618),
+    (-97.1451, 48.2683), (-97.1256, 48.2700), (-97.1253, 48.2764), (-97.1167, 48.2790), (-97.1237, 48.2910),
+    (-97.1356, 48.2869), (-97.1373, 48.2914), (-97.1277, 48.2987), (-97.1124, 48.2961), (-97.1264, 48.3034),
+    (-97.1241, 48.3110), (-97.1379, 48.3098), (-97.1329, 48.3190), (-97.1159, 48.3238), (-97.1419, 48.3260),
+    (-97.1259, 48.3405), (-97.1402, 48.3446), (-97.1362, 48.3521), (-97.1561, 48.3646), (-97.1534, 48.3706),
+    (-97.1377, 48.3712), (-97.1412, 48.3785), (-97.1335, 48.3822), (-97.1499, 48.3818), (-97.1633, 48.3925),
+    (-97.1311, 48.4068), (-97.1401, 48.4185), (-97.1505, 48.4127), (-97.1541, 48.4178), (-97.1393, 48.4216),
+    (-97.1224, 48.4181), (-97.1457, 48.4311), (-97.1266, 48.4315), (-97.1256, 48.4422), (-97.1505, 48.4407),
+    (-97.1307, 48.4518), (-97.1286, 48.4596), (-97.1441, 48.4643), (-97.1474, 48.4725), (-97.1280, 48.4741),
+    (-97.1626, 48.4781), (-97.1403, 48.4846), (-97.1426, 48.4923), (-97.1316, 48.4888), (-97.1491, 48.5006),
+    (-97.1504, 48.5116), (-97.1359, 48.5124), (-97.1269, 48.5199), (-97.1534, 48.5209), (-97.1538, 48.5294),
+    (-97.1414, 48.5349), (-97.1660, 48.5489), (-97.1639, 48.5540), (-97.1390, 48.5551), (-97.1754, 48.5620),
+    (-97.1492, 48.5700), (-97.1487, 48.5764), (-97.1606, 48.5809), (-97.1439, 48.5821), (-97.1423, 48.5926),
+    (-97.1540, 48.5954), (-97.1343, 48.6074), (-97.1506, 48.6117), (-97.1296, 48.6137), (-97.1339, 48.6228),
+    (-97.1195, 48.6186), (-97.1311, 48.6315), (-97.1095, 48.6325), (-97.1157, 48.6446), (-97.0987, 48.6610),
+    (-97.1092, 48.6642), (-97.1005, 48.6685), (-97.1013, 48.6823), (-97.0903, 48.6844), (-97.1199, 48.7012),
+    (-97.1101, 48.7080), (-97.1374, 48.7266), (-97.1283, 48.7321), (-97.1421, 48.7362), (-97.1375, 48.7496),
+    (-97.1538, 48.7540), (-97.1454, 48.7648), (-97.1590, 48.7757), (-97.1475, 48.7814), (-97.1589, 48.7833),
+    (-97.1582, 48.7912), (-97.1740, 48.7939), (-97.1633, 48.8006), (-97.1816, 48.7985), (-97.1581, 48.8103),
+    (-97.1903, 48.8151), (-97.1780, 48.8228), (-97.1842, 48.8339), (-97.1739, 48.8380), (-97.1829, 48.8469),
+    (-97.1731, 48.8506), (-97.1792, 48.8628), (-97.1906, 48.8643), (-97.1778, 48.8756), (-97.1994, 48.8811),
+    (-97.2016, 48.8919), (-97.1900, 48.8955), (-97.2114, 48.9056), (-97.2108, 48.9160), (-97.2198, 48.9221),
+    (-97.2144, 48.9316), (-97.2246, 48.9338), (-97.2266, 48.9458), (-97.2340, 48.9474), (-97.2277, 48.9624),
+    (-97.2389, 48.9666), (-97.2382, 48.9830), (-97.2266, 48.9930), (-97.2342, 48.9964), (-97.2286, 49.0004),
+)
+
+
+class Stop(Exception):
+    """The run was asked to stop (Ctrl-C, or a terminate signal)."""
+
+
+class UserError(Exception):
+    """Something the user must put right; printed without a traceback."""
+
+
+# ----------------------------------------------------------------------------------- small --
+def now():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def dur(sec):
+    sec = max(0, int(round(sec)))
+    d, r = divmod(sec, 86400)
+    h, r = divmod(r, 3600)
+    m, s = divmod(r, 60)
+    if d:
+        return "{} d {} h".format(d, h)
+    if h:
+        return "{} h {:02d} min".format(h, m)
+    if m:
+        return "{} min {:02d} s".format(m, s)
+    return "{} s".format(s)
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def real(path):
+    return os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+
+
+def inside(path, folder):
+    """True when path is folder or lies in it (both resolved)."""
+    p, f = real(path), real(folder)
+    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+
+
+def write_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def ram_gb():
+    try:
+        return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1024.0 ** 3
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def more_files():
+    """Lift this process's limit on open files towards 4096 (macOS starts at 256; a VRT of
+    thousands of tiles keeps up to 100 of them open at a time)."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except Exception:                                                   # noqa - best effort
+        pass
+
+
+def cpu_seconds():
+    try:
+        import resource
+        r = resource.getrusage(resource.RUSAGE_SELF)
+        return round(r.ru_utime + r.ru_stime, 1)
+    except Exception:                                                   # noqa - a record only
+        return None
+
+
+def size_text(mb):
+    return "{:.1f} GB".format(mb / 1024.0) if mb >= 1024.0 else "{:.0f} MB".format(max(1.0, mb))
+
+
+def peak_rss_mb():
+    try:
+        import resource
+        v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return round(v / (1024.0 * 1024.0) if sys.platform == "darwin" else v / 1024.0, 1)
+    except Exception:                                                   # noqa - a record only
+        return None
+
+
+class Log:
+    """Lines to the screen and, when a path is given, to a log file."""
+
+    def __init__(self, path=None):
+        self.fh = open(path, "a", encoding="utf-8") if path else None
+
+    def __call__(self, msg=""):
+        print(msg, flush=True)
+        if self.fh:
+            self.fh.write("{}  {}\n".format(now(), msg))
+            self.fh.flush()
+
+    def close(self):
+        if self.fh:
+            self.fh.close()
+            self.fh = None
+
+
+# ------------------------------------------------------------------------------ where things are --
+def profile_plugins():
+    prof = os.environ.get("DAMSAFETY_PROFILE") or os.environ.get("DS_QGIS_PROFILE") or "damsafety"
+    home = os.path.expanduser("~")
+    return [os.path.join(home, "Library", "Application Support", "QGIS", "QGIS3", "profiles", prof,
+                         "python", "plugins"),
+            os.path.join(home, ".local", "share", "QGIS", "QGIS3", "profiles", prof, "python", "plugins")]
+
+
+def find_plugins(a):
+    """The folder that holds DamSafety_Finder: --plugins, --repo, $DAMSAFETY_PLUGINS, the damsafety
+    QGIS profile, then the DWR_Plugins checkout this script sits in (tools/mac)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    given = [(a.plugins, "--plugins"), (a.repo, "--repo")]
+    for p, what in given:
+        if p:
+            p = real(p)
+            if os.path.basename(p) == ENGINE and os.path.isfile(os.path.join(p, "finder.py")):
+                p = os.path.dirname(p)
+            if not os.path.isfile(os.path.join(p, ENGINE, "finder.py")):
+                raise UserError("{} {} holds no {}/finder.py".format(what, p, ENGINE))
+            return p, what
+    cands = [(os.environ.get("DAMSAFETY_PLUGINS"), "$DAMSAFETY_PLUGINS")]
+    cands += [(p, "the damsafety QGIS profile") for p in profile_plugins()]
+    cands.append((os.path.normpath(os.path.join(here, "..", "..")), "the checkout this script is in"))
+    for p, what in cands:
+        if p and os.path.isfile(os.path.join(p, ENGINE, "finder.py")):
+            return real(p), what
+    raise UserError("the {} plugin was not found (looked in $DAMSAFETY_PLUGINS, {} and the folder two "
+                    "above this script). Install the suite, or give --plugins FOLDER (the folder that "
+                    "holds {}) or --repo CHECKOUT.".format(ENGINE, profile_plugins()[0], ENGINE))
+
+
+def load_engine(plugins):
+    if plugins not in sys.path:
+        sys.path.insert(0, plugins)
+    import importlib
+    return importlib.import_module(ENGINE + ".finder")
+
+
+def find_data(a):
+    d = a.data or os.environ.get("NDSUITE_DATA") or os.path.join("~", "ND_Suite_Data")
+    return real(d)
+
+
+def find_pack(data):
+    """The folder that holds hydro/3DHP_flowlines.gpkg: $NDSUITE_PACK, <data>/ND_Dam_Suite_Pack,
+    or the data folder itself."""
+    cands = [os.environ.get("NDSUITE_PACK")] + [os.path.join(data, n) for n in PACK_NAMES] + [data]
+    for c in cands:
+        if c and os.path.isfile(os.path.join(os.path.expanduser(c), STREAMS)):
+            return real(c)
+    raise UserError("the ND data pack was not found: no {} in {} or in {}. Give --data FOLDER (the suite "
+                    "data folder, or the pack folder itself).".format(
+                        STREAMS, data, os.path.join(data, PACK_NAMES[0])))
+
+
+def pack_inputs(pack):
+    """{role: path} of the pack layers the run reads; refuses when one is missing."""
+    files = {"streams": STREAMS, "roads": ROADS, "rails": RAILS}
+    for rel, label in KNOWN:
+        files["known: " + label] = rel
+    out, missing = collections.OrderedDict(), []
+    for role, rel in files.items():
+        p = os.path.join(pack, *rel.split("/"))
+        if os.path.isfile(p):
+            out[role] = p
+        else:
+            missing.append(rel)
+    if missing:
+        raise UserError("the pack {} lacks: {}".format(pack, ", ".join(missing)))
+    return out
+
+
+# ------------------------------------------------------------------------------------ geometry --
+def gdal_mods():
+    from osgeo import gdal, ogr, osr
+    return gdal, ogr, osr
+
+
+def srs_of(epsg=None, wkt=None):
+    _g, _o, osr = gdal_mods()
+    s = osr.SpatialReference()
+    if epsg is not None:
+        s.ImportFromEPSG(int(epsg))
+    else:
+        s.ImportFromWkt(wkt)
+    if hasattr(s, "SetAxisMappingStrategy"):
+        s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return s
+
+
+def transformer(src, dst):
+    _g, _o, osr = gdal_mods()
+    return osr.CoordinateTransformation(src, dst)
+
+
+def grow(box, m):
+    return (box[0] - m, box[1] - m, box[2] + m, box[3] + m)
+
+
+def box_ring(box, n=8):
+    x0, y0, x1, y1 = box
+    pts = []
+    for i in range(n):
+        t = i / float(n)
+        pts.append((x0 + (x1 - x0) * t, y0))
+    for i in range(n):
+        t = i / float(n)
+        pts.append((x1, y0 + (y1 - y0) * t))
+    for i in range(n):
+        t = i / float(n)
+        pts.append((x1 - (x1 - x0) * t, y1))
+    for i in range(n):
+        t = i / float(n)
+        pts.append((x0, y1 - (y1 - y0) * t))
+    return pts
+
+
+def box_to(box, ct, n=8):
+    """The box of a box's outline carried through a coordinate transformation."""
+    pts = [ct.TransformPoint(x, y)[:2] for x, y in box_ring(box, n)]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def meets(a, b):
+    return not (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3])
+
+
+def box_geom(box):
+    _g, ogr, _s = gdal_mods()
+    r = ogr.Geometry(ogr.wkbLinearRing)
+    for x, y in ((box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]), (box[0], box[1])):
+        r.AddPoint_2D(x, y)
+    p = ogr.Geometry(ogr.wkbPolygon)
+    p.AddGeometry(r)
+    return p
+
+
+def rings_of(geom):
+    """Every ring (numpy x, y arrays) of a polygon / multipolygon: even-odd counting over all of
+    them tests a point against the outer rings and the holes at once."""
+    import numpy as np
+    out = []
+    n = geom.GetGeometryCount()
+    if geom.GetGeometryName() == "LINEARRING" or (n == 0 and geom.GetPointCount()):
+        pts = geom.GetPoints()
+        if pts and len(pts) >= 4:
+            a = np.asarray(pts, float)
+            out.append((a[:, 0].copy(), a[:, 1].copy()))
+        return out
+    for i in range(n):
+        out.extend(rings_of(geom.GetGeometryRef(i)))
+    return out
+
+
+def points_in_rings(xs, ys, rings):
+    """Bool array: the points inside the rings (even-odd rule)."""
+    import numpy as np
+    xs = np.asarray(xs, float)
+    ys = np.asarray(ys, float)
+    inside_ = np.zeros(xs.shape, bool)
+    for rx, ry in rings:
+        x1, y1 = rx[:-1], ry[:-1]
+        x2, y2 = rx[1:], ry[1:]
+        for k in range(0, len(x1), 4096):
+            a1, b1, a2, b2 = x1[k:k + 4096], y1[k:k + 4096], x2[k:k + 4096], y2[k:k + 4096]
+            cross = (b1[None, :] > ys[:, None]) != (b2[None, :] > ys[:, None])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                xc = a1[None, :] + (ys[:, None] - b1[None, :]) * (a2 - a1)[None, :] / (b2 - b1)[None, :]
+            inside_ ^= (np.count_nonzero(cross & (xs[:, None] < xc), axis=1) % 2).astype(bool)
+    return inside_
+
+
+def polygons_of(path, where=None):
+    """The union of the polygons of a vector file (optionally those a filter function keeps), in
+    EPSG:5070; None when it has none."""
+    _g, ogr, _s = gdal_mods()
+    ds = ogr.Open(path, 0)
+    if ds is None:
+        raise UserError("cannot open {}".format(path))
+    lyr = ds.GetLayer(0)
+    src = lyr.GetSpatialRef()
+    if src is None:
+        raise UserError("{} has no coordinate system".format(path))
+    src = src.Clone()
+    if hasattr(src, "SetAxisMappingStrategy"):
+        from osgeo import osr
+        src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    ct = transformer(src, srs_of(WORK_EPSG))
+    multi = ogr.Geometry(ogr.wkbMultiPolygon)
+    for f in lyr:
+        if where is not None and not where(f):
+            continue
+        g = f.GetGeometryRef()
+        if g is None:
+            continue
+        g = g.Clone()
+        g.FlattenTo2D()
+        if ogr.GT_Flatten(g.GetGeometryType()) not in (ogr.wkbPolygon, ogr.wkbMultiPolygon):
+            continue
+        g.Segmentize(0.02 if src.IsGeographic() else 2000.0)
+        g.Transform(ct)
+        if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPolygon:
+            multi.AddGeometry(g)
+        else:
+            for i in range(g.GetGeometryCount()):
+                multi.AddGeometry(g.GetGeometryRef(i).Clone())
+    ds = None
+    if multi.GetGeometryCount() == 0:
+        return None
+    u = multi.UnionCascaded()
+    return u if u is not None else multi.Buffer(0)
+
+
+def builtin_outline():
+    """The built-in outline of North Dakota in EPSG:5070 (see BUILTIN_ND at the top)."""
+    _g, ogr, _s = gdal_mods()
+    east = list(BUILTIN_EAST)
+    ring = [(BUILTIN_W, BUILTIN_S), (east[0][0], BUILTIN_S)] + east + [(east[-1][0], BUILTIN_N),
+                                                                      (BUILTIN_W, BUILTIN_N), (BUILTIN_W, BUILTIN_S)]
+    r = ogr.Geometry(ogr.wkbLinearRing)
+    for x, y in ring:
+        r.AddPoint_2D(x, y)
+    p = ogr.Geometry(ogr.wkbPolygon)
+    p.AddGeometry(r)
+    p.Segmentize(0.02)
+    p.Transform(transformer(srs_of(4326), srs_of(WORK_EPSG)))
+    return p
+
+
+def state_outline(a, pack):
+    """(polygon in EPSG:5070 with its allowance, or None; what it is) - see the module text."""
+    choice = (a.state_outline or "").strip()
+    if choice.lower() == "none":
+        return None, "none (fills outside North Dakota are kept; in_state is yes for all)"
+    counties = os.path.join(pack, *COUNTIES.split("/")) if pack else ""
+    if choice:
+        if not os.path.exists(os.path.expanduser(choice)):
+            raise UserError("--state-outline {}: no such file".format(choice))
+        geom, what, buf = polygons_of(real(choice)), "the polygon file {}".format(real(choice)), 0.0
+        if geom is None:
+            raise UserError("--state-outline {} holds no polygons".format(choice))
+    elif counties and os.path.isfile(counties) and polygons_of(counties) is not None:
+        geom, what, buf = polygons_of(counties), "the pack's county boundaries ({})".format(COUNTIES), 0.0
+    else:
+        geom, buf = builtin_outline(), BUILTIN_BUFFER_M
+        what = ("the built-in simple outline of North Dakota (no --state-outline given and the pack "
+                "has no {})".format(COUNTIES))
+    if a.state_buffer_m is not None:
+        buf = float(a.state_buffer_m)
+    if buf:
+        geom = geom.Buffer(buf, 8)
+    return geom, "{}, with a {:.0f} m allowance".format(what, buf)
+
+
+def county_geom(a, pack):
+    """The polygon (EPSG:5070) of --county NAME from --county-file or the pack's county layer."""
+    _g, ogr, _s = gdal_mods()
+    path = a.county_file or os.path.join(pack, *COUNTIES.split("/"))
+    if not os.path.isfile(os.path.expanduser(path)):
+        raise UserError(
+            "--county {}: this pack has no county layer ({} is not there). Give --county-file FILE "
+            "(any polygon file with a county name field), or use --bbox=W,S,E,N (lon / lat).".format(
+                a.county, COUNTIES))
+    path = real(path)
+    want = a.county.strip().lower()
+    if want.endswith(" county"):
+        want = want[:-7].strip()
+    names = set()
+
+    def is_it(f):
+        hit = False
+        for i in range(f.GetFieldCount()):
+            d = f.GetFieldDefnRef(i)
+            if d.GetType() != ogr.OFTString or f.GetField(i) in (None, ""):
+                continue
+            v = str(f.GetField(i)).strip()
+            low = v.lower()
+            if low.endswith(" county"):
+                low = low[:-7].strip()
+            if "name" in d.GetName().lower() or "county" in d.GetName().lower() or "cnty" in d.GetName().lower():
+                names.add(v)
+            if low == want:
+                hit = True
+        return hit
+
+    geom = polygons_of(path, is_it)
+    if geom is None:
+        some = ", ".join(sorted(names)[:60])
+        raise UserError("--county {}: no polygon of that name in {}{}".format(
+            a.county, path, " (it has: {})".format(some) if some else ""))
+    return geom, path
+
+
+def parse_bbox(text):
+    """(xmin, ymin, xmax, ymax) in EPSG:5070 from 'W,S,E,N' in lon / lat degrees, or, when the
+    numbers are too big for degrees, in EPSG:5070 metres."""
+    try:
+        v = [float(t) for t in str(text).replace(";", ",").split(",")]
+    except ValueError:
+        v = []
+    if len(v) != 4 or v[0] >= v[2] or v[1] >= v[3]:
+        raise UserError("--bbox must be W,S,E,N with W < E and S < N (lon / lat degrees, or EPSG:5070 "
+                        "metres), e.g. --bbox=-101.0,46.4,-100.5,46.8")
+    if all(abs(t) <= 360.0 for t in v):
+        g = box_geom(v)
+        g.Segmentize(0.02)
+        g.Transform(transformer(srs_of(4326), srs_of(WORK_EPSG)))
+        e = g.GetEnvelope()
+        return (e[0], e[2], e[1], e[3])
+    return tuple(v)
+
+
+# ------------------------------------------------------------------------------------- the DEM --
+class Dem:
+    """The terrain raster: its grid, where its source files lie, and quick 'is there terrain' reads."""
+
+    def __init__(self, path):
+        gdal, _o, _s = gdal_mods()
+        import numpy as np
+        self.path = path
+        if not os.path.exists(path):
+            vol = ""
+            parts = path.split(os.sep)
+            if len(parts) > 2 and parts[1] == "Volumes" and not os.path.isdir(os.sep.join(parts[:3])):
+                vol = " The drive {} is not connected.".format(os.sep.join(parts[:3]))
+            raise UserError("the terrain file was not found: {}.{} Give --dem FILE.".format(path, vol))
+        self.ds = gdal.Open(path)
+        if self.ds is None:
+            raise UserError("GDAL cannot open the terrain file {}: {}".format(
+                path, (gdal.GetLastErrorMsg() or "").strip()))
+        self.gt = self.ds.GetGeoTransform()
+        if self.gt[2] or self.gt[4] or self.gt[5] >= 0:
+            raise UserError("the terrain raster {} is rotated or south-up; a north-up raster is needed".format(path))
+        wkt = self.ds.GetProjection()
+        if not wkt:
+            raise UserError("the terrain raster {} has no coordinate system".format(path))
+        self.nx, self.ny = self.ds.RasterXSize, self.ds.RasterYSize
+        self.band = self.ds.GetRasterBand(1)
+        self.nodata = self.band.GetNoDataValue()
+        self.overviews = self.band.GetOverviewCount()
+        self.srs = srs_of(wkt=wkt)
+        self.epsg = self.srs.GetAuthorityCode(None)
+        self.to_dem = transformer(srs_of(WORK_EPSG), self.srs)
+        self.from_dem = transformer(self.srs, srs_of(WORK_EPSG))
+        x0, y1 = self.gt[0], self.gt[3]
+        self.box_dem = (x0, y1 + self.ny * self.gt[5], x0 + self.nx * self.gt[1], y1)
+        self.box_5070 = box_to(self.box_dem, self.from_dem, 64)
+        self.rects = self._source_rects()
+        self.np = np
+
+    def _source_rects(self):
+        """Pixel boxes (x0, y0, x1, y1) of the VRT's source files, read from the VRT text (no
+        pixels are read); None when the file is not a plain VRT (then every tile in its box is
+        looked at)."""
+        import numpy as np
+        if not self.path.lower().endswith(".vrt"):
+            return None
+        try:
+            root = ET.parse(self.path).getroot()
+        except (ET.ParseError, OSError):
+            return None
+        band = root.find("VRTRasterBand")
+        if band is None:
+            return None
+        rects = []
+        for src in band:
+            d = src.find("DstRect")
+            if d is None:
+                continue
+            try:
+                x, y = float(d.get("xOff")), float(d.get("yOff"))
+                rects.append((x, y, x + float(d.get("xSize")), y + float(d.get("ySize"))))
+            except (TypeError, ValueError):
+                return None
+        return np.asarray(rects, float) if rects else None
+
+    def window(self, box5070, margin=0.0):
+        """(xoff, yoff, xsize, ysize) in pixels of a EPSG:5070 box (plus margin), cut to the raster;
+        None when it lies outside."""
+        b = box_to(grow(box5070, margin), self.to_dem)
+        c0 = int(math.floor((b[0] - self.gt[0]) / self.gt[1]))
+        c1 = int(math.ceil((b[2] - self.gt[0]) / self.gt[1]))
+        r0 = int(math.floor((b[3] - self.gt[3]) / self.gt[5]))
+        r1 = int(math.ceil((b[1] - self.gt[3]) / self.gt[5]))
+        c0, r0, c1, r1 = max(0, c0), max(0, r0), min(self.nx, c1), min(self.ny, r1)
+        if c1 <= c0 or r1 <= r0:
+            return None
+        return (c0, r0, c1 - c0, r1 - r0)
+
+    def has_source(self, win):
+        if self.rects is None:
+            return True
+        r = self.rects
+        return bool(((r[:, 0] < win[0] + win[2]) & (r[:, 2] > win[0])
+                     & (r[:, 1] < win[1] + win[3]) & (r[:, 3] > win[1])).any())
+
+    def valid(self, a):
+        np = self.np
+        a = np.asarray(a, "float64")
+        ok = np.isfinite(a) & (a > -9998.0)
+        if self.nodata is not None and math.isfinite(self.nodata):
+            ok &= a != self.nodata
+        return ok
+
+    def has_data(self, win):
+        """True when the window holds any terrain. With overviews (a VRT of USGS tiles has them)
+        this reads a 64 x 64 sample from an overview. Without, 25 single cells are read first and
+        only an all-empty answer is checked with the 64 x 64 sample (which then reads the window's
+        full-resolution blocks: slow, but only for the empty tiles under a source file)."""
+        xo, yo, xs, ys = win
+        if not self.overviews:
+            for i in range(5):
+                for j in range(5):
+                    a = self.band.ReadAsArray(xo + min(xs - 1, int((i + 0.5) * xs / 5)),
+                                              yo + min(ys - 1, int((j + 0.5) * ys / 5)), 1, 1)
+                    if a is not None and self.valid(a).any():
+                        return True
+        a = self.band.ReadAsArray(xo, yo, xs, ys, buf_xsize=max(1, min(xs, 64)), buf_ysize=max(1, min(ys, 64)))
+        if a is None:
+            return True                                     # not readable now: let the tile run and say so
+        return bool(self.valid(a).any())
+
+    def edge_m(self, x, y):
+        """Metres from the point (EPSG:5070) to the nearest missing terrain (a NoData cell, or the
+        end of the raster) within EDGE_SEARCH_M, read at full resolution; holes smaller than
+        EDGE_SPECK_M2 that do not reach the search window's rim are ignored. None when there is none."""
+        np = self.np
+        px, py = self.to_dem.TransformPoint(float(x), float(y))[:2]
+        cell = abs(self.gt[1])
+        h = int(math.ceil(EDGE_SEARCH_M / cell))
+        c = int(math.floor((px - self.gt[0]) / self.gt[1]))
+        r = int(math.floor((py - self.gt[3]) / self.gt[5]))
+        n = 2 * h + 1
+        miss = np.ones((n, n), bool)
+        c0, r0, c1, r1 = max(0, c - h), max(0, r - h), min(self.nx, c + h + 1), min(self.ny, r + h + 1)
+        if c1 > c0 and r1 > r0:
+            a = self.band.ReadAsArray(c0, r0, c1 - c0, r1 - r0)
+            if a is None:
+                raise RuntimeError("reading the terrain round a fill failed")
+            miss[r0 - (r - h):r1 - (r - h), c0 - (c - h):c1 - (c - h)] = ~self.valid(a)
+        if not miss.any():
+            return None
+        from scipy import ndimage as ndi
+        lab, k = ndi.label(miss)
+        if k:
+            size = np.bincount(lab.ravel())
+            rim = np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))
+            small = size < max(1.0, EDGE_SPECK_M2 / (cell * cell))
+            small[rim] = False
+            small[0] = False
+            miss &= ~small[lab]
+        rr, cc = np.nonzero(miss)
+        if not len(rr):
+            return None
+        d = float(np.hypot((rr - h) * cell, (cc - h) * cell).min())
+        return round(d, 1) if d <= EDGE_SEARCH_M else None
+
+
+# ------------------------------------------------------------------------------------ the plan --
+Tile = collections.namedtuple("Tile", "id ix iy box")
+
+
+def tile_id(ix, iy, km):
+    def part(v, pos, neg):
+        return "{}{:04d}".format(pos if v >= 0 else neg, abs(v))
+    return "T{:02d}_{}_{}".format(km, part(ix * km, "E", "W"), part(iy * km, "N", "S"))
+
+
+def lattice(box, tile_m):
+    """Every lattice tile that meets the box: corners at whole multiples of tile_m in EPSG:5070."""
+    km = int(round(tile_m / 1000.0))
+    out = []
+    for ix in range(int(math.floor(box[0] / tile_m)), int(math.ceil(box[2] / tile_m))):
+        for iy in range(int(math.floor(box[1] / tile_m)), int(math.ceil(box[3] / tile_m))):
+            b = (ix * tile_m, iy * tile_m, (ix + 1) * tile_m, (iy + 1) * tile_m)
+            if meets(b, box):
+                out.append(Tile(tile_id(ix, iy, km), ix, iy, b))
+    out.sort(key=lambda t: (t.ix, t.iy))
+    return out
+
+
+def settings_key(engine_version, a, dem):
+    """What a finished tile was made with; a tile made with something else is not mixed in. The
+    terrain is known by its file name and grid, not its folder (a drive can mount under another
+    name)."""
+    return {"script": SCRIPT_VERSION.split(".")[0], "finder": engine_version, "tile_km": int(a.tile_km),
+            "call": dict(CALL), "engine_tile_m": ENGINE_TILE_M, "edge_search_m": EDGE_SEARCH_M,
+            "edge_speck_m2": EDGE_SPECK_M2,
+            "dem": {"name": os.path.basename(dem.path), "nx": dem.nx, "ny": dem.ny,
+                    "grid": [round(v, 6) for v in dem.gt], "epsg": str(dem.epsg)}}
+
+
+def tile_dir(out, tid):
+    return os.path.join(out, "tiles", tid)
+
+
+def marker(out, tid):
+    return read_json(os.path.join(tile_dir(out, tid), "done.json"))
+
+
+def redo_since(a, out, start=False):
+    """--redo: the time the redo began (kept in redo.json, so a stopped --redo goes on with the tiles
+    it has not yet run again); a tile finished after it is finished. None without --redo, and then a
+    redo.json left by a stopped --redo is taken away (start=True: a real run, not a dry run)."""
+    path = os.path.join(out, "redo.json")
+    if not a.redo:
+        if start and os.path.exists(path):
+            os.remove(path)
+        return None
+    old = read_json(path)
+    if old and old.get("since"):
+        return float(old["since"])
+    since = time.time()
+    if start:
+        write_json(path, {"since": since, "started": now()})
+    return since
+
+
+def make_plan(a, dem, out, key, outline, select, log, cache_ok, since=None):
+    """[(Tile, state)] for the lattice tiles over the terrain raster that the selection keeps.
+    state: done / other (finished with other settings) / outside (the state outline) / nosource (no
+    source file of the VRT there) / nodata (source files, but no terrain) / todo."""
+    tile_m = a.tile_km * 1000.0
+    tiles = lattice(dem.box_5070, tile_m)
+    cache_path = os.path.join(out, "plan_cache.json")
+    stamp = "{}|{}|{}".format(dem.path, os.path.getsize(dem.path), int(os.path.getmtime(dem.path)))
+    cache = read_json(cache_path) or {}
+    if cache.get("stamp") != stamp:
+        cache = {"stamp": stamp, "terrain": {}}
+    changed, plan, looked, t0 = False, [], 0, time.time()
+    for t in tiles:
+        g = None
+        if select is not None:
+            g = box_geom(t.box)
+            if not select.Intersects(g):
+                continue
+        m = marker(out, t.id) if os.path.isdir(out) else None
+        if m is not None and (since is None or float(m.get("finished_epoch") or 0) >= since):
+            plan.append((t, "done" if m.get("key") == key else "other"))
+            continue
+        if outline is not None and not outline.Intersects(g or box_geom(t.box)):
+            plan.append((t, "outside"))
+            continue
+        win = dem.window(t.box)
+        if win is None or not dem.has_source(win):
+            plan.append((t, "nosource"))
+            continue
+        got = cache["terrain"].get(t.id)
+        if got is None:
+            got = bool(dem.has_data(win))
+            cache["terrain"][t.id] = got
+            changed = True
+            looked += 1
+            if looked % 200 == 0:
+                log("  looked for terrain in {} tiles ({})".format(looked, dur(time.time() - t0)))
+        plan.append((t, "todo" if got else "nodata"))
+    if changed and cache_ok:
+        write_json(cache_path, cache)
+    return plan
+
+
+# ---------------------------------------------------------------------------------- one tile --
+def extract(finder, src, dst, box5070):
+    """A GeoPackage holding the features of src whose box meets box5070 (grown by EXTRACT_M), in
+    the source's own order and with its feature ids, fields, layer name and CRS: what the engine
+    reads from it for this tile is what it would read from the whole layer."""
+    _g, ogr, osr = gdal_mods()
+    ds, lyr = finder.open_layer(src)
+    s = lyr.GetSpatialRef()
+    if s is None:
+        raise RuntimeError("layer {} has no CRS".format(src))
+    s2 = s.Clone()
+    if hasattr(s2, "SetAxisMappingStrategy"):
+        s2.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    b = box_to(grow(box5070, EXTRACT_M), transformer(srs_of(WORK_EPSG), s2), 16)
+    lyr.SetSpatialFilterRect(b[0], b[1], b[2], b[3])
+    feats = []
+    f = lyr.GetNextFeature()
+    while f is not None:
+        feats.append((f.GetFID(), f))
+        f = lyr.GetNextFeature()
+    feats.sort(key=lambda t: t[0])
+    drv = ogr.GetDriverByName("GPKG")
+    out = drv.CreateDataSource(dst)
+    if out is None:
+        raise RuntimeError("cannot create {}".format(dst))
+    ol = out.CreateLayer(lyr.GetName(), s, lyr.GetGeomType())
+    dfn = lyr.GetLayerDefn()
+    for i in range(dfn.GetFieldCount()):
+        ol.CreateField(dfn.GetFieldDefn(i))
+    odf = ol.GetLayerDefn()
+    out.StartTransaction()
+    for fid, f in feats:
+        g = ogr.Feature(odf)
+        g.SetFrom(f)
+        g.SetFID(fid)
+        if ol.CreateFeature(g) != 0:
+            raise RuntimeError("writing the extract {} failed".format(dst))
+    out.CommitTransaction()
+    out = None
+    ds = None
+    return len(feats)
+
+
+def run_tile(job):
+    """One tile, in its own process: the extracts, the terrain window, finder.run_embankments with
+    the proven call, the distance of every fill to missing terrain, then the tile folder is put in
+    place in one step (a rename). Nothing is left half-finished in tiles/."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)            # Ctrl-C is the parent's to handle
+    parent = os.getppid()
+    gdal, _o, _s = gdal_mods()
+    t0 = time.time()
+    tid, box, out = job["id"], tuple(job["box"]), job["out"]
+    finder = load_engine(job["plugins"])
+    work = os.path.join(out, "work", "{}.{}".format(tid, os.getpid()))
+    os.makedirs(work)
+    try:
+        return _run_tile(job, finder, work, parent, t0)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)             # a failed tile leaves only its log
+        raise
+
+
+def _run_tile(job, finder, work, parent, t0):
+    gdal, _o, _s = gdal_mods()
+    tid, box, out = job["id"], tuple(job["box"]), job["out"]
+
+    def say(*parts):
+        print("{}  {}".format(now(), " ".join(str(p) for p in parts)), flush=True)
+
+    def orphaned():
+        return os.getppid() != parent
+
+    say("tile", tid, "bbox (EPSG:5070)", box, "Finder", finder.VERSION, "GDAL", gdal.__version__)
+    dem = Dem(job["dem"])
+    win = dem.window(box, ENGINE_PAD_M + WINDOW_MARGIN_M)
+    if win is None:
+        raise RuntimeError("the tile lies outside the terrain raster")
+    inp = os.path.join(work, "in")
+    os.makedirs(inp)
+    dem_win = os.path.join(inp, "dem_window.vrt")
+    if gdal.Translate(dem_win, dem.ds, format="VRT", srcWin=list(win)) is None:
+        raise RuntimeError("cutting the terrain window failed: {}".format(gdal.GetLastErrorMsg()))
+    say("terrain window", win, "of", job["dem"])
+    paths = {}
+    for role, src in job["inputs"].items():
+        dst = os.path.join(inp, os.path.basename(src))
+        n = extract(finder, src, dst, box)
+        paths[role] = dst
+        say("extract", role, n, "feature(s)")
+    known = [(paths["known: " + label], label, None) for _rel, label in KNOWN]
+    gpkg = os.path.join(work, tid + ".gpkg")
+    res = finder.run_embankments(dem_win, paths["streams"], gpkg, roads=paths["roads"], rails=paths["rails"],
+                                 known=known, bbox=box, log=say, cancelled=orphaned, **CALL)
+    if res.get("cancelled") or orphaned():
+        shutil.rmtree(work, ignore_errors=True)
+        say("stopped: the run that started this tile is gone")
+        return 3
+    rows = res["rows"]
+    edge = [[r["find_id"], dem.edge_m(r["x"], r["y"])] for r in rows]
+    say("{} fill(s), {} within {:.0f} m of missing terrain".format(
+        len(rows), sum(1 for _i, d in edge if d is not None), EDGE_SEARCH_M))
+    shutil.rmtree(inp, ignore_errors=True)                  # the extracts and the window are not results
+    done = {"id": tid, "box": list(box), "key": job["key"], "fills": len(rows),
+            "status": res["counts"]["status"], "kinds": res["counts"]["kinds"], "ridges": len(res["ridges"]),
+            "edge_m": edge, "seconds": round(time.time() - t0, 1), "cpu_seconds": cpu_seconds(),
+            "peak_rss_mb": peak_rss_mb(),
+            "finished": now(), "finished_epoch": round(time.time(), 1), "finder": finder.VERSION,
+            "gdal": gdal.__version__}
+    write_json(os.path.join(work, "done.json"), done)
+    final = tile_dir(out, tid)
+    old = None
+    if os.path.isdir(final):                                # --redo: the old result goes when the new one is in
+        old = os.path.join(out, "work", "{}.old.{}".format(tid, os.getpid()))
+        os.rename(final, old)
+    if orphaned():
+        if old:
+            os.rename(old, final)
+        shutil.rmtree(work, ignore_errors=True)
+        return 3
+    os.rename(work, final)
+    if old:
+        shutil.rmtree(old, ignore_errors=True)
+    say("finished in", dur(time.time() - t0), "- peak memory", done["peak_rss_mb"], "MB")
+    return 0
+
+
+# ----------------------------------------------------------------------------- running tiles --
+def spawn(t, job_base, out):
+    job = dict(job_base, id=t.id, box=list(t.box))
+    logp = os.path.join(out, "work", t.id + ".log")
+    fh = open(logp, "w", encoding="utf-8")
+    env = dict(os.environ)
+    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+              "NUMEXPR_NUM_THREADS"):
+        env.setdefault(k, "1")                              # one core per tile; --workers sets how many tiles
+    env.setdefault("GDAL_CACHEMAX", GDAL_CACHE_MB)        # MB; the results do not depend on it
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--worker-job", json.dumps(job)],
+                         stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
+    return p, fh, logp
+
+
+def tail(path, n=12):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return [ln.rstrip("\n") for ln in fh.readlines()[-n:]]
+    except OSError:
+        return []
+
+
+def run_tiles(todo, a, out, job_base, counts, log):
+    """Run the tiles, a.workers at a time, each in its own process. A tile that fails is tried once
+    more after the others; a second failure is logged and the run goes on. Many failures in a row
+    (the drive was unplugged) end the run. Returns {'ran': [...], 'failed': {id: why}, 'gave_up':
+    bool}; raises Stop (after stopping the tile processes) on Ctrl-C."""
+    queue = collections.deque(todo)
+    running, tried, failed, ran = {}, set(), {}, []
+    total, start = counts["total"], time.time()
+    fills = counts["fills"]
+    done_before = counts["done"]
+    last_line = time.time()
+    in_a_row = 0
+    gave_up = False
+    timeout = a.tile_timeout_min * 60.0
+
+    def stop_running():
+        for _tid, (p, fh, _logp, _t, _t0) in running.items():
+            try:
+                p.terminate()
+            except OSError:
+                pass
+        t_end = time.time() + 15
+        for _tid, (p, fh, _logp, _t, _t0) in running.items():
+            try:
+                p.wait(timeout=max(0.1, t_end - time.time()))
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+            fh.close()
+
+    def line():
+        n_done = done_before + len(ran)
+        left = len(queue) + len(running)
+        if not left:
+            est = "none left"
+        elif ran:
+            per = (time.time() - start) / len(ran)
+            eta = per * left
+            when = (datetime.datetime.now() + datetime.timedelta(seconds=eta)).strftime("%a %H:%M")
+            est = "about {} left (to {})".format(dur(eta), when)
+        else:
+            est = "about {} left (a first guess)".format(
+                dur(counts["sec_per_tile"] * max(left / float(max(1, a.workers)), 1.0)))
+        log("  tiles {}/{} done, {} running, {} failed - {:,} fills so far - {} elapsed, {}".format(
+            n_done, total, min(a.workers, left), len(failed), fills, dur(time.time() - start), est))
+
+    try:
+        while queue or running:
+            while queue and len(running) < a.workers:
+                t = queue.popleft()
+                p, fh, logp = spawn(t, job_base, out)
+                running[t.id] = (p, fh, logp, t, time.time())
+            time.sleep(0.5)
+            for tid, (p, fh, logp, t, t0) in list(running.items()):
+                rc = p.poll()
+                if rc is None:
+                    if timeout and time.time() - t0 > timeout:
+                        p.kill()
+                        p.wait()
+                        rc = -9
+                        with open(logp, "a", encoding="utf-8") as lf:
+                            lf.write("stopped after {} (--tile-timeout-min)\n".format(dur(time.time() - t0)))
+                    else:
+                        continue
+                fh.close()
+                del running[tid]
+                m = marker(out, tid) if rc == 0 else None
+                if m is not None:
+                    try:
+                        os.replace(logp, os.path.join(tile_dir(out, tid), tid + ".log"))
+                        if tid in tried:                    # it failed once and then ran: its failure log goes
+                            os.remove(os.path.join(out, "failed", tid + ".log"))
+                    except OSError:
+                        pass
+                    ran.append(tid)
+                    fills += int(m.get("fills") or 0)
+                    in_a_row = 0
+                    log("{}: {} fill(s) in {}".format(tid, m.get("fills"), dur(m.get("seconds") or 0)))
+                    line()
+                    last_line = time.time()
+                    continue
+                os.makedirs(os.path.join(out, "failed"), exist_ok=True)
+                keep = os.path.join(out, "failed", tid + ".log")
+                try:
+                    os.replace(logp, keep)
+                except OSError:
+                    pass
+                why = (tail(keep, 1) or ["exit code {}".format(rc)])[0]
+                in_a_row += 1
+                if tid not in tried:
+                    tried.add(tid)
+                    queue.append(t)
+                    log("{}: FAILED ({}); it will be tried once more. Log: {}".format(tid, why, keep))
+                else:
+                    failed[tid] = why
+                    log("{}: FAILED again ({}); left out of this run. Log: {}".format(tid, why, keep))
+                if in_a_row >= max(6, 2 * a.workers):
+                    log("{} tile runs in a row failed: stopping. Is the terrain drive still connected? "
+                        "See the logs in {}".format(in_a_row, os.path.join(out, "failed")))
+                    stop_running()
+                    for q in list(tried) + list(running):
+                        if q not in ran:
+                            failed.setdefault(q, "failed or stopped; not tried again in this run")
+                    running.clear()
+                    queue.clear()
+                    gave_up = True
+                    break
+            if time.time() - last_line > 600:
+                line()
+                last_line = time.time()
+    except (KeyboardInterrupt, Stop) as e:
+        stop_running()
+        raise Stop(str(e) or "stopped") from None
+    return {"ran": ran, "failed": failed, "gave_up": gave_up}
+
+
+def clean_work(out):
+    """Remove what stopped tile processes left in work/ (never anything in tiles/)."""
+    w = os.path.join(out, "work")
+    if os.path.isdir(w):
+        for name in os.listdir(w):
+            p = os.path.join(w, name)
+            if ".old." in name and os.path.isdir(p):
+                tid = name.split(".old.")[0]              # a --redo stopped between its two renames
+                if not os.path.isdir(tile_dir(out, tid)):
+                    os.rename(p, tile_dir(out, tid))
+                    continue
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+
+def take_lock(out):
+    path = os.path.join(out, "run.lock")
+    old = read_json(path)
+    if old and old.get("pid") and old.get("pid") != os.getpid():
+        try:
+            os.kill(int(old["pid"]), 0)
+            alive = True
+        except (OSError, ValueError):
+            alive = False
+        if alive:
+            raise UserError("another run (process {}, started {}) is using {}. Wait for it or stop it; if "
+                            "there is none, delete {}".format(old["pid"], old.get("started"), out, path))
+    write_json(path, {"pid": os.getpid(), "started": now()})
+    return path
+
+
+# -------------------------------------------------------------------------------------- merge --
+def finished_tiles(out, key):
+    """([(id, marker)] of the tiles finished with these settings, sorted; [ids finished with others])."""
+    good, other = [], []
+    base = os.path.join(out, "tiles")
+    for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+        m = read_json(os.path.join(base, name, "done.json"))
+        if m is None:
+            continue
+        (good if m.get("key") == key else other).append((name, m))
+    return good, [n for n, _m in other]
+
+
+def field_names(lyr):
+    d = lyr.GetLayerDefn()
+    return [d.GetFieldDefn(i).GetName() for i in range(d.GetFieldCount())]
+
+
+def as_dict(f, names):
+    """feature.items(), read by field number (by name the Python bindings search the field list
+    for every value, which is most of the time of a merge)."""
+    return {n: f.GetField(i) for i, n in enumerate(names)}
+
+
+def cross_tile_rules(finder, tiles, out, log):
+    """The engine's one-fill-per-pool and 60 m rules across tile seams (see the module text).
+    Reads only a few numbers per fill. Returns (drop, same_pool, n_total): drop = {(tile index,
+    row index)} of the fills another tile's fill replaces, same_pool = {(tile, row): new count}."""
+    import numpy as np
+    _g, ogr, _s = gdal_mods()
+    em = finder.em
+    p = em.FinderParams()
+    ti, ri = array.array("l"), array.array("l")
+    xs, ys, hs = array.array("d"), array.array("d"), array.array("d")
+    sx, sy, sm, od, sd = (array.array("d") for _ in range(5))
+    pool, same = array.array("b"), array.array("l")
+    nan = float("nan")
+
+    def num(v):
+        return nan if v is None else float(v)
+
+    for k, (tid, _m) in enumerate(tiles):
+        ds = ogr.Open(os.path.join(tile_dir(out, tid), tid + ".gpkg"), 0)
+        if ds is None:
+            raise RuntimeError("cannot open the result of tile {}".format(tid))
+        spill = {}
+        sl = ds.GetLayerByName("spillways")
+        if sl is not None:
+            i_id = sl.GetLayerDefn().GetFieldIndex("find_id")
+            for f in sl:
+                g = f.GetGeometryRef()
+                if g is not None:
+                    spill[f.GetField(i_id)] = (g.GetX(), g.GetY())
+        lyr = ds.GetLayerByName("embankments")
+        d = lyr.GetLayerDefn()
+        i_id, i_h, i_sp, i_od, i_sd, i_ls, i_same = (d.GetFieldIndex(n_) for n_ in (
+            "find_id", "height_ft", "spill_ft", "outlet_dist_ft", "spill_dist_ft", "line_source", "same_pool"))
+        j = 0
+        for f in lyr:
+            g = f.GetGeometryRef()
+            s = spill.get(f.GetField(i_id))
+            ti.append(k)
+            ri.append(j)
+            xs.append(g.GetX())
+            ys.append(g.GetY())
+            hs.append(num(f.GetField(i_h)))
+            sx.append(s[0] if s else nan)
+            sy.append(s[1] if s else nan)
+            sm.append(num(f.GetField(i_sp)) * FT)
+            od.append(num(f.GetField(i_od)) * FT)
+            sd.append(num(f.GetField(i_sd)) * FT)
+            pool.append(1 if f.GetField(i_ls) == finder.LINE_POOL else 0)
+            same.append(int(f.GetField(i_same) or 0))
+            j += 1
+        ds = None
+    n = len(xs)
+    drop, same_new = set(), {}
+    if n < 2:
+        return drop, same_new, n
+    from scipy.spatial import cKDTree
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    A = {name: np.frombuffer(arr, dtype=dt) for name, arr, dt in (
+        ("ti", ti, np.dtype("l")), ("x", xs, "d"), ("y", ys, "d"), ("h", hs, "d"), ("sx", sx, "d"),
+        ("sy", sy, "d"), ("sm", sm, "d"), ("od", od, "d"), ("sd", sd, "d"), ("pool", pool, "b"))}
+    alive = np.ones(n, bool)
+
+    def groups(px, py, idx, radius):
+        """Lists of fill indices linked by pairs closer than radius, for the groups that hold fills
+        of more than one tile (a group of one tile's fills is as the engine left it)."""
+        if len(idx) < 2:
+            return []
+        pairs = cKDTree(np.column_stack([px, py])).query_pairs(radius, output_type="ndarray")
+        if not len(pairs):
+            return []
+        m = len(idx)
+        g = coo_matrix((np.ones(len(pairs), "i1"), (pairs[:, 0], pairs[:, 1])), shape=(m, m))
+        _k, lab = connected_components(g, directed=False)
+        in_pair = np.zeros(m, bool)
+        in_pair[pairs.ravel()] = True
+        by = {}
+        for loc in np.nonzero(in_pair)[0]:
+            by.setdefault(int(lab[loc]), []).append(int(idx[loc]))
+        return [sorted(v) for v in by.values() if len(set(A["ti"][v].tolist())) > 1]
+
+    # 1. one fill per pool: the pools that get out at the same spill point (2 cells, same level)
+    idx = np.nonzero(np.isfinite(A["sx"]))[0]
+    n_pool = 0
+    for grp in groups(A["sx"][idx], A["sy"][idx], idx, 2.0 * CALL["cell"] + 1e-9):
+        cands = [types.SimpleNamespace(i=i, spill_xy=(float(A["sx"][i]), float(A["sy"][i])), spill_m=float(A["sm"][i]),
+                                       outlet_dist_m=float(A["od"][i]),
+                                       spill_dist_m=float(A["sd"][i]) if math.isfinite(A["sd"][i]) else 0.0,
+                                       pool_line=bool(A["pool"][i]), height_m=float(A["h"][i]) * FT,
+                                       same_pool=int(same[i]), notes=[]) for i in grp]
+        kept = em.one_per_pool(cands, CALL["cell"])
+        kept_i = set(c.i for c in kept)
+        for c in kept:
+            if c.same_pool != int(same[c.i]):
+                same_new[(int(A["ti"][c.i]), int(ri[c.i]))] = c.same_pool
+        for i in grp:
+            if i not in kept_i:
+                alive[i] = False
+                drop.add((int(A["ti"][i]), int(ri[i])))
+                n_pool += 1
+    # 2. no two fills within dedupe_m (60 m): the higher one stays (a pool-outlet reading goes first)
+    idx = np.nonzero(alive)[0]
+    n_near = 0
+    for grp in groups(A["x"][idx], A["y"][idx], idx, p.dedupe_m):
+        cands = [types.SimpleNamespace(i=i, x=float(A["x"][i]), y=float(A["y"][i]), pool_line=bool(A["pool"][i]),
+                                       height_m=float(A["h"][i]) * FT) for i in grp]
+        kept_i = set(c.i for c in em.dedupe(cands, p.dedupe_m))
+        for i in grp:
+            if i not in kept_i:
+                drop.add((int(A["ti"][i]), int(ri[i])))
+                same_new.pop((int(A["ti"][i]), int(ri[i])), None)
+                n_near += 1
+    log("  across tile seams: {} fill(s) on a pool another tile's fill holds, {} within {:.0f} m of another "
+        "tile's fill: removed".format(n_pool, n_near, p.dedupe_m))
+    return drop, same_new, n
+
+
+def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_note, model_path, log):
+    """One GeoPackage of every fill of the finished tiles, scored, with the ranked candidates, the
+    ranked CSV and the summary. Tile by tile: the rows of one tile are in memory at a time; the
+    seam rules and the ranking keep a few numbers per fill."""
+    import numpy as np
+    gdal, ogr, _s = gdal_mods()
+    t0 = time.time()
+    tiles, other = finished_tiles(out, key)
+    if not tiles:
+        raise UserError("no finished tile in {} to merge{}".format(
+            out, " ({} were made with other settings: --redo runs them again)".format(len(other)) if other else ""))
+    log("Merging {} finished tile(s) from {}".format(len(tiles), os.path.join(out, "tiles")))
+    drop, same_new, n_all = cross_tile_rules(finder, tiles, out, log)
+    model = None
+    if not a.no_score:
+        from importlib import import_module
+        sc = import_module(ENGINE + ".core.score")
+        model = sc.load(model_path)
+    rings = rings_of(outline) if outline is not None else None
+    edge_lim = float(a.edge_m)
+    fields = [f for f in finder.EMB_FIELDS] + EXTRA_FIELDS
+    kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
+    conv = {"str": str, "float": float, "int": int}
+    final = os.path.join(out, OUT_GPKG)
+    part = os.path.join(out, "work", "merge_{}.gpkg".format(os.getpid()))
+    os.makedirs(os.path.dirname(part), exist_ok=True)
+    for q in (part, part + "-wal", part + "-shm", part + "-journal"):
+        if os.path.exists(q):
+            os.remove(q)
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(part)
+    if ds is None:
+        raise RuntimeError("cannot create {}".format(part))
+    srs = srs_of(WORK_EPSG)
+    lyr = ds.CreateLayer("embankments", srs, ogr.wkbPoint)
+    for name, t in fields:
+        lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
+    spl = ds.CreateLayer("spillways", srs, ogr.wkbPoint)
+    for name, t in finder.SPILL_FIELDS + [("tile", "str")]:
+        spl.CreateField(ogr.FieldDefn(name, kinds[t]))
+    rdl = ds.CreateLayer("ridges", srs, ogr.wkbPoint)
+    for name, t in finder.RIDGE_FIELDS + [("tile", "str")]:
+        rdl.CreateField(ogr.FieldDefn(name, kinds[t]))
+    dfn = lyr.GetLayerDefn()
+    fields_i = [(name, t, dfn.GetFieldIndex(name)) for name, t in fields]
+    seen, clash = {}, []
+    stat = collections.Counter()
+    by_status, by_kind, by_kind_status = collections.Counter(), collections.Counter(), collections.Counter()
+    secs, cpus, peak = [], [], 0.0
+    ds.StartTransaction()
+    written = 0
+    for k, (tid, m) in enumerate(tiles):
+        secs.append(float(m.get("seconds") or 0.0))
+        cpus.append(float(m.get("cpu_seconds") or 0.0))
+        peak = max(peak, float(m.get("peak_rss_mb") or 0.0))
+        src = ogr.Open(os.path.join(tile_dir(out, tid), tid + ".gpkg"), 0)
+        rows = []
+        sl_ = src.GetLayerByName("embankments")
+        names = field_names(sl_)
+        for j, f in enumerate(sl_):
+            r = as_dict(f, names)
+            g = f.GetGeometryRef()
+            r["x"], r["y"], r["_j"] = g.GetX(), g.GetY(), j
+            rows.append(r)
+        edge = m.get("edge_m") or []
+        if len(edge) != len(rows) or any(e[0] != r["find_id"] for e, r in zip(edge, rows)):
+            raise RuntimeError("tile {}: done.json does not match its GeoPackage; run it again "
+                               "(delete {})".format(tid, tile_dir(out, tid)))
+        for r, e in zip(rows, edge):
+            r["_edge"] = e[1]
+        rows = [r for r in rows if (k, r["_j"]) not in drop]
+        gone = set()
+        if len(rows) != len(edge):
+            keep_ids = set(r["find_id"] for r in rows)
+            gone = set(e[0] for e in edge) - keep_ids
+        if rows:
+            ins = points_in_rings([r["x"] for r in rows], [r["y"] for r in rows], rings) if rings is not None \
+                else np.ones(len(rows), bool)
+            det = sc.score_detail(model, rows) if model is not None else None
+            for i, r in enumerate(rows):
+                r["tile"] = tid
+                r["edge_ft"] = None if r["_edge"] is None else round(r["_edge"] / FT, 0)
+                r["at_data_edge"] = "yes" if r["_edge"] is not None and r["_edge"] <= edge_lim else "no"
+                r["in_state"] = "yes" if ins[i] else "no"
+                if det is not None:
+                    r["score"] = round(float(det[i][0]), 3)
+                    r["score_note"] = det[i][1]
+                else:
+                    r["score"], r["score_note"] = None, None
+                new = same_new.get((k, r["_j"]))
+                if new is not None:
+                    notes = [t for t in str(r.get("notes") or "").split("; ") if t
+                             and not t.endswith("(one fill per pool)")]
+                    notes.append("{} other hump(s) on this pool dropped (one fill per pool)".format(new))
+                    r["same_pool"], r["notes"] = new, "; ".join(notes)
+                feat = ogr.Feature(dfn)
+                for name, t, fi in fields_i:
+                    v = r.get(name)
+                    if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                        continue                            # as the engine writes them: '' stays ''
+                    feat.SetField(fi, conv[t](v))
+                g = ogr.Geometry(ogr.wkbPoint)
+                g.AddPoint_2D(r["x"], r["y"])
+                feat.SetGeometry(g)
+                if lyr.CreateFeature(feat) != 0:
+                    raise RuntimeError("writing {} failed (is the disk full?)".format(part))
+                fid = feat.GetFID()
+                if r["find_id"] in seen:
+                    clash.append((seen[r["find_id"]], fid))
+                else:
+                    seen[r["find_id"]] = fid
+                written += 1
+                use = r["in_state"] == "yes" and r["at_data_edge"] == "no"
+                stat["all"] += 1
+                stat["out_of_state"] += r["in_state"] == "no"
+                stat["at_edge"] += r["at_data_edge"] == "yes"
+                if use:
+                    by_status[r["status"]] += 1
+                    by_kind[r["kind"]] += 1
+                    by_kind_status[(r["kind"], r["status"])] += 1
+        for layer, dst in (("spillways", spl), ("ridges", rdl)):
+            sl = src.GetLayerByName(layer)
+            if sl is None:
+                continue
+            ddf = dst.GetLayerDefn()
+            i_tile, i_id = ddf.GetFieldIndex("tile"), sl.GetLayerDefn().GetFieldIndex("find_id")
+            for f in sl:
+                if layer == "spillways" and gone and f.GetField(i_id) in gone:
+                    continue
+                g = ogr.Feature(ddf)
+                g.SetFrom(f)
+                g.SetField(i_tile, tid)
+                dst.CreateFeature(g)
+        src = None
+        if (k + 1) % 50 == 0:
+            ds.CommitTransaction()
+            ds.StartTransaction()
+            log("  {}/{} tiles, {:,} fills".format(k + 1, len(tiles), written))
+    ds.CommitTransaction()
+    # two different fills with one find_id (the id is a 32-bit hash of the point): both are kept
+    if clash:
+        ds.StartTransaction()
+        i_clash = dfn.GetFieldIndex("id_clash")
+        for pair in clash:
+            for fid in pair:
+                f = lyr.GetFeature(fid)
+                f.SetField(i_clash, "yes")
+                lyr.SetFeature(f)
+        ds.CommitTransaction()
+    # the ranked candidates: unlisted, dam or dry embankment, in the state, not at the data edge
+    kd = finder.em
+    order = "score DESC, height_ft DESC, find_id, tile" if model is not None else "height_ft DESC, find_id, tile"
+    sql = ("SELECT fid FROM embankments WHERE status <> 'listed' AND kind IN ('{}', '{}') AND in_state = 'yes' "
+           "AND at_data_edge = 'no' ORDER BY {}".format(kd.K_DAM, kd.K_DRY, order))
+    res = ds.ExecuteSQL(sql)
+    if res is None:
+        raise RuntimeError("ranking the candidates failed: {}".format(gdal.GetLastErrorMsg()))
+    ranked = array.array("q")
+    for f in res:
+        ranked.append(f.GetField(0) if f.GetFieldCount() else f.GetFID())
+    ds.ReleaseResultSet(res)
+    cl = ds.CreateLayer("candidates", srs, ogr.wkbPoint)
+    cfields = [("rank", "int")] + fields
+    for name, t in cfields:
+        cl.CreateField(ogr.FieldDefn(name, kinds[t]))
+    cdf = cl.GetLayerDefn()
+    i_rank, emb_names = cdf.GetFieldIndex("rank"), field_names(lyr)
+    first = ["rank", "score", "find_id", "kind", "status", "lat", "lon", "height_ft", "storage_af", "area_ac",
+             "drain_ac", "length_ft", "known_id", "known_layer", "known_ft", "score_note", "tile"]
+    cols = first + [n for n, _t in cfields if n not in first]
+    csv_part = os.path.join(out, "work", "ranked_{}.csv".format(os.getpid()))
+    top = []
+    with open(csv_part, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(cols)
+        ds.StartTransaction()
+        for rank, fid in enumerate(ranked, 1):
+            f = lyr.GetFeature(fid)
+            g = ogr.Feature(cdf)
+            g.SetFrom(f)
+            g.SetField(i_rank, rank)
+            cl.CreateFeature(g)
+            vals = as_dict(f, emb_names)
+            vals["rank"] = rank
+            w.writerow(["" if vals.get(c) is None else vals.get(c) for c in cols])
+            if rank <= 10:
+                top.append(vals)
+            if rank % 20000 == 0:
+                ds.CommitTransaction()
+                ds.StartTransaction()
+        ds.CommitTransaction()
+    # the record
+    plan_note = dict(plan_note or {})
+    info = collections.OrderedDict()
+    info["made"] = now()
+    info["script"] = "run_finder_statewide.py {}".format(SCRIPT_VERSION)
+    info["finder_version"] = finder.VERSION
+    info["gdal"] = gdal.__version__
+    info["numpy"] = np.__version__
+    import scipy
+    info["scipy"] = scipy.__version__
+    info["python"] = sys.version.split()[0]
+    info["terrain"] = dem_path
+    info["tile_km"] = a.tile_km
+    info["call"] = "finder.run_embankments(" + ", ".join("{}={}".format(k_, v) for k_, v in sorted(CALL.items())) \
+        + ", bbox=<tile>, the six known layers; everything else the Finder's defaults)"
+    info["state_outline"] = outline_what
+    info["edge_m"] = "{:.0f} (at_data_edge = yes within this of missing terrain; searched to {:.0f} m, holes " \
+                     "under {:.0f} m2 ignored)".format(edge_lim, EDGE_SEARCH_M, EDGE_SPECK_M2)
+    info["score_model"] = "none (--no-score)" if model is None else model_path
+    info["tiles_merged"] = len(tiles)
+    for k_, v in plan_note.items():
+        info[k_] = v
+    if other:
+        info["tiles_left_out_other_settings"] = len(other)
+    info["fills_read"] = n_all
+    info["fills_removed_across_seams"] = len(drop)
+    info["fills"] = stat["all"]
+    info["fills_outside_state"] = stat["out_of_state"]
+    info["fills_at_data_edge"] = stat["at_edge"]
+    info["candidates_ranked"] = len(ranked)
+    info["find_id_clashes"] = len(clash)
+    info["tile_seconds_total"] = round(sum(secs))
+    info["tile_seconds_mean"] = round(sum(secs) / len(secs), 1)
+    info["tile_seconds_max"] = round(max(secs), 1)
+    info["tile_cpu_seconds_total"] = round(sum(cpus))
+    info["tile_peak_memory_mb_max"] = round(peak)
+    sums = collections.OrderedDict()
+    if not a.no_checksums:
+        files = list(inputs.items()) + ([("score model", model_path)] if model is not None else [])
+        if os.path.isfile(dem_path) and os.path.getsize(dem_path) < 512 * 1024 * 1024 \
+                and dem_path.lower().endswith(".vrt"):
+            files.append(("terrain VRT (the list of tiles, not the tiles)", dem_path))
+        for role, p in files:
+            sums[role] = "{}  {}".format(sha256(p), p)
+    il = ds.CreateLayer("run_info", None, ogr.wkbNone)
+    il.CreateField(ogr.FieldDefn("key", ogr.OFTString))
+    il.CreateField(ogr.FieldDefn("value", ogr.OFTString))
+    for k_, v in list(info.items()) + [("sha256 " + r_, v_) for r_, v_ in sums.items()]:
+        f = ogr.Feature(il.GetLayerDefn())
+        f.SetField("key", str(k_))
+        f.SetField("value", str(v))
+        il.CreateFeature(f)
+    ds = None
+    os.replace(part, final)
+    os.replace(csv_part, os.path.join(out, OUT_CSV))
+    # the summary text
+    L = []
+    L.append("ND Finder statewide run - summary ({})".format(info["made"]))
+    L.append("")
+    if plan_note.get("tiles_still_to_run") or plan_note.get("tiles_failed_this_run"):
+        L.append("PARTIAL RESULT: {} tile(s) still to run, {} failed in this run. Run the same command again."
+                 .format(plan_note.get("tiles_still_to_run", 0), plan_note.get("tiles_failed_this_run", 0)))
+        L.append("")
+    L.append("Fills found (all tiles merged, duplicates across tile seams removed): {:,}".format(stat["all"]))
+    L.append("  outside North Dakota (in_state = no):            {:,}".format(stat["out_of_state"]))
+    L.append("  within {:.0f} m of missing terrain (at_data_edge):   {:,}".format(edge_lim, stat["at_edge"]))
+    L.append("  in the state and not at the data edge:           {:,}".format(sum(by_status.values())))
+    L.append("")
+    L.append("Of those, by status (against the DWR, NID and SARP lists, 1000 ft) and kind:")
+    sts = ["new", "unsure", "listed"]
+    L.append("  {:<42}{:>9}{:>9}{:>9}{:>9}".format("kind", *(sts + ["all"])))
+    for kind in sorted(by_kind, key=lambda q: -by_kind[q]):
+        L.append("  {:<42}{:>9,}{:>9,}{:>9,}{:>9,}".format(kind, *([by_kind_status[(kind, s)] for s in sts]
+                                                               + [by_kind[kind]])))
+    L.append("  {:<42}{:>9,}{:>9,}{:>9,}{:>9,}".format("all", *([by_status[s] for s in sts] + [sum(by_status.values())])))
+    L.append("")
+    L.append("Ranked candidates (not listed; dam or dry embankment; in the state; not at the data edge): {:,}"
+             .format(len(ranked)))
+    L.append("  ranked by {}".format("the score of {}".format(os.path.basename(model_path)) if model is not None
+                                     else "height (--no-score)"))
+    for v in top:
+        L.append("  {:>3}  {}  score {}  {:<15} {:<7} {:>6} ft  {:.5f}, {:.5f}".format(
+            v["rank"], v["find_id"], "-" if v.get("score") is None else "{:.3f}".format(v["score"]), v["kind"],
+            v["status"], v["height_ft"], v["lat"], v["lon"]))
+    if clash:
+        L.append("")
+        L.append("{} pair(s) of different fills share a find_id (the id is a 32-bit hash of the point; marked "
+                 "id_clash = yes, both kept).".format(len(clash)))
+    L.append("")
+    L.append("Tiles")
+    L.append("  merged here: {}".format(len(tiles)))
+    for k_, label in (("tiles_in_plan", "in the plan (terrain raster and selection)"),
+                      ("tiles_ran_this_run", "run in this run"), ("tiles_failed_this_run", "failed in this run"),
+                      ("tiles_still_to_run", "still to run"),
+                      ("tiles_skipped_no_terrain", "skipped: no terrain"),
+                      ("tiles_skipped_outside_state", "skipped: outside the state outline")):
+        if k_ in plan_note:
+            L.append("  {}: {}".format(label, plan_note[k_]))
+    if plan_note.get("failed_ids"):
+        L.append("  failed: {}".format(plan_note["failed_ids"]))
+    if other:
+        L.append("  left out, made with other settings: {}".format(len(other)))
+    L.append("  tile time: {} in all ({} of processor time), mean {}, longest {}; highest memory of one tile "
+             "{:.0f} MB".format(dur(sum(secs)), dur(sum(cpus)), dur(sum(secs) / len(secs)), dur(max(secs)), peak))
+    L.append("")
+    L.append("Versions and settings")
+    for k_ in ("script", "finder_version", "gdal", "numpy", "scipy", "python", "terrain", "tile_km", "call",
+               "state_outline", "edge_m", "score_model", "selection"):
+        if k_ in info:
+            L.append("  {}: {}".format(k_, info[k_]))
+    if sums:
+        L.append("")
+        L.append("Input checksums (sha256)")
+        for role, v in sums.items():
+            L.append("  {}: {}".format(role, v))
+    L.append("")
+    L.append("Files")
+    L.append("  {}  (layers: embankments = every fill; candidates = the ranked list; spillways; ridges; "
+             "run_info)".format(final))
+    L.append("  {}".format(os.path.join(out, OUT_CSV)))
+    L.append("")
+    with open(os.path.join(out, OUT_SUMMARY), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(L))
+    for ln in L:
+        log(ln)
+    log("merge took {}".format(dur(time.time() - t0)))
+    return info
+
+
+# ---------------------------------------------------------------------------------------- main --
+def parser():
+    ap = argparse.ArgumentParser(
+        prog="run_finder_statewide", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=__doc__.split("HOW THE STATE IS TILED")[0])
+    ap.add_argument("--dem", default=os.environ.get("ND_LOCAL_TERRAIN") or DEFAULT_DEM,
+                    help="the statewide 1 m terrain VRT, NAVD88 metres [$ND_LOCAL_TERRAIN, else %(default)s]")
+    ap.add_argument("--data", default="", help="the suite data folder (it holds ND_Dam_Suite_Pack), or the pack "
+                                               "folder itself; read only [$NDSUITE_DATA, else ~/ND_Suite_Data]")
+    ap.add_argument("--out", default=DEFAULT_OUT, help="where everything is written [%(default)s]")
+    ap.add_argument("--workers", type=int, default=4, help="tiles run at once, one core each [4]")
+    ap.add_argument("--tile-km", type=int, default=10, help="tile size, a multiple of 5 km [10]")
+    ap.add_argument("--bbox", default="", help="only the tiles that touch W,S,E,N (lon / lat degrees; or EPSG:5070 "
+                                               "metres). Write it --bbox=-101.0,46.4,-100.5,46.8")
+    ap.add_argument("--county", default="", help="only the tiles that touch this county (needs a county layer: the "
+                                                 "pack's {} or --county-file)".format(COUNTIES))
+    ap.add_argument("--county-file", default="", help="a polygon file with the county names, for --county")
+    ap.add_argument("--limit", type=int, default=0, help="run at most N tiles in this run (a trial)")
+    ap.add_argument("--list", action="store_true", help="list the tiles and what each would do; writes nothing")
+    ap.add_argument("--dry-run", action="store_true", help="tile counts, time and disk estimates; writes nothing")
+    ap.add_argument("--redo", action="store_true", help="run the selected tiles again though they are finished "
+                                                        "(each old result is replaced when its new one is in)")
+    ap.add_argument("--merge-only", action="store_true", help="run no tiles: merge the finished ones")
+    ap.add_argument("--no-score", action="store_true", help="do not score; the candidates are ranked by height")
+    ap.add_argument("--review-batch", type=int, default=0, metavar="N",
+                    help="after the merge, draw a review batch of N cards from the ranked candidates "
+                         "(finder.run_review_batch with its defaults) into ND_finder_review_batch.gpkg / .csv")
+    ap.add_argument("--model", default="", help="the score model JSON [the plugin's models/{}]".format(MODEL_NAME))
+    ap.add_argument("--state-outline", default="", help="a polygon file of North Dakota; 'none' = no test "
+                                                        "[the pack's counties, else the built-in simple outline]")
+    ap.add_argument("--state-buffer-m", type=float, default=None,
+                    help="allowance round the state outline [0 for a file, {:.0f} for the built-in one]".format(
+                        BUILTIN_BUFFER_M))
+    ap.add_argument("--edge-m", type=float, default=150.0,
+                    help="a fill this close to missing terrain is at_data_edge [150; at most {:.0f}]".format(
+                        EDGE_SEARCH_M))
+    ap.add_argument("--plugins", default="", help="the folder that holds {} [the damsafety QGIS profile]".format(ENGINE))
+    ap.add_argument("--repo", default="", help="a DWR_Plugins checkout to take {} from".format(ENGINE))
+    ap.add_argument("--tile-timeout-min", type=float, default=240.0,
+                    help="stop a tile that runs longer than this and count it as failed [240; 0 = never]")
+    ap.add_argument("--no-checksums", action="store_true", help="do not sha256 the pack layers for the summary")
+    ap.add_argument("--worker-job", default="", help=argparse.SUPPRESS)
+    return ap
+
+
+def fix_argv(argv):
+    """'--bbox -101,46,-100,47' -> '--bbox=-101,46,-100,47' (argparse takes the minus for an option)."""
+    out, i = [], 0
+    while i < len(argv):
+        if argv[i] == "--bbox" and i + 1 < len(argv) and argv[i + 1][:1] == "-" and argv[i + 1][1:2].isdigit():
+            out.append("--bbox=" + argv[i + 1])
+            i += 2
+        else:
+            out.append(argv[i])
+            i += 1
+    return out
+
+
+def main(argv=None):
+    a = parser().parse_args(fix_argv(list(sys.argv[1:] if argv is None else argv)))
+    more_files()
+    if a.worker_job:
+        try:
+            return run_tile(json.loads(a.worker_job))
+        except Exception:                                               # noqa - the tile's log says why
+            traceback.print_exc()
+            sys.stdout.flush()
+            e = sys.exc_info()[1]
+            print("{}: {}".format(type(e).__name__, e), flush=True)
+            return 1
+    try:
+        return run(a)
+    except UserError as e:
+        print("ERROR: {}".format(e), file=sys.stderr)
+        return 2
+
+
+def run(a):
+    if a.workers < 1:
+        raise UserError("--workers must be 1 or more")
+    if a.tile_km < 5 or a.tile_km % 5:
+        raise UserError("--tile-km must be a multiple of 5 (the engine works in 5 km squares; see the top of "
+                        "this script)")
+    if not 0 < a.edge_m <= EDGE_SEARCH_M:
+        raise UserError("--edge-m must be between 0 and {:.0f}".format(EDGE_SEARCH_M))
+    if a.bbox and a.county:
+        raise UserError("give --bbox or --county, not both")
+    if a.redo and a.merge_only:
+        raise UserError("give --redo or --merge-only, not both")
+    try:
+        gdal, _o, _s = gdal_mods()
+        import numpy                                                    # noqa - checked here, used later
+        import scipy                                                    # noqa
+    except ImportError as e:
+        raise UserError("this Python lacks {} - run it with the suite's QGIS Python (run_finder_statewide.sh "
+                        "does: mamba run -n ndqgis python ...)".format(e)) from None
+    quiet = a.list or a.dry_run
+    out = real(a.out)
+    data = find_data(a)
+    pack = find_pack(data)
+    plugins, plugins_from = find_plugins(a)
+    dem_path = real(a.dem) if os.path.exists(os.path.expanduser(a.dem)) else os.path.expanduser(a.dem)
+    for folder, what in ((data, "the suite data folder"), (pack, "the data pack"), (plugins, "the plugins folder"),
+                         (os.path.dirname(dem_path), "the terrain folder")):
+        if inside(out, folder):
+            raise UserError("--out {} is inside {} ({}): nothing is ever written there. Choose another "
+                            "--out.".format(out, what, folder))
+    inputs = pack_inputs(pack)
+    finder = load_engine(plugins)
+    ver = tuple(int(t) for t in finder.VERSION.split(".")[:2])
+    if ver < (0, 6):
+        raise UserError("{} in {} is version {}; 0.6.0 or later is needed".format(ENGINE, plugins, finder.VERSION))
+    model_path = real(a.model) if a.model else os.path.join(plugins, ENGINE, "models", MODEL_NAME)
+    if not a.no_score and not os.path.isfile(model_path):
+        raise UserError("the score model {} was not found (give --model FILE, or --no-score)".format(model_path))
+    dem = Dem(dem_path)
+    key = settings_key(finder.VERSION, a, dem)
+    log = Log()
+    lock = None
+    if not quiet:
+        os.makedirs(os.path.join(out, "logs"), exist_ok=True)
+        lock = take_lock(out)
+        log = Log(os.path.join(out, "logs", "run_{}.log".format(datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))))
+    try:
+        return run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder,
+                          model_path, key)
+    finally:
+        log.close()
+        if lock and (read_json(lock) or {}).get("pid") == os.getpid():
+            os.remove(lock)
+
+
+def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_path, inputs, finder, model_path, key):
+    gdal, _o, _s = gdal_mods()
+    log("run_finder_statewide {} - {}".format(SCRIPT_VERSION, now()))
+    log("  Finder   {} from {} ({})".format(finder.VERSION, os.path.join(plugins, ENGINE), plugins_from))
+    log("  terrain  {}  ({:,} x {:,} cells of {:g} m, EPSG:{}, {} source file(s) listed, {} overview level(s))".format(
+        dem_path, dem.nx, dem.ny, abs(dem.gt[1]), dem.epsg, "?" if dem.rects is None else len(dem.rects),
+        dem.overviews))
+    log("  pack     {}  (read only)".format(pack))
+    log("  out      {}".format(out))
+    unit = (dem.band.GetUnitType() or "").strip().lower()
+    if unit and ("foot" in unit or "feet" in unit or unit in ("ft", "ftus", "us-ft")):
+        raise UserError("the terrain raster is tagged with elevations in '{}'. This script reads the terrain in "
+                        "metres (the statewide VRT is NAVD88 metres): it is not the right file.".format(unit))
+    if dem.nodata is None:
+        log("  WARNING: the terrain raster names no NoData value; gaps cannot be told from ground")
+    if abs(dem.gt[1]) > 2.0:
+        log("  WARNING: the terrain cells are {:g} m; the Finder was tested on 1 m LiDAR".format(abs(dem.gt[1])))
+    outline, outline_what = state_outline(a, pack)
+    log("  state    {}".format(outline_what))
+    select, sel_what = None, "the whole terrain raster"
+    if a.bbox:
+        b = parse_bbox(a.bbox)
+        select, sel_what = box_geom(b), "--bbox {} (EPSG:5070: {:.0f}, {:.0f}, {:.0f}, {:.0f})".format(a.bbox, *b)
+    elif a.county:
+        select, cpath = county_geom(a, pack)
+        sel_what = "--county {} (from {})".format(a.county, cpath)
+    log("  area     {} - whole {} km tiles".format(sel_what, a.tile_km))
+    if not quiet:
+        clean_work(out)
+        os.makedirs(os.path.join(out, "work"), exist_ok=True)
+        os.makedirs(os.path.join(out, "tiles"), exist_ok=True)
+    log("Planning the tiles (looking for terrain) ...")
+    since = redo_since(a, out, start=not quiet and not a.merge_only) if os.path.isdir(out) \
+        else (time.time() if a.redo else None)
+    plan = make_plan(a, dem, out, key, outline, select, log, cache_ok=not quiet, since=since)
+    n = collections.Counter(s for _t, s in plan)
+    todo = [t for t, s in plan if s == "todo"]
+    if a.redo:
+        log("  --redo: tiles finished before {} run again (each old result is replaced when its new one is in)".format(
+            datetime.datetime.fromtimestamp(since).strftime("%Y-%m-%d %H:%M:%S")))
+    with_terrain = n["todo"] + n["done"] + n["other"]
+    log("  {} tile(s) of {} km in the selection: {} with terrain ({} finished, {} to run), {} without terrain "
+        "(skipped), {} outside the state outline (skipped)".format(
+            len(plan), a.tile_km, with_terrain, n["done"], n["todo"], n["nodata"] + n["nosource"], n["outside"]))
+    if n["other"]:
+        log("  {} finished tile(s) were made with other settings (another Finder version, tile size or terrain "
+            "file): they are left as they are, NOT run and NOT merged. --redo runs them again with the "
+            "settings of this run.".format(n["other"]))
+    if a.list:
+        ll = transformer(srs_of(WORK_EPSG), srs_of(4326))
+        words = {"todo": "to run", "done": "finished", "other": "finished with other settings",
+                 "nodata": "no terrain", "nosource": "no terrain (no source file)", "outside": "outside the state"}
+        log("{:<20}{:>11}{:>10}  {}".format("tile", "lon", "lat", "state"))
+        for t, s in plan:
+            lon, lat = ll.TransformPoint(0.5 * (t.box[0] + t.box[2]), 0.5 * (t.box[1] + t.box[3]))[:2]
+            m = marker(out, t.id) if s == "done" else None
+            log("{:<20}{:>11.4f}{:>10.4f}  {}{}".format(t.id, lon, lat, words[s],
+                                                        " - {} fill(s)".format(m.get("fills")) if m else ""))
+    # what a tile costs: this folder's own finished tiles when there are 3, else the cloud-box numbers
+    done_m = [marker(out, t.id) for t, s in plan if s == "done"]
+    done_m = [m for m in done_m if m]
+    secs = [float(m.get("seconds") or 0) for m in done_m if m.get("seconds")]
+    measured = len(secs) >= 3
+    sec_per = sum(secs) / len(secs) if measured else EST_SEC_PER_TILE
+    fills_done = sum(int(m.get("fills") or 0) for m in done_m)
+    if a.limit and a.limit > 0 and not a.merge_only:
+        todo_now = todo[:a.limit]
+    else:
+        todo_now = list(todo)
+    if a.dry_run or a.list:
+        w = max(1, a.workers)
+        log("")
+        log("Estimate for the {} tile(s) still to run, {} at a time:".format(len(todo), w))
+        log("  time    {} ({} per tile: {})".format(
+            "about " + dur(sec_per * max(len(todo) / float(w), 1.0)) if todo else "nothing left to run", dur(sec_per),
+            "the mean of the {} tiles finished in this folder".format(len(secs)) if measured else
+            "processor time of a tile full of terrain on the cloud test box, NOT timed on this computer; "
+            "tiles at the edge of the terrain are quicker; the first finished tiles give this computer's own "
+            "figure"))
+        ram = ram_gb()
+        log("  memory  about {:.1f} GB per tile at its peak (1.2 GB measured on the test box), so about {:.0f} GB "
+            "for {} at a time{}".format(EST_PEAK_GB, math.ceil(EST_PEAK_GB * w), w,
+                                        "; this computer has {:.0f} GB".format(ram) if ram else ""))
+        area = with_terrain * a.tile_km ** 2
+        nf = area * EST_FILLS_PER_KM2
+        mb_tiles = with_terrain * EST_TILE_MB + nf * EST_TILE_KB_PER_FILL / 1024.0
+        mb_merged = nf * EST_MERGED_KB_PER_FILL / 1024.0
+        log("  disk    about {} in --out for all {} tiles with terrain: {} of tile results and {} for the merged "
+            "GeoPackage and CSV (about {:,.0f} fills expected, at {} per km2 as in the test tiles)".format(
+                size_text(mb_tiles + mb_merged), with_terrain, size_text(mb_tiles), size_text(mb_merged), nf,
+                EST_FILLS_PER_KM2))
+        log("Nothing was run and nothing was written ({}).".format("--list" if a.list else "--dry-run"))
+        return 0
+    ram = ram_gb()
+    if ram and todo_now and a.workers * EST_PEAK_GB > 0.8 * ram:
+        log("  WARNING: {} tiles at a time need about {:.0f} GB and this computer has {:.0f} GB; use a smaller "
+            "--workers".format(a.workers, a.workers * EST_PEAK_GB, ram))
+    result = {"ran": [], "failed": {}, "gave_up": False}
+    if not a.merge_only and todo_now:
+        if a.limit and len(todo_now) < len(todo):
+            log("  --limit {}: running {} of the {} tiles still to run".format(a.limit, len(todo_now), len(todo)))
+        log("Running {} tile(s), {} at a time. Ctrl-C stops; the same command again goes on.".format(
+            len(todo_now), a.workers))
+        job_base = {"out": out, "dem": dem_path, "plugins": plugins, "inputs": dict(inputs), "key": key}
+        counts = {"total": n["done"] + len(todo_now), "done": n["done"], "fills": fills_done,
+                  "sec_per_tile": sec_per}
+        old_term = signal.getsignal(signal.SIGTERM)
+
+        def on_term(_s, _f):
+            raise Stop("terminated")
+        signal.signal(signal.SIGTERM, on_term)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, on_term)
+        # Ctrl-C also when the run was started in the background (a shell then starts it with
+        # SIGINT ignored, and Python would not raise KeyboardInterrupt)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            result = run_tiles(todo_now, a, out, job_base, counts, log)
+        except Stop:
+            clean_work(out)
+            log("")
+            log("STOPPED. The finished tiles are kept. Run the same command again to go on{}; "
+                "--merge-only merges what is finished.".format(
+                    " (with --redo: it goes on with the tiles not yet run again)" if a.redo else ""))
+            return 130
+        finally:
+            signal.signal(signal.SIGTERM, old_term)
+    elif not a.merge_only:
+        log("No tile to run: every tile in the selection is finished or has no terrain.")
+    left = len(todo) - len(result["ran"])
+    if a.redo and not left and os.path.exists(os.path.join(out, "redo.json")):
+        os.remove(os.path.join(out, "redo.json"))
+    note = collections.OrderedDict()
+    note["selection"] = "{}; whole {} km tiles".format(sel_what, a.tile_km)
+    note["tiles_in_plan"] = len(plan)
+    note["tiles_ran_this_run"] = len(result["ran"])
+    note["tiles_failed_this_run"] = len(result["failed"])
+    note["tiles_still_to_run"] = left
+    note["tiles_skipped_no_terrain"] = n["nodata"] + n["nosource"]
+    note["tiles_skipped_outside_state"] = n["outside"]
+    if result["failed"]:
+        note["failed_ids"] = ", ".join(sorted(result["failed"]))
+    log("")
+    bad = bool(result["failed"] or result["gave_up"])
+    try:
+        merge(a, finder, out, key, dem_path, outline, outline_what, inputs, note, model_path, log)
+    except UserError as e:
+        if not bad:
+            raise
+        log("Nothing merged: {}".format(e))
+        a.review_batch = 0
+    clean_work(out)
+    if a.review_batch > 0:
+        rb = os.path.join(out, "ND_finder_review_batch.gpkg")
+        if os.path.exists(rb):
+            os.remove(rb)
+        try:
+            res = finder.run_review_batch(os.path.join(out, OUT_GPKG) + "|layername=candidates", rb,
+                                          n=a.review_batch, log=log)
+            os.replace(res["csv"], os.path.join(out, "ND_finder_review_batch.csv"))
+            log("review batch: {} and ND_finder_review_batch.csv".format(rb))
+        except RuntimeError as e:
+            log("review batch not made: {}".format(e))
+    if bad:
+        log("")
+        log("{} tile(s) FAILED{}: {}. Their logs are in {}. Run the same command again to try them again.".format(
+            len(result["failed"]), " and the run stopped after failures in a row" if result["gave_up"] else "",
+            ", ".join(sorted(result["failed"])[:20]) or "see the log", os.path.join(out, "failed")))
+        return 1
+    if left:
+        log("{} tile(s) are still to run: run the same command again{}.".format(
+            left, " without --limit" if a.limit else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("stopped", file=sys.stderr)
+        sys.exit(130)
