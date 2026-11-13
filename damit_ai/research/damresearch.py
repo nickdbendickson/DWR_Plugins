@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# damresearch.py v1.0.3 — local research assistant for dam-safety, dam-design and
+# damresearch.py v1.0.5 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -20,6 +20,17 @@
 #                                      verbatim evidence -> check every quote against the page
 #                                      -> cited report in ~/DamResearch/reports/
 #   damresearch chat                   ask follow-up questions in a loop
+#
+#   search / ask / research / chat also take:
+#     --doc KEY        only read this publication. KEY is the id from `damresearch list`,
+#                      or part of its file name, title or report number; punctuation does
+#                      not matter, so --doc P-946 finds the file named "... P946.pdf".
+#                      Several keys, comma separated, are read together. Naming the
+#                      publication in the QUESTION instead hurts: "FEMA" is just another
+#                      search word and matches every FEMA document.
+#     --per-doc N      passages allowed from any one publication (default 3; with --doc
+#                      the cap is lifted unless you set it, so a long guideline can give
+#                      up all -k passages).
 #   damresearch ocr                    OCR the scanned PDFs (needs ocrmypdf) and re-ingest them
 #   damresearch remove DOC             drop a document from the index (file is not touched)
 #   damresearch doctor                 check Ollama, the two models and the database
@@ -41,7 +52,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime
 
-VERSION = "1.0.3"
+VERSION = "1.0.5"
 HOME = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch"))
 LIBRARY = os.path.join(HOME, "library")
 REPORTS = os.path.join(HOME, "reports")
@@ -154,6 +165,14 @@ def chat(messages, schema=None, think=False, stream_to=None, num_predict=None, t
     p = {"model": CHAT_MODEL, "messages": messages, "options": opts, "stream": stream_to is not None}
     if schema is not None and _format_ok[0]:
         p["format"] = schema
+    elif schema is not None:
+        # 1.0.4: no structured output (older Ollama, or a model whose renderer has none, e.g.
+        # qwen3.6 on Ollama 0.40: HTTP 501 "structured output is unavailable"): ask for the
+        # same JSON in words; parse_json takes it out of the reply.
+        msgs = [dict(m) for m in messages]
+        msgs[-1]["content"] = (msgs[-1]["content"] + "\n\nReply with ONE JSON object only, no "
+                               "other text, matching this JSON schema:\n" + json.dumps(schema))
+        p["messages"] = msgs
     if _think_ok[0]:
         p["think"] = bool(think)
     try:
@@ -166,8 +185,10 @@ def chat(messages, schema=None, think=False, stream_to=None, num_predict=None, t
         if "HTTP 400" in s and "think" in s.lower() and _think_ok[0]:
             _think_ok[0] = False          # older Ollama, or a model without a thinking switch
             return chat(messages, schema, False, stream_to, num_predict, temperature)
-        if "HTTP 400" in s and schema is not None and _format_ok[0] and "format" in s.lower():
-            _format_ok[0] = False         # Ollama too old for JSON-schema output
+        if (schema is not None and _format_ok[0]
+                and (("HTTP 400" in s and "format" in s.lower())
+                     or ("HTTP 501" in s and "structured output" in s.lower()))):
+            _format_ok[0] = False         # no JSON-schema output here: ask for JSON in words
             return chat(messages, schema, think, stream_to, num_predict, temperature)
         raise
 
@@ -296,6 +317,52 @@ def find_doc(db, key):
         die("no document matches %r (see: damresearch list)" % key)
     die("%r matches %d documents; use the id from `damresearch list`:\n  " % (key, len(rows))
         + "\n  ".join("%d  %s" % r for r in rows[:20]))
+
+
+def squash(s):
+    """Lower-case, punctuation removed: 'FEMA P-946' and 'P946.pdf' both become ...p946."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def find_docs(db, key):
+    """Document ids a --doc filter names, as (ids, labels).
+
+    KEY is an id, or part of a file name, title or report number. Punctuation is ignored,
+    so --doc P-946 matches a file called "... P946.pdf". Comma-separated keys are read
+    together. Unlike find_doc this allows several matches on purpose: the point is to scope
+    a question to one publication, or to a family of them.
+    """
+    rows = db.execute("SELECT id, title, path, number FROM docs").fetchall()
+    ids, labels = [], []
+    for part in [p.strip() for p in str(key).split(",") if p.strip()]:
+        if part.isdigit():
+            hit = [r for r in rows if r[0] == int(part)]
+        else:
+            if len(squash(part)) < 2:
+                die("--doc %r is too short to match on; use the id from `damresearch list`" % part)
+            low = part.lower()
+            hit = [r for r in rows if low in (r[2] or "").lower() or low in (r[1] or "").lower()
+                   or low in (r[3] or "").lower()]
+            if not hit:                                   # 'P-946' against a file named P946
+                sq = squash(part)
+                hit = [r for r in rows if sq in squash(r[2]) or sq in squash(r[1]) or sq in squash(r[3])]
+        if not hit:
+            die("--doc %r matches no document (see: damresearch list)" % part)
+        for r in hit:
+            if r[0] not in ids:
+                ids.append(r[0])
+                labels.append("%d  %s" % (r[0], (r[1] or r[2])[:80]))
+    return ids, labels
+
+
+def scope_note(labels):
+    """One line naming what --doc scoped the search to, so a silent over-match is visible."""
+    if not labels:
+        return ""
+    if len(labels) <= 6:
+        return "Scoped to %d document(s):\n  %s" % (len(labels), "\n  ".join(labels))
+    return "Scoped to %d documents: %s, ... (%d more)" % (
+        len(labels), "; ".join(l.split("  ", 1)[-1][:40] for l in labels[:3]), len(labels) - 3)
 
 
 # --------------------------------------------------------------------------- text extraction
@@ -621,42 +688,76 @@ class Index:
 
     def __init__(self, db):
         self.db = db
-        rows = db.execute("SELECT c.id, c.vec FROM chunks c").fetchall()
+        rows = db.execute("SELECT c.id, c.doc_id, c.vec FROM chunks c").fetchall()
         if not rows:
             die("the library is empty. Put PDFs in %s and run: damresearch ingest" % LIBRARY)
         self.ids = [r[0] for r in rows]
+        self.doc_of = [r[1] for r in rows]
+        self._sel_cache = {}
         if np is not None:
-            self.M = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+            self.M = np.frombuffer(b"".join(r[2] for r in rows), dtype=np.float32).reshape(len(rows), -1)
         else:
-            self.M = [array("f", r[1]) for r in rows]
+            self.M = [array("f", r[2]) for r in rows]
 
-    def vector(self, q, n):
+    def rows_for(self, keep):
+        """Row positions belonging to the documents in `keep` (cached: chat reuses the Index)."""
+        key = frozenset(keep)
+        hit = self._sel_cache.get(key)
+        if hit is None:
+            sel = [i for i, d in enumerate(self.doc_of) if d in key]
+            hit = np.asarray(sel, dtype=np.int64) if np is not None else sel
+            self._sel_cache[key] = hit
+        return hit
+
+    def vector(self, q, n, keep=None):
         qv = embed([query_text(EMBED_MODEL, q)], EMBED_MODEL)[0]
+        # With --doc the filter is applied BEFORE ranking, not after: a pool taken from the
+        # whole library can easily hold no chunk of the document that was asked for.
+        sel = self.rows_for(keep) if keep else None
         if np is not None:
-            s = self.M @ np.asarray(qv, dtype=np.float32)
-            top = np.argsort(-s)[:n]
-            return [(self.ids[i], float(s[i])) for i in top]
-        sc = sorted(((sum(a * b for a, b in zip(v, qv)), i) for i, v in enumerate(self.M)), reverse=True)[:n]
+            if sel is None:
+                s = self.M @ np.asarray(qv, dtype=np.float32)
+                top = np.argsort(-s)[:n]
+                return [(self.ids[i], float(s[i])) for i in top]
+            if len(sel) == 0:
+                return []
+            s = self.M[sel] @ np.asarray(qv, dtype=np.float32)
+            return [(self.ids[sel[i]], float(s[i])) for i in np.argsort(-s)[:n]]
+        rows = range(len(self.M)) if sel is None else sel
+        sc = sorted(((sum(a * b for a, b in zip(self.M[i], qv)), i) for i in rows), reverse=True)[:n]
         return [(self.ids[i], s) for s, i in sc]
 
-    def lexical(self, q, n):
+    def lexical(self, q, n, keep=None):
         if not self.db.fts:
             return []
         toks = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}|\d+(?:\.\d+)?", q) if t.lower() not in STOP]
         if not toks:
             return []
         expr = " OR ".join('"%s"' % t.replace('"', "") for t in dict.fromkeys(toks))
+        sql = "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"
+        args = [expr]
+        if keep:
+            ids = sorted(keep)
+            sql += " AND rowid IN (SELECT id FROM chunks WHERE doc_id IN (%s))" % ",".join("?" * len(ids))
+            args += ids
+        sql += " ORDER BY bm25(chunks_fts) LIMIT ?"
+        args.append(n)
         try:
-            return [(r[0], -r[1]) for r in self.db.execute(
-                "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ? "
-                "ORDER BY bm25(chunks_fts) LIMIT ?", (expr, n))]
+            return [(r[0], -r[1]) for r in self.db.execute(sql, args)]
         except sqlite3.OperationalError:
             return []
 
-    def search(self, q, k=8, per_doc=3, pool=60):
-        """Hybrid: meaning (vectors) + exact words (BM25, catches 'Froehlich', 'MacDonald'), fused by rank."""
+    def search(self, q, k=8, per_doc=3, pool=60, keep=None):
+        """Hybrid: meaning (vectors) + exact words (BM25, catches 'Froehlich', 'MacDonald'), fused by rank.
+
+        keep: document ids to read, or None for the whole library (see find_docs).
+        per_doc: passages allowed from any one document; None lifts the cap, which is what
+        a question scoped to a single long guideline needs.
+        """
+        if per_doc is None:
+            per_doc = k
         fused = {}
-        for lst in (self.vector(q, pool), self.lexical(q, pool)):
+        for lst in (self.vector(q, pool, keep), self.lexical(q, pool, keep)):
             for rank, (cid, _) in enumerate(lst):
                 fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + rank)
         order = sorted(fused, key=lambda c: -fused[c])
@@ -706,12 +807,36 @@ class Hit:
         return u + ("#page=%d" % self.page if self.path.lower().endswith(".pdf") else "")
 
 
+def doc_scope(db, a):
+    """Turn --doc / --per-doc into (document ids or None, per_doc or None, a line to print).
+
+    Without --doc the per-document cap stays at 3, which keeps one chatty source from
+    filling the window. With --doc the cap is lifted unless it was asked for: scoping to a
+    145-page guideline and then reading 3 of its passages is the thing that sends you away
+    empty-handed.
+    """
+    keep, labels = (find_docs(db, a.doc) if getattr(a, "doc", None) else ([], []))
+    per_doc = getattr(a, "per_doc", None)
+    if per_doc is None:
+        per_doc = None if keep else 3
+    return (keep or None), per_doc, scope_note(labels)
+
+
 def cmd_search(a):
     db = connect()
     check_embed_model(db)
     idx = Index(db)
     q = " ".join(a.question)
-    for n, h in enumerate(idx.search(q, k=a.k, per_doc=a.per_doc), 1):
+    keep, per_doc, note = doc_scope(db, a)
+    if note:
+        say(note)
+    hits = idx.search(q, k=a.k, per_doc=per_doc, keep=keep)
+    if not hits:
+        say("\nNo passage matched%s. %s" % (
+            " in that document" if keep else "",
+            "Try other words, or drop --doc." if keep else "Try other words."))
+        return
+    for n, h in enumerate(hits, 1):
         say("\n[%d] %s  %s   (score %.4f)\n    %s" % (n, h.short(), h.pg, h.score, h.path))
         say("    " + textwrap_short(h.txt, 420))
 
@@ -949,10 +1074,13 @@ def uncited_sentences(text):
     return bad
 
 
-def run_pipeline(question, mode, depth, k, out=sys.stdout, idx=None, save=True):
+def run_pipeline(question, mode, depth, k, out=sys.stdout, idx=None, save=True,
+                 keep=None, per_doc=None, scope=""):
     db = connect()
     check_embed_model(db)
     idx = idx or Index(db)
+    if scope:
+        say(scope)
     t0 = time.time()
     ev = Evidence()
     if mode == "research":
@@ -966,7 +1094,7 @@ def run_pipeline(question, mode, depth, k, out=sys.stdout, idx=None, save=True):
     log = []
     for i, s in enumerate(subs, 1):
         q = s + ((" " + " ".join(terms)) if (i == 1 and terms) else "")
-        hits = idx.search(q, k=k, per_doc=3)
+        hits = idx.search(q, k=k, per_doc=per_doc if per_doc is not None else 3, keep=keep)
         log.append((s, hits))
         say("[%d/%d] reading %d passages for: %s" % (i, len(subs), len(hits), textwrap_short(s, 90)))
         extract(ev, s, hits)
@@ -975,14 +1103,18 @@ def run_pipeline(question, mode, depth, k, out=sys.stdout, idx=None, save=True):
         % (nf, nr))
     say("-" * 72)
     if not ev.findings:
-        body = ("The library returned no passage that answers this question, so there is nothing to cite. "
+        body = ("That document returned no passage that answers this question, so there is nothing to "
+                "cite. Try `damresearch search --doc ...` with different words, or drop --doc and search "
+                "the whole library." if keep else
+                "The library returned no passage that answers this question, so there is nothing to cite. "
                 "Try `damresearch search` with different words, or add publications that cover it.")
         out.write(body + "\n")
     else:
         body = synthesize(question, ev, mode, out)
     rendered, order, unknown, used_f = render_citations(body, ev)
     unc = uncited_sentences(body) if ev.findings else 0
-    report = build_report(question, mode, subs, terms, log, ev, rendered, order, unknown, used_f, unc, time.time() - t0)
+    report = build_report(question, mode, subs, terms, log, ev, rendered, order, unknown, used_f, unc,
+                          time.time() - t0, scope=scope)
     path = None
     if save:
         os.makedirs(REPORTS, exist_ok=True)
@@ -1044,13 +1176,16 @@ def md_cell(s):
     return " ".join(str(s).split()).replace("|", "\\|")
 
 
-def build_report(question, mode, subs, terms, log, ev, rendered, order, unknown, used_f, unc, secs):
+def build_report(question, mode, subs, terms, log, ev, rendered, order, unknown, used_f, unc, secs,
+                 scope=""):
     L = ["# %s" % question, "",
          "> **%s**" % BANNER, "",
          "%s · model `%s` · embeddings `%s` · %s · %.0f s" % (
              "Deep research" if mode == "research" else "Quick answer", CHAT_MODEL, EMBED_MODEL,
-             datetime.now().strftime("%Y-%m-%d %H:%M"), secs), "",
-         rendered.strip(), "", "## References", ""]
+             datetime.now().strftime("%Y-%m-%d %H:%M"), secs), ""]
+    if scope:
+        L += ["> " + scope.replace("\n", "  \n> "), ""]           # --doc: say what was read
+    L += [rendered.strip(), "", "## References", ""]
     for n, did in enumerate(order, 1):
         hs = [s for s in ev.sources if s.doc_id == did]
         pages = sorted({s.pg for s in hs})
@@ -1087,18 +1222,25 @@ def build_report(question, mode, subs, terms, log, ev, rendered, order, unknown,
 
 
 def cmd_ask(a):
-    run_pipeline(" ".join(a.question), "ask", 1, a.k, save=not a.no_save)
+    keep, per_doc, note = doc_scope(connect(), a)
+    run_pipeline(" ".join(a.question), "ask", 1, a.k, save=not a.no_save,
+                 keep=keep, per_doc=per_doc, scope=note)
 
 
 def cmd_research(a):
-    run_pipeline(" ".join(a.question), "research", a.depth, a.k)
+    keep, per_doc, note = doc_scope(connect(), a)
+    run_pipeline(" ".join(a.question), "research", a.depth, a.k,
+                 keep=keep, per_doc=per_doc, scope=note)
 
 
 def cmd_chat(a):
     db = connect()
     check_embed_model(db)
     idx = Index(db)
+    keep, per_doc, note = doc_scope(db, a)
     say(damit_banner("dam-research - literature assistant"))
+    if note:
+        say(note)
     say("damresearch chat — cited answers from your library (%s). Blank line or Ctrl+D quits.\n"
         "Prefix a question with '!' for deep research.\n%s" % (CHAT_MODEL, BANNER))
     last_q, last_a = None, None
@@ -1122,7 +1264,8 @@ def cmd_chat(a):
                 say("(searching for: %s)" % r)
                 q = r
         try:
-            _, ans, _ = run_pipeline(q, "research" if deep else "ask", a.depth if deep else 1, a.k, idx=idx)
+            _, ans, _ = run_pipeline(q, "research" if deep else "ask", a.depth if deep else 1, a.k,
+                                     idx=idx, keep=keep, per_doc=per_doc)
         except RuntimeError as e:
             say("error: %s" % e)
             continue
@@ -1300,6 +1443,19 @@ def cmd_doctor(a):
     sys.exit(0 if ok else 1)
 
 
+def add_scope_args(s):
+    """--doc / --per-doc, on every command that retrieves."""
+    s.add_argument("--doc", metavar="KEY",
+                   help="only read this publication: the id from `damresearch list`, or part of its "
+                        "file name, title or report number (punctuation is ignored, so P-946 finds a "
+                        "file named P946.pdf). Comma-separated for several. Naming the publication in "
+                        "the question instead does not scope anything - 'FEMA' is just a search word "
+                        "and matches every FEMA document.")
+    s.add_argument("--per-doc", type=int, default=None, metavar="N",
+                   help="passages allowed from any one publication (default 3; with --doc the cap is "
+                        "lifted unless you set it)")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="damresearch",
                                  description="Local research assistant for dam-safety literature. " + BANNER)
@@ -1322,21 +1478,24 @@ def main():
     s = sub.add_parser("search", help="retrieval only: best passages with pages")
     s.add_argument("question", nargs="+")
     s.add_argument("-k", type=int, default=10)
-    s.add_argument("--per-doc", type=int, default=3)
+    add_scope_args(s)
     s.set_defaults(fn=cmd_search)
     s = sub.add_parser("ask", help="quick cited answer")
     s.add_argument("question", nargs="+")
     s.add_argument("-k", type=int, default=10)
     s.add_argument("--no-save", action="store_true")
+    add_scope_args(s)
     s.set_defaults(fn=cmd_ask)
     s = sub.add_parser("research", help="deep research report with checked quotes")
     s.add_argument("question", nargs="+")
     s.add_argument("--depth", type=int, default=5, help="sub-questions incl. the original (default 5)")
     s.add_argument("-k", type=int, default=8, help="passages read per sub-question (default 8)")
+    add_scope_args(s)
     s.set_defaults(fn=cmd_research)
     s = sub.add_parser("chat", help="interactive; '!' prefix = deep research")
     s.add_argument("--depth", type=int, default=4)
     s.add_argument("-k", type=int, default=8)
+    add_scope_args(s)
     s.set_defaults(fn=cmd_chat)
     s = sub.add_parser("ocr", help="OCR scanned PDFs (needs ocrmypdf) and re-index them")
     s.add_argument("--min-fraction", type=float, default=0.3,
