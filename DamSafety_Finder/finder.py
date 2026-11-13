@@ -2323,8 +2323,9 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
 
 def _forget_tiles(vrt):
     """Remove the downloaded image tiles a VRT is made of. A service can answer with an image
-    that holds no data (the ND GIS Hub did under load, 2026-11): kept, that blank tile would be
-    read as 'no reading' on every later run, so it is asked for again instead."""
+    that holds no data (seen, it appears, from a slow ND GIS Hub, 2026-11: tiles on disk that
+    gave no reading and read normally once downloaded again): kept, such a tile would be read
+    as 'no reading' on every later run, so it is asked for again instead."""
     try:
         ds = gdal.Open(str(vrt))
         files = (ds.GetFileList() or [])[1:] if ds is not None else []

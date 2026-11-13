@@ -288,9 +288,10 @@ tried again after 10 minutes:
 * **one image year**, when it failed for 3 fills in a row while the host's other years answered.
   A year that is down does not cost its time-out on every fill, and never stops the other years.
 
-A service can answer with an image that holds no data (the ND GIS Hub did while it was slow,
-2026-11-13). Such an image is not kept: that year is "not read" for the fill, and the next run
-asks for it again.
+A service can answer with an image that holds no data. (On 2026-11-13, while the ND GIS Hub was
+slow, 13 of 670 images gave no reading from tiles that were on disk, and read normally when
+downloaded again; the tiles themselves were not inspected.) Such an image is not kept: that
+year is "not read" for the fill, and the next run asks for it again.
 
 ### Sort by what is downstream, as a second sort (`review_order`)
 
