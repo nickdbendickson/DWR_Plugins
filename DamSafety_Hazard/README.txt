@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.24.9
+ND Dam Hazard Classification Helper - Version 2.25.0
 ====================================================
 
 WHAT IT DOES
@@ -16,6 +16,13 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
+- A class that rests on velocity (2.25.0): a structure in the high-danger or
+  judgment zone only because of its peak velocity (a lower zone with the
+  95th-percentile velocity of its cells, or on depth alone) says so in its
+  Notes and has Zone_On_Velocity = Yes in Habitable_Structures (with
+  Vel_P95_fps). When the ND or TM 11 class would be lower on either basis, a
+  judgment item "The class rests on velocity" names the structures. The
+  class is not changed; check the velocity before it is final.
 - NoData receptors (2.24.9): when the cell under a structure (or every cell
   in its footprint) is NoData and a neighbour is wet, the path depends on
   the depth-grid cell size (larger side, in metres; threshold

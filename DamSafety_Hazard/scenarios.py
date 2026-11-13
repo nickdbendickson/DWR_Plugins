@@ -299,6 +299,8 @@ EVAL_KEYS = ("max_depth", "max_vel", "arrival", "zone_found", "zone_mobile", "zo
              # M12 (2026-11-07): per-scenario review flags - without these in the snapshot the
              # last breach's flags leaked into every scenario's notes / QA / judgment items
              "vel_unknown", "arrival_below", "snap_flip",
+             # 2.25.0: a zone that rests on velocity (structures.apply_type)
+             "vel_p95", "vel_hinge",
              "zone_note", "outcome", "region", "loc", "near_raised",
              # v2.6: evaluation area and the cells read (Structure_Evaluation_Areas),
              # per-curve results for apply_type

@@ -2722,6 +2722,79 @@ def _onepass_cells(regions, sampler, progress=None):
     return out
 
 
+# 2.25.0: a zone that rests on velocity. The class uses the PEAK velocity over a structure's wet
+# cells (2.22.3, the conservative choice), and peak velocity is the model output that differs
+# most between solvers and grids (depth barely does). A structure whose zone would be less
+# severe with the 95th-percentile velocity of its own cells, or on depth alone, is flagged in
+# Notes; classification.velocity_hinge_judgment says whether the dam's class depends on them.
+# A flag only: no zone, outcome or class is changed.
+VEL_HINGE_PCT = 95.0
+VEL_P95, VEL_DEPTH = "p95", "depth"
+VEL_BASIS_TEXT = {VEL_P95: "the 95th-percentile velocity of each structure's cells",
+                  VEL_DEPTH: "depth alone (velocity 0)"}
+
+
+def velocity_percentile(d, v, pct=VEL_HINGE_PCT):
+    """The `pct` percentile of the velocity over a structure's wet cells (the cells peak_pair
+    takes the peak from), or None when no cell has a velocity."""
+    d = np.asarray(d, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    if not v.size:
+        return None
+    wet = (d > 0) & np.isfinite(v)
+    pick = v[wet] if wet.any() else v[np.isfinite(v)]
+    return float(np.percentile(pick, pct)) if pick.size else None
+
+
+def velocity_view(rec, basis, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT,
+                  borderline_higher=False):
+    """`rec` as it would be classified with its velocity taken on `basis` (VEL_P95 / VEL_DEPTH)
+    instead of the peak: a copy for structures flagged vel_hinge that count now (probable loss
+    of life or judgment zone), the record itself otherwise. The borderline rule (5.3(f)) is
+    applied to the copy as it was to the record. Never more severe than the record."""
+    hinge = rec.get("vel_hinge")
+    types = rec.get("_types")
+    if (not hinge or not types or one_d or rec.get("max_depth") is None
+            or rec.get("outcome") not in (OUT_PROBABLE, OUT_JUDGMENT)):
+        return rec
+    vel = float(rec.get("vel_p95") or 0.0) if basis == VEL_P95 else 0.0
+    key = "zone_p95" if basis == VEL_P95 else "zone_dep"
+    dpk, vpk = np.array([float(rec["max_depth"])]), np.array([vel])
+    alt = {}
+    for typ, t in types.items():
+        if t.get(key) is None:
+            return rec
+        mh, mj = zone_margins(dpk, vpk, *curve_pair("mobile" if typ == TYPE_MOBILE else "found"))
+        alt[typ] = dict(t, zone=int(t[key]), margin_high=float(mh[0]), margin_judg=float(mj[0]))
+    view = dict(rec)
+    view["_types"] = alt
+    apply_type(view, one_d, near_ft, borderline_higher)
+    view["vel_hinge"] = None
+    if view.get("zone") is not None and rec.get("zone") is not None \
+            and view["zone"] < rec["zone"]:
+        return rec                                  # (cannot happen: lower velocity, same depth)
+    return view
+
+
+def velocity_hinge_text(rec):
+    """The Notes text of a structure whose zone rests on velocity, or ''."""
+    h = rec.get("vel_hinge")
+    if not h:
+        return ""
+    bits = []
+    if h.get("zone_p95", h["zone"]) > h["zone"] and rec.get("vel_p95") is not None:
+        bits.append("{} at the 95th-percentile velocity of its cells ({:.1f} ft/s)".format(
+            zone_label(h["zone_p95"]), rec["vel_p95"]))
+    if h.get("zone_dep", h["zone"]) > h["zone"]:
+        bits.append("{} on depth alone".format(zone_label(h["zone_dep"])))
+    if not bits:
+        return ""
+    peak = " ({:.1f} ft/s)".format(rec["max_vel"]) if rec.get("max_vel") is not None else ""
+    return ("zone rests on velocity: {} at the peak velocity{}, {} - peak velocity varies "
+            "between solvers and grids; verify".format(zone_label(h["zone"]), peak,
+                                                       "; ".join(bits)))
+
+
 def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_higher=False):
     """Set the structure's zone, margins, borderline flag, sample locations
     and ND outcome from its ACER type (house-on-foundation or mobile-home
@@ -2729,7 +2802,8 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
     changed type (engineer review), 1D / 2D choice or borderline setting is
     applied without reading the rasters again."""
     types = rec.get("_types")
-    rec.update({"near": "", "zone_note": "", "near_raised": False, "one_d": bool(one_d)})
+    rec.update({"near": "", "zone_note": "", "near_raised": False, "one_d": bool(one_d),
+                "vel_hinge": None})
     if not types or rec.get("max_depth") is None:
         rec["zone"] = rec["zone_mm"] = rec["margin_high"] = rec["margin_judg"] = None
         rec["loc"] = None
@@ -2740,6 +2814,14 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
     rec["zone"], rec["loc"] = t["zone"], t["loc"]
     rec["zone_mm"] = t["zone"] if t.get("has_vel") else None
     rec["margin_high"], rec["margin_judg"] = t.get("margin_high"), t.get("margin_judg")
+    # 2.25.0: the zone would be less severe with the cells' P95 velocity or on depth alone
+    if not one_d and t.get("has_vel") and t.get("zone_dep") is not None \
+            and t["zone"] in (CLASS_HIGH, CLASS_JUDGMENT):
+        zp = t.get("zone_p95")
+        zp = t["zone"] if zp is None else zp
+        if zp > t["zone"] or t["zone_dep"] > t["zone"]:
+            rec["vel_hinge"] = {"zone": int(t["zone"]), "zone_p95": int(zp),
+                                "zone_dep": int(t["zone_dep"])}
     if one_d:
         # 1D model (ND 5.2.1.1): probable loss of life above 2 ft of depth;
         # borderline = within near_ft below that (ND 5.3(f))
@@ -2779,6 +2861,7 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           # so a structure dry in this scenario kept an earlier scenario's True) and ride the
           # snapshot (EVAL_KEYS) so the last breach's flags do not leak into every report
           "cells_xy": None, "_types": None, "vel_unknown": False,
+          "vel_p95": None, "vel_hinge": None,     # 2.25.0: a zone that rests on velocity
           "arrival_below": False, "snap_flip": None,
           "eval_failed": None,                    # audit R2: the error text, else None
           "nodata_flag": None, "cell_m": None, "neighbourhood": False,
@@ -3218,12 +3301,19 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             else:
                 rec["dv_max"] = None
                 dvv = dv_all[a0:a1] if dv_all is not None else None
+            # 2.25.0: the same peak depth with the cells' P95 velocity and with no velocity,
+            # to flag a zone that rests on the peak velocity (apply_type; a flag only)
+            vp95 = velocity_percentile(d, v) if vel_known else None
+            rec["vel_p95"] = vp95
             types = {}
             for typ in (TYPE_HOUSE, TYPE_MOBILE):
                 zcls = classify_values(d, v, *curves[typ])
                 zpk = int(classify_values(dpk, vpk, *curves[typ])[0])
                 t = {"zone": min(zpk, int(zcls.min())), "has_vel": vel_ok, "margin_high": None,
                      "margin_judg": None, "loc": None}
+                if vp95 is not None:
+                    t["zone_p95"] = int(classify_values(dpk, np.array([vp95]), *curves[typ])[0])
+                    t["zone_dep"] = int(classify_values(dpk, np.zeros(1), *curves[typ])[0])
                 try:
                     t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls, zone=t["zone"])
                 except Exception as e:                       # never fails the structure
@@ -3239,7 +3329,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             # audit R2: a wet structure that raised half-way keeps no partial result (a
             # max_depth without zones would classify as economic loss only)
             for k in ("max_depth", "max_vel", "arrival", "dv_max", "zone_found", "zone_mobile",
-                      "_types", "_dv", "cells_xy"):
+                      "_types", "_dv", "cells_xy", "vel_p95"):
                 rec[k] = None
             failed(rec, "", e)
     for rec in structs:
@@ -3452,6 +3542,9 @@ STRUCTURE_FIELDS = [
     ("ND_Outcome", FT_STRING),
     ("DV_Max_ft2s", FT_DOUBLE), ("Margin_High_ft", FT_DOUBLE),
     ("Margin_Judg_ft", FT_DOUBLE), ("Near_Threshold", FT_STRING),
+    # 2.25.0: the 95th-percentile velocity of the wet cells, and "Yes" where the zone is
+    # more severe than it would be with that velocity or on depth alone (apply_type)
+    ("Vel_P95_fps", FT_DOUBLE), ("Zone_On_Velocity", FT_STRING),
     ("Pop_Night", FT_DOUBLE), ("Pop_Day", FT_DOUBLE),
     ("Val_Struct_USD", FT_DOUBLE), ("Val_Cont_USD", FT_DOUBLE),
     ("FirstFloor_Depth_ft", FT_DOUBLE), ("Damage_USD", FT_DOUBLE),
@@ -3581,6 +3674,9 @@ def structure_notes(rec):
                      "velocity, else 0) - verify")
     if rec.get("vel_unknown"):
         notes.append("velocity unknown at every wet cell - depth only, no DV - verify")
+    note = velocity_hinge_text(rec)               # 2.25.0
+    if note:
+        notes.append(note)
     if rec.get("arrival_below") and rec.get("max_depth") is not None:
         notes.append(NOTE_ARRIVAL_BELOW.format(rec["max_depth"]))
     if rec["category"] == CAT_UNVERIFIED:
@@ -3680,6 +3776,8 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
             "DV_Max_ft2s": _nz(rec.get("dv_max")), "Margin_High_ft": _nz(rec.get("margin_high")),
             "Margin_Judg_ft": _nz(rec.get("margin_judg")),
             "Near_Threshold": rec.get("near") or NULL,
+            "Vel_P95_fps": _nz(rec.get("vel_p95")),
+            "Zone_On_Velocity": "Yes" if rec.get("vel_hinge") else NULL,
             "Pop_Night": _nz(rec.get("pop_night")),
             "Pop_Day": _nz(rec.get("pop_day")),
             "Val_Struct_USD": _nz(rec.get("val_struct")), "Val_Cont_USD": _nz(rec.get("val_cont")),

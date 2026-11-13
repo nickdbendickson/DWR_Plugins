@@ -33,6 +33,7 @@ from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, OUT_FAILED, TY
 
 JUDGMENT_RULE_PREFIX = "MEDIUM - "     # 2.22.0: judgment-zone rule reason starts so
 PROVISIONAL_PREFIX = "PROVISIONAL - "   # FF.1: formfill skips this reason (not a criterion)
+VEL_KEY_P95, VEL_KEY_DEPTH = "p95", "depth_alone"    # 2.25.0: keys of nd["velocity_hinge"]
 
 
 def governing_reason(reasons):
@@ -711,6 +712,82 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
     nd["judgment"].insert(at, msg)
     nd["struct_items"] = at + 1
     tm11.setdefault("notes", []).append(msg)
+    return msg
+
+
+def velocity_hinge_judgment(nd, tm11, structs, roads, rails, near_ft=None,
+                            borderline_higher=False, **kw):
+    """2.25.0: does the class rest on velocity? The zone of a structure is read at its PEAK
+    velocity (2.22.3), and peak velocity is the model output that differs most between
+    solvers and grids. For the habitable structures flagged vel_hinge (structures.apply_type:
+    a less severe zone with the 95th-percentile velocity of their own cells, or on depth
+    alone) the class is computed again on each of those two bases; a judgment item and
+    nd["velocity_hinge"] say how many structures hinge on velocity and whether the ND or the
+    TM 11 class would be lower. Roads and rail are held as run. The class is NOT changed.
+    Returns the message ('' when no counted structure hinges on velocity)."""
+    from . import structures as ST
+    kw = dict(kw)
+    tm11_j = kw.pop("tm11_judgment", True)
+    one_d = bool(kw.get("one_d"))
+    nd["velocity_hinge"] = {"structures": 0, "ids": [], "rests": False, VEL_KEY_P95: None,
+                            VEL_KEY_DEPTH: None}
+    if one_d:
+        return ""
+    near = ST.DEFAULT_NEAR_THRESHOLD_FT if near_ft is None else float(near_ft)
+    hinge = [r for r in structs if r.get("vel_hinge") and not r.get("dwelling_extra")
+             and r.get("habitable") in ("Yes", "Unverified")
+             and r.get("outcome") in (OUT_PROBABLE, OUT_JUDGMENT)]
+    if not hinge:
+        return ""
+    ids = {id(r) for r in hinge}
+    nd1 = classify_nd(structs, roads, rails, **kw)
+    out = nd["velocity_hinge"]
+    out.update(structures=len(hinge), ids=[r["id"] for r in hinge])
+    alts, what = {}, []
+    for basis, key in ((ST.VEL_P95, VEL_KEY_P95), (ST.VEL_DEPTH, VEL_KEY_DEPTH)):
+        alt = [ST.velocity_view(r, basis, one_d, near, borderline_higher) if id(r) in ids
+               else r for r in structs]
+        nd2 = classify_nd(alt, roads, rails, **kw)
+        tm2 = classify_tm11(alt, roads, judgment_as_probable=tm11_j)
+        # (raw structure classes, as lone_point_judgment: the access / facility raises of
+        # extra_criteria do not depend on these zones)
+        nd_low = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
+            ND_RANK.get(nd["cls"], -1)
+        tm_low = tm2["cls"] != tm11["cls"]
+        alts[basis] = (nd2["cls"], tm2["cls"], nd_low, tm_low)
+        out[key] = {"nd": nd2["cls"] if nd_low else nd["cls"], "tm11": tm2["cls"],
+                    "nd_lower": bool(nd_low), "tm11_differs": bool(tm_low)}
+        bits = []
+        if nd_low:
+            bits.append("ND {}".format(nd2["cls"].upper()))
+        if tm_low:
+            bits.append("TM 11 {}".format(tm2["cls"]))
+        if bits:
+            what.append("with {}: {}".format(ST.VEL_BASIS_TEXT[basis], " / ".join(bits)))
+    hinge.sort(key=lambda r: (r.get("zone") or 9, -(r.get("max_vel") or 0.0)))
+    names = "; ".join(
+        "structure {} ({:.1f} ft deep, peak {:.1f} ft/s, 95th percentile {:.1f} ft/s)".format(
+            r["id"], r.get("max_depth") or 0.0, r.get("max_vel") or 0.0,
+            r.get("vel_p95") or 0.0) for r in hinge[:6]) + (
+                "" if len(hinge) <= 6 else " and {} more".format(len(hinge) - 6))
+    if what:
+        out["rests"] = True
+        msg = ("The class rests on velocity: ND {} / TM 11 {} as run (peak velocity at each "
+               "structure); {}. {} structure(s) are in a more severe zone only because of "
+               "velocity: {}. Peak velocity is the model output that differs most between "
+               "solvers and grids, so check it at these structures (Structure_Sample_Points) "
+               "before the class is final. The class is not changed.".format(
+                   nd["cls"].upper(), tm11["cls"], "; ".join(what), len(hinge), names))
+        at = nd.get("struct_items", 0)
+        nd["judgment"].insert(at, msg)
+        nd["struct_items"] = at + 1
+    else:
+        msg = ("{} structure(s) are in a more severe zone only because of velocity ({}); the "
+               "ND and TM 11 classes are the same with the 95th-percentile velocity of their "
+               "cells and on depth alone.".format(len(hinge), names))
+        nd["judgment"].append(msg)
+    tm11.setdefault("notes", []).append(msg)
+    out["text"] = msg
     return msg
 
 
