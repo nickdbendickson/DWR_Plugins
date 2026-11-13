@@ -59,7 +59,7 @@ WEIR_C_SIDE_SI = 2.45 * FT ** 0.5           # ~1.353
 VW_CURVE_TOL = 0.05     # 3.16.2: curve vs maximum storage, note above 5 %
 # 3.16.4: where Vw (breach equations) comes from: sunny day = maximum storage, PMF = the pool
 VW_MAX_STORAGE, VW_POOL = "max_storage", "pool"
-# 3.18.0: a sunny-day run whose starting pool the user STATED (normal pool, an elevation): the
+# 3.19.0: a sunny-day run whose starting pool the user STATED (normal pool, an elevation): the
 # storage at that pool. The default sunny day (top of dam, ND 5.1.1) keeps VW_MAX_STORAGE.
 VW_START = "start_pool"
 VW_SOURCES = (VW_MAX_STORAGE, VW_POOL, VW_START)
@@ -102,7 +102,7 @@ class DamData:
     valley_width_ft: Optional[float] = None      # TR-60 narrow-valley check
     name: str = ""
     crest_length_ft: Optional[float] = None      # embankment crest length (overtopping)
-    # 3.18.0: a sunny-day starting pool the user stated instead of the ND 5.1.1 rule (top of
+    # 3.19.0: a sunny-day starting pool the user stated instead of the ND 5.1.1 rule (top of
     # dam), as its depth BELOW the top of dam (ft). Relative on purpose: a vertical-datum
     # conversion or a DEM-estimated crest moves the top of dam and the pool together. None =
     # the rule. start_wse_rule is START_NORMAL or START_STATED (the report text).
@@ -465,7 +465,7 @@ def _common(dam, wse0_m=None, wse0_rule=None, vw_source=None):
     if wse0_m is None:
         wse0_ft, wse0_rule = starting_wse_ft(dam)
         c.wse0_m = wse0_ft * FT
-        # 3.18.0: a STATED sunny-day pool states the storage too (Vw = storage at that pool);
+        # 3.19.0: a STATED sunny-day pool states the storage too (Vw = storage at that pool);
         # the default top-of-dam start keeps the DWR maximum storage below
         if vw_source is None and getattr(dam, "start_below_top_ft", None) is not None:
             vw_source = VW_START
@@ -920,7 +920,7 @@ def dam_from_dict(d):
 
 def dam_to_dict(dam):
     """The dam as a dict. The stated starting pool is left out when it is not used, so the
-    record (and the checkpoint key made from it) of a default run is what it was before 3.18.0."""
+    record (and the checkpoint key made from it) of a default run is what it was before 3.19.0."""
     d = asdict(dam)
     if d.get("start_below_top_ft") is None:
         d.pop("start_below_top_ft", None)

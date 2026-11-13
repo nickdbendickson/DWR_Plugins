@@ -1126,7 +1126,7 @@ def _classes():
                 self.scenario.addItem(wl.SCENARIO_LABELS[s], s)
             form.addRow("Breach", self.method)
             form.addRow("Scenario", self.scenario)
-            # 3.18.0: sunny-day starting pool (top of dam, ND 5.1.1, unless changed)
+            # 3.19.0: sunny-day starting pool (top of dam, ND 5.1.1, unless changed)
             self.start_pool, self.start_wse = W.QComboBox(), W.QLineEdit()
             for sp in wl.START_POOL_IDS:
                 self.start_pool.addItem(wl.START_POOL_LABELS[sp], sp)

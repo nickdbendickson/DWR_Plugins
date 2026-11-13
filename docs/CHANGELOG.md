@@ -2,13 +2,13 @@
 
 ## Unreleased
 
-- **DamSafety Runner 3.19.0: several dams of a batch at the same time.** One dam gains little from more LISFLOOD-FP threads, so a long batch is shortened by running dams side by side. No number changes: the rows are the same as one dam after another.
+- **DamSafety Runner 3.20.0: several dams of a batch at the same time.** One dam gains little from more LISFLOOD-FP threads, so a long batch is shortened by running dams side by side. No number changes: the rows are the same as one dam after another.
   - **QGIS:** *Run breach models for a layer of dams (batch)* has **Dams run at the same time** (`WORKERS`, default 1 = unchanged). Above 1, each dam runs in its own `qgis_process` worker with an equal share of the cores (or your own `THREADS` each); `WORKER_TIMEOUT_MIN` stops a worker that runs too long. The output `MODE` says how the dams were run.
   - **Command line:** `ndbreach_cli.py batch DAMS.csv CONFIG.json --workers N` (and `--worker-timeout-min`).
   - **When workers cannot be used** the log says why and the dams run one after another: no `qgis_process` (set `NDBREACH_QGIS_PROCESS`), a temporary or database layer, the Runner not enabled for `qgis_process`, or a suite setting the project overrides.
   - Workers open the same QGIS profile as the session that started them. Each worker's log and one-row summary are kept in `<Dams folder>/_batch_workers/`.
 
-- **DamSafety Runner 3.18.0: scenario choices (Nick, 2026-11-13).** A default run is unchanged: the sunny-day breach starts at the top of dam with a piping breach (ND 5.1.1), with the same numbers, dam record and checkpoint key.
+- **DamSafety Runner 3.19.0: scenario choices (Nick, 2026-11-13).** A default run is unchanged: the sunny-day breach starts at the top of dam with a piping breach (ND 5.1.1), with the same numbers, dam record and checkpoint key.
   - **Sunny-day starting pool** (`START_POOL`): top of dam (the preset), the normal pool (`NORMAL_POOL_FT`) or an elevation you state (`START_WSE_FT`). The pool is held as its depth below the top of dam (`DamData.start_below_top_ft`, `breach.set_start_pool`), so a datum conversion moves both together and the top of dam has to be given. The breach equations then use the storage at that pool as Vw, and the report says the run is not the ND 5.1.1 case. An overtopping method with the pool below the crest is flagged.
   - **Auxiliary spillway** for the flood scenarios (`AUX_CREST_FT`, `AUX_LENGTH_FT`, `AUX_C`): a weir, Q = C L H^1.5, added to the spillway rating in the flood routing and in the spillway-adequacy routing.
   - **Flood with no breach** (third `SCENARIO` choice, `workflow.SCENARIO_FLOOD_NO_BREACH`): the PMF inflow is routed through the spillways, the outlets and over the crest, and that outflow is the flood modelled downstream. `breach_occurs` is false and `no_breach_scenario` true in the run summary, so ND Dam Hazard's model check does not read it as a failure flood. No baseline or incremental rasters; arrival times count from the start of the inflow; the HEC-RAS 2D stage, the sensitivity tool and the probabilistic tool refuse it.
