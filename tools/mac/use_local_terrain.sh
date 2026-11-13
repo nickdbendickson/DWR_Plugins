@@ -406,7 +406,9 @@ find_b44() {
   local c
   [ -n "$B44" ] && { [ -f "$B44/run_lisflood_44.py" ] && { echo "$B44"; return 0; }
                      die "no run_lisflood_44.py in --batch44 $B44"; }
-  for c in "$HERE/batch-44-dams" "$HERE/../batch-44-dams" "$HOME/batch-44-dams-2026-11-06" \
+  # tools/batch in this repository first: the scripts live there since 2026-11-13, and a
+  # copy left over from a zip is older
+  for c in "$HERE/../batch" "$HERE/batch-44-dams" "$HERE/../batch-44-dams" "$HOME/batch-44-dams-2026-11-06" \
            "$HOME/Downloads/batch-44-dams-2026-11-06" "$HOME/Documents/batch-44-dams-2026-11-06"; do
     [ -f "$c/run_lisflood_44.py" ] && { echo "$c"; return 0; }
   done
