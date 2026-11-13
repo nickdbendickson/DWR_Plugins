@@ -93,6 +93,43 @@ class Plain(unittest.TestCase):
         finally:
             shutil.rmtree(d)
 
+    def test_inside_on_a_disk_that_ignores_case(self):
+        """A Mac's disk: ~/nd_suite_data and ~/ND_Suite_Data are one folder. The path strings differ,
+        so only asking the disk (os.path.samefile) can tell; here a stand-in that behaves like such
+        a disk: two paths are the same file when they are equal without regard to case, and a path
+        that is not there raises, as os.path.samefile does."""
+        d = tempfile.mkdtemp()
+        try:
+            data = os.path.join(d, "ND_Suite_Data")
+            os.makedirs(os.path.join(data, "ND_Dam_Suite_Pack"))
+            there = {rfs.real(q).lower() for q in (d, data, os.path.join(data, "ND_Dam_Suite_Pack"))}
+            asked = []
+
+            def samefile(a, b):
+                asked.append(a)
+                for q in (a, b):
+                    if q != os.sep and rfs.real(q).lower() not in there and not os.path.exists(q):
+                        raise FileNotFoundError(q)
+                return rfs.real(a).lower() == rfs.real(b).lower()
+
+            low = os.path.join(d, "nd_suite_data")
+            for out in (low, os.path.join(low, "out"), os.path.join(low, "a", "b", "c"),
+                        os.path.join(d, "ND_SUITE_DATA", "nd_dam_suite_pack", "x")):
+                self.assertFalse(rfs.inside(out, data, samefile=lambda a, b: False), out)   # the strings alone: no
+                self.assertTrue(rfs.inside(out, data, samefile=samefile), out)             # the disk: yes
+            # the pack, spelled otherwise, is found too; a sister folder is not
+            self.assertTrue(rfs.inside(os.path.join(low, "ND_DAM_SUITE_PACK", "out"),
+                                       os.path.join(data, "ND_Dam_Suite_Pack"), samefile=samefile))
+            self.assertFalse(rfs.inside(os.path.join(d, "ND_Finder_Statewide"), data, samefile=samefile))
+            self.assertFalse(rfs.inside(os.path.join(d, "nd_suite_data2", "out"), data, samefile=samefile))
+            # the walk went up through folders that do not exist yet, to the first that does
+            self.assertIn(rfs.real(low), asked)
+            # the real os.path.samefile: a hard-to-spell twin made with a link is caught, nothing raises
+            self.assertFalse(rfs.inside(os.path.join(d, "no", "such", "folder"), data))
+            self.assertFalse(rfs.inside(os.path.join(d, "out"), os.path.join(d, "not there")))
+        finally:
+            shutil.rmtree(d)
+
     def test_builtin_outline(self):
         g = rfs.builtin_outline()
         self.assertTrue(g.IsValid())

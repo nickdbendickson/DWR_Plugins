@@ -282,10 +282,28 @@ def real(path):
     return os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
 
 
-def inside(path, folder):
-    """True when path is folder or lies in it (both resolved)."""
+def inside(path, folder, samefile=None):
+    """True when path is folder or lies in it. Two tests. First the resolved path strings (links
+    followed). Then, because a path string does not settle it where two spellings are one folder
+    (a Mac's disk does not tell upper case from lower: ~/nd_suite_data IS ~/ND_Suite_Data), every
+    folder from path upward is compared with folder by os.path.samefile, which asks the disk. A
+    part of path that does not exist yet is skipped: the first folder above it that exists is
+    where a write would land. samefile: a stand-in for the tests."""
     p, f = real(path), real(folder)
-    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+    if p == f or p.startswith(f.rstrip(os.sep) + os.sep):
+        return True
+    samefile = samefile or os.path.samefile
+    q = p
+    while True:
+        try:
+            if samefile(q, f):
+                return True
+        except (OSError, ValueError):
+            pass                                            # not there (yet): the folder above decides
+        up = os.path.dirname(q)
+        if up == q:
+            return False
+        q = up
 
 
 def write_json(path, obj):
