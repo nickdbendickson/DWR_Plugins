@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# vor.py v1.3.0 — local research assistant for dam-safety, dam-design and
+# vor.py v1.3.1 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -47,6 +47,11 @@
 #   OLLAMA_URL           http://127.0.0.1:11434
 #
 # 1.0.1: reads library.csv in every sub-folder of the library (fetch_asdso.py writes one per folder).
+# 1.3.1: `vor ocr` followed by `vor ingest` no longer puts the scanned original back in the
+#   index beside its searchable copy. library/_ocr/ocr_sources.json records which original each
+#   copy stands in for. A stopped `vor ocr` keeps what it finished and loses nothing, a document
+#   ocrmypdf could not do stays indexed as it was, and two originals with one file name get two
+#   copies. Before this the original was dropped from the index before its copy was in it.
 # 1.3.0: an answer is never empty. A reply with no text in it (a reasoning model spending its
 #   whole allowance before the first word of the answer) is asked for once more with reasoning
 #   off and more room; if that is empty too, the answer is the checked findings themselves,
@@ -63,7 +68,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime, timedelta
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 
 def _home():
@@ -614,6 +619,99 @@ def chunk_page(text):
     return chunks
 
 
+# --------------------------------------------------------------------------- OCR copies
+# `vor ocr` writes a searchable copy of a scanned PDF to library/_ocr, and the copy is what is
+# indexed. The original stays in the library, so something has to remember that it has been
+# replaced: otherwise the next ingest sees a file that is not in the index and adds it again,
+# and the document is in the library twice, once with its unreadable pages.
+# library/_ocr/ocr_sources.json is that record: {sha1 of the original: {"copy": the file name
+# in _ocr, "from": where the original is, inside the library}}. It is keyed by content, so an
+# original that changes is a new document; and it sits beside the copies, not in the index, so
+# it is still there after an index is deleted and rebuilt.
+
+def ocr_dir():
+    return os.path.join(LIBRARY, "_ocr")
+
+
+def in_ocr_dir(path):
+    return os.path.abspath(path).startswith(os.path.abspath(ocr_dir()) + os.sep)
+
+
+def _lib_rel(path):
+    path, lib = os.path.abspath(path), os.path.abspath(LIBRARY)
+    return os.path.relpath(path, lib) if path.startswith(lib + os.sep) else path
+
+
+def ocr_map_load():
+    try:
+        with open(os.path.join(ocr_dir(), "ocr_sources.json"), encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(m, dict):
+        return {}
+    return {h: v for h, v in m.items() if isinstance(v, dict) and v.get("copy")}
+
+
+def ocr_map_save(m):
+    os.makedirs(ocr_dir(), exist_ok=True)
+    path = os.path.join(ocr_dir(), "ocr_sources.json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(m, f, indent=1, sort_keys=True)
+    os.replace(path + ".tmp", path)
+
+
+def ocr_adopt(m, library_files):
+    """Copies written before the record existed (vor 1.3.0 and earlier): <name>.ocr.pdf is taken
+    to stand in for <name>.pdf when exactly one PDF in the library has that name. True when the
+    record gained an entry."""
+    d = ocr_dir()
+    if not os.path.isdir(d):
+        return False
+    owned = {v["copy"] for v in m.values()}
+    loose = [f for f in sorted(os.listdir(d)) if f.lower().endswith(".ocr.pdf") and f not in owned]
+    if not loose:
+        return False
+    by_stem = {}
+    for f in library_files:
+        if f.lower().endswith(".pdf") and not in_ocr_dir(f):
+            by_stem.setdefault(os.path.splitext(os.path.basename(f))[0], []).append(f)
+    gained = False
+    for name in loose:
+        from_ = by_stem.get(name[:-len(".ocr.pdf")], [])
+        if len(from_) != 1:
+            continue
+        try:
+            h = sha1_of(from_[0])
+        except OSError:
+            continue
+        if h not in m:
+            m[h] = {"copy": name, "from": _lib_rel(from_[0])}
+            gained = True
+    return gained
+
+
+def ocr_copy_name(m, path, h):
+    """The file name in _ocr for this original: its own name, unless another original has it."""
+    if h in m:
+        return m[h]["copy"]
+    stem = os.path.splitext(os.path.basename(path))[0]
+    name = stem + ".ocr.pdf"
+    if name in {v["copy"] for v in m.values()} or os.path.exists(os.path.join(ocr_dir(), name)):
+        name = "%s-%s.ocr.pdf" % (stem, h[:8])
+    return name
+
+
+def ocr_replaced_paths():
+    """The originals the record says a copy stands in for. No hashing: the doctor's view."""
+    out = set()
+    for v in ocr_map_load().values():
+        src = v.get("from") or ""
+        if src and os.path.exists(os.path.join(ocr_dir(), v["copy"])):
+            out.add(os.path.normpath(src if os.path.isabs(src) else os.path.join(LIBRARY, src)))
+    return out
+
+
 # --------------------------------------------------------------------------- ingest
 
 def sha1_of(path):
@@ -675,15 +773,47 @@ def cmd_ingest(a):
     say("Scanning %d file(s) under %s" % (len(files), ", ".join(paths)))
     known = {r[0]: (r[1], r[2]) for r in db.execute("SELECT sha1, id, path FROM docs")}
     by_path = {r[1]: (r[0], r[2]) for r in db.execute("SELECT id, path, sha1 FROM docs")}
-    added = skipped = failed = notext = 0
+    # 1.3.1: which originals an OCR copy stands in for (see "OCR copies" above)
+    omap = ocr_map_load()
+    if ocr_adopt(omap, files if paths == [LIBRARY] else list(walk([LIBRARY]))):
+        ocr_map_save(omap)
+    copy_from = {v.get("from"): h for h, v in omap.items()}
+    walked = set(files)
+    added = skipped = failed = notext = replaced = 0
     t0 = time.time()
     for n, path in enumerate(files, 1):
         try:
+            if not os.path.exists(path):          # an out-of-date OCR copy removed a moment ago
+                continue
             if os.path.getsize(path) > MAX_FILE_BYTES:
                 say("  [%d/%d] SKIP (over %d MB): %s" % (n, len(files), MAX_FILE_BYTES >> 20, path))
                 skipped += 1
                 continue
             h = sha1_of(path)
+            if not in_ocr_dir(path):
+                copy = os.path.join(ocr_dir(), omap[h]["copy"]) if h in omap else ""
+                if copy and os.path.exists(copy) and (copy in by_path or copy in walked):
+                    # its searchable copy is the document; an original that an earlier version
+                    # indexed a second time comes back out
+                    if path in by_path:
+                        delete_doc(db, by_path.pop(path)[0])
+                        db.commit()
+                        known.pop(h, None)
+                    replaced += 1
+                    continue
+                was = copy_from.get(_lib_rel(path))
+                if was and was != h and was in omap:
+                    # the file changed since its copy was made: the copy is of the older text
+                    stale = os.path.join(ocr_dir(), omap.pop(was)["copy"])
+                    if stale in by_path:
+                        known.pop(by_path[stale][1], None)
+                        delete_doc(db, by_path.pop(stale)[0])
+                        db.commit()
+                    if os.path.exists(stale):
+                        os.remove(stale)
+                    ocr_map_save(omap)
+                    say("  %s was made from an older version of %s: removed. Run `vor ocr` again if "
+                        "the new one has scanned pages." % (os.path.basename(stale), os.path.basename(path)))
             if h in known:
                 did, old = known[h]
                 if old != path and not os.path.exists(old):
@@ -721,7 +851,10 @@ def cmd_ingest(a):
     nd, nc = db.execute("SELECT COUNT(*) FROM docs").fetchone()[0], db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     say("Done in %.0f s: %d added, %d with no text, %d unchanged/skipped, %d failed. Library: %d documents, %d passages."
         % (time.time() - t0, added, notext, skipped, failed, nd, nc))
-    scanned = db.execute("SELECT COUNT(*) FROM docs WHERE notext!='' AND notext IS NOT NULL").fetchone()[0]
+    if replaced:
+        say("%d scanned original(s) left out: the searchable copy in library/_ocr is indexed instead." % replaced)
+    scanned = len([1 for (sp,) in db.execute("SELECT path FROM docs WHERE notext!='' AND notext IS NOT NULL")
+                   if not in_ocr_dir(sp)])
     if scanned:
         say("%d document(s) have pages with no text layer (scanned). See `vor list`, "
             "then `vor ocr` to make them searchable." % scanned)
@@ -1687,24 +1820,58 @@ def cmd_ocr(a):
             "ndvor env), then run this again.")
     db = connect()
     rows = db.execute("SELECT id, path, pages, notext FROM docs WHERE notext!='' AND notext IS NOT NULL").fetchall()
+    db.close()
+    # 1.3.1: never a copy that OCR already made; a page it could make nothing of stays that way
     todo = [(i, p) for i, p, n, nt in rows if p.lower().endswith(".pdf") and os.path.exists(p)
+            and not in_ocr_dir(p)
             and len([x for x in nt.split(",") if x]) >= max(1, (n or 1) * a.min_fraction)]
     if not todo:
         say("No scanned PDFs to OCR.")
         return
-    outdir = os.path.join(LIBRARY, "_ocr")
+    outdir, tmpdir = ocr_dir(), os.path.join(LIBRARY, "_ocr_tmp")
     os.makedirs(outdir, exist_ok=True)
-    for i, p in todo:
-        dst = os.path.join(outdir, os.path.splitext(os.path.basename(p))[0] + ".ocr.pdf")
-        say("OCR: %s" % os.path.basename(p))
-        r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, dst])  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- local OCR on user-provided PDF paths, fixed argv
-        if r.returncode not in (0, 6):          # 6 = already has text
-            say("  ocrmypdf failed (exit %d); left as is" % r.returncode)
+    os.makedirs(tmpdir, exist_ok=True)
+    omap = ocr_map_load()
+    done, stopped = [], False
+    for n, (i, p) in enumerate(todo, 1):
+        h = sha1_of(p)
+        name = ocr_copy_name(omap, p, h)
+        tmp = os.path.join(tmpdir, name)        # written here first: a stopped run leaves no half copy
+        say("OCR [%d/%d]: %s" % (n, len(todo), os.path.basename(p)))
+        try:
+            r = subprocess.run([exe, "--skip-text", "--output-type", "pdf", "-q", p, tmp])  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- local OCR on user-provided PDF paths, fixed argv
+        except KeyboardInterrupt:
+            stopped = True
+            break
+        if r.returncode not in (0, 6) or not os.path.exists(tmp):     # 6 = already has text
+            say("  %s; left as is" % ("ocrmypdf found a text layer already and wrote nothing" if r.returncode == 6
+                                     else "ocrmypdf failed (exit %d)" % r.returncode))
+            if os.path.exists(tmp):
+                os.remove(tmp)
             continue
-        delete_doc(db, i)
-        db.commit()
+        os.replace(tmp, os.path.join(outdir, name))
+        omap[h] = {"copy": name, "from": _lib_rel(p)}
+        ocr_map_save(omap)
+        done.append((i, p, os.path.join(outdir, name)))
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    if stopped:
+        say("\nStopped. %d of %d done; run `vor ocr` again for the rest." % (len(done), len(todo)))
+    if not done:
+        return
     say("Re-indexing the OCR copies...")
     cmd_ingest(argparse.Namespace(paths=[outdir], prune=False))
+    # The copy takes the original's place only once the copy is in the index. Before 1.3.1 the
+    # original was dropped first, so a run that stopped, or an Ollama that was not answering,
+    # took every document done so far out of the library.
+    db = connect()
+    have = {r[0] for r in db.execute("SELECT path FROM docs")}
+    for i, p, copy in done:
+        if copy in have:
+            delete_doc(db, i)
+        else:
+            say("  %s: its OCR copy is not indexed yet, so the original stays. Run: vor ingest" % os.path.basename(p))
+    db.commit()
+    db.close()
 
 
 def home_reason():
@@ -1808,7 +1975,8 @@ def library_checks():
                     "VOR_HOME to it" if fuller else ". Nothing reads it; remove it once you are sure"))
     if rows:
         indexed = {os.path.normpath(r[0]) for r in rows}
-        new = [f for f in on_disk if os.path.normpath(f) not in indexed]
+        replaced = ocr_replaced_paths()        # a scanned original whose OCR copy is indexed instead
+        new = [f for f in on_disk if os.path.normpath(f) not in indexed and os.path.normpath(f) not in replaced]
         if new:
             add("WATCH", "%d file(s) in the library are not in the index (first: %s). Run: vor ingest"
                 % (len(new), os.path.relpath(new[0], LIBRARY)))
@@ -1827,12 +1995,17 @@ def library_checks():
         if changed:
             add("WATCH", "%d file(s) changed after they were indexed (first: %s), so answers come from "
                 "the older text. Run: vor ingest" % (len(changed), os.path.basename(changed[0])))
-        scanned = [r for r in rows if (r[1] or "").strip()]
+        no_text = [r for r in rows if (r[1] or "").strip()]
+        scanned = [r for r in no_text if not in_ocr_dir(r[0])]
         if scanned:
             pages = sum(len(r[1].split(",")) for r in scanned)
             add("WATCH", "%d document(s) have %d page(s) with no text layer: Vor cannot read those pages. %s"
-                % (len(scanned), pages, "Run: vor ocr, then vor ingest" if ocr_exe() else
-                   "OCR is not installed: re-run the installer with --ocr, then vor ocr and vor ingest"))
+                % (len(scanned), pages, "Run: vor ocr" if ocr_exe() else
+                   "OCR is not installed: re-run the installer with --ocr, then vor ocr"))
+        after = [r for r in no_text if in_ocr_dir(r[0])]
+        if after:
+            add("OK", "%d page(s) in %d OCR copies still have no text (blank or unreadable pages; "
+                      "there is nothing more to run)" % (sum(len(r[1].split(",")) for r in after), len(after)))
         if not (new or gone or changed):
             add("OK", "every file in the library is indexed, and none changed since")
     return out

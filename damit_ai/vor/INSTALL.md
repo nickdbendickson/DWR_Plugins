@@ -213,7 +213,10 @@ saved text of a state code is a snapshot, so check the official code before rely
 
 Scanned PDFs (old agency reports often are) have no text layer, and `list` flags them. Install
 OCR with `zsh setup-vor.zsh --ocr`, then run `vor ocr`. That writes searchable
-copies to `library/_ocr/` and indexes them.
+copies to `library/_ocr/` and indexes them. Your originals are not touched. The copy is the
+document from then on: `library/_ocr/ocr_sources.json` records which original each copy stands
+in for, so a later `vor ingest` does not index the scanned original a second time. `vor ocr`
+can be stopped with Ctrl-C and run again; it carries on with the documents it has not done.
 
 ## How deep research works
 
