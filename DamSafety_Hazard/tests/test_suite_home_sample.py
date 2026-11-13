@@ -99,11 +99,17 @@ class _Window:
     test_the_real_runner_window_takes_the_terrain_and_the_cell."""
 
     def __init__(self):
-        from qgis.PyQt.QtWidgets import QComboBox, QDoubleSpinBox, QLineEdit
+        from qgis.PyQt.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QLineEdit
         self.dams_edit, self.dam_edit = QLineEdit(), QLineEdit()
         self.dem_combo, self.grid_m = QComboBox(), QDoubleSpinBox()
         self.grid_m.setRange(0.5, 500.0)
         self.grid_m.setValue(10.0)
+        self.simh, self.simmax, self.grid_refine = QDoubleSpinBox(), QDoubleSpinBox(), QCheckBox()
+        self.simh.setRange(0.0, 240.0)
+        self.simmax.setRange(1.0, 336.0)
+        self.simh.setValue(12.0)
+        self.simmax.setValue(96.0)
+        self.grid_refine.setChecked(True)
         self.dem_combo.addItem("(choose in the tool)", "")
         self.refreshed = 0
 
@@ -184,20 +190,46 @@ def test_the_download_runs_in_the_background_and_then_the_runner_opens_on_the_da
     # the question before the Runner opens: what it is, that it is a sample, the quick try
     text, yes, no = h.asked[1]
     assert target in text and "not a hazard determination" in text and "downloaded" in text
-    assert yes == "Quick first try: 30 m cell" and no == "Keep the Runner's cell"
+    assert yes == "Quick first try: 30 m cell, first 6 hours" and no == "Keep the Runner's settings"
     w = h.plug.dialog
     assert h.plug.opened == 1 and w.refreshed == 1
     assert (w.dams_edit.text(), w.dam_edit.text()) == (dams, TINY)
     assert w.dem_combo.currentData() == dem and w.grid_m.value() == 30.0
-    assert len(h.told) == 1 and "set it back to 10 m" in h.told[0]
-    # again: nothing is downloaded or copied; this time the cell is kept
+    # the cell alone is not quick on this dam (the clock lengthens to days and an over-spread
+    # 30 m run is redone at 10 m): the quick try also fixes the clock and turns that re-run off
+    assert (w.simh.value(), w.simmax.value(), w.grid_refine.isChecked()) == (6.0, 6.0, False)
+    # one message: every value it changed with what the window held before, and to set them back
+    assert len(h.told) == 1
+    for line in ("Grid size (m): 30 (was 10)", "Simulated time (h): 6 (was 12)",
+                 "Longest simulated time (h): 6 (was 96)",
+                 "Finer grid automatically when the flood over-spreads: off (was on)",
+                 "first 6 hours", "still advancing", "Set them back"):
+        assert line in h.told[0], line
+    assert "no field for" not in h.told[0]
+    # again: nothing is downloaded or copied; this time the settings are kept
     h2 = _home(dams, [False])
     assert h2.try_sample() == "opened" and len(CALLS) == 6
     assert "already in the Dams folder" in h2.asked[0][0]
-    assert h2.plug.dialog.grid_m.value() == 10.0 and h2.told == []
-    assert h2.plug.dialog.dem_combo.currentData() == dem
-    h.close()
-    h2.close()
+    w2 = h2.plug.dialog
+    assert (w2.grid_m.value(), w2.simh.value(), w2.simmax.value(), w2.grid_refine.isChecked()) == (
+        10.0, 12.0, 96.0, True) and h2.told == []
+    assert w2.dem_combo.currentData() == dem
+    # a window that held other values is told those, not the Runner's starting ones
+    h3 = _home(dams, [True])
+    h3.plug.dialog.grid_m.setValue(5.0)
+    h3.plug.dialog.simmax.setValue(48.0)
+    h3.plug.dialog.grid_refine.setChecked(False)
+    assert h3.try_sample() == "opened"
+    assert "Grid size (m): 30 (was 5)" in h3.told[0] and "6 (was 48)" in h3.told[0]
+    assert "Finer grid" not in h3.told[0]                     # it was off already: not a change
+    # an older Runner window without the clock fields: the cell is set and the gap is said
+    h4 = _home(dams, [True])
+    del h4.plug.dialog.simmax, h4.plug.dialog.grid_refine
+    assert h4.try_sample() == "opened" and h4.plug.dialog.grid_m.value() == 30.0
+    assert "no field for: Longest simulated time (h), Finer grid" in h4.told[0]
+    assert "Without it the run is not quick" in h4.told[0]
+    for x in (h, h2, h3, h4):
+        x.close()
 
 
 def test_the_pack_sample_is_copied_and_the_pack_is_left_alone():
@@ -291,6 +323,7 @@ def test_the_real_runner_window_takes_the_terrain_and_the_cell():
     w.show()
     _pump()
     try:
+        w_start = {"simh": w.simh.value(), "simmax": w.simmax.value()}
         row = {"folder": done["folder"], "dem": done["dem"], "grid_m": 30.0}
         assert SHW.point_window_at(w, "ndbreach", dams, row) == [
             "dams_folder", "dam_id", "dem", "grid_m"]
@@ -303,6 +336,23 @@ def test_the_real_runner_window_takes_the_terrain_and_the_cell():
             "dams_folder", "dam_id"]
         _pump()
         assert w.settings()["dem"] == done["dem"] and w.settings()["grid_m"] == 30.0
+        # the quick first try on the real window: its four fields exist under these names, take
+        # the values, and what they held before comes back for the message
+        w.grid_m.setValue(10.0)
+        row = {"folder": done["folder"], "dem": done["dem"], "first_try": dict(SD.FIRST_TRY)}
+        assert SHW.point_window_at(w, "ndbreach", dams, row)[3:] == [k for k, _v in SD.FIRST_TRY]
+        _pump()
+        assert row["first_try_missing"] == []
+        assert row["first_try_before"] == {"grid_m": 10.0, "simh": w_start["simh"],
+                                            "simmax": w_start["simmax"], "grid_refine": True}
+        s = w.settings()
+        assert (s["grid_m"], s["simh"], s["simmax"]) == (30.0, 6.0, 6.0)
+        assert s.get("grid_refine", True) is False
+        # and those are the values the run is started with (popup_logic.run_params)
+        from DamSafety_Runner import popup_logic as PL
+        assert set(SD.RUNNER_STARTS) <= set(PL.DEFAULT_SETTINGS) | {"grid_refine"}
+        assert {k: PL.DEFAULT_SETTINGS[k] for k in ("grid_m", "simh", "simmax")} == {
+            k: SD.RUNNER_STARTS[k] for k in ("grid_m", "simh", "simmax")}
     finally:
         w.close()
         w.deleteLater()
