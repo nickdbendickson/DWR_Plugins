@@ -2,6 +2,28 @@
 
 This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads), #137 (HEC-RAS time limit) and #126 (zone colours). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
+## The windows
+
+The pictures in this guide are made by `tools/guide_shots.py` from the real windows, on Linux, with the sample dam. Your windows have the same fields in the same places; the frame, fonts and buttons take your system's look.
+
+**Dam suite home** (*Plugins → Dam safety → Dam suite home…*). Every dam folder of the Dams folder, how far each one is, and the next step the suite suggests. A new user starts here, with **Try the sample dam…**.
+
+![Dam suite home with the sample dam in the Dams folder](img/guide/suite_home_sample.png)
+
+**DamSafety Screening.** One county at a time: every intact dam screened and ranked High, Medium or Low.
+
+![DamSafety Screening as it first opens](img/guide/screening_main.png)
+
+**DamSafety Runner.** One dam: the breach flood modelled on the terrain. The strip at the top (Dam, Terrain, Model run, Products) shows what the dam folder has so far.
+
+![The breach Runner as it first opens](img/guide/runner_empty.png)
+
+The *Engines* line shows what this computer has. The pictures were made on a machine with neither LISFLOOD-FP nor ANUGA, so both are crossed out there.
+
+**DamSafety Hazard.** The classification: the flood rasters of a dam folder against the structures, roads and lifelines below the dam.
+
+![DamSafety Hazard on the sample dam's folder](img/guide/hazard_main.png)
+
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
 
@@ -766,7 +788,10 @@ The quickest way to see the suite work is to run it on the dam it ships with.
 
 **The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes.
 
-**What the quick first try sets**, in the Runner window:
+**What the quick first try sets**, in the Runner window (open *Advanced* to see them):
+
+![The breach Runner on the sample dam, Advanced open, with the quick first try's four values](img/guide/runner_sample_quick_try.png)
+
 
 | Setting | Quick first try | The window starts with | Why |
 |---|---|---|---|
