@@ -10,6 +10,7 @@ folder is now the copy to use, and `tools/mac/use_local_terrain.sh` looks here f
 | `run_anuga_culverts_44.py` | The same 44 through the DamSafety Runner only, LISFLOOD-FP for the extent and ANUGA for the final results, with culverts cut into the terrain, profile `damsafety`. |
 | `run_county.py` | Every DWR dam or dugout in one county, several, or the State, in either of those two modes. |
 | `batch_watch.py` | Watches a run folder and writes findings as dams finish. Rules only unless you ask for the model. |
+| `collect_results_44.py` | Packs what a finished 44-dam batch left behind (four result rasters, `dam.json`, reports per dam) into small zip files to hand on. Reads only. |
 | `batch_common.py` | What the three share: finding `dam_chain.py`, reading a dam's state, the data files, the watcher. |
 | `dams_44.csv` | The 44 dams: DWR id, name, position, height, storage, length, NID id, hazard class (DWR Dams layer, 2026-11-06). |
 | `tests/` | Every script run against a stand-in `dam_chain.py`. `python3 -m unittest discover -s tools/batch/tests` |
@@ -64,6 +65,21 @@ dams finishing together can each rewrite.
 the Runner's `DEM` parameter together with `OVERWRITE=true` for Get data, without which a dam
 folder from an earlier run keeps the terrain it recorded. The model grid takes the DEM's CRS.
 `tools/mac/use_local_terrain.sh` checks the VRT first.
+
+## Handing on the results
+
+    python3 collect_results_44.py --list
+    python3 collect_results_44.py --dams-folder ~/ND_Dams
+    python3 collect_results_44.py --only DWR-3034,DWR-4031 --out ~/Desktop/two_dams
+
+A dam folder holds gigabytes. Scoring another tool against the Runner needs little of it, so
+this takes per dam the four result rasters (`Depth (Max).tif`, `Velocity (Max).tif`,
+`Arrival Time.tif`, `WSE (Max).tif`), `dam.json`, and the small text files under
+`_breach_model/`, `_screening_model/` and `_chain_nd/`; and for the batch its summary CSVs and
+`BATCH_FINDINGS.md`. It writes `batch44_results_<date>_partN.zip` to `~/Desktop/batch44_results`,
+each about 150 MB at most (`--max-mb`), a dam never split across two, with a `MANIFEST.csv` in
+every part: status, hazard class, cell, rasters found, rasters missing. A dam that failed or
+never ran is listed too. Nothing in the dams folder is changed.
 
 ## The 44 dams, ANUGA with culverts
 
