@@ -421,7 +421,7 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         enclosures = [r["Description"] for r in rows if r["Path"].startswith(
             ("01_Report", "04_EAP")) or "Review_Decisions" in r["Path"]
             or "Run_Log" in r["Path"]]
-        missing = missing_items(rows, data_missing)       # Pierre 2.27.2: named in the letter
+        missing = missing_items(rows, data_missing)       # Heim 2.27.2: named in the letter
         if any(m.startswith("results tables") for m in missing):
             warnings.append("no results tables were packaged")                # SB.1
         with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8", newline="") as fh:

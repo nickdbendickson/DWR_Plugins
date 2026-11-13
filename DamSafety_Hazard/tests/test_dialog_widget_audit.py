@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pierre's dialog.py review (11/03/2026), item 22: _set_busy and the settings save/restore read
+"""Heim's dialog.py review (11/03/2026), item 22: _set_busy and the settings save/restore read
 their widgets with getattr(self, name, None), so a typo'd or renamed widget name silently
 stops being disabled during a run (or saved with the project). The window now checks both
 lists when it is built (_audit_widget_names, one warning in the QGIS log); this test makes
