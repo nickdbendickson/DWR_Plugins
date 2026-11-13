@@ -45,6 +45,44 @@ numpy 2 (`plugin-suites`, QGIS 4.x) and plain Python + numpy 2 without QGIS or G
   leg whatever numpy a rebuild of the image resolved, then adds scipy and pytest with pip and
   `xvfb` with apt, nothing else. Should the tag be retired, point `image:` at a `final-3_34_*`
   point-release tag (same layout) or at the next LTR (`release-3_40`).
+* **The LTR image's BLAS, and `OPENBLAS_CORETYPE: Haswell`.** The image's system numpy (1.21.5,
+  from apt; the pip line leaves it in place) multiplies matrices through
+  `libopenblas0-pthread 0.3.20`, which the image's alternatives put in front of the reference
+  BLAS. That OpenBLAS chooses its kernels by CPU when it loads, and on an Intel CPU with
+  AVX512_BF16 (Sapphire Rapids and later) it chooses "Cooperlake", whose matrix-matrix
+  routines (dgemm, dtrsm, and LAPACK's solve on top of them) return wrong numbers past a
+  modest size. Reading the 0.3.20 source and the library itself, that core calls a 4x8 kernel
+  with the block sizes of a 16x2 one; upstream removed that special case in 0.3.21, and
+  Ubuntu 22.04 still ships 0.3.20. Nothing raises, and the wrong numbers are the same on
+  every run.
+  From 2026-11-09 to 2026-11-13 this failed `plugin-suites-ltr` 11 times in 174, on
+  eleven commits across nine branches, one of them only an Actions version bump: all 4 runs that landed on AWS-hosted
+  runners and 7 of the 40 in Azure centralus, none in the other ten regions. It was always
+  `reservoir_carve_terrain_wrapper_keeps_the_volume_at_any_cell` with
+  `(40.0, 1426399.0234128712, 1110289.0878099161)`,
+  `reservoir_carve_run_hook_writes_a_copy_and_leaves_the_source_dem`, and, once it existed,
+  the Finder's `test_v2_clean_positives_trusted_marks_terrain` with `0.5 not greater than 0.9`.
+  One commit failed on centralus and passed 36 minutes later on eastus with nothing else
+  different. The same tests run against the library taken from the image give exactly those
+  numbers on a CPU of that kind, and pass with `OPENBLAS_CORETYPE=Haswell`. No job log of that
+  period names the CPU, so that the failing runners were of that kind is inferred from the
+  numbers matching to the last digit.
+  The job therefore sets `OPENBLAS_CORETYPE: Haswell` for every step (Haswell kernels are
+  what an AMD runner gets anyway, and every x64 runner can run them; a forced core is not
+  checked against the CPU, so `SkylakeX` is not safe on a runner without AVX-512, and one
+  thread alone does not cure it). OpenBLAS reads the variable once,
+  when it loads, so it must stay in the job's `env:` and cannot be set from a test.
+  `tools/blas_selfcheck.py` runs at the end of the provision step, twice: with the setting
+  removed, to print the CPU, the library and the kernels the runner would have picked and
+  whether they are right (this never fails the job, and is the record that was missing), and
+  as the job runs, where a wrong product stops the job before any suite. Do not loosen those
+  three tests, and do not re-run a red job to get a different machine.
+  **This is a CI setting, not a fix for users.** Someone running the plugins on Ubuntu 22.04
+  with the system numpy and that OpenBLAS on such a CPU gets the same wrong products: a wrong
+  reservoir carve and Finder scores that are all one value. A numpy whose OpenBLAS is 0.3.21
+  or later is not affected (the other CI legs, on numpy 2, never failed these tests on the
+  same runners). `python3 tools/blas_selfcheck.py` answers the question for any machine in
+  under a second.
 
 ## Making the checks required (repository owner)
 
