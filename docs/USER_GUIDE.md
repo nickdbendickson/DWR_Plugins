@@ -789,6 +789,35 @@ The quick run's report says *the flood is still advancing after 6 h, the duratio
 
 A run of the sample is for learning the tools. It is not a hazard determination for this dam.
 
+## SI units in the result tables (Core 1.4.0, Runner 3.20.2, Hazard 2.25.1)
+
+The suite computes and stores in US customary units. *DamSafety Setup → Suite setup / status → Units shown in windows* switches what you **see** to SI: the windows, the run report, the Hazard report and (from these versions) the result tables and three more Runner reports.
+
+**Tables.** With SI chosen, each tool leaves a copy of its result tables in a folder named `SI_units` beside them:
+
+```
+DWR-2801/_breach_model/receptors_flooded.csv            US units, as always
+DWR-2801/_breach_model/SI_units/receptors_flooded.csv   the same table with SI columns added
+```
+
+In the copy an SI column sits right after each US column:
+
+| `id` | `depth_ft` | `depth_m` | `vel_fps` | `vel_mps` |
+|---|---|---|---|---|
+| a | 2.0 | 0.6096 | 10 | 3.048 |
+
+The column names follow one rule: `_ft` becomes `_m`, `_fps` `_mps`, `_cfs` `_cms`, `_acft` `_m3`, `_ac` or `_acres` `_ha`, `_mi` `_km`, `_ft2` `_m2`, `_mph` `_kmh`. Elevations stay on the same datum. The tool's log names the folder.
+
+Things to know:
+
+- **Open the copy to read, give the original to a tool.** The tables outside `SI_units` keep US units and their names because the Runner, Hazard and the review tools read them. Nothing reads a copy back, so editing one changes nothing.
+- The copies are rewritten each time the tool runs. A copy whose table is gone is removed.
+- A column gets an SI partner only when its name says its unit and it holds a number. A text column, or one already in metres, is left as it is.
+- Under US customary units no `SI_units` folder is written.
+- The command line (`ndbreach_cli.py`) writes no copies; run the tool in QGIS for them.
+
+**Reports.** `Nested_Report.md`, `Cascade_Report.md` and `Probabilistic_Report.md` / `.html` are now in SI when SI is chosen, like `run_report.md`. Each says so in a "Units: SI" line at the top. The sensitivity, benchmark and verification HTML reports are not converted yet. `Hazard_Classification_Summary.txt` stays US because other tools read it.
+
 ## A class that rests on velocity (Hazard 2.25.0)
 
 A structure's hazard zone is read from its peak depth and its **peak** velocity. Depth is steady from one solver or grid to the next. Peak velocity is not: it can come from one fast cell at a building corner, and it differs between solvers and cell sizes. So a class can rest on a number that is the least certain one in the model.

@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.25.0
+ND Dam Hazard Classification Helper - Version 2.25.1
 ====================================================
 
 WHAT IT DOES
@@ -16,6 +16,9 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
+- SI units in the result tables (2.25.1): when the suite shows SI units, each
+  result table is written again with an SI column beside each US one, in an
+  SI_units folder beside the table. The CSV files themselves keep US units.
 - A class that rests on velocity (2.25.0): a structure in the high-danger or
   judgment zone only because of its peak velocity (a lower zone with the
   95th-percentile velocity of its cells, or on depth alone) says so in its

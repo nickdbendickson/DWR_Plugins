@@ -933,6 +933,7 @@ def finish_run(res, progress=None, log=None):
         del run.post[:]                       # res["post"] is this list
         status = "ND {} / TM 11 {} (governing scenario {})".format(
             res["nd"]["cls"], res["tm11"]["cls"], res["governing"])
+        _si_csv_copies(run)
         return res
     except Exception as e:
         run.messages.append("ERROR: {!r}".format(e))
@@ -948,6 +949,32 @@ def finish_run(res, progress=None, log=None):
                 k: {kk: vv for kk, vv in r.items() if kk != "layers"}
                 for k, r in run.results.items()}
         run.added = {}
+
+
+def _si_csv_copies(run):
+    """2.25.1: when the suite shows SI units, the result tables of this run again with an SI
+    column beside each US one, in <outputs>/SI_units and <outputs>/<sub-folder>/SI_units
+    (damsuite.display_units.write_si_csvs_in). The CSV files themselves keep US units and
+    their names: the Runner, the review tools and the submittal package read them. Never
+    stops a run; returns the copies written."""
+    try:
+        from .damsuite import display_units as DU
+        if DU.system() != DU.SI:
+            return []
+        made = []
+        for folder in [run.out] + [os.path.join(run.out, d) for d in OUTPUT_SUBDIRS]:
+            made.extend(DU.write_si_csvs_in(folder))
+        if made:
+            run.log("SI units: {} table(s) copied with SI columns beside the US ones, in the "
+                    "SI_units folder beside each. The original CSV files keep US "
+                    "units.".format(len(made)))
+        return made
+    except Exception as e:                      # noqa - a copy for reading only
+        try:
+            run.log("SI copies of the tables: {}".format(e))
+        except Exception:                       # noqa
+            pass
+        return []
 
 
 def _sub(out, name):

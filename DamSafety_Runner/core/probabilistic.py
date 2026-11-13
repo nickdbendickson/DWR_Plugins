@@ -1543,7 +1543,7 @@ def _write_report(out, st, dam, grid, thresholds_ft, plan, srows):
                "the last run is indicative.", ""]
         with open(out.convergence_svg, encoding="utf-8") as f:
             extra = f.read()
-    text = "\n".join(md)
+    text = workflow._display_units_md("\n".join(md))      # 3.20.2: in SI when the suite shows SI
     out.report_md = os.path.join(out.folder, "Probabilistic_Report.md")
     with open(out.report_md, "w", encoding="utf-8", newline="") as f:
         f.write(text)

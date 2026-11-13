@@ -34,7 +34,17 @@ def _settings():
 
 
 def _project():
+    """The open project, or None outside a running QGIS. Without a GUI application there is no
+    project to read, and making QGIS's project object there is not safe: on Qt 5.15.3 (the
+    QGIS 3.34 LTR on Ubuntu 22.04) it asks for a font and Qt ends the process ("QFontDatabase:
+    Must construct a QGuiApplication"). A plain Python has no application; a command line
+    tool may have a QCoreApplication, which is not enough either. QGIS, qgis_process and a
+    QgsApplication made with or without its GUI are all QGuiApplications."""
     try:
+        from qgis.PyQt.QtCore import QCoreApplication
+        from qgis.PyQt.QtGui import QGuiApplication
+        if not isinstance(QCoreApplication.instance(), QGuiApplication):
+            return None
         from qgis.core import QgsProject
         return QgsProject.instance()
     except Exception:
