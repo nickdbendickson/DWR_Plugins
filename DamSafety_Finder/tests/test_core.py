@@ -324,6 +324,242 @@ class Embankments(unittest.TestCase):
         self.assertEqual(em.find(dem, GT, [LINE]), [])
 
 
+class PoolLinesAndRescue(unittest.TestCase):
+    """Finder 0.6 (core/embankments.py steps 11-12): pool-outlet lines and brim-full ponds."""
+
+    POOL_LINE = [(XS, N * CELL - 150 * CELL - 1.0), (XS, 1.0)]     # from inside the pool (row 150)
+
+    def test_a_pool_line_tests_only_the_pools_own_fill(self):
+        dem, road = scene()
+        # the line leaves the pool at row 197: within 50 m of that, the dam at row 200 is tested;
+        # the dry embankment (row 260) and road fill (row 320) further down are not
+        lim = {0: (197 - 150) * CELL + 50.0}
+        got = em.find(dem, GT, [self.POOL_LINE], road_mask=road, line_lim=lim)
+        self.assertEqual([e.kind for e in got], [em.K_DAM])
+        self.assertTrue(got[0].pool_line)
+        self.assertTrue(any("line out of the pool" in t for t in got[0].notes))
+        # the same line as an ordinary line finds all three, none marked pool_line
+        allf = em.find(dem, GT, [self.POOL_LINE], road_mask=road)
+        self.assertEqual(sorted(e.kind for e in allf), sorted([em.K_DAM, em.K_DRY, em.K_ROAD]))
+        self.assertFalse(any(e.pool_line for e in allf))
+
+    def test_a_pool_line_is_never_turned_round(self):
+        # given upstream-first on purpose: an ordinary line is turned round (orient_down), a pool
+        # line is taken as given, so its reach is measured from its first point
+        dem, _road = scene()
+        rev = self.POOL_LINE[::-1]
+        # the reach covers the whole line: taken as given (rising all the way) it has no hump; turned
+        # round it would find the dam and both fills
+        self.assertEqual(em.find(dem, GT, [rev], line_lim={0: 5000.0}), [])
+        self.assertTrue(em.find(dem, GT, [rev]))
+
+    def test_pool_rules(self):
+        dem, road = scene()
+        lim = {0: (197 - 150) * CELL + 50.0}
+        ok = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, pool_rules=dict(min_area_m2=400.0))
+        self.assertEqual(len(ok), 1)
+        big = ok[0].pool_area_m2
+        self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim,
+                                 pool_rules=dict(min_area_m2=big * 2.0)), [])
+        # a road over the outlet
+        rmask = np.zeros(dem.shape, bool)
+        rmask[198:203, :] = True
+        self.assertEqual(em.find(dem, GT, [self.POOL_LINE], road_mask=rmask, line_lim=lim,
+                                 pool_rules=dict(skip_road=True)), [])
+        # drains a lot at the crest: a draw walks it
+        self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 1e9,
+                                 pool_rules=dict(max_drain_m2=50 * em.AC_M2)), [])
+        self.assertEqual(len(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 10.0,
+                                     pool_rules=dict(max_drain_m2=50 * em.AC_M2))), 1)
+
+    def test_a_pool_lines_drainage_is_read_on_its_own_path(self):
+        # a creek beside the fill (drain_area: the biggest draw within a few cells) is not the pond's
+        # drainage: with line_area the rule and drain_m2 read the line's own path, and at least all
+        # that drains into its pool (pool_drain)
+        dem, _road = scene()
+        lim = {0: (197 - 150) * CELL + 50.0}
+        creek = lambda x, y: 800 * em.AC_M2
+        two = len(self.POOL_LINE)
+        rules = dict(max_drain_m2=50 * em.AC_M2, line_area={0: [2 * em.AC_M2] * two})
+        self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                                 pool_rules=dict(max_drain_m2=50 * em.AC_M2)), [])
+        got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=rules)
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
+        got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, pool_drain={0: 7 * em.AC_M2}))
+        self.assertAlmostEqual(got[0].drain_m2, 7 * em.AC_M2)
+        # the pool the fill holds (closed, its outlet at the fill): all that drains into it, read on
+        # its cells at the spill level
+        seen = []
+
+        def inflow(xs, ys, near):
+            seen.append((len(xs), near))
+            return 9 * em.AC_M2
+
+        dem2, y = valley()
+        dem2 = add_fill(dem2, y, 200, 1.7)              # low enough that its pool ends on the floor
+        dem2 = np.where((y < 197) & (dem2 < bed(200) + 1.0), bed(200) + 1.0, dem2)
+        got = em.find(dem2, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertAlmostEqual(got[0].drain_m2, 9 * em.AC_M2)
+        self.assertAlmostEqual(seen[-1][0] * CELL * CELL, got[0].pool_area_m2)
+        # only the water that leaves the pool by this fill (near it)
+        nx, ny, rad = seen[-1][1]
+        self.assertLess(math.hypot(nx - got[0].x, ny - got[0].y), CELL)
+        self.assertGreaterEqual(rad, em.FinderParams().outlet_m + 0.5 * got[0].len_m)
+        self.assertLessEqual(rad, em.FinderParams().outlet_m + 0.5 * got[0].len_m + 20.0 + CELL)
+        # the same pool on a grid whose window does not start at its corner: the points are the
+        # pool's own cells
+        pts = []
+
+        def at(xs, ys, near):
+            pts.append((np.asarray(xs), np.asarray(ys)))
+            return 9 * em.AC_M2
+
+        pad = 500
+        big = np.pad(dem2, ((pad, 0), (pad, 0)), mode="edge")
+        gt_big = (-pad * CELL, CELL, 0.0, (N + pad) * CELL, 0.0, -CELL)
+        got = em.find(big, gt_big, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, inflow=at))
+        self.assertEqual(len(got), 1)
+        xs, ys = pts[-1]
+        self.assertAlmostEqual(float(xs.mean()), got[0].pool_xy[0], places=6)
+        self.assertAlmostEqual(float(ys.mean()), got[0].pool_xy[1], places=6)
+        self.assertTrue(0.0 < xs.min() and xs.max() < N * CELL and 0.0 < ys.min() and ys.max() < N * CELL)
+        # the pool also gets out by a bypass channel round the east end of the fill (a notch 100 m
+        # upstream, 0.2 m under the crest, back to the valley below the dam): it is read while that
+        # outlet is within outlet_m of the fill and not when it is further
+        yy, xx = np.mgrid[0:N, 0:N]
+        sad = bed(200) + 1.5
+        by = np.where((np.abs(yy - 167) <= 2) & (xx >= N // 2) & (xx <= N // 2 + 43), np.minimum(dem2, sad), dem2)
+        side = (yy >= 165) & (yy <= 235) & (xx >= N // 2 + 40) & (xx <= N // 2 + 43)
+        by = np.where(side, np.minimum(by, sad - np.maximum(0, yy - 169) * 0.012), by)
+        back = (np.abs(yy - 233) <= 2) & (xx >= N // 2) & (xx <= N // 2 + 43)
+        by = np.where(back, np.minimum(by, sad - (233 - 169) * 0.012), by)
+        seen[:] = []
+        got = em.find(by, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertTrue(10.0 < got[0].outlet_dist_m <= em.FinderParams().outlet_m)
+        self.assertEqual(len(seen), 1)
+        seen[:] = []
+        got = em.find(by, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, params=em.FinderParams(outlet_m=10.0),
+                      pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertEqual(seen, [])
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
+        # the window cuts the pool (a valley floor, not a pond): not read
+        got = em.find(dem2, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      params=em.FinderParams(window_m=150.0), pool_rules=dict(rules, inflow=inflow))
+        self.assertTrue(got and got[0].open_pool)
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
+        # its own path drains a lot at the crest: a draw walks it
+        self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 0.0,
+                                 pool_rules=dict(rules, line_area={0: [90 * em.AC_M2] * two})), [])
+
+    def test_a_pool_line_toe_stays_near_the_fill(self):
+        # a flat pad on a hillside: the ground below its lip falls 10 % for 400 m, steeper than the
+        # 8 degree face test, so an ordinary toe walk runs on down the hill (150 m) and takes its
+        # fall as the fill's height; on a pool line the toe is looked for within pool_toe_m
+        y, x = np.mgrid[0:N, 0:N]
+        z = 100.0 - np.maximum(0, y - 101) * CELL * 0.20 + np.abs(x - N // 2) * CELL * 0.02
+        z = np.where(y < 100, 100.0, z)                           # the pad
+        z = np.where((y >= 100) & (y <= 101), 100.6, z)          # a 0.6 m lip at its edge
+        line = [(XS, N * CELL - 50 * CELL - 1.0), (XS, 1.0)]
+        p = em.FinderParams(min_height_m=0.5)
+        far = em.find(z, GT, [line], params=p)
+        near = em.find(z, GT, [line], params=p, line_lim={0: 1000.0})
+        self.assertTrue(far and near)
+        self.assertGreater(far[0].height_m, 20.0)                # 150 m of a 20 % hillside
+        self.assertLess(near[0].height_m, 0.6 + p.pool_toe_m * 0.20 + 1.0)
+
+    def test_draw_readings_are_kept_before_pool_line_readings(self):
+        def e(x, h, pl, outlet=10.0):
+            return em.Embankment(x=x, y=0.0, kind=em.K_DAM, on_road=False, crest_m=10, spill_m=9.0,
+                                 toe_m=5, up_m=8, height_m=h, crest_height_m=5, head_m=3, valley_drop_m=0,
+                                 len_m=20, storage_m3=100, pool_area_m2=100, pool=False, open_pool=False,
+                                 confidence="medium", line=0, spill_xy=(50.0, 50.0), outlet_dist_m=outlet,
+                                 pool_line=pl)
+        draw, pool = e(0.0, 3.0, False, outlet=30.0), e(20.0, 5.0, True, outlet=1.0)
+        self.assertEqual(em.one_per_pool([pool, draw]), [draw])            # same pool: the draw's
+        self.assertEqual(em.dedupe([pool, draw], 60.0), [draw])            # 20 m apart: the draw's
+        far = e(500.0, 5.0, True)
+        far.spill_xy = (900.0, 900.0)
+        got = em.dedupe(em.one_per_pool([pool, draw, far]), 60.0)
+        self.assertEqual(got, [far, draw])                                 # highest first
+
+    @staticmethod
+    def brim_full(notch=0.05):
+        """The scene's dam with its pool full to a notch `notch` above the water: the line's last
+        cell before the dam is a 12 cm beach (within tol_m of the water), above the notch."""
+        dem, y = valley()
+        x = np.mgrid[0:N, 0:N][1]
+        dem = add_fill(dem, y, 200, 4.0)
+        lvl = bed(200) + 3.0
+        dem = np.where((y < 196) & (dem < lvl), lvl, dem)
+        dem = np.where((y == 196) & (dem < lvl + 0.12), lvl + 0.12, dem)
+        cut = (y >= 196) & (y <= 204) & (x >= 205) & (x <= 207)          # 18 m off the line
+        return np.where(cut, np.minimum(dem, lvl + notch), dem)
+
+    def test_a_brim_full_pond_is_tested_from_its_lowest_ground(self):
+        dem = self.brim_full()
+        self.assertEqual(em.find(dem, GT, [LINE], params=em.FinderParams(rescue_joined=False)), [])
+        got = em.find(dem, GT, [LINE])
+        self.assertEqual(len(got), 1)
+        d = got[0]
+        self.assertTrue(d.rescued)
+        self.assertEqual(d.kind, em.K_DAM)
+        self.assertAlmostEqual(d.spill_m, bed(200) + 3.05, delta=0.05)
+        self.assertTrue(d.spill_on_fill)
+        self.assertTrue(any("tested from the pool's lowest ground" in t for t in d.notes))
+        # a fill that drains a lot (a floodplain beside a creek reads the same way) is not rescued
+        self.assertEqual(em.find(dem, GT, [LINE], drain_area=lambda x, y: 1e9), [])
+        self.assertEqual(len(em.find(dem, GT, [LINE], drain_area=lambda x, y: 1000.0)), 1)
+
+    def test_a_rescued_dam_reads_the_ground_under_its_pond(self):
+        # the same dam read the ordinary way (its notch above the beach) and rescued: the original
+        # ground, the share of the pool below grade and the flat water surface agree - the beach at
+        # the dam face is not the pool's far end, and the dam is not a dug pond
+        normal = em.find(self.brim_full(notch=0.30), GT, [LINE])
+        rescued = em.find(self.brim_full(), GT, [LINE])
+        self.assertEqual(len(normal), 1)
+        self.assertEqual(len(rescued), 1)
+        n, r = normal[0], rescued[0]
+        self.assertFalse(n.rescued)
+        self.assertTrue(r.rescued)
+        self.assertGreater(n.ag_head_m, 2.5)
+        self.assertAlmostEqual(r.ag_head_m, n.ag_head_m, delta=0.3)
+        self.assertLess(r.below_frac, 0.1)
+        self.assertTrue(r.pool)
+        self.assertFalse([t for t in r.notes if "dug" in t])
+
+    def test_a_rescue_needs_a_pool_that_gets_out_at_the_fill(self):
+        dem = self.brim_full()
+        # a pool under min_pool_m2 is not a pond
+        self.assertEqual(em.find(dem, GT, [LINE], params=em.FinderParams(min_pool_m2=1e9)), [])
+        # the pool gets out 300 m round the side, not at this fill: something else holds it
+        dem2, y = valley()
+        x = np.mgrid[0:N, 0:N][1]
+        dem2 = add_fill(dem2, y, 200, 4.0)
+        lvl = bed(200) + 3.0
+        dem2 = np.where((y < 196) & (dem2 < lvl), lvl, dem2)
+        dem2 = np.where((y == 196) & (dem2 < lvl + 0.12), lvl + 0.12, dem2)
+        side = (y >= 90) & (y <= 240) & (x >= 300) & (x <= 302)            # a channel round it,
+        dem2 = np.where(side, np.minimum(dem2, lvl + 0.05 - (y - 90) * 0.02), dem2)
+        dem2 = np.where((y >= 85) & (y <= 91) & (x > 200) & (x < 300) & (dem2 > lvl), lvl, dem2)  # from the pool
+        cross = (y >= 238) & (y <= 240) & (x >= 200) & (x <= 302)          # back to the valley below the dam
+        dem2 = np.where(cross, np.minimum(dem2, lvl + 0.05 - 150 * 0.02), dem2)
+        # the scene does take the rescue path: with no outlet rule it is a rescued dam ...
+        self.assertTrue([e for e in em.find(dem2, GT, [LINE], params=em.FinderParams(outlet_m=1e9))
+                         if e.rescued])
+        # ... whose pool gets out 400 m away: nothing at this fill
+        self.assertEqual(em.find(dem2, GT, [LINE]), [])
+
+
 class Listed(unittest.TestCase):
     def test_status(self):
         kn = ls.Known([(0.0, 0.0, "ND00199", "NID"), (1000.0, 0.0, "2801", "DWR dams")])
@@ -410,6 +646,154 @@ class Terrain(unittest.TestCase):
         lines = tr.drainage_lines(rec, area, GT, 20000.0)
         got = em.find(dem, GT, lines, road_mask=road)
         self.assertEqual(sorted(e.kind for e in got), sorted([em.K_DAM, em.K_DRY, em.K_ROAD]))
+
+
+class PoolSeeds(unittest.TestCase):
+    def test_depression_and_flat_water_seeds(self):
+        # valley sides of 10 %: a 2 % side slope on 3 m cells spans under 15 cm in 3 x 3 and
+        # would read as one flat with the pool (the ring test then rejects the lot)
+        y, x = np.mgrid[0:N, 0:N]
+        dem = 100.0 - y * CELL * SLOPE + np.abs(x - N // 2) * CELL * 0.10
+        # a closed pit 1 m deep, 30 m across, on the valley side
+        pit = (np.hypot(y - 100, x - 300) <= 5)
+        dem = np.where(pit, dem - 1.0, dem)
+        # a flat water surface held by a fill: the scene's pool
+        dem = add_fill(dem, y, 200, 4.0)
+        lvl = bed(200) + 3.0
+        dem = np.where((y < 197) & (dem < lvl), lvl, dem)
+        seeds, mask = tr.pool_seeds(dem, GT)
+        kinds = {k for *_xy, _a, k in seeds}
+        self.assertEqual(kinds, {"flat", "depression"})
+        near_pit = [s for s in seeds if s[3] == "depression" and abs(s[0] - (300.5 * CELL)) <= 6 * CELL
+                    and abs(s[1] - (N - 100.5) * CELL) <= 6 * CELL]
+        self.assertTrue(near_pit)
+        self.assertTrue(mask[pit].any() and mask[150, N // 2])
+        self.assertFalse(mask[300, N // 2])
+        # a sloping field is no pool
+        flat_seeds, _m = tr.pool_seeds(valley()[0], GT)
+        self.assertEqual(flat_seeds, [])
+
+    def test_a_pond_on_gentle_ground_is_a_pool_and_a_bench_is_not(self):
+        y, x = np.mgrid[0:240, 0:240]
+        for shore in (0.01, 0.02):
+            # 1 % fall, gentle sides: the pond and its shores pass the 3 x 3 test as one flat whose
+            # rim reads lower than its median; tried again on its level, the water is a pool
+            z = 100.0 - y * CELL * 0.01 + np.abs(x - 120) * CELL * shore
+            lvl = 100.0 - 150 * CELL * 0.01 + 2.0
+            z = np.where(np.abs(y - 150) <= 2, np.maximum(z, lvl + 1.0), z)
+            pool = (y < 148) & (z < lvl)
+            z = np.where(pool, lvl, z)
+            z = np.where((np.abs(y - 150) <= 2) & (np.abs(x - 126) <= 1), lvl + 0.10, z)     # a notch
+            lab, keep = tr.flat_pools(z, CELL)
+            self.assertIn(lab[130, 120], keep)
+            m = lab == lab[130, 120]
+            self.assertTrue(m[pool].mean() > 0.9)                      # the water, ...
+            self.assertGreater((np.abs(z[m] - lvl) <= 0.03).mean(), 0.9)  # ... not its shores
+        # not pools: gentle sloping swales, ...
+        for fall, side in ((0.01, 0.0), (0.005, 0.002), (0.003, 0.002), (0.001, 0.0005)):
+            self.assertEqual(tr.flat_pools(100.0 - y * CELL * fall + np.abs(x - 120) * CELL * side, CELL)[1], [])
+        # ... a sharp-edged level bench on a 10 % valley side (the 3 x 3 test leaves its edge cells
+        # out, so the rim is read beyond them), a level pad on a 2 % slope, a level hilltop
+        yy, xx = np.mgrid[0:N, 0:N]
+        side = 100.0 - yy * CELL * SLOPE + np.abs(xx - N // 2) * CELL * 0.10
+        bench = side.copy()
+        bench[50:81, 300:341] = side[65, 320]
+        self.assertEqual(tr.flat_pools(bench, CELL)[1], [])
+        pad = 100.0 - yy * CELL * 0.02
+        pad[100:140, 100:160] = pad[120, 130]
+        self.assertEqual(tr.flat_pools(pad, CELL)[1], [])
+        r = np.hypot(yy - 200, xx - 200)
+        self.assertEqual(tr.flat_pools(100.0 - np.maximum(r, 15) * CELL * 0.05, CELL)[1], [])
+        # ... nor a level pit with lower ground along a fifth of its rim (a ditch beside it; at most
+        # 0.16 of the rim may be lower: an Iowa pond flush with its dam crest for a few metres reads 0.15)
+        pit = np.full((120, 120), 100.0)
+        pit[40:80, 40:80] = 99.0
+        lab, keep = tr.flat_pools(pit, CELL)
+        self.assertIn(lab[60, 60], keep)
+        pit[80, 42:72] = 98.5
+        lab, keep = tr.flat_pools(pit, CELL)
+        self.assertNotIn(lab[60, 60], keep)
+        # ... nor, on its own water level, a pond whose rim runs 150 m lower than the water (the
+        # retry's rim share is 0.10: on real ground a contour band round a field hollow has a lower
+        # side over 10-25 % of its rim)
+        y, x = np.mgrid[0:240, 0:240]
+        z = 100.0 - y * CELL * 0.01 + np.abs(x - 120) * CELL * 0.01
+        lvl = 100.0 - 150 * CELL * 0.01 + 2.0
+        z = np.where(np.abs(y - 150) <= 2, np.maximum(z, lvl + 1.0), z)
+        z = np.where((y < 148) & (z < lvl), lvl, z)
+        lab, keep = tr.flat_pools(z, CELL)
+        self.assertIn(lab[130, 120], keep)
+        z = np.where((y >= 148) & (y <= 152) & (np.abs(x - 120) <= 25), lvl - 0.05, z)
+        lab, keep = tr.flat_pools(z, CELL)
+        self.assertNotIn(lab[130, 120], keep)
+        # ... nor a tilted floor ringed by higher ground (not level: it falls 3 m; only a level strip
+        # of it, its low end against the wall, can be one)
+        tilt = np.where((yy < 100) | (yy > 300) | (xx < 100) | (xx > 300), 110.0, 100.0 - yy * CELL * 0.005)
+        lab, keep = tr.flat_pools(tilt, CELL)
+        self.assertTrue(all(np.ptp(tilt[lab == k]) <= 2 * 0.03 for k in keep))
+
+    def test_pool_inflow_counts_each_cell_once(self):
+        # a chain 0 -> 1 -> ... -> 6 -> out whose path leaves the pool {2, 3, 5} at 3 and comes back at
+        # 5: the cells reaching the pool are 0-5, not area[3] + area[5]; a pool whose water leaves by
+        # two cells (flat routing) has both; a sink in a pool counts
+        rec = np.array([1, 2, 3, 4, 5, 6, -1, -1, 10, 11, 12, 13, -1, -1])
+        area = np.array([1, 2, 3, 4, 5, 6, 7, 1, 1, 1, 2, 2, 3, 3], float)
+        self.assertEqual(tr.pool_inflow([2, 3, 5], rec, area), 6.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, area), 4.0)
+        self.assertEqual(tr.pool_inflow([7], rec, area), 1.0)
+        # near: only what leaves by a pool cell that close (row, col, radius on a 2-D grid)
+        a2 = area.reshape(2, 7)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 3, 0.5)), 2.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 4, 0.5)), 2.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, a2, near=(1, 3.5, 1.0)), 4.0)
+        self.assertEqual(tr.pool_inflow([2, 3, 5], rec, a2, near=(0, 0, 1.0)), 0.0)
+        # on routed terrain, against every cell's path walked out
+        rng = np.random.default_rng(3)
+        dem = 100.0 + np.cumsum(rng.normal(0, 0.3, (60, 60)), axis=0) * 0.1 + rng.normal(0, 0.05, (60, 60))
+        rec, order, _f = tr.flow(dem)
+        area, _l = tr.accumulate(rec, order, dem.shape, 1.0)
+        for r0, c0 in ((10, 10), (30, 40), (45, 20)):
+            pool = {r * 60 + c for r in range(r0, r0 + 6) for c in range(c0, c0 + 4)}
+            reach = 0
+            for i in range(3600):
+                k = i
+                while k >= 0:
+                    if k in pool:
+                        reach += 1
+                        break
+                    k = int(rec[k])
+            self.assertAlmostEqual(tr.pool_inflow(pool, rec, area), float(reach))
+
+    def test_pool_lines_leave_their_own_pool(self):
+        # with pools (each seed's own cells) a line leaves its pool where its own pool ends, not where
+        # a pool beside it does; with_index names each line's seed
+        rec = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, -1])
+        gt = (0.0, 10.0, 0.0, 10.0, 0.0, -10.0)
+        seeds = [(5.0, 5.0, 100.0, "flat")]
+        lines, exits = tr.pool_lines(seeds, rec, gt, (1, 10), pool=np.array([[True] * 6 + [False] * 4]),
+                                     min_cells=2)
+        self.assertEqual(exits, [60.0])
+        lines, exits, idx = tr.pool_lines(seeds, rec, gt, (1, 10), pools=[{0, 1}], min_cells=2, with_index=True)
+        self.assertEqual((exits, idx), ([20.0], [0]))
+
+    def test_pool_lines_leave_the_pool_and_go_on(self):
+        dem, _road = scene()
+        o = tr.open_ridges(dem, CELL, 60.0)
+        rec, _order, _f = tr.flow(o)
+        seeds, mask = tr.pool_seeds(dem, GT)
+        seeds.sort(key=lambda sd: -sd[2])
+        lines, exits = tr.pool_lines(seeds, rec, GT, dem.shape, pool=mask, down_m=150.0)
+        self.assertEqual(len(lines), len(exits))
+        k = max(range(len(lines)), key=lambda i: exits[i])        # the big pool behind the dam
+        self.assertGreater(exits[k], 0.0)
+        ys = [p[1] for p in lines[k]]
+        self.assertLess(min(ys), (N - 200) * CELL)                 # it crosses the dam (row 200)
+        # and stops about down_m below where it left the pool
+        run = sum(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(lines[k][:-1], lines[k][1:]))
+        self.assertAlmostEqual(run - exits[k], 150.0, delta=2 * CELL * 1.5)
+        # no pool mask: the line leaves 'the pool' at once
+        l2, e2 = tr.pool_lines(seeds[:1], rec, GT, dem.shape, down_m=60.0)
+        self.assertEqual(e2, [0.0])
 
 
 class Ridges(unittest.TestCase):

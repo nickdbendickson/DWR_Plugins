@@ -69,6 +69,37 @@ a pit drains over its rim). Every draw that drains at least `DRAIN_AC` becomes a
 exactly like a stream line; `line_source` says which kind of line found the fill. The tile pad is
 3 km so most of a draw's basin is in the tile.
 
+**Lines out of each pond** (`POOLS`, on whenever the draws are; `POOL_MAX_AC`, 50 acres; 0.6.0;
+`core/terrain.py` `pool_seeds` / `pool_lines`, step 11 of `core/embankments.py`). Most farm ponds
+drain only a few acres, less than the draws take, and a draw that does reach a pond can cross its
+dam at a low spot. So every pool in the DEM gets a short line of its own: the most interior cell of
+each flat water surface (level, with higher ground all round it, read two cells out; a pond in a
+swale with gentle sides is tried again on its own water level) and the deepest cell of each closed
+depression at least 0.15 m deep, walked out through its outlet down the same opened 10 m routing as
+the draws. On such a line only a hump within 50 m below where it leaves its own pool is tested (the
+pool's own fill), the toe is looked for within `pool_toe_m` (40 m) of it, the line is never turned
+round, the pool must reach `min_pool_m2`, a road over the outlet is left to the road tools, and a
+pool line whose own path drains `POOL_MAX_AC` or more at the crest is left to the draws. Its
+`drain_ac` is the most of: its own path at the crest, all the ground whose water reaches the seed's
+own pool (each cell once, though flat routing can split a pond's water over several outlet cells
+and a path can step out of the pool and back), and, when the fill holds a closed pool at its
+outlet, all the ground draining into that pool whose water the routing takes out near this fill
+(a creek the routing sends out through a culvert elsewhere is not this fill's; a pool the window
+cuts is not read). A pool covers a 10 m routing cell only where it holds at least 40 % of it, so a
+creek or another pond beside it is not part of its pool. Where a draw and a pool line read the
+same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The flat-water rim test
+reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water,
+so a pond near that cut can pass on one grid alignment and fail on another (seen on one Iowa
+census pond: 14 % and 20 %).
+
+**Brim-full ponds** (step 12; 0.6.0). A pond full to within 0.15 m of its spill level reads as
+joined to the ground below its dam from the beach cell just above the dam, so it used to be
+dropped. Such a fill is tested again from the pool's lowest ground on the line, with its toe within
+`pool_toe_m`; it is kept only when that pool reaches `min_pool_m2`, gets out at this fill (outlet
+within `outlet_m`) and drains under 200 acres (a floodplain beside a creek reads the same way).
+Its original ground and dug share are read from the pool's far shore, not the beach. `rescued` =
+yes.
+
 **Dug pits** (`DUGOUTS`, on; `core/ridges.py`). A pit below the DEM's grey closing by 120 m, at
 least 1 m deep, 150 m2 to 2 ha, filling at least 85 % of its smallest rectangle, no more than 8
 times as long as wide, with spoil (the upper quarter of the ground within 8 m at least 0.3 m above

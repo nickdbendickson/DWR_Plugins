@@ -270,6 +270,99 @@ class Runs(unittest.TestCase):
         ds = ogr.Open(self.out)
         self.assertEqual(ds.GetLayerByName("spillways").GetFeatureCount(), 3)
 
+    def test_pool_lines_find_a_pond_no_draw_reaches(self):
+        # a draw threshold far above anything on the grid: no draw at all, but the dam's pool has
+        # its own line out through its outlet (Finder 0.6); the dry embankment and the road fill
+        # hold no pool, so nothing finds them
+        # the scene with its pool 2 m deep at the dam, so the pool ends on the valley floor inside
+        # the grid (a closed depression; the scene's 3 m pool runs off the top of the grid)
+        dem, y = tc.valley()
+        dem = tc.add_fill(dem, y, 200, 4.0)
+        dem = tc.add_fill(dem, y, 260, 2.5)
+        dem = tc.add_fill(dem, y, 320, 2.5, half=2)
+        lvl = tc.bed(200) + 2.0
+        dem = np.where((y < 197) & (dem < lvl), lvl, dem)
+        self.dem = os.path.join(self.tmp, "dem_closed.tif")
+        write_dem(self.dem, dem)
+        kw = dict(roads=self.roads, known=[(self.known, "DWR dams", None)], match_ft=200.0,
+                  drainage_ac=1e6, drain_cell=6.0, hillshade=False, log=lambda *_: None)
+        none = self.f.run_embankments(self.dem, None, self.out, pool_lines=False, **kw)
+        self.assertEqual(none["rows"], [])
+        res = self.f.run_embankments(self.dem, None, self.out, pool_max_drain_ac=None, **kw)
+        self.assertEqual([r["kind"] for r in res["rows"]], ["dam"])
+        r = res["rows"][0]
+        self.assertEqual(r["line_source"], "DEM pool outlet")
+        self.assertEqual(r["rescued"], "no")
+        self.assertEqual(res["counts"]["pool_outlet"], 1)
+        self.assertIn("line out of the pool", r["notes"])
+        # the 50 ac cap: this pool drains the whole valley above it, so the draws are left to it
+        capped = self.f.run_embankments(self.dem, None, self.out, **kw)
+        self.assertEqual(capped["rows"], [])
+        # with the draws on, the draw's reading of the dam is kept, not the pool line's
+        both = self.f.run_embankments(self.dem, None, self.out, roads=self.roads,
+                                      known=[(self.known, "DWR dams", None)], match_ft=200.0,
+                                      drainage_ac=2.0, drain_cell=6.0, hillshade=False,
+                                      pool_max_drain_ac=None, log=lambda *_: None)
+        self.assertEqual(sorted(r["kind"] for r in both["rows"]), ["dam", "dry embankment", "road fill"])
+        self.assertTrue(all(r["line_source"] == "DEM drainage" for r in both["rows"]))
+
+    def test_near10_is_the_points_cell(self):
+        # the fill's position on the 10 m routing grid: the cell holding it, radius in cells
+        g = (1000.0, 10.0, 0.0, 2000.0, 0.0, -10.0)
+        self.assertEqual(self.f._near10((1015.0, 1985.0, 65.0), g), (1.0, 1.0, 6.5))
+        self.assertEqual(self.f._near10((1035.0, 1985.0, 65.0), g), (1.0, 3.0, 6.5))
+        self.assertIsNone(self.f._near10(None, g))
+        self.assertEqual(self.f._cells10([1015.0], [1985.0], g, (5, 5)), [6])
+        # with a share: a 10 m cell a pool's 3 m cells only brush (1 of ~11) is left out, 5 is kept
+        xs = [1015.0] * 5 + [1025.0]
+        ys = [1985.0] * 5 + [1985.0]
+        self.assertEqual(self.f._cells10(xs, ys, g, (5, 5)), [6, 7])
+        self.assertEqual(self.f._cells10(xs, ys, g, (5, 5), 0.4, 3.0), [6])
+
+    def test_a_held_pool_counts_only_the_water_leaving_by_the_fill(self):
+        # the shipped chain (_cells10 + _near10 + pool_inflow) on a 3 x 7 grid: a pool on row 1,
+        # cols 1-5, whose water leaves by col 1 (5 m2 over it) and by col 5 (7 m2); a fill at col 5
+        # gets 7, one at col 1 gets 5, no fill (or a wide radius) gets both
+        g = (1000.0, 10.0, 0.0, 2030.0, 0.0, -10.0)
+        rec = -np.ones(21, np.int64)
+        rec[8], rec[9], rec[10], rec[11], rec[12] = 1, 8, 11, 12, 19
+        area = np.zeros((3, 7))
+        area[1, 1], area[1, 5] = 5.0, 7.0
+        xs = [1000.0 + (c + 0.5) * 10.0 for c in range(1, 6) for _k in range(5)]
+        ys = [2015.0] * len(xs)
+        held = lambda near: self.f._held_inflow(xs, ys, near, rec, area, g, 3.0)
+        self.assertEqual(held((1055.0, 2015.0, 5.0)), 7.0)
+        self.assertEqual(held((1015.0, 2015.0, 5.0)), 5.0)
+        self.assertEqual(held(None), 12.0)
+        self.assertEqual(held((1035.0, 2015.0, 100.0)), 12.0)
+        self.assertEqual(held((1035.0, 2015.0, 5.0)), 0.0)
+
+    def test_a_pond_beside_a_big_draw_keeps_its_own_drainage(self):
+        # a hillside pond (2.3 ac of water) whose west berm stands 16 m from the valley's draw (80 ac),
+        # which runs beside it and never crosses it: only its pool line finds it, and the 50 ac cap
+        # reads the pool line's own path and the ground draining into the pool, not the draw beside it
+        dem, y = tc.valley()
+        x = np.mgrid[0:tc.N, 0:tc.N][1]
+        lvl = tc.bed(165) + 1.0
+        dem = np.where((y >= 150) & (y <= 180) & (x >= 207) & (x <= 240), lvl, dem)
+        berm = ((y >= 148) & (y <= 182) & (x >= 205) & (x <= 206)) | \
+            ((((y >= 148) & (y <= 149)) | ((y >= 181) & (y <= 182))) & (x >= 205) & (x <= 240))
+        dem = np.where(berm, np.maximum(dem, lvl + 1.2), dem)
+        path = os.path.join(self.tmp, "dem_hillside.tif")
+        write_dem(path, dem)
+        res = self.f.run_embankments(path, None, self.out, drainage_ac=20.0, hillshade=False, log=lambda *_: None)
+        self.assertEqual([(r["kind"], r["line_source"]) for r in res["rows"]], [("dam", "DEM pool outlet")])
+        d = res["rows"][0]["drain_ac"]
+        self.assertGreater(d, 31 * 34 * 9.0 / 4046.86)                 # at least the pond itself
+        self.assertLess(d, 50.0)
+        # a scour hole in the draw's bed beside the berm is a pool of its own (the draws walk it): the
+        # pond's drainage is still its own, not the draw's
+        hole = (y >= 160) & (y <= 170) & (x >= 197) & (x <= 204)
+        write_dem(path, np.where(hole, tc.bed(y) - 0.3, dem))
+        res = self.f.run_embankments(path, None, self.out, drainage_ac=20.0, hillshade=False, log=lambda *_: None)
+        self.assertEqual([(r["kind"], r["line_source"]) for r in res["rows"]], [("dam", "DEM pool outlet")])
+        self.assertAlmostEqual(res["rows"][0]["drain_ac"], d, delta=1.0)
+
     def test_ridges_and_dugouts_layers(self):
         res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, ridges=True,
                                      dugouts=True, hillshade=False, log=lambda *_: None)
