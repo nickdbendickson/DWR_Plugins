@@ -312,6 +312,11 @@ class Runs(unittest.TestCase):
         self.assertEqual(self.f._near10((1015.0, 1985.0, 65.0), g), (1.0, 1.0, 6.5))
         self.assertIsNone(self.f._near10(None, g))
         self.assertEqual(self.f._cells10([1015.0], [1985.0], g, (5, 5)), [6])
+        # with a share: a 10 m cell a pool's 3 m cells only brush (1 of ~11) is left out, 5 is kept
+        xs = [1015.0] * 5 + [1025.0]
+        ys = [1985.0] * 5 + [1985.0]
+        self.assertEqual(self.f._cells10(xs, ys, g, (5, 5)), [6, 7])
+        self.assertEqual(self.f._cells10(xs, ys, g, (5, 5), 0.4, 3.0), [6])
 
     def test_a_pond_beside_a_big_draw_keeps_its_own_drainage(self):
         # a hillside pond (2.3 ac of water) whose west berm stands 16 m from the valley's draw (80 ac),

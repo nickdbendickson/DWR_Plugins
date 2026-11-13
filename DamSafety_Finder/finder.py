@@ -745,8 +745,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
                      pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
-                     inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10: tr.pool_inflow(
-                         _cells10(xs, ys, g, area.shape), rec, area, near=_near10(near, g))) if pls else None)
+                     inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]): tr.pool_inflow(
+                         _cells10(xs, ys, g, area.shape, 0.4, c3), rec, area, near=_near10(near, g)))
+                     if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
                       drain_area=darea, line_lim=lim, pool_rules=rules)
         for e in got:
@@ -934,12 +935,17 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index]
 
 
-def _cells10(xs, ys, gt, shape):
-    """The flat indices of the cells of a grid (geotransform gt, shape) holding the points xs, ys."""
+def _cells10(xs, ys, gt, shape, share=0.0, cell=None):
+    """The flat indices of the cells of a grid (geotransform gt, shape) holding the points xs, ys;
+    with share and cell (the points' own cell size), only the cells they cover at least that share
+    of (a creek cell a pool's edge just reaches is not part of the pool)."""
     c = np.floor((np.asarray(xs, float) - gt[0]) / gt[1]).astype(np.int64)
     r = np.floor((np.asarray(ys, float) - gt[3]) / gt[5]).astype(np.int64)
     ok = (r >= 0) & (r < shape[0]) & (c >= 0) & (c < shape[1])
-    return np.unique(r[ok] * shape[1] + c[ok]).tolist()
+    u, n = np.unique(r[ok] * shape[1] + c[ok], return_counts=True)
+    if share and cell:
+        u = u[n * float(cell) ** 2 >= share * abs(gt[1] * gt[5])]
+    return u.tolist()
 
 
 def _near10(near, gt):
