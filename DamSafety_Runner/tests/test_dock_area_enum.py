@@ -11,6 +11,12 @@ from nd_breach_runner.tests.registry import test
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _failed(out):
+    """The failed checks first (the end of the output alone can be all warnings), then its end."""
+    bad = [ln for ln in out.splitlines() if ln.startswith("FAIL") or "Error" in ln]
+    return "\n".join(bad[:40]) + "\n...\n" + out[-2000:]
+
+
 @test
 def results_and_status_docks_use_the_scoped_dock_area_enum():
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", HOME=tempfile.mkdtemp(prefix="dock_home_"))
@@ -21,4 +27,4 @@ def results_and_status_docks_use_the_scoped_dock_area_enum():
     if "SKIP: no real QGIS" in out:
         print("      (skipped: no real QGIS Python here)")
         return
-    assert r.returncode == 0 and "all checks passed" in out, out[-3000:]
+    assert r.returncode == 0 and "all checks passed" in out, _failed(out)

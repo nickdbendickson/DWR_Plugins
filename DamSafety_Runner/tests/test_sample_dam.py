@@ -191,9 +191,30 @@ def sample_dam_is_built_from_the_service_joined_checked_and_tagged_metres():
         # a second build downloads nothing
         assert SD.build(root, TINY, fetch=_service(calls)) == folder and len(calls) == 6
         assert any("already there" in m for m in [SD.build(root, TINY, log=log.append)] + log)
-        # refresh downloads it again
+        # refresh downloads it again (the test's own handle closed first: Windows does not
+        # replace a file that is open)
+        ds = band = None
         SD.build(root, TINY, fetch=_service(calls), refresh=True)
         assert len(calls) == 12
+        # Core 1.5.1: a terrain that cannot be replaced because it is open (its layer is in the
+        # project, on Windows) is said in those words, the old terrain stays, no part is left
+        real = SD.os.replace
+
+        def held(a, b):
+            if os.path.basename(b) != SD.dem_name(TINY):
+                return real(a, b)
+            raise PermissionError(13, "Access is denied", a)
+        SD.os.replace = held
+        try:
+            SD.build(root, TINY, fetch=_service(calls), refresh=True)
+            raise AssertionError("expected SampleError")
+        except SD.SampleError as e:
+            assert "open in QGIS" in str(e) and "Remove the terrain layer" in str(e), str(e)
+            assert SD.dem_name(TINY) in str(e)
+        finally:
+            SD.os.replace = real
+        assert not [n for n in os.listdir(folder) if n.endswith(".part.tif")], os.listdir(folder)
+        assert SD.complete(folder, TINY)
 
 
 @test

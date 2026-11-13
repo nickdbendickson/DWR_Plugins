@@ -239,6 +239,7 @@ def test_hecras_p0_build_model_on_a_synthetic_run():
         assert "Storage Area Is2D=-1" in g and "Connection Up SA=Reservoir" in g
         assert "Breach Geom=" in open(os.path.join(out, m.name + ".p01")).read()
     finally:
+        t = None            # Windows cannot remove a file this test still has open
         shutil.rmtree(d)
 
 

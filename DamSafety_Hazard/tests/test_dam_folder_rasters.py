@@ -115,8 +115,10 @@ def _boxes(d):
 # ---------------------------------------------------------------- Qt-free rules
 
 def test_normalize_and_root_refused():
-    assert DF.normalize("//") == os.path.abspath("/")
-    assert DF.normalize("/a//b///c/") == "/a/b/c"
+    if os.name != "nt":                         # on Windows '//' starts a network (UNC) name
+        assert DF.normalize("//") == os.path.abspath("/")
+    # '/a/b/c' here, '<drive>:\\a\\b\\c' on Windows
+    assert DF.normalize("/a//b///c/") == os.path.abspath(os.path.join(os.sep, "a", "b", "c"))
     for bad in ("/", "//", "///", " / "):
         assert "root" in DF.dam_folder_problem(bad.strip()), bad
 
