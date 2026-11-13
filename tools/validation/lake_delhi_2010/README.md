@@ -86,6 +86,68 @@ the model.
 - **The terrain.** USGS 3DEP 10 m, bare earth. The river bed below the water surface of the
   day the LiDAR was flown is not in it, and bridges are not modelled.
 
+## Results (13 November 2026)
+
+From the validation job (`.github/workflows/validation.yml`): LISFLOOD-FP 8.3 built from the
+official source, 30 m cells, 48 hours, inflow factor 1.10. A run takes about 12 minutes on a
+GitHub runner. "As observed" is given the surveyed breach (235 ft, 2.17 hours); "blind" lets
+the Runner work the breach out from the dam alone, as it would for a dam that has not failed.
+
+**The breach.**
+
+| | Reported | As observed | Blind |
+|---|---|---|---|
+| Breach width, ft | 235 | 235 (given) | 243 |
+| Time to form, hours | 2.17 | 2.17 (given) | 1.56 |
+| Pool when the breach starts, ft | 905.55 | 905.69 | 905.69 |
+| Peak outflow, cfs | 69,000 (the panel's estimate, not measured) | 140,855 | 169,257 |
+
+**The flood, model minus surveyed, in feet.**
+
+| Mark | Miles below | As observed, n 0.06 | Blind, n 0.06 | As observed, n 0.04 |
+|---|---|---|---|---|
+| Below the dam (tailwater) | 0.0 | +14.31 | +16.45 | +7.91 |
+| Hopkinton, up side | 9.4 | +3.57 | +3.50 | +1.35 |
+| Hopkinton, down side | 9.4 | +3.69 | +3.63 | +1.47 |
+| Highway 38, up side | 18.6 | +2.10 | +2.06 | +0.85 |
+| Highway 38, down side | 18.6 | +1.82 | +1.79 | +0.73 |
+| Main Street, up side | 20.1 | +0.66 | +0.61 | -0.99 |
+| Main Street, down side | 20.1 | +1.46 | +1.41 | -0.44 |
+| U.S. 151, up side | 21.0 | +1.64 | +1.58 | -0.30 |
+| U.S. 151, down side | 21.0 | +1.64 | +1.59 | -0.26 |
+| **The eight bridge marks: mean, largest** | | **+2.07, +3.69** | **+2.02, +3.63** | **+0.30, +1.47** |
+
+What it says:
+
+- **The blind breach is close to the real one**: 243 ft against 235 ft, formed in 1.6 hours
+  against 2.2.
+- **With the suite's default roughness (Manning's n 0.06) the flood is about 2 ft high at the
+  bridges**, every mark on the high side. That is conservative, and it is not small: the
+  largest is 3.7 ft.
+- **With n 0.04 the same run is within 1.5 ft at every bridge, mean +0.3 ft.** One flood on one
+  river does not set a default, and this is an Iowa river, not a North Dakota one. It does
+  say how much of the 2 ft is the roughness: nearly all of it.
+- **The peak outflow is about twice the panel's estimate, and the water just below the dam is
+  8 to 16 ft too high.** The breach routing is a level pool emptying through a weir with no
+  tailwater. The surveyed tailwater was 889 ft, 27 ft above the breach floor, and the lake is
+  nine miles long and narrow, so neither assumption fits this dam well. How much each accounts
+  for is not separated here. The panel's 69,000 cfs is itself an estimate.
+- **Nine miles down, the breach's peak no longer matters.** The two breaches differ by
+  28,000 cfs at the dam and by 0.07 ft at the bridges. What sets the level there is the volume
+  of the flood and the roughness of the valley.
+
+Three things the runs showed about the Runner, apart from the numbers:
+
+- **LISFLOOD-FP flow sections near the east or south edge of the model read zero** (three of
+  the four bridges here). Fixed in Runner 3.20.4, with a test; water levels were not affected.
+- **The built-in engine (the stand-in for when LISFLOOD-FP is not installed) is not steady on
+  this valley.** At 60 m, and at 40 m with flow sections, its flow at the bridges swung between
+  zero and over 100,000 cfs and the levels came out up to 48 ft high, with no warning and a
+  volume balance that looked fine. Not fixed here. Use LISFLOOD-FP for this case.
+- **Not done:** no change to the breach routing (a tailwater limit changes the numbers of
+  every dam, which is a decision and not part of a test), no change to the default roughness,
+  and NOAA's exact datum shift is not applied (`observed.json` has the place for it).
+
 ## Tests
 
 `python3 -W error tools/validation/lake_delhi_2010/test_case.py` (17 tests, numpy only, no
