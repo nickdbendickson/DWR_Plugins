@@ -143,21 +143,24 @@ def hecras_compute_child_sees_the_raised_stack_limit():
                     "echo \"OMP=$KMP_STACKSIZE,$OMP_STACKSIZE\"\n"
                     "echo ' Finished Unsteady Flow Simulation'\n")
         os.chmod(exe, 0o755)
-        try:
-            R.setrlimit(R.RLIMIT_STACK, (eight, hard))
-        except (ValueError, OSError):
+        def put(soft):
             # macOS refuses a stack limit below the stack size this Python was linked with
-            # ("current limit exceeds maximum limit"): the test starts from the limit as it is
-            pass
+            # ("current limit exceeds maximum limit"), even the limit it reports itself:
+            # there the test starts from the limit as it is, and has nothing to put back
+            try:
+                R.setrlimit(R.RLIMIT_STACK, (soft, hard))
+            except (ValueError, OSError):
+                pass
+        put(eight)
         start, _h = R.getrlimit(R.RLIMIT_STACK)
         if start == hard:
-            R.setrlimit(R.RLIMIT_STACK, (soft0, hard))
+            put(soft0)
             return                          # already at the hard limit: no raise to see
         logs = []
         try:
             he.compute(t, "M", d={"linux_dir": t, "rasunsteady": exe}, env={}, log=logs.append)
         finally:
-            R.setrlimit(R.RLIMIT_STACK, (soft0, hard))
+            put(soft0)
         txt = open(os.path.join(t, "linux_run", "run.log")).read()
         want = "unlimited" if hard == R.RLIM_INFINITY else str(hard // 1024)
         assert "STACK={}".format(want) in txt, (txt, want)
