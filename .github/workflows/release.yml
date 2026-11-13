@@ -203,7 +203,7 @@ jobs:
           done
           cp pages/plugins.xml dist/plugins.xml
       - name: GitHub Release (a draft when started by hand)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.sha) }}
           name: DamSafety ${{ github.ref_name }}
