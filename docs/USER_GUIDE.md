@@ -833,6 +833,34 @@ The message names the size and the limit. If a real archive is larger, set `NDSU
 
 `nsi/nsi_summary.json` lists how many structures were installed, how many bad records were left out, and the SHA-256 of each answer from the API.
 
+## The hazard creep watch every year, by itself (Hazard 2.25.3)
+
+A classification is only as current as the houses and roads it counted. The hazard creep watch re-classifies every dam of a folder with its own flood rasters and fresh data, and lists the dams that changed. Until now it ran when someone remembered to start it.
+
+**Schedule it.** Processing Toolbox → DamSafety Hazard → *Schedule the hazard creep watch*. Give it the folder that holds the dam folders and press Run. The default is once a year, on 15 January at 06:00. *How often* also offers every 3 months and every month; *Month*, *Day* and *Hour* move it.
+
+- The schedule belongs to this computer and this user. It is a launchd agent on macOS, a systemd timer on Linux and a task in the Task Scheduler on Windows.
+- The computer has to be on. macOS runs a missed watch when it wakes from sleep, but skips it if it was switched off. Linux makes it up at the next start. On Windows, tick *Run task as soon as possible after a scheduled start is missed* in the Task Scheduler if you want that.
+- Run the tool from the QGIS profile that has the suite. The scheduled run opens that same profile.
+- *Dams classified at the same time* is 2 by default. A statewide folder takes hours; give it more on a machine with the cores.
+- To change the schedule, run the tool again. To stop it, choose *Remove the schedule*. One schedule per folder.
+- *Only write the script and show the command* registers nothing. Use it when an administrator has to register the job.
+
+**What you get after each run**, in the folder of dams:
+
+| File | What it is |
+|---|---|
+| `Hazard_Creep_Changed_Dams_<date>.html` | **The page to read.** Only the dams whose class changed, that have newly flooded structures, roads or lifelines, or that need a look. Then the dams that could not be checked. Made to print on one page. |
+| `Hazard_Creep_Changed_Dams.csv` | The same rows, from the latest run. |
+| `Hazard_Creep_Watch_<date>.html`, `Hazard_Creep_Watch.csv` | Every dam, changed or not (as before). |
+| `_creep_watch/creep_watch_log.txt` | What every scheduled run printed, with its date and how it ended. Look here when no page arrived. |
+
+A watch started by hand from the Hazard window writes the same page and opens it.
+
+The page is a list of dams to look at. It does not change any dam's classification.
+
+On Linux without systemd the tool writes the script and gives you the line to add with `crontab -e`. Not checked here: no schedule was registered on a real Mac, Linux desktop or Windows machine.
+
 ## A class that rests on velocity (Hazard 2.25.0)
 
 A structure's hazard zone is read from its peak depth and its **peak** velocity. Depth is steady from one solver or grid to the next. Peak velocity is not: it can come from one fast cell at a building corner, and it differs between solvers and cell sizes. So a class can rest on a number that is the least certain one in the model.
