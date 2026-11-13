@@ -789,6 +789,39 @@ The quick run's report says *the flood is still advancing after 6 h, the duratio
 
 A run of the sample is for learning the tools. It is not a hazard determination for this dam.
 
+## A class that rests on velocity (Hazard 2.25.0)
+
+A structure's hazard zone is read from its peak depth and its **peak** velocity. Depth is steady from one solver or grid to the next. Peak velocity is not: it can come from one fast cell at a building corner, and it differs between solvers and cell sizes. So a class can rest on a number that is the least certain one in the model.
+
+Hazard now checks this for every run and tells you when it matters. It does **not** change the class.
+
+**For each structure** it also works out:
+
+- the 95th-percentile velocity of the structure's wet cells, and the zone with that velocity;
+- the zone on depth alone (velocity taken as zero).
+
+A structure that is in the high-danger or the judgment zone only because of velocity gets a line in its Notes, for example:
+
+> zone rests on velocity: JUDGMENT at the peak velocity (12.0 ft/s), LOW at the 95th-percentile velocity of its cells (1.0 ft/s); LOW on depth alone - peak velocity varies between solvers and grids; verify
+
+The `Habitable_Structures` layer has two new fields for this: `Vel_P95_fps` (the 95th-percentile velocity) and `Zone_On_Velocity` (`Yes` for a flagged structure). Filter on `"Zone_On_Velocity" = 'Yes'` to see them on the map.
+
+**For the dam** it computes the ND and TM 11 classes again on each of the two bases, with roads and rail as run:
+
+| What you see | What it means |
+|---|---|
+| Judgment item **The class rests on velocity: ND ... / TM 11 ... as run; with ...: ...** and a `WARNING` in the log | The ND or the TM 11 class would be lower with the 95th-percentile velocity, or on depth alone. The item names the structures. |
+| A line "N structure(s) are in a more severe zone only because of velocity ...; the ND and TM 11 classes are the same ..." | Some structures hinge on velocity, but the class holds either way. |
+| Nothing | No counted structure's zone depends on velocity. |
+
+**What to do when the class rests on velocity.** Look at the named structures in `Structure_Sample_Points` and `Structure_Sampled_Cells`. Is the peak one cell, or the flow across the whole footprint? Then check the velocity there another way: a second solver, a finer cell, or a Runner sensitivity run. Keep the class as run unless that check supports a lower one.
+
+Notes:
+
+- In North Dakota a house that is flooded at all makes the dam Medium, so the ND class rarely moves on this check. The TM 11 class counts lives in jeopardy by zone, so it is the one that usually does.
+- The check is skipped for 1-D runs, which have no velocity field, and where the velocity is unknown at every wet cell.
+- The Runner's run summary gives the 95th and 99th-percentile velocity of the whole flood beside the maximum (`Velocity_P95_fps`, `Velocity_P99_fps`) for the same reason: the single highest cell is the least repeatable number.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:
