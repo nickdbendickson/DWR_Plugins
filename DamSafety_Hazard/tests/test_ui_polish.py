@@ -1,4 +1,4 @@
-"""Hazard 2.18.36: Pierre's Hazard screens review - status line, badge, red box, ellipsis,
+"""Hazard 2.18.36: Heim's Hazard screens review - status line, badge, red box, ellipsis,
 Review help, window fit. Real Qt (offscreen), no project, no network.
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_ui_polish.py
