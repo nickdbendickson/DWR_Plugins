@@ -84,7 +84,10 @@ vor research "How should breach formation time be chosen for small homogeneous e
 vor chat                               # follow-ups; prefix a question with ! for deep research.
                                        # Drag a file into the chat window to add it on the spot.
 damchain vor ask "..."                         # same thing through damchain
-vor doctor                             # checks Ollama, both models, the library
+vor doctor                             # Ollama and both models, and that the library being read is the
+                                       # full one and level with its files (two libraries, an empty
+                                       # index, files not indexed, scanned pages). Exits 1 on a PROBLEM.
+vor doctor --library                   # the library checks only; needs no Ollama
 ```
 
 **Do not name the publication inside the question.** "...in FEMA P-946" does not narrow

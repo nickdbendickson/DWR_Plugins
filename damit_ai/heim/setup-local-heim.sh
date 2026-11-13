@@ -321,10 +321,16 @@ say "Step 6/9 — Python tools (written to ~/local-ai)"
 if [[ $REWRITE_SCRIPTS -eq 1 ]]; then
   cat > "$LOCAL_AI/rag_index.py" << 'SCRIPT_EOF_RAG_INDEX'
 #!/usr/bin/env python3
-# rag_index.py v2.6 — multi-collection RAG indexer (stdlib only)
+# rag_index.py v2.7 — multi-collection RAG indexer (stdlib only)
 # Atomic rebuilds via a hidden per-collection stage; auto-migrates v1 DBs;
 # PDF backends: pdftotext -> pymupdf -> pypdf -> skip.
 #
+# v2.7: --doctor (heim-doctor). Says, without changing anything, whether Heim is reading what
+#   you think it is: no index, an empty index, no knowledge pack (Heim then answers from its
+#   built-in rules alone, and an empty collection is not an error), a collection still under
+#   its pre-rename name, an interrupted run's leftovers, a folder that moved, files that
+#   changed or arrived after the folder was indexed, and files the index silently skips for
+#   size. Exits 1 on a PROBLEM.
 # v2.6: --add FILE ... copies single files into <index folder>/added and indexes them as the
 #   collection 'added' (heim-add). Indexing took folders only, so one dragged PDF had no home.
 #
@@ -739,6 +745,160 @@ def add_files(paths):
     return copied
 
 
+KNOWLEDGE = "heim_knowledge"
+LEGACY_KNOWLEDGE = ("pierre_knowledge", "lumo_knowledge")
+
+
+def _walk_indexable(roots):
+    """(rel path as the index stores it, full path, kind) for every file a run over these
+    roots would look at. The same walk as index_collection, so the two cannot disagree."""
+    multi = len(roots) > 1
+    for root in roots:
+        for dp, dns, fns in os.walk(root):
+            dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
+            for fn in sorted(fns):
+                kind = file_filter(fn)
+                if kind is None:
+                    continue
+                full = os.path.join(dp, fn)
+                rel = os.path.relpath(full, root)
+                if multi:
+                    rel = os.path.join(os.path.basename(root), rel)
+                yield rel, full, kind
+
+
+def doctor_checks(ollama=True):
+    """[(level, text)], level one of OK / WATCH / PROBLEM. Reads the index; never writes it
+    (not even the schema upgrade a normal run does), so running it cannot hide what it finds."""
+    out = []
+    add = lambda level, text: out.append((level, text))
+    if not os.path.exists(DB):
+        add("PROBLEM", "no index at %s: heim and heim-chat answer from the model's built-in rules alone. "
+                       "Index the knowledge pack: heim-index -c %s <heim/knowledge folder>" % (DB, KNOWLEDGE))
+        return out
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % urllib.request.pathname2url(DB), uri=True)
+        counts = dict((c, (f, n)) for c, f, n in db.execute(
+            "SELECT collection, COUNT(DISTINCT path), COUNT(*) FROM chunks GROUP BY collection"))
+        try:
+            roots = dict((c, (json.loads(r), t)) for c, r, t in db.execute(
+                "SELECT collection, roots, indexed_at FROM roots"))
+        except sqlite3.Error:
+            roots = {}
+        paths = {}
+        for c, p in db.execute("SELECT DISTINCT collection, path FROM chunks"):
+            paths.setdefault(c, set()).add(p)
+        db.close()
+    except sqlite3.Error as e:
+        add("PROBLEM", "%s is not a readable index (%s)" % (DB, e))
+        return out
+    live = dict((c, v) for c, v in counts.items() if not c.startswith("__"))
+    add("OK", "index %s: %d collection(s), %d passages" % (DB, len(live), sum(n for _, n in live.values())))
+    if not live:
+        add("PROBLEM", "the index is empty: heim and heim-chat answer from the model's built-in rules alone")
+    legacy = [c for c in LEGACY_KNOWLEDGE if c in live]
+    if KNOWLEDGE not in live:
+        if legacy:
+            add("PROBLEM", "the knowledge pack is still under its old name '%s', and Heim asks for '%s': it "
+                           "finds nothing and says nothing. Indexing the pack renames it and brings it up to date: "
+                           "heim-index -c %s <heim/knowledge folder>" % (legacy[0], KNOWLEDGE, KNOWLEDGE))
+        elif live:
+            add("PROBLEM", "no '%s' collection: Heim has code and documents but not the knowledge pack (known "
+                           "behaviours, failure casebook, tool help). Index it: heim-index -c %s "
+                           "<heim/knowledge folder>" % (KNOWLEDGE, KNOWLEDGE))
+    elif legacy:
+        add("WATCH", "old collection(s) %s are still in the index beside '%s' and are searched too: a stale "
+                     "copy of the pack can out-rank the current one" % (", ".join(legacy), KNOWLEDGE))
+    stages = [c for c in counts if c.startswith(STAGE_PREFIX)]
+    if stages:
+        add("WATCH", "an indexing run was interrupted and left %s (%d passages, not searched). Run that "
+                     "heim-index again; it clears its own leftovers"
+            % (", ".join(c[len(STAGE_PREFIX):] for c in stages), sum(counts[c][1] for c in stages)))
+    for c in sorted(live):
+        nfiles, nchunks = live[c]
+        if c not in roots:
+            add("OK", "%-16s %5d files, %6d passages (folder not recorded: indexed by an older version)"
+                % (c, nfiles, nchunks))
+            continue
+        rts, when = roots[c]
+        missing = [r for r in rts if not os.path.isdir(r)]
+        if missing:
+            add("WATCH", "%s was indexed from %s, which is not there now: it still answers from the text "
+                         "as it was on %s, and cannot be refreshed until the folder is back or it is "
+                         "re-indexed from where it moved" % (c, ", ".join(missing), when))
+            continue
+        try:
+            stamp = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            stamp = None
+        new, changed, big = [], [], []
+        on_disk = set()
+        for rel, full, kind in _walk_indexable(rts):
+            on_disk.add(rel)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            if st.st_size > (MAX_PDF_BYTES if kind == "pdf" else MAX_TEXT_BYTES):
+                big.append(rel)
+                continue
+            if rel not in paths.get(c, ()):
+                # a file with no text (an empty __init__.py, a scanned PDF) is never in the
+                # index, so "not indexed" only means something when it arrived after the run
+                if stamp is not None and st.st_mtime > stamp + 2:
+                    new.append(rel)
+            elif stamp is not None and st.st_mtime > stamp + 2:
+                changed.append(rel)
+        gone = sorted(paths.get(c, set()) - on_disk)
+        notes = []
+        if changed:
+            notes.append("%d file(s) changed since (first: %s)" % (len(changed), changed[0]))
+        if new:
+            notes.append("%d new file(s) since (first: %s)" % (len(new), new[0]))
+        if gone:
+            notes.append("%d indexed file(s) are gone from the folder (first: %s)" % (len(gone), gone[0]))
+        if notes:
+            add("WATCH", "%s is older than its files (indexed %s): %s. Heim answers from the text as it "
+                         "was. Refresh: heim-index -c %s %s"
+                % (c, when, "; ".join(notes), c, " ".join("'%s'" % r for r in rts)))
+        else:
+            add("OK", "%-16s %5d files, %6d passages, level with its folder (indexed %s)"
+                % (c, nfiles, nchunks, when))
+        if big:
+            add("WATCH", "%s: %d file(s) are over the size limit (%d KB for text) and are never indexed, "
+                         "however often it is re-run (first: %s). Split them if Heim should read them"
+                % (c, len(big), MAX_TEXT_BYTES // 1024, big[0]))
+    if ollama:
+        base = EMBED_URL.rsplit("/api/", 1)[0]
+        chat_model = os.environ.get("HEIM_MODEL", "heim")
+        try:
+            with urllib.request.urlopen(base + "/api/tags", timeout=10) as r:
+                tags = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
+            for m_ in (chat_model, EMBED_MODEL):
+                if m_ in tags or (m_ + ":latest") in tags:
+                    add("OK", "model %s is present" % m_)
+                else:
+                    add("PROBLEM", "model %s is missing from Ollama: re-run the installer" % m_)
+        except Exception as e:
+            add("PROBLEM", "Ollama is not reachable at %s (%s). Start it: heim-start" % (base, e))
+    return out
+
+
+def doctor(ollama=True):
+    checks = doctor_checks(ollama)
+    for level, text in checks:
+        print("  %-8s %s" % ({"OK": "ok", "WATCH": "WATCH", "PROBLEM": "PROBLEM"}[level], text))
+    problems = sum(1 for level, _ in checks if level == "PROBLEM")
+    watches = sum(1 for level, _ in checks if level == "WATCH")
+    if problems:
+        print("\n%d PROBLEM(s): until fixed, Heim runs and answers from less than you think." % problems)
+    elif watches:
+        print("\nNo problem; %d thing(s) to look at." % watches)
+    else:
+        print("\nAll checks passed.")
+    return 1 if problems else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Index folders (text+PDFs) into a named collection.")
     ap.add_argument("-c", "--collection", default=None)
@@ -749,7 +909,14 @@ def main():
                          "index them as the collection 'added' (type the command, drag the files in)")
     ap.add_argument("--allow-empty", action="store_true",
                     help="allow a run with 0 chunks to replace (clear) the collection")
+    ap.add_argument("--doctor", action="store_true",
+                    help="check, without changing anything, that the index is there, holds the "
+                         "knowledge pack and is level with the folders it was built from")
+    ap.add_argument("--library", action="store_true",
+                    help="with --doctor: check the index and folders only (no Ollama needed)")
     args = ap.parse_args()
+    if args.doctor:
+        sys.exit(doctor(ollama=not args.library))
     if args.list_collections:
         list_collections()
         return
@@ -777,7 +944,19 @@ SCRIPT_EOF_RAG_INDEX
 
   cat > "$LOCAL_AI/rag_query.py" << 'SCRIPT_EOF_RAG_QUERY'
 #!/usr/bin/env python3
-# rag_query.py v2.2 — query the RAG store, streaming output (stdlib only; numpy if present)
+# rag_query.py v2.3 — query the RAG store, streaming output (stdlib only; numpy if present)
+#
+#   rag_query.py "question"            one question, answered from the indexed documents
+#   rag_query.py -c standards "..."    from one collection
+#   rag_query.py --chat                a conversation: every question is looked up first
+#
+# v2.3: --chat (the `heim-chat` command). heim-chat used to be `ollama run heim`: the bare
+#   model, which never read a document, so the knowledge pack and anything added with
+#   heim-add were invisible to it. Now each question is looked up in the index like a one-shot
+#   query, a follow-up is searched together with the question before it, and a file dragged
+#   into the window is indexed (rag_index --add) and readable on the next question. With
+#   nothing indexed it says so before every answer: an empty index is not an error, and that
+#   has cost a wrong answer more than once.
 #
 # v2.2 fixes (vs v2.1):
 #   - nomic-embed-text query prefix (search_query:) to match the v2.4 index.
@@ -785,7 +964,7 @@ SCRIPT_EOF_RAG_INDEX
 #   - num_ctx sent per request, sized to the prompt, so Ollama never trims the
 #     front of the prompt (the instructions) without saying so.
 #   - qwen3 "thinking" is streamed separately and kept out of the answer.
-import os, sys, json, sqlite3, urllib.request, urllib.error, math, argparse
+import os, sys, json, sqlite3, urllib.request, urllib.error, math, argparse, shlex
 
 DB = os.path.expanduser(os.environ.get("HEIM_DB", "~/local-ai/knowledge.db"))
 BASE = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -807,35 +986,92 @@ def post(url, payload, timeout=900):
         return json.loads(r.read())
 
 
+class Store(object):
+    """The indexed passages of one collection (or all), held in memory. A chat asks many
+    questions, and parsing every stored vector again for each one takes seconds on a full
+    index; the file's size and time say when it has changed and must be read again."""
+
+    def __init__(self, coll):
+        self.coll = coll
+        self.rows, self.M, self.stamp = [], None, None
+        self.load()
+
+    def _stamp(self):
+        try:
+            st = os.stat(DB)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def load(self):
+        self.stamp = self._stamp()
+        self.rows, self.M = [], None
+        if self.stamp is None:
+            return
+        db = sqlite3.connect(DB)
+        try:
+            if self.coll == "all":
+                rows = db.execute("SELECT collection,path,idx,txt,vec FROM chunks "
+                                  "WHERE collection NOT LIKE '\\_\\_%' ESCAPE '\\'").fetchall()
+            else:
+                rows = db.execute("SELECT collection,path,idx,txt,vec FROM chunks WHERE collection=?",
+                                  (self.coll,)).fetchall()
+        except sqlite3.OperationalError:      # a file that is not an index yet
+            rows = []
+        finally:
+            db.close()
+        vecs = [json.loads(r[4]) for r in rows]
+        self.rows = [r[:4] for r in rows]
+        if np is not None and vecs:
+            self.M = np.array(vecs, dtype=np.float32)
+            self.norms = np.linalg.norm(self.M, axis=1)
+        else:
+            self.vecs = vecs
+
+    def changed(self):
+        return self._stamp() != self.stamp
+
+    def collections(self):
+        out = {}
+        for r in self.rows:
+            out[r[0]] = out.get(r[0], 0) + 1
+        return out
+
+    def _sims(self, qv):
+        if self.M is not None:
+            v = np.array(qv, dtype=np.float32)
+            return ((self.M @ v) / (self.norms * np.linalg.norm(v) + 1e-9)).tolist()
+        nb = math.sqrt(sum(y * y for y in qv))
+
+        def cos(a):
+            d = sum(x * y for x, y in zip(a, qv))
+            na = math.sqrt(sum(x * x for x in a))
+            return d / (na * nb) if na and nb else 0.0
+        return [cos(a) for a in self.vecs]
+
+    def search(self, queries, top_k):
+        """Best passages for any of the queries (a follow-up is searched on its own and
+        together with the question before it; each passage keeps its better score)."""
+        if not self.rows:
+            return []
+        qvs = post(BASE + "/api/embed", {"model": EMBED_MODEL,
+                                         "input": [QUERY_PREFIX + q for q in queries]})["embeddings"]
+        best = None
+        for qv in qvs:
+            sims = self._sims(qv)
+            best = sims if best is None else [max(a, b) for a, b in zip(best, sims)]
+        order = sorted(range(len(best)), key=lambda i: -best[i])[:top_k]
+        return [(float(best[i]),) + tuple(self.rows[i]) for i in order]
+
+
 def retrieve(q, coll, top_k):
     if not os.path.exists(DB):
         sys.exit("No index at %s — run rag_index.py first." % DB)
-    db = sqlite3.connect(DB)
-    if coll == "all":
-        rows = db.execute("SELECT collection,path,idx,txt,vec FROM chunks "
-                          "WHERE collection NOT LIKE '\\_\\_%' ESCAPE '\\'").fetchall()
-    else:
-        rows = db.execute("SELECT collection,path,idx,txt,vec FROM chunks WHERE collection=?",
-                          (coll,)).fetchall()
-    db.close()
-    if not rows:
+    store = Store(coll)
+    if not store.rows:
         h = (" Collection '%s' empty — index it: rag_index.py -c %s <folder>" % (coll, coll)) if coll != "all" else ""
         sys.exit("Index is empty.%s" % h)
-    qv = post(BASE + "/api/embed", {"model": EMBED_MODEL, "input": [QUERY_PREFIX + q]})["embeddings"][0]
-    if np is not None:
-        M = np.array([json.loads(r[4]) for r in rows], dtype=np.float32)
-        v = np.array(qv, dtype=np.float32)
-        sims = (M @ v) / (np.linalg.norm(M, axis=1) * np.linalg.norm(v) + 1e-9)
-        return [(float(sims[i]), rows[i][0], rows[i][1], rows[i][2], rows[i][3])
-                for i in np.argsort(-sims)[:top_k]]
-
-    def cos(a, b):
-        d = sum(x * y for x, y in zip(a, b))
-        na = math.sqrt(sum(x * x for x in a))
-        nb = math.sqrt(sum(y * y for y in b))
-        return d / (na * nb) if na and nb else 0.0
-    sc = sorted(((cos(qv, json.loads(r[4])), r) for r in rows), key=lambda x: -x[0])[:top_k]
-    return [(s, r[0], r[1], r[2], r[3]) for s, r in sc]
+    return store.search([q], top_k)
 
 
 def chat_payload(prompt, stream, think=True):
@@ -888,12 +1124,146 @@ def stream_answer(prompt, think=True):
     return "".join(buf)
 
 
+INSTRUCTION = ("Answer using ONLY the context below. Cite each fact with the collection "
+               "and file path shown in its bracket header. If insufficient, say so plainly.")
+NO_DOCS = ("NO DOCUMENTS ARE INDEXED%s, so nothing below is looked up or cited: it is the model's "
+           "built-in rules only.\nIndex the knowledge pack:  heim-index -c heim_knowledge <folder>   "
+           "(the installer does this; `heim-index --list-collections` shows what is there)")
+
+
+def build_prompt(q, hits, earlier=None):
+    ctx = "\n\n".join("--- [%s] %s (chunk %d) ---\n%s" % (c, p, i, t) for _, c, p, i, t in hits)
+    parts = [INSTRUCTION, ""]
+    if earlier:
+        parts += ["=== EARLIER IN THIS CONVERSATION (for what the question refers to; not a source) ===",
+                  "Question: " + earlier[0], "Answer: " + earlier[1][:1200], ""]
+    parts += ["=== CONTEXT ===", ctx, "=== QUESTION ===", q]
+    return "\n".join(parts)
+
+
+def answer(prompt):
+    """Stream the answer; fall back to one non-streamed call. Returns the text ('' if none)."""
+    try:
+        ans = stream_answer(prompt)
+    except KeyboardInterrupt:
+        print("\n[interrupted]")
+        return None
+    except Exception as e:
+        print("[stream failed (%s) — non-streaming fallback]" % e)
+        out = post(BASE + "/api/chat", chat_payload(prompt, False, think=False))
+        ans = (out.get("message") or {}).get("content") or ""
+        print(ans)
+    if not ans.strip():
+        print("[empty response — check `ollama ps` and the server log]")
+    return ans
+
+
+def dropped_paths(line):
+    """The paths in a line Terminal pasted when a file was dragged in, or [] when the line is
+    a question. Every word must be an existing path that has a separator or starts with ~, so
+    a question that happens to name a file in the current folder is still a question."""
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return []
+    out = []
+    for p in parts:
+        full = os.path.expanduser(p)
+        if not (os.sep in p or p.startswith("~")) or not os.path.exists(full):
+            return []
+        out.append(full)
+    return out
+
+
+def add_dropped(paths):
+    """Index dragged files with rag_index.add_files (the heim-add command). Returns the number
+    of files indexed, or None when the indexer could not be used at all."""
+    import importlib.util
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_index.py")
+    if not os.path.isfile(src):
+        print("rag_index.py is not next to this script, so nothing was added. Use: heim-add <file>")
+        return None
+    spec = importlib.util.spec_from_file_location("rag_index_for_chat", src)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+        return mod.add_files(paths)
+    except SystemExit as e:                 # the indexer exits with its reason; keep the chat
+        if e.code not in (0, None):
+            print(e.code if isinstance(e.code, str) else "not added (reason above)")
+        return None
+    except Exception as e:                  # Ollama down, an unreadable file: say so and go on
+        print("not added: %s" % e)
+        return None
+
+
+def chat(coll, top_k, ask=input):
+    store = Store(coll)
+    print("Heim chat (%s): every question is looked up in the indexed documents first.\n"
+          "Blank line or Ctrl+D quits. Drag a file into this window to add it." % CHAT_MODEL)
+    cols = store.collections()
+    if cols:
+        print("Reading %d passages: %s" % (len(store.rows), ", ".join(
+            "%s (%d)" % kv for kv in sorted(cols.items()))))
+    else:
+        print(NO_DOCS % ((" in collection '%s'" % coll) if coll != "all" else ""))
+    earlier = None
+    while True:
+        try:
+            q = ask("\n? ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("")
+            break
+        if not q:
+            break
+        drop = dropped_paths(q)
+        if drop:
+            n = add_dropped(drop)
+            store.load()
+            if n:
+                print("Ready: ask about it.")
+                if coll not in ("all", "added"):
+                    print("(this chat reads only collection '%s'; a dragged file goes into 'added', "
+                          "so start heim-chat without -c to read it)" % coll)
+            continue
+        if store.changed():                 # heim-add or heim-index ran in another window
+            store.load()
+        try:
+            hits = store.search([q] + ([earlier[0] + "\n" + q] if earlier else []), top_k)
+        except Exception as e:
+            print("could not look that up: %s\n(is Ollama running? heim-start)" % e)
+            continue
+        if hits:
+            print("Looked up %d passages:" % len(hits))
+            for s, c, p, i, _ in hits:
+                print("  %.3f  [%s] %s (chunk %d)" % (s, c, p, i))
+            prompt = build_prompt(q, hits, earlier)
+        else:
+            print(NO_DOCS % ((" in collection '%s'" % coll) if coll != "all" else ""))
+            prompt = q if not earlier else ("Earlier question: %s\nEarlier answer: %s\n\nQuestion: %s"
+                                            % (earlier[0], earlier[1][:1200], q))
+        print("-" * 70)
+        ans = answer(prompt)
+        if ans is None:
+            continue
+        if ans.strip():
+            earlier = (q, ans.strip())
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("-c", "--collection", default="all")
-    ap.add_argument("-k", "--top-k", type=int, default=TOP_K)
-    ap.add_argument("question", nargs="+")
+    ap = argparse.ArgumentParser(description="Ask Heim a question, answered from the indexed documents.")
+    ap.add_argument("-c", "--collection", default="all",
+                    help="read one collection only (default: all of them)")
+    ap.add_argument("-k", "--top-k", type=int, default=TOP_K, help="passages handed to the model per question")
+    ap.add_argument("--chat", action="store_true",
+                    help="a conversation: each question is looked up first, and a dragged file is indexed")
+    ap.add_argument("question", nargs="*")
     args = ap.parse_args()
+    if args.chat:
+        if args.question:
+            ap.error("--chat takes no question on the command line: type it at the ? prompt")
+        chat(args.collection, args.top_k)
+        return
     q = " ".join(args.question).strip()
     if not q:
         sys.exit("no question given")
@@ -902,25 +1272,11 @@ def main():
     for s, c, p, i, _ in hits:
         print("  %.3f  [%s] %s (chunk %d)" % (s, c, p, i))
     print("-" * 70)
-    ctx = "\n\n".join("--- [%s] %s (chunk %d) ---\n%s" % (c, p, i, t) for _, c, p, i, t in hits)
-    prompt = ("Answer using ONLY the context below. Cite each fact with the collection "
-              "and file path shown in its bracket header. If insufficient, say so plainly.\n\n"
-              "=== CONTEXT ===\n" + ctx + "\n=== QUESTION ===\n" + q)
+    prompt = build_prompt(q, hits)
     print("Answer (%s, streaming — Ctrl+C aborts):" % CHAT_MODEL)
     print("-" * 70)
-    ans = ""
-    try:
-        ans = stream_answer(prompt)
-    except KeyboardInterrupt:
-        print("\n[interrupted]")
+    if answer(prompt) is None:
         sys.exit(0)
-    except Exception as e:
-        print("[stream failed (%s) — non-streaming fallback]" % e)
-        out = post(BASE + "/api/chat", chat_payload(prompt, False, think=False))
-        ans = (out.get("message") or {}).get("content") or ""
-        print(ans)
-    if not ans.strip():
-        print("[empty response — check `ollama ps` and the server log]")
 
 
 if __name__ == "__main__":
@@ -3273,11 +3629,19 @@ alias heim-start="OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \$HOME/loca
 unalias heim-chat 2>/dev/null
 function heim-chat {
   [[ -t 1 && -z "\$NO_COLOR" ]] && printf '\033[1;38;2;48;196;200mD\033[1;38;2;250;250;240ma\033[1;38;2;48;196;200mM\033[1;38;2;244;158;24miT\033[0m  \033[2mHeim - local triage. It watches and explains; the code sets the verdict.\033[0m\n \033[38;2;31;188;188m~\033[0m\n'
-  \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run heim "\$@"
+  # --bare is the model on its own, with no document lookup (what heim-chat used to be)
+  if [[ "\$1" == "--bare" ]]; then
+    shift
+    \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run heim "\$@"
+  else
+    $PYRUN \$HOME/local-ai/rag_query.py --chat "\$@"
+  fi
 }
 alias heim-ps="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama ps"
 alias heim-index="$PYRUN \$HOME/local-ai/rag_index.py"
 alias heim-add="$PYRUN \$HOME/local-ai/rag_index.py --add"
+alias heim-doctor="$PYRUN \$HOME/local-ai/rag_index.py --doctor"
+alias heim="$PYRUN \$HOME/local-ai/rag_query.py"
 alias heim-query="$PYRUN \$HOME/local-ai/rag_query.py"
 alias heim-audit="$PYRUN \$HOME/local-ai/audit_plugin.py"
 alias heim-test="$PYRUN \$HOME/local-ai/suite_check.py"

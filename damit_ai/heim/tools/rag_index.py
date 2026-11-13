@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-# rag_index.py v2.6 — multi-collection RAG indexer (stdlib only)
+# rag_index.py v2.7 — multi-collection RAG indexer (stdlib only)
 # Atomic rebuilds via a hidden per-collection stage; auto-migrates v1 DBs;
 # PDF backends: pdftotext -> pymupdf -> pypdf -> skip.
 #
+# v2.7: --doctor (heim-doctor). Says, without changing anything, whether Heim is reading what
+#   you think it is: no index, an empty index, no knowledge pack (Heim then answers from its
+#   built-in rules alone, and an empty collection is not an error), a collection still under
+#   its pre-rename name, an interrupted run's leftovers, a folder that moved, files that
+#   changed or arrived after the folder was indexed, and files the index silently skips for
+#   size. Exits 1 on a PROBLEM.
 # v2.6: --add FILE ... copies single files into <index folder>/added and indexes them as the
 #   collection 'added' (heim-add). Indexing took folders only, so one dragged PDF had no home.
 #
@@ -417,6 +423,160 @@ def add_files(paths):
     return copied
 
 
+KNOWLEDGE = "heim_knowledge"
+LEGACY_KNOWLEDGE = ("pierre_knowledge", "lumo_knowledge")
+
+
+def _walk_indexable(roots):
+    """(rel path as the index stores it, full path, kind) for every file a run over these
+    roots would look at. The same walk as index_collection, so the two cannot disagree."""
+    multi = len(roots) > 1
+    for root in roots:
+        for dp, dns, fns in os.walk(root):
+            dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
+            for fn in sorted(fns):
+                kind = file_filter(fn)
+                if kind is None:
+                    continue
+                full = os.path.join(dp, fn)
+                rel = os.path.relpath(full, root)
+                if multi:
+                    rel = os.path.join(os.path.basename(root), rel)
+                yield rel, full, kind
+
+
+def doctor_checks(ollama=True):
+    """[(level, text)], level one of OK / WATCH / PROBLEM. Reads the index; never writes it
+    (not even the schema upgrade a normal run does), so running it cannot hide what it finds."""
+    out = []
+    add = lambda level, text: out.append((level, text))
+    if not os.path.exists(DB):
+        add("PROBLEM", "no index at %s: heim and heim-chat answer from the model's built-in rules alone. "
+                       "Index the knowledge pack: heim-index -c %s <heim/knowledge folder>" % (DB, KNOWLEDGE))
+        return out
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % urllib.request.pathname2url(DB), uri=True)
+        counts = dict((c, (f, n)) for c, f, n in db.execute(
+            "SELECT collection, COUNT(DISTINCT path), COUNT(*) FROM chunks GROUP BY collection"))
+        try:
+            roots = dict((c, (json.loads(r), t)) for c, r, t in db.execute(
+                "SELECT collection, roots, indexed_at FROM roots"))
+        except sqlite3.Error:
+            roots = {}
+        paths = {}
+        for c, p in db.execute("SELECT DISTINCT collection, path FROM chunks"):
+            paths.setdefault(c, set()).add(p)
+        db.close()
+    except sqlite3.Error as e:
+        add("PROBLEM", "%s is not a readable index (%s)" % (DB, e))
+        return out
+    live = dict((c, v) for c, v in counts.items() if not c.startswith("__"))
+    add("OK", "index %s: %d collection(s), %d passages" % (DB, len(live), sum(n for _, n in live.values())))
+    if not live:
+        add("PROBLEM", "the index is empty: heim and heim-chat answer from the model's built-in rules alone")
+    legacy = [c for c in LEGACY_KNOWLEDGE if c in live]
+    if KNOWLEDGE not in live:
+        if legacy:
+            add("PROBLEM", "the knowledge pack is still under its old name '%s', and Heim asks for '%s': it "
+                           "finds nothing and says nothing. Indexing the pack renames it and brings it up to date: "
+                           "heim-index -c %s <heim/knowledge folder>" % (legacy[0], KNOWLEDGE, KNOWLEDGE))
+        elif live:
+            add("PROBLEM", "no '%s' collection: Heim has code and documents but not the knowledge pack (known "
+                           "behaviours, failure casebook, tool help). Index it: heim-index -c %s "
+                           "<heim/knowledge folder>" % (KNOWLEDGE, KNOWLEDGE))
+    elif legacy:
+        add("WATCH", "old collection(s) %s are still in the index beside '%s' and are searched too: a stale "
+                     "copy of the pack can out-rank the current one" % (", ".join(legacy), KNOWLEDGE))
+    stages = [c for c in counts if c.startswith(STAGE_PREFIX)]
+    if stages:
+        add("WATCH", "an indexing run was interrupted and left %s (%d passages, not searched). Run that "
+                     "heim-index again; it clears its own leftovers"
+            % (", ".join(c[len(STAGE_PREFIX):] for c in stages), sum(counts[c][1] for c in stages)))
+    for c in sorted(live):
+        nfiles, nchunks = live[c]
+        if c not in roots:
+            add("OK", "%-16s %5d files, %6d passages (folder not recorded: indexed by an older version)"
+                % (c, nfiles, nchunks))
+            continue
+        rts, when = roots[c]
+        missing = [r for r in rts if not os.path.isdir(r)]
+        if missing:
+            add("WATCH", "%s was indexed from %s, which is not there now: it still answers from the text "
+                         "as it was on %s, and cannot be refreshed until the folder is back or it is "
+                         "re-indexed from where it moved" % (c, ", ".join(missing), when))
+            continue
+        try:
+            stamp = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            stamp = None
+        new, changed, big = [], [], []
+        on_disk = set()
+        for rel, full, kind in _walk_indexable(rts):
+            on_disk.add(rel)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            if st.st_size > (MAX_PDF_BYTES if kind == "pdf" else MAX_TEXT_BYTES):
+                big.append(rel)
+                continue
+            if rel not in paths.get(c, ()):
+                # a file with no text (an empty __init__.py, a scanned PDF) is never in the
+                # index, so "not indexed" only means something when it arrived after the run
+                if stamp is not None and st.st_mtime > stamp + 2:
+                    new.append(rel)
+            elif stamp is not None and st.st_mtime > stamp + 2:
+                changed.append(rel)
+        gone = sorted(paths.get(c, set()) - on_disk)
+        notes = []
+        if changed:
+            notes.append("%d file(s) changed since (first: %s)" % (len(changed), changed[0]))
+        if new:
+            notes.append("%d new file(s) since (first: %s)" % (len(new), new[0]))
+        if gone:
+            notes.append("%d indexed file(s) are gone from the folder (first: %s)" % (len(gone), gone[0]))
+        if notes:
+            add("WATCH", "%s is older than its files (indexed %s): %s. Heim answers from the text as it "
+                         "was. Refresh: heim-index -c %s %s"
+                % (c, when, "; ".join(notes), c, " ".join("'%s'" % r for r in rts)))
+        else:
+            add("OK", "%-16s %5d files, %6d passages, level with its folder (indexed %s)"
+                % (c, nfiles, nchunks, when))
+        if big:
+            add("WATCH", "%s: %d file(s) are over the size limit (%d KB for text) and are never indexed, "
+                         "however often it is re-run (first: %s). Split them if Heim should read them"
+                % (c, len(big), MAX_TEXT_BYTES // 1024, big[0]))
+    if ollama:
+        base = EMBED_URL.rsplit("/api/", 1)[0]
+        chat_model = os.environ.get("HEIM_MODEL", "heim")
+        try:
+            with urllib.request.urlopen(base + "/api/tags", timeout=10) as r:
+                tags = {m.get("name", "") for m in json.loads(r.read()).get("models", [])}
+            for m_ in (chat_model, EMBED_MODEL):
+                if m_ in tags or (m_ + ":latest") in tags:
+                    add("OK", "model %s is present" % m_)
+                else:
+                    add("PROBLEM", "model %s is missing from Ollama: re-run the installer" % m_)
+        except Exception as e:
+            add("PROBLEM", "Ollama is not reachable at %s (%s). Start it: heim-start" % (base, e))
+    return out
+
+
+def doctor(ollama=True):
+    checks = doctor_checks(ollama)
+    for level, text in checks:
+        print("  %-8s %s" % ({"OK": "ok", "WATCH": "WATCH", "PROBLEM": "PROBLEM"}[level], text))
+    problems = sum(1 for level, _ in checks if level == "PROBLEM")
+    watches = sum(1 for level, _ in checks if level == "WATCH")
+    if problems:
+        print("\n%d PROBLEM(s): until fixed, Heim runs and answers from less than you think." % problems)
+    elif watches:
+        print("\nNo problem; %d thing(s) to look at." % watches)
+    else:
+        print("\nAll checks passed.")
+    return 1 if problems else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Index folders (text+PDFs) into a named collection.")
     ap.add_argument("-c", "--collection", default=None)
@@ -427,7 +587,14 @@ def main():
                          "index them as the collection 'added' (type the command, drag the files in)")
     ap.add_argument("--allow-empty", action="store_true",
                     help="allow a run with 0 chunks to replace (clear) the collection")
+    ap.add_argument("--doctor", action="store_true",
+                    help="check, without changing anything, that the index is there, holds the "
+                         "knowledge pack and is level with the folders it was built from")
+    ap.add_argument("--library", action="store_true",
+                    help="with --doctor: check the index and folders only (no Ollama needed)")
     args = ap.parse_args()
+    if args.doctor:
+        sys.exit(doctor(ollama=not args.library))
     if args.list_collections:
         list_collections()
         return
