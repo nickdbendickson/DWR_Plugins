@@ -841,7 +841,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
                      pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
-                     seed={len(tl) + len(dl) + i: (sd[0], sd[1], sd[3]) for i, sd in enumerate(psd)},
+                     seed={len(tl) + len(dl) + i: [(sd[0], sd[1], sd[3]) for sd in sds]
+                           for i, sds in enumerate(psd)},
                      inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]):
                              _held_inflow(xs, ys, near, rec, area, g, c3)) if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
@@ -998,8 +999,9 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     (grid gt10, the draws' receivers); exits = the distance along each line at which it leaves its
     own pool; drains = the ground draining into that pool (m2, terrain.pool_inflow over `area` on
     gt10): flat routing can split a pool's water over many outlet cells, so no one cell on the line
-    holds it all; seeds = the pool seed (x, y, area m2, 'flat' or 'depression') each line starts
-    from. A pool is the seed's own (its flat or depression), on the 10 m cells at least
+    holds it all; seeds = for each line the pool seeds (x, y, area m2, 'flat' or 'depression') it
+    starts from: its own, then any flat water surface whose seed lies in the same routing cell
+    (which got no line of its own). A pool is the seed's own (its flat or depression), on the 10 m cells at least
     40 % of whose 3 m cells it covers, so a creek or another pond beside it is not part of it. A pool
     whose seed already drains max_area gets no line: the draws walk it."""
     c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
@@ -1039,7 +1041,18 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     seeds = [pc[0] for pc in pairs]
     pools = [own10(*pc) for pc in pairs]
     lines, exits, index = tr.pool_lines(seeds, rec, gt10, (H10, W10), pools=pools, with_index=True)
-    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index], [seeds[i] for i in index]
+    # A small pond is usually both a flat water surface and a closed depression, and the two seeds
+    # often fall in one 10 m routing cell: only the bigger (the depression) then starts a line. The
+    # line out of that cell comes out of the flat water all the same, so it carries that seed too.
+    sds = [[seeds[i]] for i in index]
+    start = {rc10(seeds[i][0], seeds[i][1]): k for k, i in enumerate(index)}
+    lined = set(index)
+    for i, sd in enumerate(seeds):
+        if i not in lined and sd[3] == "flat":
+            k = start.get(rc10(sd[0], sd[1]))
+            if k is not None:
+                sds[k].append(sd)
+    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index], sds
 
 
 def _cells10(xs, ys, gt, shape, share=0.0, cell=None):

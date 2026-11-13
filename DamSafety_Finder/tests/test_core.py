@@ -44,15 +44,17 @@ LINE = [(XS, N * CELL - 1.0), (XS, 1.0)]
 
 
 def hill_pond(water=6, n=120, r0=50, c0=57):
-    """(DEM, water mask, water level) of a small pond on a 6 % hillside falling south: water x water
-    cells of flat water (6 x 6 = 324 m2, 4 x 4 = 144 m2) 0.3 m below the ground at its uphill
-    side, ringed by a fill two cells wide whose top is 0.9 m above the water."""
+    """(DEM, water mask, water level) of a small pond in a draw (sides of 10 %) falling south at
+    6 %: water x water cells of flat water (6 x 6 = 324 m2, 4 x 4 = 144 m2) 0.3 m below the
+    draw's floor at its uphill end, ringed by a fill two cells wide whose top is 1.1 m above the
+    water (the draw's sides are higher than that beside the pond: the fill is the dam across)."""
     y, x = np.mgrid[0:n, 0:n]
-    z = 100.0 - y * CELL * 0.06
-    lvl = float(z[r0, 0]) - 0.3
+    mid = c0 + (water - 1) / 2.0
+    z = 100.0 - y * CELL * 0.06 + np.abs(x - mid) * CELL * 0.10
+    lvl = 100.0 - r0 * CELL * 0.06 - 0.3
     ring = (y >= r0 - 2) & (y < r0 + water + 2) & (x >= c0 - 2) & (x < c0 + water + 2)
     wat = (y >= r0) & (y < r0 + water) & (x >= c0) & (x < c0 + water)
-    z = np.where(ring, np.maximum(z, lvl + 0.9), z)
+    z = np.where(ring, np.maximum(z, lvl + 1.1), z)
     return np.where(wat, lvl, z), wat, lvl
 
 
@@ -683,9 +685,13 @@ class PoolSeeds(unittest.TestCase):
             self.assertEqual(got[0].kind, em.K_DAM)
             self.assertAlmostEqual(got[0].pool_area_m2, area, delta=1.0)
             self.assertGreaterEqual(got[0].height_m, 5.0 * em.FT)
+            self.assertTrue(any("small pond" in t for t in got[0].notes))
             # the same pond, the same line, but out of a closed depression: not kept
             self.assertEqual(em.find(z, gt, [line], line_lim=lim,
                                      pool_rules=dict(rules, seed={0: (sx, sy, "depression")})), [])
+            # a line can start from several seeds (a depression and the flat water in its cell)
+            both = [(sx, sy, "depression"), (sx + 3.0, sy, "flat")]
+            self.assertEqual(len(em.find(z, gt, [line], line_lim=lim, pool_rules=dict(rules, seed={0: both}))), 1)
             # a flat seed the fill's pool does not hold (it lies on the hillside beside the pond)
             self.assertEqual(em.find(z, gt, [line], line_lim=lim,
                                      pool_rules=dict(rules, seed={0: (sx + 60.0, sy, "flat")})), [])

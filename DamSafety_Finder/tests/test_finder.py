@@ -306,6 +306,29 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in both["rows"]), ["dam", "dry embankment", "road fill"])
         self.assertTrue(all(r["line_source"] == "DEM drainage" for r in both["rows"]))
 
+    def test_a_small_pond_is_found_wherever_the_routing_cells_fall(self):
+        # 324 m2 of flat water on a hillside behind its own fill, no draw near it (Finder 0.7).
+        # It is a flat water surface and a closed depression at once; on most placements both seeds
+        # fall in one 10 m routing cell and only the depression starts a line - which still comes
+        # out of the flat water. Found on every placement; not with the 0.6 seed size.
+        z, _wat, _lvl = tc.hill_pond(6)
+        kw = dict(drainage_ac=1e6, hillshade=False, log=lambda *_: None)
+        global X0
+        keep = X0
+        try:
+            for dx in (0.0, 3.0, 6.0, 9.0, 12.0):
+                X0 = keep + dx                                # the DEM moved over the 10 m cells
+                dem = os.path.join(self.tmp, "pond{:.0f}.tif".format(dx))
+                write_dem(dem, z)
+                rows = self.f.run_embankments(dem, None, self.out, **kw)["rows"]
+                self.assertEqual([(r["kind"], r["line_source"]) for r in rows], [("dam", "DEM pool outlet")], dx)
+                self.assertLess(rows[0]["area_ac"] * 4046.86, 400.0)
+                self.assertIn("small pond", rows[0]["notes"])
+                old = self.f.run_embankments(dem, None, self.out, pool_opts={"flat_min_m2": 300.0}, **kw)["rows"]
+                self.assertEqual(old, [], dx)
+        finally:
+            X0 = keep
+
     def test_near10_is_the_points_cell(self):
         # the fill's position on the 10 m routing grid: the cell holding it, radius in cells
         g = (1000.0, 10.0, 0.0, 2000.0, 0.0, -10.0)

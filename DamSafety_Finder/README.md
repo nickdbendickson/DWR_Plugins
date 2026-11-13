@@ -99,7 +99,10 @@ things changed: a flat water surface now seeds a line from 100 m2 (it was 300 m2
 is that of the cells whose neighbours are all at the water level, which leaves out the water's
 edge cells, so this is a pond of about 250 m2 on 3 m cells), and on a line that comes out of a flat
 water surface a pool of `own_pool_m2` (100 m2) is enough when the pool the fill holds contains
-that water surface. A line out of a closed depression keeps the 400 m2: there the small pools
+that water surface. A small pond is usually a flat water surface and a closed depression at
+once, and their two seeds often fall in one 10 m routing cell, where only one line starts: that
+line counts as coming out of the flat water too. A line out of a closed depression with no flat
+water in its cell keeps the 400 m2: there the small pools
 were mostly field hollows and ditch pits (on four Iowa tiles letting every seed keep a 100 m2 pool
 gained 17 dams for 375 fills that were not on one).
 `pool_toe_reach_m` (a script setting, off = 0) takes the toe of a pool-line fill as at least the

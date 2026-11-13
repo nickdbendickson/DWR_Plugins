@@ -756,9 +756,9 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
     (never turned round): on such a line only a hump starting within that distance of its first
     point is tested, its toe is looked for within params.pool_toe_m, and the fill is marked
     pool_line. `pool_rules` (on those lines only): min_area_m2 - the pool at the spill level is at
-    least this (or, when seed - {line index: (x, y, 'flat' or 'depression')}, the pool seed the
-    line starts from - is a flat water surface and the pool holds that point, at least
-    params.own_pool_m2); skip_road - not on the road mask; max_drain_m2 - drains less than this at the
+    least this (or, when seed - {line index: (x, y, 'flat' or 'depression') or a list of them},
+    the pool seeds the line starts from - holds a flat water surface whose point is in the pool,
+    at least params.own_pool_m2); skip_road - not on the road mask; max_drain_m2 - drains less than this at the
     crest; line_area - {line index: contributing area (m2) at each of its points}, its own path,
     read for max_drain_m2 and the fill's drain_m2 (else drain_area); pool_drain - {line index: m2
     draining into its pool}, the least drain_m2 of a fill on it; inflow(xs, ys, near) - m2 draining into
@@ -867,18 +867,26 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             open_pool = bool(pm[0, :].any() or pm[-1, :].any() or pm[:, 0].any() or pm[:, -1].any())
             if storage < p.min_storage_m3:
                 continue
+            small = False                               # kept on its own flat water, under min_area_m2
             if lim is not None and pool_rules:
                 if parea < pool_rules.get("min_area_m2", 0.0):
                     # ... unless the line comes out of a flat water surface and this pool holds it: a
                     # pond of 100-400 m2 behind its own dam (Iowa census, 4 tiles: 28 such fills on a
                     # pond dam, 21 not; from any seed it was 17 dams gained for 375 fills not on one)
-                    sd = (pool_rules.get("seed") or {}).get(li)
+                    sds = (pool_rules.get("seed") or {}).get(li) or ()
+                    if sds and not isinstance(sds[0], (tuple, list)):
+                        sds = (sds,)                    # one seed (x, y, kind)
                     held = False
-                    if sd is not None and sd[2] == "flat" and parea >= p.own_pool_m2:
+                    for sd in sds if parea >= p.own_pool_m2 else ():
+                        if sd[2] != "flat":
+                            continue
                         f0 = (int(math.floor((sd[1] - gt[3]) / gt[5])) - r0, int(math.floor((sd[0] - gt[0]) / gt[1])) - c0)
-                        held = 0 <= f0[0] < pm.shape[0] and 0 <= f0[1] < pm.shape[1] and bool(pm[f0])
+                        if 0 <= f0[0] < pm.shape[0] and 0 <= f0[1] < pm.shape[1] and bool(pm[f0]):
+                            held = True
+                            break
                     if not held:
                         continue                        # not the pool's own fill: a dip below it
+                    small = True
                 if pool_rules.get("skip_road") and road_mask is not None and \
                         any(road_mask[r, c] for r, c in cells[s:e]):
                     continue                            # a road over the pool's outlet
@@ -961,6 +969,9 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             if lim is not None:
                 notes.append("found on a line out of the pool (less drains to it than the draws "
                              "take)")
+            if small:
+                notes.append("a small pond ({:.2f} ac at its spill level): kept because the line "
+                             "comes out of its own flat water".format(parea / AC_M2))
             fill_road = bool(road_mask is not None and len(fr)
                              and road_mask[fr + fr0, fc + fc0].any())
             pool_xy = None
