@@ -35,8 +35,10 @@ relative to the file. Keys that start with an underscore are ignored, null means
              breach.DamData (dam_height_ft, storage_top_acft, top_of_dam_ft, ...); the short
              names id, height_ft, storage_acft, top_ft, area_ac, pmf_ft, bottom_ft also work
   breach     method, user_csv, overrides (BreachOverrides fields: avg_width_ft, ...)
-  scenario   type (sunny|flood|per_dam), inflow_csv, spillway_csv, normal_pool_ft, trigger,
-             trigger_value, baseline_csv, baseline, incr_thresholds_ft
+  scenario   type (sunny|flood|flood_no_breach|per_dam), inflow_csv, spillway_csv,
+             normal_pool_ft, trigger, trigger_value, baseline_csv, baseline, incr_thresholds_ft;
+             start_pool (top|normal|stated) + start_wse_ft for a sunny day that does not start
+             at the top of dam; aux_crest_ft, aux_length_ft, aux_c: auxiliary spillway weir
   layers     GeoJSON files: receptor_points/roads/rail, structures (culverts, bridges, notches),
              channels, ponds, refine_lines, gauges, and their options; vector_crs
   manning    n, raster, nlcd, nlcd_n
@@ -180,7 +182,8 @@ DAM_ALIASES = {"id": "dam_id", "height_ft": "dam_height_ft", "storage_acft": "st
 TIER_ALIASES = {"both": workflow.TIER_BOTH, "anuga": workflow.TIER_BOTH,
                 "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD,
                 "hecras": workflow.TIER_HECRAS}
-SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam")
+SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam",
+                  workflow.SCENARIO_FLOOD_NO_BREACH)        # 3.18.0, appended
 READERS = ("auto", "gdal", "asc")
 
 # --------------------------------------------------------------------------------------
@@ -237,7 +240,11 @@ SECTIONS = {
                  "spillway_csv": ("path",), "normal_pool_ft": ("num", None, None),
                  "trigger": ("enum", floodmod.TRIGGERS), "trigger_value": ("num", None, None),
                  "baseline_csv": ("path",), "baseline": ("bool",),
-                 "incr_thresholds_ft": ("nums",)},
+                 "incr_thresholds_ft": ("nums",),
+                 # 3.18.0: sunny-day starting pool and the auxiliary spillway weir
+                 "start_pool": ("enum", brmod.START_POOLS), "start_wse_ft": ("num", None, None),
+                 "aux_crest_ft": ("num", None, None), "aux_length_ft": ("num", 0.0, None),
+                 "aux_c": ("num", 0.1, 4.5)},
     "layers": {"receptor_points": ("path",), "receptor_roads": ("path",),
                "receptor_rail": ("path",), "lookahead_mi": ("num", 0.1, None),
                "structures": ("path",), "structure_fields": ("dict",),
@@ -439,12 +446,19 @@ TEMPLATE = {
                  + ", ".join(OVERRIDE_KEYS) + ".",
         "method": brmod.METHOD_PIPING, "user_csv": None, "overrides": {}},
     "scenario": {
-        "_help": "sunny: no inflow. flood: PMF inflow with and without the breach. per_dam "
+        "_help": "sunny: no inflow. flood: PMF inflow with and without the breach. "
+                 "flood_no_breach: PMF inflow through the spillways and outlets and over the "
+                 "crest, the dam stands. per_dam "
                  "(batch): flood where the dam's folder has inputs/pmf_inflow.csv. "
-                 "trigger: peak|time|wse.",
+                 "trigger: peak|time|wse. start_pool (sunny): top (ND 5.1.1, the default) | "
+                 "normal (normal_pool_ft) | stated (start_wse_ft); needs dam.top_of_dam_ft. "
+                 "aux_crest_ft + aux_length_ft (+ aux_c, default 2.6): an auxiliary spillway "
+                 "weir for the flood scenarios.",
         "type": "sunny", "inflow_csv": None, "spillway_csv": None, "normal_pool_ft": None,
         "trigger": "peak", "trigger_value": None, "baseline_csv": None, "baseline": True,
-        "incr_thresholds_ft": [1.0, 2.0, 3.0]},
+        "incr_thresholds_ft": [1.0, 2.0, 3.0],
+        "start_pool": "top", "start_wse_ft": None,
+        "aux_crest_ft": None, "aux_length_ft": None, "aux_c": None},
     "layers": {
         "_help": "GeoJSON files (points, lines or polygons) in the DEM's CRS, or with a crs "
                  "member / vector_crs 'EPSG:xxxx' (needs GDAL). structure_fields maps S_KIND, "
@@ -1149,9 +1163,11 @@ def build_flood(cfg, dam, files, pool_ft=None):
     for what, p in (("inflow", inflow), ("spillway rating", spill), ("baseline outflow", base)):
         if p and not os.path.isfile(p):
             raise CliError("the {} CSV does not exist: {}".format(what, p))
-    return floodmod.FloodInputs.from_files(
+    fi = floodmod.FloodInputs.from_files(
         inflow, spill or None, normal_pool_ft=pool, crest_length_ft=dam.crest_length_ft,
         trigger=trig, trigger_value=val, baseline_csv=base or None)
+    fi.set_aux_weir(sc.get("aux_crest_ft"), sc.get("aux_length_ft"), sc.get("aux_c"))   # 3.18.0
+    return fi
 
 
 class LayerCache(object):
@@ -1383,6 +1399,8 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         scen = workflow.SCENARIO_FLOOD if "pmf_inflow" in files or cfg.get_path(
             "scenario", "inflow_csv") else workflow.SCENARIO_SUNNY
     st.scenario = scen
+    if workflow.no_breach_tier_problem(st.scenario, st.tier):        # 3.18.0
+        raise brmod.BreachInputError(workflow.no_breach_tier_problem(st.scenario, st.tier))
     if files.get("breach"):
         st.user_hydrograph = files["breach"]
     if st.breach_method == brmod.METHOD_USER:
@@ -1400,8 +1418,18 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         notes.append(n)
     dem_projected = True
     notes += apply_layers(st, cfg, setup, dam_xy, layers or LayerCache(), dem_projected)
-    if st.scenario == workflow.SCENARIO_FLOOD:
+    if st.scenario in workflow.FLOOD_SCENARIOS:
         st.flood = build_flood(cfg, dam, files, pool_ft)
+    else:                                                    # 3.18.0: sunny-day starting pool
+        sc = cfg.section("scenario")
+        kind = sc.get("start_pool") or brmod.START_TOP
+        if kind != brmod.START_TOP:
+            wse = (pool_ft if pool_ft is not None else sc.get("normal_pool_ft")) \
+                if kind == brmod.START_NORMAL else sc.get("start_wse_ft")
+            brmod.set_start_pool(dam, kind, wse)
+            notes.append("Sunny day starts {:.2f} ft below the top of dam ({}), not at the top "
+                         "of dam (ND 5.1.1).".format(dam.start_below_top_ft,
+                                                     brmod.START_POOL_TEXT[kind]))
     return Prepared(dam, st, setup, dam_xy, inflow_xy, folder, notes)
 
 
@@ -1862,7 +1890,7 @@ def cmd_batch(args):
                                    p.folder, None, pr.progress, pr.log, pr.cancel)
             _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
             s = res.summary
-            if not s.get("breach_occurs", True):
+            if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
                 out.update({"Status": "no breach",
                             "Message": "the dam does not fail in this flood"})
             else:

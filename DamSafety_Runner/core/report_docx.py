@@ -2024,7 +2024,13 @@ class _Report(object):
         self.settings = self.rep.get("settings") or {}
         self.dam = self.rep.get("dam") or {}
         self.warnings = [str(w) for w in (self.rep.get("warnings") or [])]
-        self.flood_mode = (self.rep.get("scenario") or self.summary.get("scenario")) == "flood"
+        scen = self.rep.get("scenario") or self.summary.get("scenario")
+        self.flood_mode = scen in ("flood", "flood_no_breach")
+        self.no_breach = scen == "flood_no_breach"      # 3.18.0: PMF routed, no failure
+        self.scenario_text = ("Flood inflow (PMF) through the spillways and over the crest, "
+                              "NO breach" if self.no_breach else
+                              "Flood inflow (PMF), with and without the breach"
+                              if self.flood_mode else "")
         self.dam_id = str(dam_id or self.dam.get("dam_id") or self.summary.get("dam_id")
                           or os.path.basename(self.folder) or "")
         self.dam_name = str(opt.dam_name or self.dam.get("name") or "")
@@ -2155,8 +2161,7 @@ class _Report(object):
             if v not in (None, ""):
                 rows.append([k, fmt_val(v) + (" " + unit if unit else "")])
         add("Dam", self.dam_label)
-        add("Scenario", "Flood inflow (PMF), with and without the breach" if self.flood_mode
-            else "Sunny day (no inflow)")
+        add("Scenario", self.scenario_text or "Sunny day (no inflow)")
         if "breach_occurs" in s:
             add("Dam fails in this scenario", bool(s.get("breach_occurs")))
         method = h.get("method")
@@ -2207,7 +2212,11 @@ class _Report(object):
         self.kv(rows, head=("Item", "Result"), caption="Key results")
         if s.get("units"):
             self.note("Units: {}.".format(s["units"]))
-        if s.get("breach_occurs") is False:
+        if self.no_breach:
+            d.callout("No breach is modelled in this scenario: the flood downstream is the "
+                      "routed outflow through the spillways, the outlets and over the crest. "
+                      "The depths are not a dam failure flood.", kind="warn")
+        elif s.get("breach_occurs") is False:
             d.callout("The dam does not fail in this flood, so no breach flood was modelled.",
                       kind="warn")
         if self.warnings:
@@ -2300,12 +2309,24 @@ class _Report(object):
                         "supplied by the user; each starts at breach initiation. The reservoir "
                         "was not routed by this tool.")
         rows = []
+        if self.no_breach:
+            d.paragraph("No breach is modelled: the inflow is routed through the reservoir and "
+                        "leaves through the spillway rating, the auxiliary spillway and the "
+                        "outlets where given, and over the embankment crest once the pool tops "
+                        "it. That outflow is the flood modelled downstream. The embankment is "
+                        "assumed to stand.")
         for src, keys in ((st, ("inflow_peak_cfs", "trigger", "trigger_value", "normal_pool_ft",
-                                "crest_length_ft", "spillway", "baseline_csv")),
+                                "crest_length_ft", "spillway", "aux_spillway", "baseline_csv")),
                           (self.hy, ("inflow_volume_acft",)),
                           (fl, ("breach_initiation_hr", "pool_at_breach_ft",
-                                "peak_pool_ft_no_breach"))):
+                                "peak_pool_ft_no_breach", "freeboard_at_peak_ft",
+                                "peak_outflow_no_breach_cfs", "aux_spillway_peak_cfs"))):
             for k in keys:
+                if self.no_breach and k in ("trigger", "trigger_value", "baseline_csv"):
+                    continue
+                if not self.no_breach and k in ("freeboard_at_peak_ft",
+                                                "peak_outflow_no_breach_cfs"):
+                    continue          # the with-breach report shows these in its own table
                 if src.get(k) not in (None, ""):
                     lab = {"spillway": "Spillway rating supplied", "trigger":
                            "Breach trigger", "trigger_value": "Trigger value (ft, or h)",
@@ -2316,6 +2337,11 @@ class _Report(object):
                            "pool_at_breach_ft": "Pool level at breach initiation (ft)",
                            "peak_pool_ft_no_breach": "Peak pool level without the breach (ft)",
                            "normal_pool_ft": "Normal pool level (ft)",
+                           "aux_spillway": "Auxiliary spillway (weir)",
+                           "aux_spillway_peak_cfs": "Auxiliary spillway peak flow (cfs)",
+                           "freeboard_at_peak_ft": "Freeboard at the peak pool (ft; negative = "
+                                                   "overtopped)",
+                           "peak_outflow_no_breach_cfs": "Peak outflow, no breach (cfs)",
                            "crest_length_ft": "Crest length overtopped (ft)"}.get(k, label_of(k))
                     rows.append([lab, fmt_val(src[k])])
         wrote = False
@@ -3046,7 +3072,10 @@ class _Report(object):
         cons = self.find_consequences() if self.opt.include_consequences else \
             (f.glob("consequences*.csv") + f.glob("consequences*.md"))
         inc = rep.get("incremental")
-        if self.flood_mode:
+        if self.no_breach:
+            add("Without-breach (baseline) flood modelled", "N/A",
+                "this run IS the without-breach flood; compare it with a breach run")
+        elif self.flood_mode:
             base_ok = bool(f.find("Baseline Depth (Max).tif", "")) or bool(inc)
             add("Without-breach (baseline) flood modelled", "Yes" if base_ok else "No",
                 "baseline rasters found" if base_ok else "no baseline results", "flood")
@@ -3059,6 +3088,8 @@ class _Report(object):
             add("Incremental consequences computed", "Check",
                 "Incremental area is tabulated; there were no receptor layers, so incremental "
                 "receptors are not counted", "flood")
+        elif self.no_breach:
+            add("Incremental consequences computed", "N/A", "no breach in this scenario")
         elif self.flood_mode:
             add("Incremental consequences computed", "No", "no incremental results")
         else:
@@ -3266,8 +3297,7 @@ class _Report(object):
                     ("Project", opt.project), ("Prepared by", opt.engineer),
                     ("Firm", opt.firm), ("Date", self.date),
                     ("Scenario", None if not self.rep else (
-                        "Flood inflow (PMF), with and without the breach" if self.flood_mode
-                        else "Sunny day"))]
+                        self.scenario_text or "Sunny day"))]
             d.title_block(opt.title, self.dam_label if self.dam_name else "", info,
                           logo=opt.logo if opt.logo and os.path.exists(opt.logo) else None,
                           note="Generated from the files in the dam folder by ND Dam Breach "

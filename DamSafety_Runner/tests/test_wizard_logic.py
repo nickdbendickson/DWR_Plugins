@@ -157,7 +157,7 @@ def wizard_parameters_match_the_algorithm_definition():
                       ("TRIGGER", wl.TRIGGER_IDS)):
         assert len(options(name)) == len(ids), name
     # the tool's own labels are the ones the wizard shows
-    assert list(options("SCENARIO")) == [algs.SCENARIOS[i][1] for i in range(2)]
+    assert list(options("SCENARIO")) == [algs.SCENARIOS[i][1] for i in range(len(algs.SCENARIOS))]   # 3.18.0: three
     assert set(wl.TIER_LABELS) == set(wl.TIER_IDS) and set(wl.SCENARIO_LABELS) == set(wl.SCENARIO_IDS)
     assert set(wl.Z_LABELS) == set(wl.Z_IDS) and set(wl.TRIGGER_LABELS) == set(wl.TRIGGER_IDS)
     assert wl.ALGORITHM_ID == algs.PROVIDER_ID + ":" + algs.RunDamAlgorithm().name()

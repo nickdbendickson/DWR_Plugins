@@ -26,7 +26,12 @@ ALGORITHM_ID = "ndbreach:rundam"
 # enum parameters of the tool, in the order of their options
 METHOD_IDS = tuple(brmod.METHODS)
 TIER_IDS = tuple(workflow.TIERS)
-SCENARIO_IDS = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD)
+SCENARIO_IDS = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD,
+                workflow.SCENARIO_FLOOD_NO_BREACH)          # the tool's SCENARIO order
+START_POOL_IDS = tuple(brmod.START_POOLS)                   # the tool's START_POOL order
+START_POOL_LABELS = {brmod.START_TOP: "Top of dam (ND 5.1.1; the default)",
+                     brmod.START_NORMAL: "Normal pool",
+                     brmod.START_STATED: "An elevation I state"}
 Z_IDS = tuple(gdal_io.Z_CHOICES)
 TRIGGER_IDS = tuple(floodmod.TRIGGERS)
 
@@ -35,7 +40,9 @@ TIER_LABELS = {workflow.TIER_LISFLOOD: "LISFLOOD-FP only",
                workflow.TIER_HECRAS: "LISFLOOD-FP, then HEC-RAS 2D for the final results "
                                      "(needs HEC-RAS 6.6)"}
 SCENARIO_LABELS = {workflow.SCENARIO_SUNNY: "Sunny day: no inflow, breach at the top of dam",
-                   workflow.SCENARIO_FLOOD: "Flood (PMF): inflow with and without the breach"}
+                   workflow.SCENARIO_FLOOD: "Flood (PMF): inflow with and without the breach",
+                   workflow.SCENARIO_FLOOD_NO_BREACH:
+                       "Flood (PMF), NO breach: through the spillways and over the crest"}
 # the tool's DEM_Z text; 3.10.89 review round 3 appended the "(the raster's unit tag is wrong)"
 # choices after Meters, so the DEM_Z index of each id is unchanged
 Z_LABELS = dict(gdal_io.Z_CHOICE_LABELS)
@@ -267,6 +274,9 @@ def default_answers(dams_folder=""):
         "method": brmod.METHOD_PIPING, "scenario": workflow.SCENARIO_SUNNY,
         "inflow_csv": "", "spillway_csv": "", "normal_pool_ft": None,
         "trigger": floodmod.TRIGGER_PEAK, "trigger_value": None,
+        # 3.18.0: sunny-day starting pool (top of dam unless changed) and the auxiliary spillway
+        "start_pool": brmod.START_TOP, "start_wse_ft": None,
+        "aux_crest_ft": None, "aux_length_ft": None,
         "tier": workflow.TIER_LISFLOOD, "cell_m": 10.0,
     }
 
@@ -284,16 +294,26 @@ def build_rundam_params(a):
         p["DAM_POINT"] = point_text(pt[0], pt[1], pt[2] if len(pt) > 2 else "")
     p["METHOD"] = METHOD_IDS.index(a.get("method", brmod.METHOD_PIPING))
     p["SCENARIO"] = SCENARIO_IDS.index(a.get("scenario", workflow.SCENARIO_SUNNY))
-    if a.get("scenario") == workflow.SCENARIO_FLOOD:
+    if a.get("scenario") in workflow.FLOOD_SCENARIOS:
         if a.get("inflow_csv"):
             p["INFLOW_CSV"] = a["inflow_csv"]
         if a.get("spillway_csv"):
             p["SPILLWAY_CSV"] = a["spillway_csv"]
         if a.get("normal_pool_ft") is not None:
             p["NORMAL_POOL_FT"] = float(a["normal_pool_ft"])
-        p["TRIGGER"] = TRIGGER_IDS.index(a.get("trigger", floodmod.TRIGGER_PEAK))
-        if a.get("trigger_value") is not None:
-            p["TRIGGER_VALUE"] = float(a["trigger_value"])
+        if a.get("aux_crest_ft") is not None and a.get("aux_length_ft"):
+            p["AUX_CREST_FT"] = float(a["aux_crest_ft"])
+            p["AUX_LENGTH_FT"] = float(a["aux_length_ft"])
+        if a.get("scenario") == workflow.SCENARIO_FLOOD:
+            p["TRIGGER"] = TRIGGER_IDS.index(a.get("trigger", floodmod.TRIGGER_PEAK))
+            if a.get("trigger_value") is not None:
+                p["TRIGGER_VALUE"] = float(a["trigger_value"])
+    else:
+        sp = a.get("start_pool") or brmod.START_TOP
+        if sp != brmod.START_TOP and a.get("start_wse_ft") is not None:
+            p["START_POOL"] = START_POOL_IDS.index(sp)
+            p["NORMAL_POOL_FT" if sp == brmod.START_NORMAL else "START_WSE_FT"] = \
+                float(a["start_wse_ft"])
     if a.get("dem_id"):
         p["DEM"] = a["dem_id"]
     p["DEM_Z"] = Z_IDS.index(a.get("z_units", "auto"))
@@ -372,7 +392,35 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
             warnings.append("Elevation units 'detect': only units recorded in the raster are "
                             "trusted; check the units note in the run report.")
     elif page == "scenario":
-        if a.get("scenario") == workflow.SCENARIO_FLOOD:
+        if a.get("scenario") not in workflow.FLOOD_SCENARIOS and \
+                (a.get("start_pool") or brmod.START_TOP) != brmod.START_TOP:
+            dam = a.get("dam") or {}
+            top, wse = dam.get("TOP_FT"), a.get("start_wse_ft")
+            if wse is None:
+                errors.append("Give the starting pool elevation (ft), or choose 'Top of dam'.")
+            elif top in (None, ""):
+                warnings.append("A starting pool below the top of dam needs the top of dam "
+                                "elevation (the pool is taken as its depth below it). None is "
+                                "given on the dam page: the run stops unless the dam folder's "
+                                "dam.json has one.")
+            elif float(wse) > float(top) + 0.005:
+                errors.append("The starting pool ({:g} ft) is above the top of dam ({:g} ft). A "
+                              "pool above the crest needs the flood scenario.".format(
+                                  float(wse), float(top)))
+            else:
+                warnings.append("The breach starts {:g} ft below the top of dam. ND 5.1.1 has "
+                                "the sunny-day breach start at the top of dam; this run is "
+                                "not that case.".format(float(top) - float(wse)))
+            if a.get("method") in (brmod.METHOD_OVERTOPPING, brmod.METHOD_F95_OVERTOPPING) \
+                    and wse is not None and top not in (None, "") and float(wse) < float(top):
+                warnings.append("An overtopping breach with the pool below the crest: water "
+                                "cannot overtop from there. Use a flood scenario for an "
+                                "overtopping failure.")
+        if a.get("scenario") in workflow.FLOOD_SCENARIOS:
+            if (a.get("aux_crest_ft") is None) != (not a.get("aux_length_ft")):
+                errors.append("The auxiliary spillway needs both its crest elevation (ft) and "
+                              "its length (ft); leave both empty for none.")
+        if a.get("scenario") in workflow.FLOOD_SCENARIOS:
             inflow = str(a.get("inflow_csv") or "").strip()
             if not inflow:
                 errors.append("The flood scenario needs the PMF inflow hydrograph "
@@ -385,7 +433,8 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
             if a.get("normal_pool_ft") is None and not spill:
                 errors.append("The flood scenario needs the normal pool elevation or a "
                               "spillway rating CSV.")
-            if a.get("trigger") != floodmod.TRIGGER_PEAK and a.get("trigger_value") is None:
+            if a.get("scenario") == workflow.SCENARIO_FLOOD and \
+                    a.get("trigger") != floodmod.TRIGGER_PEAK and a.get("trigger_value") is None:
                 errors.append("Give the failure time (hours) or pool elevation (ft) for the "
                               "chosen trigger.")
             dam = a.get("dam") or {}
@@ -396,6 +445,8 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
                 warnings.append("No crest length (Dam page): overtopping of the embankment "
                                 "cannot be computed without it.")
     elif page == "model":
+        if workflow.no_breach_tier_problem(a.get("scenario"), a.get("tier")):
+            errors.append(workflow.no_breach_tier_problem(a.get("scenario"), a.get("tier")))
         cell = a.get("cell_m")
         if cell is None or cell < 1.0:
             errors.append("The cell size must be at least 1 m.")
@@ -539,15 +590,26 @@ def review_text(a, estimate=None, warnings=()):
     lines += ["", "Scenario",
               "  Breach: {}".format(brmod.METHOD_LABELS.get(a.get("method"), a.get("method"))),
               "  {}".format(SCENARIO_LABELS.get(a.get("scenario"), a.get("scenario")))]
-    if a.get("scenario") == workflow.SCENARIO_FLOOD:
+    if a.get("scenario") in workflow.FLOOD_SCENARIOS:
         lines.append("  Inflow: {}".format(a.get("inflow_csv") or "(none)"))
         if a.get("spillway_csv"):
             lines.append("  Spillway rating: {}".format(a["spillway_csv"]))
         if a.get("normal_pool_ft") is not None:
             lines.append("  Normal pool: {:g} ft".format(a["normal_pool_ft"]))
-        lines.append("  The dam fails {}{}".format(
-            TRIGGER_LABELS.get(a.get("trigger"), a.get("trigger")),
-            "" if a.get("trigger_value") is None else " ({:g})".format(a["trigger_value"])))
+        if a.get("aux_crest_ft") is not None and a.get("aux_length_ft"):
+            lines.append("  Auxiliary spillway: crest {:g} ft, {:g} ft long".format(
+                a["aux_crest_ft"], a["aux_length_ft"]))
+        if a.get("scenario") == workflow.SCENARIO_FLOOD_NO_BREACH:
+            lines.append("  The dam does not fail: the flood is the routed outflow")
+        else:
+            lines.append("  The dam fails {}{}".format(
+                TRIGGER_LABELS.get(a.get("trigger"), a.get("trigger")),
+                "" if a.get("trigger_value") is None else " ({:g})".format(a["trigger_value"])))
+    elif (a.get("start_pool") or brmod.START_TOP) != brmod.START_TOP \
+            and a.get("start_wse_ft") is not None:
+        lines.append("  Starting pool: {} at {:g} ft (not the ND 5.1.1 top of dam)".format(
+            START_POOL_LABELS.get(a.get("start_pool"), a.get("start_pool")).lower(),
+            a["start_wse_ft"]))
     lines += ["", "Models",
               "  {}".format(TIER_LABELS.get(a.get("tier"), a.get("tier"))),
               "  Cell size: {:g} m".format(a.get("cell_m", 10.0))]

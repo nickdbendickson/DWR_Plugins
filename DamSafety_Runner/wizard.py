@@ -1115,7 +1115,8 @@ def _classes():
         def __init__(self):
             Page.__init__(self)
             self.setTitle("Scenario")
-            self.setSubTitle("Sunny-day failure, or a flood (PMF) with and without the breach.")
+            self.setSubTitle("Sunny-day failure (from the top of dam unless you change it), "
+                             "or a flood (PMF) with the breach or with no breach.")
             outer = W.QVBoxLayout(self)
             form = W.QFormLayout()
             self.method, self.scenario = W.QComboBox(), W.QComboBox()
@@ -1125,6 +1126,13 @@ def _classes():
                 self.scenario.addItem(wl.SCENARIO_LABELS[s], s)
             form.addRow("Breach", self.method)
             form.addRow("Scenario", self.scenario)
+            # 3.18.0: sunny-day starting pool (top of dam, ND 5.1.1, unless changed)
+            self.start_pool, self.start_wse = W.QComboBox(), W.QLineEdit()
+            for sp in wl.START_POOL_IDS:
+                self.start_pool.addItem(wl.START_POOL_LABELS[sp], sp)
+            form.addRow("Sunny day starts at", self.start_pool)
+            form.addRow("Starting pool elevation (ft)", self.start_wse)
+            mark_unit(self.start_wse, None, "Starting pool elevation (ft)")
             outer.addLayout(form)
             self.flood = W.QGroupBox("Flood scenario inputs")
             f2 = W.QFormLayout(self.flood)
@@ -1139,6 +1147,11 @@ def _classes():
             f2.addRow("Spillway rating CSV (ft, cfs; optional)", box2)
             f2.addRow("Normal pool elevation (ft)", self.pool)
             mark_unit(self.pool, None, "Normal pool elevation (ft)")
+            self.aux_crest, self.aux_length = W.QLineEdit(), W.QLineEdit()
+            f2.addRow("Auxiliary spillway crest elevation (ft; optional)", self.aux_crest)
+            mark_unit(self.aux_crest, None, "Auxiliary spillway crest elevation (ft)")
+            f2.addRow("Auxiliary spillway length (ft)", self.aux_length)
+            mark_unit(self.aux_length, None, "Auxiliary spillway length (ft)")
             f2.addRow("The dam fails", self.trigger)
             # the value is hours or an elevation by the choice above: never converted as one
             # unit; under SI an elevation is typed in m and converted here (trigger_si)
@@ -1147,10 +1160,18 @@ def _classes():
             self.problems = red_label()
             outer.addWidget(self.problems)
             self.scenario.currentIndexChanged.connect(self.toggle)
+            self.start_pool.currentIndexChanged.connect(self.toggle)
 
         @_safe(what="the scenario page")
         def toggle(self, *_):
-            self.flood.setEnabled(self.scenario.currentData() == "flood")
+            scen = self.scenario.currentData()
+            flood = scen in ("flood", "flood_no_breach")
+            self.flood.setEnabled(flood)
+            # no breach: nothing fails, so the trigger and the breach method are not used
+            for w_ in (self.trigger, self.trigger_value, self.method):
+                w_.setEnabled(scen != "flood_no_breach")
+            self.start_pool.setEnabled(not flood)
+            self.start_wse.setEnabled(not flood and self.start_pool.currentData() != "top")
 
         @_safe(what="the scenario page")
         def initializePage(self):
@@ -1159,7 +1180,10 @@ def _classes():
             self.scenario.setCurrentIndex(max(self.scenario.findData(a.get("scenario")), 0))
             self.inflow.setText(a.get("inflow_csv", ""))
             self.spillway.setText(a.get("spillway_csv", ""))
-            for edit, key in ((self.pool, "normal_pool_ft"), (self.trigger_value, "trigger_value")):
+            self.start_pool.setCurrentIndex(max(self.start_pool.findData(a.get("start_pool")), 0))
+            for edit, key in ((self.pool, "normal_pool_ft"), (self.trigger_value, "trigger_value"),
+                              (self.start_wse, "start_wse_ft"), (self.aux_crest, "aux_crest_ft"),
+                              (self.aux_length, "aux_length_ft")):
                 v = a.get(key)
                 if key == "trigger_value" and v is not None and _trigger_is_wse(a.get("trigger")):
                     v = _DU.to_display(v, "ft")          # SI: the elevation shown in m
@@ -1175,6 +1199,11 @@ def _classes():
             a["inflow_csv"] = self.inflow.text().strip()
             a["spillway_csv"] = self.spillway.text().strip()
             a["normal_pool_ft"] = number_or_none(self.pool, "normal pool elevation", problems)
+            a["start_pool"] = self.start_pool.currentData()
+            a["start_wse_ft"] = number_or_none(self.start_wse, "starting pool elevation", problems)
+            a["aux_crest_ft"] = number_or_none(self.aux_crest, "auxiliary spillway crest", problems)
+            a["aux_length_ft"] = number_or_none(self.aux_length, "auxiliary spillway length",
+                                                problems)
             a["trigger"] = self.trigger.currentData()
             a["trigger_value"] = number_or_none(self.trigger_value, "failure time or elevation",
                                                 problems)

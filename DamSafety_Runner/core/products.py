@@ -522,7 +522,10 @@ def line_plot_svg(series, title, xlabel="Hours", ylabel="Discharge (cfs)", width
 
 
 def hydrograph_plot(hy, hy_nb=None, flood=None):
-    ser = [("With breach", hy.t_s / 3600.0, hy.q_cms / CFS, "#d62728")]
+    # 3.18.0: a no-breach flood scenario plots its one outflow as what it is
+    nb_only = bool(getattr(flood, "no_breach_only", False))
+    ser = [("Outflow, no breach" if nb_only else "With breach", hy.t_s / 3600.0, hy.q_cms / CFS,
+            "#1f77b4" if nb_only else "#d62728")]
     if hy_nb is not None:
         ser.append(("Without breach", hy_nb.t_s / 3600.0, hy_nb.q_cms / CFS, "#1f77b4"))
     if flood is not None and getattr(flood, "inflow_t_s", None) is not None:

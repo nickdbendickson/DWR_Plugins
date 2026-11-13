@@ -81,6 +81,27 @@ TIERS = (TIER_LISFLOOD, TIER_BOTH, TIER_HECRAS)
 
 SCENARIO_SUNNY = "sunny"
 SCENARIO_FLOOD = "flood"
+# 3.18.0: the flood (PMF) inflow routed through the spillways, the outlets and over the crest
+# with NO breach; that outflow is the flood modelled downstream
+SCENARIO_FLOOD_NO_BREACH = "flood_no_breach"
+FLOOD_SCENARIOS = (SCENARIO_FLOOD, SCENARIO_FLOOD_NO_BREACH)
+
+
+def no_breach_tier_problem(scenario, tier):
+    """'' or why this scenario cannot run with these models: the HEC-RAS 2D stage models the
+    breach, so the no-breach flood has nothing to build there. For the callers that start the
+    HEC-RAS stage (the tools, the CLI, the wizard); run_dam itself never looks at that tier."""
+    if scenario == SCENARIO_FLOOD_NO_BREACH and tier == TIER_HECRAS:
+        return ("The flood scenario with no breach is not built as a HEC-RAS 2D model (that "
+                "stage models the breach). Choose LISFLOOD-FP only or LISFLOOD-FP then ANUGA.")
+    return ""
+
+
+SCENARIOS = (SCENARIO_SUNNY, SCENARIO_FLOOD, SCENARIO_FLOOD_NO_BREACH)
+SCENARIO_TEXT = {SCENARIO_SUNNY: "sunny day",
+                 SCENARIO_FLOOD: "flood inflow (PMF) with and without the breach",
+                 SCENARIO_FLOOD_NO_BREACH: "flood inflow (PMF) through the spillways and over "
+                                           "the crest, NO breach"}
 
 MODEL_FOLDER = "_breach_model"
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
@@ -410,6 +431,8 @@ class RunSettings:
                     "outlets": [(c.name, c.invert_m, c.width_m, c.height_m, c.cd,
                                  c.schedule) for c in (v.outlets or [])],
                     "spillway_schedule": v.spillway_schedule}
+                if v is not None and getattr(v, "aux_spillway", None) is not None:
+                    d[k]["aux_spillway"] = v.aux_text       # 3.18.0 (only when one is given)
             elif k == "receptors":
                 d[k] = None if v is None else len(v)
             elif k == "structures":
@@ -1348,7 +1371,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     os.makedirs(model_dir, exist_ok=True)
     warnings = []
     _check_solver(st, model_dir, log)                                  # 3.16.0
-    flood_mode = st.scenario == SCENARIO_FLOOD
+    flood_mode = st.scenario in FLOOD_SCENARIOS
+    no_breach = st.scenario == SCENARIO_FLOOD_NO_BREACH
     report = {"tool": "ND Dam Breach Runner " + VERSION,
               "run_started": datetime.datetime.now().isoformat(timespec="seconds"),
               "dam": brmod.dam_to_dict(dam), "dam_xy": list(dam_xy),
@@ -1653,10 +1677,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         flood_mode or amb_cms > 0 or st.user_baseline_obj is not None))
     report["hydrograph"] = hy_summary
     warnings += hy.notes
-    log("Breach hydrograph ({}): peak {:.0f} cfs at {:.2f} h{}, {:.0f} ac-ft".format(
+    log("{} ({}): peak {:.0f} cfs at {:.2f} h{}, {:.0f} ac-ft".format(
+        "Flood outflow, no breach" if no_breach else "Breach hydrograph",
         hy.method, hy.peak_cfs, hy.time_to_peak_hr,
-        " after initiation (breach at {:.2f} h of the flood)".format(t_ref_hr) if flood_mode
-        else "", hy.volume_m3 / ACFT))
+        " after initiation (breach at {:.2f} h of the flood)".format(t_ref_hr)
+        if flood_mode and not no_breach else "", hy.volume_m3 / ACFT))
 
     state = _State(model_dir, _hash(brmod.dam_to_dict(dam), dam_xy, key_settings(st),
                                     hy.summary(), inflow_xy), st.resume)
@@ -2750,9 +2775,15 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                               if np.isfinite(fin["arrival"]).any() else None),
         "lisflood_runs": len(iterations),
         "domain_mi": iterations[-1]["size_mi"] if iterations else None,
-        "scenario": st.scenario, "breach_occurs": True,
-        "units": "depth ft, velocity ft/s, arrival hours after breach initiation, WSE ft",
+        "scenario": st.scenario, "breach_occurs": not no_breach,
+        "units": "depth ft, velocity ft/s, arrival hours after {}, WSE ft".format(
+            "the start of the inflow" if no_breach else "breach initiation"),
     }
+    if no_breach:
+        # 3.18.0: a flood WAS modelled (final_model is set), but the dam does not fail in it.
+        # breach_occurs False keeps ND Dam Hazard's model gate and the dam record from reading
+        # these rasters as a failure flood.
+        summary["no_breach_scenario"] = True
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
@@ -3145,7 +3176,7 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         # highest cell (nanmax) - a nearby hill, road crown or spike reads the crest several feet
         # high, which can let the dam route the PMF without overtopping and be dropped silently.
         dam.top_of_dam_ft = float(np.nanpercentile(z[sel & np.isfinite(z)], 98)) / FT
-    flood_mode = st.scenario == SCENARIO_FLOOD
+    flood_mode = st.scenario in FLOOD_SCENARIOS
     hy_nb = None
     if flood_mode:
         hy, hy_nb, _ = _flood_hydrographs(dam, st, warnings)
@@ -3190,7 +3221,9 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         duration_s += max(0.0, float(st.spinup_hr)) * 3600.0
     sim_time = _auto_sim_time(duration_s, bounds, st)
     w, h = terrain.bounds_size(bounds)
-    return {"breach_occurs": True, "cells": int(round(w / cs)) * int(round(h / cs)),
+    # breach_occurs here means "there is a flood to model" (a no-breach flood scenario has one)
+    return {"breach_occurs": True, "no_breach_scenario": st.scenario == SCENARIO_FLOOD_NO_BREACH,
+            "cells": int(round(w / cs)) * int(round(h / cs)),
             "size_mi": (w / MILE, h / MILE), "cell_m": cs, "sim_time_s": sim_time,
             "peak_cfs": hy.peak_cfs, "inflow_xy": inflow_xy,
             "baseline": bool((flood_mode or (st.ambient_cfs or 0) > 0) and st.baseline
@@ -3229,12 +3262,30 @@ def _safe(name):
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(name))
 
 
+def require_breach(st, what):
+    """3.18.0: tools that vary or compare the breach (sensitivity, probabilistic) have nothing
+    to do in the no-breach flood scenario."""
+    if getattr(st, "scenario", None) == SCENARIO_FLOOD_NO_BREACH:
+        raise brmod.BreachInputError(
+            "{} varies the breach, and the scenario chosen has none. Choose the sunny-day "
+            "scenario or the flood scenario with the breach.".format(what))
+
+
 def _flood_hydrographs(dam, st, warnings):
     """(with-breach hydrograph, no-breach hydrograph, FloodResult). The first is
     None when the dam does not fail."""
     fi = st.flood
     if fi is None:
         raise brmod.BreachInputError("the flood scenario needs the inflow hydrograph")
+    if st.scenario == SCENARIO_FLOOD_NO_BREACH:
+        # 3.18.0: the routed outflow with no failure is the flood. It comes back as the first
+        # hydrograph (what the models run) with no baseline: there is nothing to subtract.
+        fr = floodmod.route_flood(dam, st.breach_method, st.overrides, fi, breach=False)
+        warnings.append(
+            "The no-breach outflow enters the model at the breach inflow point at the toe of "
+            "the dam, not at the spillway outlet or along the crest. Close to the dam the "
+            "flood path is approximate; further downstream it is the routed outflow.")
+        return fr.no_breach, None, fr
     if st.breach_method == brmod.METHOD_USER:
         if not st.user_hydrograph or not fi.baseline_csv:
             raise brmod.BreachInputError(
@@ -3745,17 +3796,21 @@ def render_report(r):
              "{} · {} · finished {}".format(r["tool"], r["policy"], r["run_finished"]), "",
              "## Result", "",
              "| | |", "|---|---|",
-             "| Scenario | {} |".format("flood inflow (PMF) with and without the breach"
-                                        if s.get("scenario") == SCENARIO_FLOOD else "sunny day"),
+             "| Scenario | {} |".format(SCENARIO_TEXT.get(s.get("scenario"), "sunny day")),
              "| Final rasters from | {} |".format(s["final_model"]),
-             "| Peak breach outflow | {:,.0f} cfs ({}) |".format(s["peak_breach_cfs"],
-                                                                s["breach_method"]),
-             "| Storage at failure | {} ac-ft |".format(s["storage_at_failure_acft"]),
+             "| {} | {:,.0f} cfs ({}) |".format(
+                 "Peak outflow, NO breach" if s.get("no_breach_scenario")
+                 else "Peak breach outflow", s["peak_breach_cfs"], s["breach_method"]),
+             "| Storage at failure | {} |".format(
+                 "not applicable (no breach)" if s.get("no_breach_scenario")
+                 else "{} ac-ft".format(s["storage_at_failure_acft"])),
              "| Flooded area | {:,} ac ({:,} ac deeper than the arrival depth) |".format(
                  s["flooded_acres"], s["flooded_acres_over_arrival_depth"]),
              "| Maximum depth / velocity | {} ft / {} ft/s |".format(s["max_depth_ft"],
                                                                   s["max_velocity_fps"]),
-             "| Latest arrival | {} h after breach initiation |".format(s["latest_arrival_hr"]),
+             "| Latest arrival | {} h after {} |".format(
+                 s["latest_arrival_hr"], "the start of the inflow" if s.get("no_breach_scenario")
+                 else "breach initiation"),
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
@@ -3835,7 +3890,8 @@ def render_report(r):
         lines += ["## Results cut off", "", why, ""]
     if warns:
         lines += ["## Things to check", ""] + ["- " + w for w in warns] + [""]
-    lines += ["## Breach (ND 5.1.1)", ""]
+    lines += ["## Flood outflow, no breach" if s.get("no_breach_scenario")
+              else "## Breach (ND 5.1.1)", ""]
     for k in ("starting_wse_ft", "starting_wse_rule", "breach_bottom_ft", "hw_ft", "hb_ft",
               "storage_at_failure_acft", "storage_exponent_m", "breach_parameters",
               "failure_mode", "avg_breach_width_ft", "bottom_width_ft", "side_slope_h",
@@ -3843,7 +3899,9 @@ def render_report(r):
               "pipe_phase_hr", "tr60_peak_cfs", "tr60_rule", "breach_factor_br_ac",
               "embankment_area_ft2", "rise_time_hr", "base_time_hr", "shape",
               "froehlich_1995_peak_cfs", "tr60_peak_cfs_check", "tr60_rule_check", "peak_cfs",
-              "time_to_peak_hr", "volume_acft", "source"):
+              "time_to_peak_hr", "volume_acft", "source",
+              "peak_pool_ft", "peak_pool_hr", "freeboard_at_peak_ft", "aux_spillway",
+              "aux_spillway_peak_cfs"):
         if k in h and h[k] is not None:
             lines.append("- {}: {}".format(k.replace("_", " "), h[k]))
     if "flood" in r and r["flood"]:
