@@ -761,12 +761,25 @@ The quickest way to see the suite work is to run it on the dam it ships with.
 1. Open *Plugins → Dam safety → Dam suite home…* and click **Try the sample dam…**. The empty Runner window points there too.
 2. If no Dams folder is chosen yet, the window offers the default one.
 3. The sample is copied from the offline pack. If the pack has none, the window asks first and then downloads the terrain from the USGS (about 29 MB, a minute or two). Clicking the button again cancels the download, and the next try goes on from the parts it already has.
-4. The window asks whether you want a **quick first try at a 30 m cell**. Say yes the first time. The breach Runner then opens with the Dams folder, the dam and its terrain filled in.
+4. The window asks whether you want a **quick first try: 30 m cell, first 6 hours**. Say yes the first time. The breach Runner then opens with the Dams folder, the dam and its terrain filled in, and a message lists the four settings it changed.
 5. Run the breach model, then classify it in DamSafety Hazard, as for any dam.
 
-**The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes. A 30 m cell has nine times fewer cells than the 10 m default and runs many times faster.
+**The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes.
 
-**Set the cell back.** The 30 m cell is for a quick look at the sample only. The Runner window remembers it, so set it back to 10 m before you model a dam for real. The grid-size section above gives the reasons.
+**What the quick first try sets**, in the Runner window:
+
+| Setting | Quick first try | The window starts with | Why |
+|---|---|---|---|
+| Grid size (m) | 30 | 10 | Nine times fewer cells. |
+| Simulated time (h) | 6 | 12 | The breach peaks in the first hour. |
+| Longest simulated time (h) | 6 | 96 | Without this the clock is lengthened while the flood still moves, and on this plain it moves for days. |
+| Finer grid automatically when the flood over-spreads | off | on | Without this a 30 m run that over-spreads is run again at 10 m. |
+
+The cell alone does not make the run quick. Measured on a 4-core Linux machine with the built-in engine, through the Runner's command line: **53 seconds** with the four values (two model areas, the first 6 hours). With only the cell changed, two trials: held to three model areas, the 30 m run took about 7 minutes and then started the 10 m run of 1.8 million cells; left to grow to six areas and a 123-hour clock, it was stopped unfinished after 90 minutes. A slower computer takes longer, a real LISFLOOD-FP less. Not measured: a run started from the window on a Mac or on Windows.
+
+The quick run's report says *the flood is still advancing after 6 h, the duration cap*, and that a 30 m cell is coarse for a flat plain. Both are true and expected: the map shows the first 6 hours on a coarse grid. It is for learning the tools.
+
+**Set them back.** The four values are for a quick look at the sample only. The Runner window remembers them, so set them back before you model a dam for real. The message that opens with the Runner lists each one with the value the window held before. The grid-size section above gives the reasons for 10 m.
 
 **What is written.** `<Dams folder>/DWR-2801/` gets `dam.json`, the terrain `DWR-2801_10m_5070.tif` (EPSG:5070, elevations in metres, from the USGS 3D Elevation Program), `sample.json` and `README.txt`. If the folder already holds a dam record or that terrain file, yours is kept. Nothing is written into the offline pack.
 

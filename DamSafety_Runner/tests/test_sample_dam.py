@@ -379,3 +379,32 @@ def sample_dam_record_gives_the_runner_its_inputs_as_given():
         assert point == ("xy", f["x"], f["y"], "EPSG:5070")
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def sample_dam_quick_first_try_names_every_value_that_makes_it_quick():
+    """The cell alone is not quick on the sample (the clock lengthens to days and an over-spread
+    30 m run is redone at 10 m), so the quick try carries four values, by the Runner window's
+    own field names, and can say each one with what the window held before."""
+    from nd_breach_runner import popup_logic as PL
+    ft = dict(SD.FIRST_TRY)
+    assert ft == {"grid_m": 30.0, "simh": 6.0, "simmax": 6.0, "grid_refine": False}
+    assert ft["simmax"] <= ft["simh"], "the clock must not be lengthened past the hours asked"
+    assert set(SD.FIRST_TRY_LABELS) == set(ft) == set(SD.RUNNER_STARTS)
+    # the 'was' values of a window that cannot say: the Runner window's own starting values
+    for k in ("grid_m", "simh", "simmax"):
+        assert SD.RUNNER_STARTS[k] == PL.DEFAULT_SETTINGS[k], k
+    assert SD.RUNNER_STARTS["grid_refine"] is True
+    # and each value reaches the run: the window's settings become these parameters
+    p = PL.defaults("rundam", "", "", dict(PL.DEFAULT_SETTINGS, **ft))
+    assert (p["CELL"], p["DURATION_HR"], p["DURATION_MAX_HR"]) == (30.0, 6.0, 6.0)
+    assert p["GRID_REFINE"] is False
+    assert "GRID_REFINE" not in PL.defaults("rundam", "", "", dict(PL.DEFAULT_SETTINGS))
+    assert SD.first_try_lines() == [
+        "Grid size (m): 30 (was 10)", "Simulated time (h): 6 (was 12)",
+        "Longest simulated time (h): 6 (was 96)",
+        "Finer grid automatically when the flood over-spreads: off (was on)"]
+    # what the window really held is said, and a value that was there already is not a change
+    assert SD.first_try_lines({"grid_m": 5.0, "simh": 6.0, "grid_refine": False}) == [
+        "Grid size (m): 30 (was 5)", "Longest simulated time (h): 6 (was 96)"]
+    assert "first 6 hours" in SD.get().about and "30 m" in SD.get().about
