@@ -30,16 +30,22 @@ def test_no_project_object_is_made_without_a_running_qgis():
         "assert display_units.system() in ('us', 'si')\n"
         "suite_config.source('unit_system')\n"
         "assert not made, 'QgsProject.instance() was called without an application'\n"
-        "app = QCoreApplication([])\n"
-        "assert suite_config._project() is not None and made, 'no project with an application'\n"
+        "if sys.argv[1] == 'core':\n"            # a command line tool's application: not enough
+        "    app = QCoreApplication([])\n"
+        "    assert suite_config._project() is None and not made, 'a project with no GUI application'\n"
+        "else:\n"                                # QGIS, qgis_process, a test's QgsApplication
+        "    from qgis.core import QgsApplication\n"
+        "    app = QgsApplication([], False)\n"
+        "    assert suite_config._project() is not None and made, 'no project in QGIS'\n"
         "print('OK')\n").format(root=os.path.dirname(os.path.dirname(HERE)))
     env = dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
     env.pop("NDSUITE_UNITS", None)
-    r = subprocess.run([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, timeout=120)
-    out = r.stdout.decode("utf-8", "replace")
-    assert r.returncode == 0 and ("OK" in out or "NOQGIS" in out), (r.returncode, out[-1500:])
+    for kind in ("core", "qgis"):
+        r = subprocess.run([sys.executable, "-c", code, kind], env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=120)
+        out = r.stdout.decode("utf-8", "replace")
+        assert r.returncode == 0 and ("OK" in out or "NOQGIS" in out), (kind, r.returncode, out[-1500:])
 
 
 def test_system_default_and_env(monkeypatch=None):
