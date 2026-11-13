@@ -89,9 +89,12 @@ outlet, all the ground draining into that pool whose water the routing takes out
 cuts is not read). A pool covers a 10 m routing cell only where it holds at least 40 % of it, so a
 creek or another pond beside it is not part of its pool. Where a draw and a pool line read the
 same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The flat-water rim test
-reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water,
-so a pond near that cut can pass on one grid alignment and fail on another (seen on one Iowa
-census pond: 14 % and 20 %).
+reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water
+(`max_lower` in `terrain.flat_pools`). That cut is a known limit and is left as it is in 0.7.0: a
+pond whose rim reads right at 16 % is found or missed on a small difference (one Iowa census pond
+read 14 % with the cells laid one way and 20 % laid another). What has changed is that the cells
+are now on a fixed grid, so such a pond gets the same answer in every run - found every time or
+missed every time - instead of an answer that moved with the run's box.
 
 **Small ponds** (0.7.0). On Iowa's census of pond dams most of the missed dams with a crest under
 40 m had a pond under 400 m2 (median 270 m2 on three tiles), too small for the pool-line tests. Two
