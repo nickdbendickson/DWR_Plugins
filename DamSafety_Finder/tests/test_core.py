@@ -410,6 +410,48 @@ class PoolLinesAndRescue(unittest.TestCase):
         nx, ny, rad = seen[-1][1]
         self.assertLess(math.hypot(nx - got[0].x, ny - got[0].y), CELL)
         self.assertGreaterEqual(rad, em.FinderParams().outlet_m + 0.5 * got[0].len_m)
+        self.assertLessEqual(rad, em.FinderParams().outlet_m + 0.5 * got[0].len_m + 20.0 + CELL)
+        # the same pool on a grid whose window does not start at its corner: the points are the
+        # pool's own cells
+        pts = []
+
+        def at(xs, ys, near):
+            pts.append((np.asarray(xs), np.asarray(ys)))
+            return 9 * em.AC_M2
+
+        pad = 500
+        big = np.pad(dem2, ((pad, 0), (pad, 0)), mode="edge")
+        gt_big = (-pad * CELL, CELL, 0.0, (N + pad) * CELL, 0.0, -CELL)
+        got = em.find(big, gt_big, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, inflow=at))
+        self.assertEqual(len(got), 1)
+        xs, ys = pts[-1]
+        self.assertAlmostEqual(float(xs.mean()), got[0].pool_xy[0], places=6)
+        self.assertAlmostEqual(float(ys.mean()), got[0].pool_xy[1], places=6)
+        self.assertTrue(0.0 < xs.min() and xs.max() < N * CELL and 0.0 < ys.min() and ys.max() < N * CELL)
+        # the pool also gets out by a bypass channel round the east end of the fill (a notch 100 m
+        # upstream, 0.2 m under the crest, back to the valley below the dam): it is read while that
+        # outlet is within outlet_m of the fill and not when it is further
+        yy, xx = np.mgrid[0:N, 0:N]
+        sad = bed(200) + 1.5
+        by = np.where((np.abs(yy - 167) <= 2) & (xx >= N // 2) & (xx <= N // 2 + 43), np.minimum(dem2, sad), dem2)
+        side = (yy >= 165) & (yy <= 235) & (xx >= N // 2 + 40) & (xx <= N // 2 + 43)
+        by = np.where(side, np.minimum(by, sad - np.maximum(0, yy - 169) * 0.012), by)
+        back = (np.abs(yy - 233) <= 2) & (xx >= N // 2) & (xx <= N // 2 + 43)
+        by = np.where(back, np.minimum(by, sad - (233 - 169) * 0.012), by)
+        seen[:] = []
+        got = em.find(by, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertTrue(10.0 < got[0].outlet_dist_m <= em.FinderParams().outlet_m)
+        self.assertEqual(len(seen), 1)
+        seen[:] = []
+        got = em.find(by, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, params=em.FinderParams(outlet_m=10.0),
+                      pool_rules=dict(rules, inflow=inflow))
+        self.assertEqual(len(got), 1)
+        self.assertFalse(got[0].open_pool)
+        self.assertEqual(seen, [])
+        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
         # the window cuts the pool (a valley floor, not a pond): not read
         got = em.find(dem2, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
                       params=em.FinderParams(window_m=150.0), pool_rules=dict(rules, inflow=inflow))

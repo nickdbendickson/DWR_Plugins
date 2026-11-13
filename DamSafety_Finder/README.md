@@ -82,9 +82,15 @@ round, the pool must reach `min_pool_m2`, a road over the outlet is left to the 
 pool line whose own path drains `POOL_MAX_AC` or more at the crest is left to the draws. Its
 `drain_ac` is the most of: its own path at the crest, all the ground whose water reaches the seed's
 own pool (each cell once, though flat routing can split a pond's water over several outlet cells
-and a path can step out of the pool and back), and the pool behind the fill. A creek or another
-pond beside it is not part of its pool. Where a draw and a pool line read the same fill, the draw's
-reading is kept. `line_source` = `DEM pool outlet`.
+and a path can step out of the pool and back), and, when the fill holds a closed pool at its
+outlet, all the ground draining into that pool whose water the routing takes out near this fill
+(a creek the routing sends out through a culvert elsewhere is not this fill's; a pool the window
+cuts is not read). A pool covers a 10 m routing cell only where it holds at least 40 % of it, so a
+creek or another pond beside it is not part of its pool. Where a draw and a pool line read the
+same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The flat-water rim test
+reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water,
+so a pond near that cut can pass on one grid alignment and fail on another (seen on one Iowa
+census pond: 14 % and 20 %).
 
 **Brim-full ponds** (step 12; 0.6.0). A pond full to within 0.15 m of its spill level reads as
 joined to the ground below its dam from the beach cell just above the dam, so it used to be

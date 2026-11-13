@@ -745,9 +745,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
                      pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
-                     inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]): tr.pool_inflow(
-                         _cells10(xs, ys, g, area.shape, 0.4, c3), rec, area, near=_near10(near, g)))
-                     if pls else None)
+                     inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]):
+                             _held_inflow(xs, ys, near, rec, area, g, c3)) if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
                       drain_area=darea, line_lim=lim, pool_rules=rules)
         for e in got:
@@ -946,6 +945,14 @@ def _cells10(xs, ys, gt, shape, share=0.0, cell=None):
     if share and cell:
         u = u[n * float(cell) ** 2 >= share * abs(gt[1] * gt[5])]
     return u.tolist()
+
+
+def _held_inflow(xs, ys, near, rec, area, gt10, cell):
+    """The ground (m2, `area` on the 10 m routing grid gt10, receivers `rec`) draining into the pool
+    at the points xs, ys (cell: their own cell size) whose water the routing takes out of it within
+    near = (x, y, radius m): the 10 m cells the pool covers at least 40 % of (a creek cell its edge
+    brushes is not part of it)."""
+    return tr.pool_inflow(_cells10(xs, ys, gt10, area.shape, 0.4, cell), rec, area, near=_near10(near, gt10))
 
 
 def _near10(near, gt):

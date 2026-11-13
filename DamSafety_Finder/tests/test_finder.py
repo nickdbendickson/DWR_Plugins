@@ -310,6 +310,7 @@ class Runs(unittest.TestCase):
         # the fill's position on the 10 m routing grid: the cell holding it, radius in cells
         g = (1000.0, 10.0, 0.0, 2000.0, 0.0, -10.0)
         self.assertEqual(self.f._near10((1015.0, 1985.0, 65.0), g), (1.0, 1.0, 6.5))
+        self.assertEqual(self.f._near10((1035.0, 1985.0, 65.0), g), (1.0, 3.0, 6.5))
         self.assertIsNone(self.f._near10(None, g))
         self.assertEqual(self.f._cells10([1015.0], [1985.0], g, (5, 5)), [6])
         # with a share: a 10 m cell a pool's 3 m cells only brush (1 of ~11) is left out, 5 is kept
@@ -317,6 +318,24 @@ class Runs(unittest.TestCase):
         ys = [1985.0] * 5 + [1985.0]
         self.assertEqual(self.f._cells10(xs, ys, g, (5, 5)), [6, 7])
         self.assertEqual(self.f._cells10(xs, ys, g, (5, 5), 0.4, 3.0), [6])
+
+    def test_a_held_pool_counts_only_the_water_leaving_by_the_fill(self):
+        # the shipped chain (_cells10 + _near10 + pool_inflow) on a 3 x 7 grid: a pool on row 1,
+        # cols 1-5, whose water leaves by col 1 (5 m2 over it) and by col 5 (7 m2); a fill at col 5
+        # gets 7, one at col 1 gets 5, no fill (or a wide radius) gets both
+        g = (1000.0, 10.0, 0.0, 2030.0, 0.0, -10.0)
+        rec = -np.ones(21, np.int64)
+        rec[8], rec[9], rec[10], rec[11], rec[12] = 1, 8, 11, 12, 19
+        area = np.zeros((3, 7))
+        area[1, 1], area[1, 5] = 5.0, 7.0
+        xs = [1000.0 + (c + 0.5) * 10.0 for c in range(1, 6) for _k in range(5)]
+        ys = [2015.0] * len(xs)
+        held = lambda near: self.f._held_inflow(xs, ys, near, rec, area, g, 3.0)
+        self.assertEqual(held((1055.0, 2015.0, 5.0)), 7.0)
+        self.assertEqual(held((1015.0, 2015.0, 5.0)), 5.0)
+        self.assertEqual(held(None), 12.0)
+        self.assertEqual(held((1035.0, 2015.0, 100.0)), 12.0)
+        self.assertEqual(held((1035.0, 2015.0, 5.0)), 0.0)
 
     def test_a_pond_beside_a_big_draw_keeps_its_own_drainage(self):
         # a hillside pond (2.3 ac of water) whose west berm stands 16 m from the valley's draw (80 ac),
