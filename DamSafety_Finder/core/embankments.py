@@ -955,8 +955,9 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             relief, slope = terrain_round(dem, rc[0], rc[1], cell, p.terrain_m)
             # a pool line's drainage is read on its own path (the routing it follows), not the
             # biggest draw within a few cells: a pond beside a creek drains the pond's own ground
-            # (and at least all that drains into the pool, which flat routing can split)
-            drain = max(own(x, y), float((pool_rules.get("pool_drain") or {}).get(li, 0.0))) \
+            # (and at least all that drains into the seed's pool, which flat routing can split, and
+            # the pool behind the fill itself, which can be bigger than the seed's pit)
+            drain = max(own(x, y), float((pool_rules.get("pool_drain") or {}).get(li, 0.0)), parea) \
                 if own is not None else (float(drain_area(x, y)) if drain_area is not None else float("nan"))
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,

@@ -385,10 +385,15 @@ class PoolLinesAndRescue(unittest.TestCase):
                                  pool_rules=dict(max_drain_m2=50 * em.AC_M2)), [])
         got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek, pool_rules=rules)
         self.assertEqual(len(got), 1)
-        self.assertAlmostEqual(got[0].drain_m2, 2 * em.AC_M2)
+        parea = got[0].pool_area_m2                     # the pool behind the fill drains to it at least
+        self.assertAlmostEqual(got[0].drain_m2, max(2 * em.AC_M2, parea))
         got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
-                      pool_rules=dict(rules, pool_drain={0: 7 * em.AC_M2}))
-        self.assertAlmostEqual(got[0].drain_m2, 7 * em.AC_M2)
+                      pool_rules=dict(rules, line_area={0: [0.1 * parea] * two}))
+        self.assertAlmostEqual(got[0].drain_m2, parea)
+        big = parea * 3.0
+        got = em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=creek,
+                      pool_rules=dict(rules, pool_drain={0: big}))
+        self.assertAlmostEqual(got[0].drain_m2, big)
         # its own path drains a lot at the crest: a draw walks it
         self.assertEqual(em.find(dem, GT, [self.POOL_LINE], line_lim=lim, drain_area=lambda x, y: 0.0,
                                  pool_rules=dict(rules, line_area={0: [90 * em.AC_M2] * two})), [])
@@ -636,11 +641,71 @@ class PoolSeeds(unittest.TestCase):
         self.assertEqual(tr.flat_pools(pad, CELL)[1], [])
         r = np.hypot(yy - 200, xx - 200)
         self.assertEqual(tr.flat_pools(100.0 - np.maximum(r, 15) * CELL * 0.05, CELL)[1], [])
+        # ... nor a level pit with lower ground along a fifth of its rim (a ditch beside it; at most
+        # 0.16 of the rim may be lower: an Iowa pond flush with its dam crest for a few metres reads 0.15)
+        pit = np.full((120, 120), 100.0)
+        pit[40:80, 40:80] = 99.0
+        lab, keep = tr.flat_pools(pit, CELL)
+        self.assertIn(lab[60, 60], keep)
+        pit[80, 42:72] = 98.5
+        lab, keep = tr.flat_pools(pit, CELL)
+        self.assertNotIn(lab[60, 60], keep)
+        # ... nor, on its own water level, a pond whose rim runs 150 m lower than the water (the
+        # retry's rim share is 0.10: on real ground a contour band round a field hollow has a lower
+        # side over 10-25 % of its rim)
+        y, x = np.mgrid[0:240, 0:240]
+        z = 100.0 - y * CELL * 0.01 + np.abs(x - 120) * CELL * 0.01
+        lvl = 100.0 - 150 * CELL * 0.01 + 2.0
+        z = np.where(np.abs(y - 150) <= 2, np.maximum(z, lvl + 1.0), z)
+        z = np.where((y < 148) & (z < lvl), lvl, z)
+        lab, keep = tr.flat_pools(z, CELL)
+        self.assertIn(lab[130, 120], keep)
+        z = np.where((y >= 148) & (y <= 152) & (np.abs(x - 120) <= 25), lvl - 0.05, z)
+        lab, keep = tr.flat_pools(z, CELL)
+        self.assertNotIn(lab[130, 120], keep)
         # ... nor a tilted floor ringed by higher ground (not level: it falls 3 m; only a level strip
         # of it, its low end against the wall, can be one)
         tilt = np.where((yy < 100) | (yy > 300) | (xx < 100) | (xx > 300), 110.0, 100.0 - yy * CELL * 0.005)
         lab, keep = tr.flat_pools(tilt, CELL)
         self.assertTrue(all(np.ptp(tilt[lab == k]) <= 2 * 0.03 for k in keep))
+
+    def test_pool_inflow_counts_each_cell_once(self):
+        # a chain 0 -> 1 -> ... -> 6 -> out whose path leaves the pool {2, 3, 5} at 3 and comes back at
+        # 5: the cells reaching the pool are 0-5, not area[3] + area[5]; a pool whose water leaves by
+        # two cells (flat routing) has both; a sink in a pool counts
+        rec = np.array([1, 2, 3, 4, 5, 6, -1, -1, 10, 11, 12, 13, -1, -1])
+        area = np.array([1, 2, 3, 4, 5, 6, 7, 1, 1, 1, 2, 2, 3, 3], float)
+        self.assertEqual(tr.pool_inflow([2, 3, 5], rec, area), 6.0)
+        self.assertEqual(tr.pool_inflow([10, 11], rec, area), 4.0)
+        self.assertEqual(tr.pool_inflow([7], rec, area), 1.0)
+        # on routed terrain, against every cell's path walked out
+        rng = np.random.default_rng(3)
+        dem = 100.0 + np.cumsum(rng.normal(0, 0.3, (60, 60)), axis=0) * 0.1 + rng.normal(0, 0.05, (60, 60))
+        rec, order, _f = tr.flow(dem)
+        area, _l = tr.accumulate(rec, order, dem.shape, 1.0)
+        for r0, c0 in ((10, 10), (30, 40), (45, 20)):
+            pool = {r * 60 + c for r in range(r0, r0 + 6) for c in range(c0, c0 + 4)}
+            reach = 0
+            for i in range(3600):
+                k = i
+                while k >= 0:
+                    if k in pool:
+                        reach += 1
+                        break
+                    k = int(rec[k])
+            self.assertAlmostEqual(tr.pool_inflow(pool, rec, area), float(reach))
+
+    def test_pool_lines_leave_their_own_pool(self):
+        # with pools (each seed's own cells) a line leaves its pool where its own pool ends, not where
+        # a pool beside it does; with_index names each line's seed
+        rec = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, -1])
+        gt = (0.0, 10.0, 0.0, 10.0, 0.0, -10.0)
+        seeds = [(5.0, 5.0, 100.0, "flat")]
+        lines, exits = tr.pool_lines(seeds, rec, gt, (1, 10), pool=np.array([[True] * 6 + [False] * 4]),
+                                     min_cells=2)
+        self.assertEqual(exits, [60.0])
+        lines, exits, idx = tr.pool_lines(seeds, rec, gt, (1, 10), pools=[{0, 1}], min_cells=2, with_index=True)
+        self.assertEqual((exits, idx), ([20.0], [0]))
 
     def test_pool_lines_leave_the_pool_and_go_on(self):
         dem, _road = scene()

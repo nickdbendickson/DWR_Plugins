@@ -887,10 +887,11 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     """(lines, exits, drains) of one tile: the pools of the DEM z (grid gt) over the core box plus
     margin_m (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec`
     (grid gt10, the draws' receivers); exits = the distance along each line at which it leaves its
-    pool; drains = the ground draining into the line's pool (m2): the routed area (area, on gt10)
-    of every pool cell whose water leaves the pool - flat routing can split a pool's water over
-    many outlet cells, so no one cell on the line holds it all. A pool whose seed already drains
-    max_area gets no line: the draws walk it."""
+    own pool; drains = the ground draining into that pool (m2, terrain.pool_inflow over `area` on
+    gt10): flat routing can split a pool's water over many outlet cells, so no one cell on the line
+    holds it all. A pool is the seed's own (its flat or depression), on the 10 m cells at least
+    40 % of whose 3 m cells it covers, so a creek or another pond beside it is not part of it. A pool
+    whose seed already drains max_area gets no line: the draws walk it."""
     c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
     c1 = min(z.shape[1], int(math.ceil((core_box[2] + margin_m - gt[0]) / gt[1])))
     r0 = max(0, int((core_box[3] + margin_m - gt[3]) / gt[5]))
@@ -899,41 +900,36 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
         return [], [], []
     sub = z[r0:r1, c0:c1]
     gs = (gt[0] + c0 * gt[1], gt[1], 0.0, gt[3] + r0 * gt[5], 0.0, gt[5])
-    seeds, mask = tr.pool_seeds(sub, gs, **(opts or {}))
-    shape10 = area.shape
+    seeds, _mask, cells = tr.pool_seeds(sub, gs, cells=True, **(opts or {}))
+    H10, W10 = area.shape
+    per = (abs(gt10[1]) / abs(gs[1])) ** 2              # 3 m cells in a 10 m cell
 
     def rc10(x, y):
         return int((y - gt10[3]) / gt10[5]), int((x - gt10[0]) / gt10[1])
 
+    def own10(sd, idx):
+        rr, cc = np.divmod(np.asarray(idx, np.int64), sub.shape[1])
+        R = np.floor((gs[3] + (rr + 0.5) * gs[5] - gt10[3]) / gt10[5]).astype(np.int64)
+        C = np.floor((gs[0] + (cc + 0.5) * gs[1] - gt10[0]) / gt10[1]).astype(np.int64)
+        ok = (R >= 0) & (R < H10) & (C >= 0) & (C < W10)
+        u, n = np.unique(R[ok] * W10 + C[ok], return_counts=True)
+        got = set(u[n >= 0.4 * per].tolist())
+        r, c = rc10(sd[0], sd[1])
+        if 0 <= r < H10 and 0 <= c < W10:
+            got.add(r * W10 + c)
+        return got
+
+    pairs = list(zip(seeds, cells))
     if max_area:
         def drains(sd):
             r, c = rc10(sd[0], sd[1])
-            return area[r, c] if 0 <= r < shape10[0] and 0 <= c < shape10[1] else 0.0
-        seeds = [sd for sd in seeds if drains(sd) < max_area]
-    pool10 = np.zeros(shape10, bool)
-    rr, cc = np.nonzero(mask)
-    if len(rr):
-        R = ((gs[3] + (rr + 0.5) * gs[5] - gt10[3]) / gt10[5]).astype(int)
-        C = ((gs[0] + (cc + 0.5) * gs[1] - gt10[0]) / gt10[1]).astype(int)
-        ok = (R >= 0) & (R < shape10[0]) & (C >= 0) & (C < shape10[1])
-        pool10[R[ok], C[ok]] = True
-    seeds.sort(key=lambda sd: -sd[2])            # a seed sharing a cell with a bigger pool's is dropped
-    lines, exits = tr.pool_lines(seeds, rec, gt10, shape10, pool=pool10)
-    lab, nl = ndi.label(pool10, structure=np.ones((3, 3), bool))
-    catch = np.zeros(nl + 1)
-    if nl:
-        L = lab.ravel()
-        idx = np.flatnonzero(L)
-        j = np.asarray(rec).ravel()[idx].astype(np.int64)
-        leaves = (j < 0) | (L[np.maximum(j, 0)] != L[idx])
-        catch = np.bincount(L[idx[leaves]], weights=np.asarray(area, float).ravel()[idx[leaves]],
-                            minlength=nl + 1)
-    drains = []
-    for ln in lines:
-        r, c = rc10(*ln[0])
-        k = lab[r, c] if 0 <= r < shape10[0] and 0 <= c < shape10[1] else 0
-        drains.append(float(catch[k]) if k else 0.0)
-    return lines, exits, drains
+            return area[r, c] if 0 <= r < H10 and 0 <= c < W10 else 0.0
+        pairs = [pc for pc in pairs if drains(pc[0]) < max_area]
+    pairs.sort(key=lambda pc: -pc[0][2])          # a seed sharing a cell with a bigger pool's is dropped
+    seeds = [pc[0] for pc in pairs]
+    pools = [own10(*pc) for pc in pairs]
+    lines, exits, index = tr.pool_lines(seeds, rec, gt10, (H10, W10), pools=pools, with_index=True)
+    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index]
 
 
 def _line_area(line, area, gt):

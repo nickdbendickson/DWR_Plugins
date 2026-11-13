@@ -324,6 +324,13 @@ class Runs(unittest.TestCase):
         d = res["rows"][0]["drain_ac"]
         self.assertGreater(d, 31 * 34 * 9.0 / 4046.86)                 # at least the pond itself
         self.assertLess(d, 50.0)
+        # a scour hole in the draw's bed beside the berm is a pool of its own (the draws walk it): the
+        # pond's drainage is still its own, not the draw's
+        hole = (y >= 160) & (y <= 170) & (x >= 197) & (x <= 204)
+        write_dem(path, np.where(hole, tc.bed(y) - 0.3, dem))
+        res = self.f.run_embankments(path, None, self.out, drainage_ac=20.0, hillshade=False, log=lambda *_: None)
+        self.assertEqual([(r["kind"], r["line_source"]) for r in res["rows"]], [("dam", "DEM pool outlet")])
+        self.assertAlmostEqual(res["rows"][0]["drain_ac"], d, delta=1.0)
 
     def test_ridges_and_dugouts_layers(self):
         res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, ridges=True,

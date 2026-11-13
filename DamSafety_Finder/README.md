@@ -76,13 +76,15 @@ dam at a low spot. So every pool in the DEM gets a short line of its own: the mo
 each flat water surface (level, with higher ground all round it, read two cells out; a pond in a
 swale with gentle sides is tried again on its own water level) and the deepest cell of each closed
 depression at least 0.15 m deep, walked out through its outlet down the same opened 10 m routing as
-the draws. On such a line only a hump within 50 m below where it leaves the pool is tested (the
+the draws. On such a line only a hump within 50 m below where it leaves its own pool is tested (the
 pool's own fill), the toe is looked for within `pool_toe_m` (40 m) of it, the line is never turned
 round, the pool must reach `min_pool_m2`, a road over the outlet is left to the road tools, and a
 pool line whose own path drains `POOL_MAX_AC` or more at the crest is left to the draws. Its
-`drain_ac` is all that drains into the pool (flat routing can split a pond's water over several
-outlet cells). Where a draw and a pool line read the same fill, the draw's reading is kept.
-`line_source` = `DEM pool outlet`.
+`drain_ac` is the most of: its own path at the crest, all the ground whose water reaches the seed's
+own pool (each cell once, though flat routing can split a pond's water over several outlet cells
+and a path can step out of the pool and back), and the pool behind the fill. A creek or another
+pond beside it is not part of its pool. Where a draw and a pool line read the same fill, the draw's
+reading is kept. `line_source` = `DEM pool outlet`.
 
 **Brim-full ponds** (step 12; 0.6.0). A pond full to within 0.15 m of its spill level reads as
 joined to the ground below its dam from the beach cell just above the dam, so it used to be
