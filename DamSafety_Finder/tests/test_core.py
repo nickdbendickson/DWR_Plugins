@@ -347,10 +347,14 @@ class EdgeOfTheTerrainData(unittest.TestCase):
         dem, road = scene()
         dem[:, 230:] = np.nan                                # the east half is outside the data: 90 m off
         got = sorted(em.find(dem, GT, [LINE], road_mask=road), key=lambda e: -e.y)
+        # each fill's pool at its spill level (the valley is 2 % to each side) runs into the missing
+        # cells: all three are at the edge
         self.assertEqual([e.kind for e in got], [em.K_EDGE] * 3)
         for e, was in zip(got, (em.K_DAM, em.K_DRY, em.K_ROAD)):
             self.assertAlmostEqual(e.edge_m, 30 * CELL, delta=CELL)
+            self.assertTrue(e.edge_pool)
             self.assertTrue(e.notes[0].startswith("at the edge of the terrain data: missing terrain acts as a wall here"))
+            self.assertIn("which its pool reaches", e.notes[0])
             self.assertTrue(e.notes[0].endswith("it would otherwise read as: " + was), e.notes[0])
             self.assertEqual(e.confidence, "low")
         self.assertIn(em.K_EDGE, em.KINDS)
@@ -367,6 +371,28 @@ class EdgeOfTheTerrainData(unittest.TestCase):
         self.assertTrue(far[0].edge_pool)
         self.assertTrue(any("the pool reaches missing terrain" in t for t in far[0].notes))
         self.assertEqual(far[0].confidence, "low")
+
+    def test_a_fill_near_the_edge_whose_pool_stays_clear_of_it_keeps_its_kind(self):
+        # a fill 2 m high: its pool at the spill level ends about 100 m to each side of the valley
+        # line. The terrain is missing from 135 m east of the line: within 150 m of the crest, but no
+        # missing cell touches the pool, so the wall changes nothing - the same kind and readings,
+        # with the edge distance written
+        dem, y = valley()
+        dem = add_fill(dem, y, 200, 2.0)
+        whole = em.find(dem, GT, [LINE])
+        self.assertEqual(len(whole), 1)
+        dem[:, 245:] = np.nan
+        got = em.find(dem, GT, [LINE])
+        self.assertEqual(len(got), 1)
+        self.assertNotEqual(got[0].kind, em.K_EDGE)
+        self.assertAlmostEqual(got[0].edge_m, 135.0, delta=CELL)
+        self.assertFalse(got[0].edge_pool)
+        self.assertFalse(any("missing terrain" in t for t in got[0].notes))
+        self.assertEqual([(e.kind, e.height_m, e.storage_m3) for e in got], [(e.kind, e.height_m, e.storage_m3) for e in whole])
+        # edge_needs_pool off: every fill within the distance is set aside
+        every = em.find(dem, GT, [LINE], params=em.FinderParams(edge_needs_pool=False))
+        self.assertEqual([e.kind for e in every], [em.K_EDGE])
+        self.assertNotIn("which its pool reaches", every[0].notes[0])
 
     def test_missing_terrain_far_from_the_fill_and_its_pool_changes_nothing(self):
         dem, road = scene()

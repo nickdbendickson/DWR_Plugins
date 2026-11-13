@@ -751,9 +751,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     (two squares can read one fill or pool; counts['dropped_between_squares'] says how many
     readings were dropped between the squares of this run).
     THE EDGE OF THE TERRAIN DATA (0.7, core/embankments.py step 13): edge_ft = how far the crest is
-    from the nearest missing DEM cell; a fill within params.edge_m_max (150 m) of one has
-    the kind em.K_EDGE: it is written, but it is not scored, not handed to Screening and not
-    picked for a review batch (the ground past the end of the DEM file counts as missing too).
+    from the nearest missing DEM cell; a fill within params.edge_m_max (150 m) of one
+    whose pool reaches the missing cells has the kind em.K_EDGE: it is written, but it is not
+    scored, not handed to Screening and not picked for a review batch (the ground past the end
+    of the DEM file counts as missing too).
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()

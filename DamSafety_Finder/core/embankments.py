@@ -111,15 +111,18 @@ WHAT IT LOOKS FOR
      the data edge reads as a dam holding everything on its other side (a real case on the ND / SD
      line: a 17 ft "dam" with a 262 acre pool, 39 m from the edge). Every fill gets edge_m, the
      distance from its crest to the nearest missing cell (pieces of missing cells under
-     edge_min_m2 are ignored; not measured beyond edge_search_m). A fill within edge_m_max of
-     missing terrain is kept but given the kind "at the edge of the terrain data": nothing can
-     be said about it without the terrain beyond. Farther off, a fill whose pool reaches missing
+     edge_min_m2 are ignored; not measured beyond edge_search_m). The wall can only change a
+     reading when the pool at its spill level touches the missing cells. So a fill within
+     edge_m_max of missing terrain whose pool reaches it is kept but given the kind "at the edge
+     of the terrain data": nothing can be said about it without the terrain beyond. A fill that
+     near whose pool stays clear of the missing cells keeps its kind (edge_needs_pool False sets
+     every fill within the distance aside: on an Iowa tile half outside its LiDAR project that
+     set aside 10 fills, 6 of them census dams). Farther off, a fill whose pool reaches missing
      terrain keeps its kind, with low confidence and a note of the level at which the pool first
      touches the missing cells. Taking the missing cells as open ground instead of a wall
      (edge_open, off) is not the default: it does not remove the real case (its pool meets the
-     missing cells only 0.1 ft under its spill level; the wall that makes it is on the toe side
-     and at the analysis window), and it would drop a real dam whose flat water surface is cut
-     by the edge of the data.
+     missing cells only 0.1 ft under its spill level), and it would drop a real dam whose flat
+     water surface is cut by the edge of the data.
 
 Every threshold is a FinderParams value the engineer chooses; the defaults are starting values,
 not standards. The result is a list of candidates for review against an aerial image, not a
@@ -177,7 +180,8 @@ class FinderParams:
     rescue_max_drain_m2: float = 200.0 * 4046.8564224  # a rescued fill drains less than this
     own_pool_m2: float = 100.0          # pool lines: a pool this big is enough when it holds the flat water the line starts in
     pool_toe_reach_m: float = 0.0       # pool lines: the toe is at least the lowest ground this far below the hump (0 = off)
-    edge_m_max: float = 150.0           # a crest this close to missing terrain: "at the edge of the terrain data" (0 = off)
+    edge_m_max: float = 150.0           # a crest this close to missing terrain that its pool reaches: "at the edge of the terrain data" (0 = off)
+    edge_needs_pool: bool = True        # False: every fill within edge_m_max, whether or not its pool reaches the missing terrain
     edge_min_m2: float = 100.0          # a piece of missing cells smaller than this is ignored
     edge_search_m: float = 1000.0       # the distance to missing terrain is measured this far
     edge_open: bool = False             # True: also a fill whose pool gets out through missing terrain under min_height_m
@@ -1092,8 +1096,9 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
                 rimw = miss_rim[r0:r1, c0:c1]
                 edge_pool = bool((pm & rimw).any())
                 why = None
-                if math.isfinite(edge) and edge <= p.edge_m_max:
-                    why = "{:.0f} ft from missing terrain".format(edge / FT)
+                if math.isfinite(edge) and edge <= p.edge_m_max and (edge_pool or not p.edge_needs_pool):
+                    why = "{:.0f} ft from missing terrain{}".format(
+                        edge / FT, ", which its pool reaches" if edge_pool else "")
                 elif edge_pool:
                     # what the fill holds on the ground the DEM has: the missing cells open
                     known = spill_level(win, u, d, lo, spill, p.level_tol_m, rim=rimw)
