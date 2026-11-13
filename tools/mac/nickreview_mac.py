@@ -1273,6 +1273,13 @@ class Runner(object):
                 return 2
             r, notes = rn
         self.record.setdefault("notes", []).extend(notes)
+        # --dem replaces the DEM for every dam, kit or prepared. It must happen HERE, above
+        # self.dem_src, so that ctx.need, relocate_vrt, the --list-data walk, the rundam.json
+        # written at the end of this method, write_7b's rundam_params and checksums() all see
+        # the same path. r["DEM"] is the only place a DEM enters this script.
+        if ctx.a.dem:
+            r["DEM"] = os.path.abspath(os.path.expanduser(ctx.a.dem))
+            self.note("DEM replaced by --dem: " + r["DEM"])
         # common overrides: this Mac's solvers, threads and output folder
         self.box = area_box(r)
         self.dem_src = r["DEM"]
@@ -1749,6 +1756,11 @@ def main():
     ap.add_argument("--anuga-python", default="")
     ap.add_argument("--lisflood", default="")
     ap.add_argument("--map", action="append", default=[], metavar="BOXPATH=MACPATH")
+    ap.add_argument("--dem", default="", metavar="PATH",
+                    help="use this DEM/VRT for every dam, instead of the kit's DEM (kit dams) "
+                         "or DEFAULT_DEM (prepared dams). NOT a --map: --map is a directory "
+                         "prefix mapper and cannot name a single file (an exact-file --map "
+                         "produces a trailing slash and the DEM is reported missing).")
     ap.add_argument("--list-data", default="", metavar="TSV",
                     help="(on the box) write every data file these dams need, with sizes, the "
                          "path to copy it to under --data and its source (the data_files_*.tsv "
