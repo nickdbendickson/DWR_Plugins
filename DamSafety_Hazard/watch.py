@@ -424,6 +424,19 @@ def _real_qgis():
         return False
 
 
+def _qgis_app_running():
+    """True when QGIS (or qgis_process, or a test's QgsApplication) is running in this Python.
+    QgsApplication's own paths may only be asked then: without a GUI application, asking
+    makes QGIS build its application objects, and on Qt 5.15.3 (the QGIS 3.34 LTR on Ubuntu
+    22.04) that ends the process ("QFontDatabase: Must construct a QGuiApplication")."""
+    try:
+        from qgis.PyQt.QtCore import QCoreApplication
+        from qgis.PyQt.QtGui import QGuiApplication
+        return isinstance(QCoreApplication.instance(), QGuiApplication)
+    except Exception:
+        return False
+
+
 def _qgis_process_names():
     if os.name == "nt":
         return ["qgis_process-qgis-ltr.bat", "qgis_process-qgis.bat", "qgis_process.bat",
@@ -440,7 +453,8 @@ def find_qgis_process():
     (None, why not). Looked for, in this order: the environment variable
     ND_QGIS_PROCESS (a full path); the QGIS install directory (QgsApplication.
     prefixPath() / pkgDataPath(): <prefix>/bin, <prefix>, and on Windows the
-    OSGeo4W wrapper qgis_process-qgis[-ltr].bat two levels above apps/qgis);
+    OSGeo4W wrapper qgis_process-qgis[-ltr].bat two levels above apps/qgis;
+    outside a running QGIS, QGIS_PREFIX_PATH and this Python's own prefix);
     the folder of the running QGIS program; PATH. Never raises."""
     if not _real_qgis():
         return None, "this is not a real QGIS session"
@@ -450,18 +464,24 @@ def find_qgis_process():
         if _is_exe(env):
             return env, ""
         note = "{} points to {} which is not an executable file; ".format(ENV_QGIS_PROCESS, env)
-    dirs = []
-    try:
-        from qgis.core import QgsApplication
-        for base in (QgsApplication.prefixPath(), os.path.join(
-                QgsApplication.pkgDataPath(), os.pardir, os.pardir)):
-            if not base:
-                continue
-            base = os.path.normpath(str(base))
-            dirs += [os.path.join(base, "bin"), base,
-                     os.path.join(base, os.pardir, os.pardir, "bin")]
-    except Exception:
-        pass
+    dirs, bases = [], []
+    if _qgis_app_running():
+        try:
+            from qgis.core import QgsApplication
+            bases = [QgsApplication.prefixPath(), os.path.join(
+                QgsApplication.pkgDataPath(), os.pardir, os.pardir)]
+        except Exception:
+            bases = []
+    else:
+        # a command line (watch_schedule.py) or a plain Python: QGIS's paths cannot be asked
+        # (see _qgis_app_running), so the places it is installed in are tried instead
+        bases = [os.environ.get("QGIS_PREFIX_PATH", ""), sys.prefix]
+    for base in bases:
+        if not base:
+            continue
+        base = os.path.normpath(str(base))
+        dirs += [os.path.join(base, "bin"), base,
+                 os.path.join(base, os.pardir, os.pardir, "bin")]
     exe_dir = os.path.dirname(sys.executable or "")
     if exe_dir and "qgis" in os.path.basename(sys.executable or "").lower():
         dirs.append(exe_dir)

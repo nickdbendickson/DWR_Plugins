@@ -231,6 +231,34 @@ except S.ScheduleError:
     check(True, "a Windows path with a quote is refused")
 check(S.main([os.path.join(T, "nowhere"), "--print"]) == 1, "the command line returns 1 on an error")
 
+# ---- 6. outside a running QGIS, QGIS's own paths are not asked ------------------------
+# In a child process: on Qt 5.15.3 (QGIS 3.34 LTR, Ubuntu 22.04) asking QgsApplication for
+# its paths with no application ended the process, and with it this whole file.
+import subprocess  # noqa: E402
+code = (
+    "import sys\n"
+    "sys.path.insert(0, {root!r})\n"
+    "from DamSafety_Hazard import watch as W\n"
+    "if not W._real_qgis():\n"
+    "    print('NOQGIS'); sys.exit(0)\n"
+    "from qgis.core import QgsApplication\n"
+    "asked = []\n"
+    "for name in ('prefixPath', 'pkgDataPath'):\n"
+    "    setattr(QgsApplication, name, staticmethod(lambda n=name: asked.append(n) or ''))\n"
+    "assert not W._qgis_app_running()\n"
+    "exe, why = W.find_qgis_process()\n"
+    "assert not asked, asked\n"
+    "assert exe or 'not found' in why, (exe, why)\n"
+    "print('OK')\n").format(root=os.path.dirname(os.path.dirname(HERE)))
+env = dict(os.environ)
+env.setdefault("QT_QPA_PLATFORM", "offscreen")
+r = subprocess.run([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE,
+                   stderr=subprocess.STDOUT, timeout=120)
+out = r.stdout.decode("utf-8", "replace")
+check(r.returncode == 0 and ("OK" in out or "NOQGIS" in out),
+      "qgis_process is looked for without asking QGIS for its paths when no QGIS is running"
+      + ("" if r.returncode == 0 else " (exit {}: {})".format(r.returncode, out[-400:])))
+
 shutil.rmtree(T, ignore_errors=True)
 print("\n{} failed".format(len(fails)))
 sys.exit(1 if fails else 0)
