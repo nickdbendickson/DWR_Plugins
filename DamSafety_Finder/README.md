@@ -234,7 +234,7 @@ For each fill of an `embankments` layer, every source optional:
   returns, so a pond void inside the survey still reads empty).
 * **What is below** (with a DEM and buildings / roads): buildings and road crossings down the flow
   path within 1, 3 and 5 miles, and `conseq`, a second sort for the review. `permit_check` = yes
-  when the storage is over 12.5 acre-feet (an ND water permit), for every fill.
+  when the storage is over 12.5 acre-feet (an ND water permit), for every fill with a storage.
 
 ## Review batches and honest numbers (`ndfind:review_batch`, `core/review.py`, `core/evaluate.py`)
 
