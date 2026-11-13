@@ -1,4 +1,4 @@
-"""3.18.0 (Nick, 2026-11-13): the scenario choices.
+"""3.19.0 (Nick, 2026-11-13): the scenario choices.
 
 * Sunny day still starts at the top of dam with a piping breach (ND 5.1.1) unless the user
   changes it; a normal-pool or stated-elevation start is held as its depth below the top of dam
@@ -173,7 +173,7 @@ def aux_spillway_needs_both_values():
 
 @test
 def no_breach_settings_keep_the_default_key():
-    """A run with no auxiliary spillway records its flood settings as before 3.18.0."""
+    """A run with no auxiliary spillway records its flood settings as before 3.19.0."""
     st = workflow.RunSettings(scenario=workflow.SCENARIO_FLOOD, flood=_inflow())
     assert "aux_spillway" not in st.as_dict()["flood"]
     st.flood.set_aux_weir(1094.0, 200.0)

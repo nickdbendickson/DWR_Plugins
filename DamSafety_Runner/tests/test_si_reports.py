@@ -1,4 +1,4 @@
-"""Runner 3.19.2: the nested, cascade and probabilistic reports are written in SI when the suite
+"""Runner 3.20.2: the nested, cascade and probabilistic reports are written in SI when the suite
 shows SI units, as run_report.md already was (Core 1.1.0). Under US customary units the text is
 exactly what it was. The data files beside them keep US units in both systems."""
 import os

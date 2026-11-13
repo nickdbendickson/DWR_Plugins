@@ -1,6 +1,6 @@
 """Runs DamSafety Core's unit-system tests with the Hazard suite, which CI runs in real QGIS
 (Core has no test job of its own): the pure-Python tests of damsuite.display_units, and the
-real-QGIS check that a Processing tool leaves SI copies of its result tables (Core 1.3.0).
+real-QGIS check that a Processing tool leaves SI copies of its result tables (Core 1.4.0).
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_core_si_copies.py
 """

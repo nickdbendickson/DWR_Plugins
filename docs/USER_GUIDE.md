@@ -702,7 +702,7 @@ When a structure, road or rail receptor sits on a NoData cell next to water, the
 
 The path, the 20 m threshold and the cell size are written to the existing Sampling / Notes fields (no new CSV columns). The same rule is used in Hazard, the Screening/Runner `nd_hazard` sampler, Runner receptor summaries, and Hazard Lite.
 
-## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.18.0)
+## Scenario choices: starting pool, auxiliary spillway, flood with no breach (Runner 3.19.0)
 
 Nothing changes unless you choose it: a sunny-day run starts at the top of dam with a piping
 breach (ND 5.1.1).
@@ -728,7 +728,7 @@ breach (ND 5.1.1).
   pool field; a dam with no normal pool or no top of dam fails with a message instead of
   running from the top of dam.
 
-## Running several dams at the same time (Runner 3.19.0)
+## Running several dams at the same time (Runner 3.20.0)
 
 One dam gains little from more model threads, so the way to shorten a long batch is to run dams side by side.
 
@@ -750,7 +750,7 @@ When workers cannot be used the log says why in one line and the batch runs one 
 
 The batch chain (Screening to Runner to HEC-RAS to Hazard) still takes one dam at a time.
 
-## Try the sample dam (Core 1.2.0, Data 1.11.0, Runner 3.19.1)
+## Try the sample dam (Core 1.3.0, Data 1.11.0, Runner 3.20.1)
 
 The quickest way to see the suite work is to run it on the dam it ships with.
 
@@ -772,7 +772,7 @@ The quickest way to see the suite work is to run it on the dam it ships with.
 
 A run of the sample is for learning the tools. It is not a hazard determination for this dam.
 
-## SI units in the result tables (Core 1.3.0, Runner 3.19.2, Hazard 2.25.1)
+## SI units in the result tables (Core 1.4.0, Runner 3.20.2, Hazard 2.25.1)
 
 The suite computes and stores in US customary units. *DamSafety Setup → Suite setup / status → Units shown in windows* switches what you **see** to SI: the windows, the run report, the Hazard report and (from these versions) the result tables and three more Runner reports.
 

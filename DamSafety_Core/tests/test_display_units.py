@@ -107,7 +107,7 @@ def test_convert_table_and_markdown():
     assert DU.convert_markdown(md, "us") == md
 
 
-# -- SI copies of the result CSVs (Core 1.3.0) --------------------------------------------------
+# -- SI copies of the result CSVs (Core 1.4.0) --------------------------------------------------
 
 def _csv(path, rows):
     import csv

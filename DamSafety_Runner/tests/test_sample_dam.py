@@ -1,4 +1,4 @@
-"""Core 1.2.0 / Data 1.11.0: the suite's sample dam (damsuite.sample_dam).
+"""Core 1.3.0 / Data 1.11.0: the suite's sample dam (damsuite.sample_dam).
 
 * The offline pack carries one ready-made dam: its record (dam.json) and 10 m terrain named as
   'Download DEM' names it, so the Runner finds the terrain in the dam folder by itself.

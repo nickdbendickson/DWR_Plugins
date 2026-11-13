@@ -1,4 +1,4 @@
-"""Real-QGIS check of the SI copies of a tool's result tables (Core 1.3.0).
+"""Real-QGIS check of the SI copies of a tool's result tables (Core 1.4.0).
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Core/tests/qgis_si_copies_check.py
 

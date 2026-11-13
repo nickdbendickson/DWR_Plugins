@@ -230,7 +230,7 @@ def tag_parameter(param, system_value=None):
 
 
 def si_copies_of(results, feedback=None):
-    """Core 1.3.0: under SI, the SI copies of the result tables a tool returned
+    """Core 1.4.0: under SI, the SI copies of the result tables a tool returned
     (display_units.write_si_csvs_of: SI_units/<name>.csv with an SI column beside each US
     one). Says so in the log. Never raises; returns the copies written."""
     try:
@@ -261,7 +261,7 @@ def _with_si_copies(fn):
 
 
 class UnitParamsMixin(object):
-    """Tags each number parameter as it is added (see tag_parameter), and (Core 1.3.0) writes
+    """Tags each number parameter as it is added (see tag_parameter), and (Core 1.4.0) writes
     the SI copies of the CSV tables a tool returns when the display units are SI."""
 
     def __init_subclass__(cls, **kwargs):

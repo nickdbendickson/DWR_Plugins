@@ -1006,7 +1006,7 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
     out.seed, out.n = int(seed), n
 
     # --- the base run: its plan (domain, inflow point, duration) is every run's -----------
-    workflow.require_breach(st, "The probabilistic analysis")          # 3.18.0
+    workflow.require_breach(st, "The probabilistic analysis")          # 3.19.0
     base_st = copy.copy(st)
     base_st.grid_refine = False          # 3.15.0: every run of this tool keeps its own cell
     base_st.keep_arrays = False
@@ -1543,7 +1543,7 @@ def _write_report(out, st, dam, grid, thresholds_ft, plan, srows):
                "the last run is indicative.", ""]
         with open(out.convergence_svg, encoding="utf-8") as f:
             extra = f.read()
-    text = workflow._display_units_md("\n".join(md))      # 3.19.2: in SI when the suite shows SI
+    text = workflow._display_units_md("\n".join(md))      # 3.20.2: in SI when the suite shows SI
     out.report_md = os.path.join(out.folder, "Probabilistic_Report.md")
     with open(out.report_md, "w", encoding="utf-8", newline="") as f:
         f.write(text)
