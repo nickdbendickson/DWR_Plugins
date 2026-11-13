@@ -51,7 +51,10 @@ def _precheck(zcell, mode="warn", weir=None, **opts):
     """A 1,000 ft straight dam line on y=0 with the 2D area below it (y<0), a row of cell
     centres 50 ft apart at y=-25, and a flat terrain at `zcell` (no GDAL: _tif_window faked)."""
     per = np.array([[0.0, 0.0], [1000.0, 0.0], [1000.0, -500.0], [0.0, -500.0]])
-    xs = np.arange(25.0, 1000.0, 50.0)
+    # 0.02 ft off the round stations: with centres at 25, 75, ... the samples at stations 50,
+    # 100, ... are exactly as far from two centres, and which cell such a tie goes to differs
+    # between systems (macOS on Apple Silicon gave station 100.0, the notch's first, to cell 1)
+    xs = np.arange(25.0, 1000.0, 50.0) - 0.02
     pts = np.vstack([np.column_stack([xs, np.full_like(xs, -25.0)]),
                      np.column_stack([xs, np.full_like(xs, -75.0)])])
     conn = [(0.0, 0.0), (1000.0, 0.0)]

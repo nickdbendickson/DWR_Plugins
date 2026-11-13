@@ -65,7 +65,10 @@ def dwr_slope_finds_the_dams_record_by_its_dwr_number():
         z, note = dwr_slope.ds_slope_of("DWR-4031", paths=[os.path.join(d, "none.gpkg")])
         assert z is None and "no DWR dams layer" in note, note
         # a shapefile-cut field name and |layername= (the dam folder's data/dwr_dams.gpkg)
-        g2 = _gpkg(os.path.join(d, "dwr_dams.gpkg"), [("4031", "3:1")], layer="dwr_dams",
+        # in its own folder: on a file system that ignores case (macOS, Windows) the name
+        # dwr_dams.gpkg beside DWR_dams.gpkg is the same file
+        os.makedirs(os.path.join(d, "data"))
+        g2 = _gpkg(os.path.join(d, "data", "dwr_dams.gpkg"), [("4031", "3:1")], layer="dwr_dams",
                    id_col="structure_", slope_col="downstream")
         z, _n = dwr_slope.ds_slope_of("DWR-4031", paths=[g2 + "|layername=dwr_dams", g])
         assert z == 3.0, z                                          # the first layer wins

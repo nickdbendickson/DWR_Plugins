@@ -143,7 +143,16 @@ def hecras_compute_child_sees_the_raised_stack_limit():
                     "echo \"OMP=$KMP_STACKSIZE,$OMP_STACKSIZE\"\n"
                     "echo ' Finished Unsteady Flow Simulation'\n")
         os.chmod(exe, 0o755)
-        R.setrlimit(R.RLIMIT_STACK, (eight, hard))
+        try:
+            R.setrlimit(R.RLIMIT_STACK, (eight, hard))
+        except (ValueError, OSError):
+            # macOS refuses a stack limit below the stack size this Python was linked with
+            # ("current limit exceeds maximum limit"): the test starts from the limit as it is
+            pass
+        start, _h = R.getrlimit(R.RLIMIT_STACK)
+        if start == hard:
+            R.setrlimit(R.RLIMIT_STACK, (soft0, hard))
+            return                          # already at the hard limit: no raise to see
         logs = []
         try:
             he.compute(t, "M", d={"linux_dir": t, "rasunsteady": exe}, env={}, log=logs.append)
@@ -152,10 +161,10 @@ def hecras_compute_child_sees_the_raised_stack_limit():
         txt = open(os.path.join(t, "linux_run", "run.log")).read()
         want = "unlimited" if hard == R.RLIM_INFINITY else str(hard // 1024)
         assert "STACK={}".format(want) in txt, (txt, want)
-        assert "STACK=8192" not in txt, txt
+        assert "STACK={}\n".format(start // 1024) not in txt, txt
         assert "OMP=1g,1g" in txt, txt                 # through nice, as a wrapper would
         line = [m for m in logs if "stack limit for RasUnsteady" in m]
-        assert line and "(was 8 MB" in line[0], logs
+        assert line and "(was {}".format(he._rlim_text(start)) in line[0], logs
     finally:
         shutil.rmtree(t, ignore_errors=True)
 
