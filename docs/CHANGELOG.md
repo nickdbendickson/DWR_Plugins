@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **DamSafety Core 1.2.0 / Data 1.11.0 / Runner 3.19.1: a sample dam to try the suite on (Nick, 2026-11-13).** A new user had no dam folder, no terrain and nothing to compare a first run with.
+  - **Dam suite home:** the new **Try the sample dam…** button puts one real dam, Swan Buffalo Detention Dam 12 near Absaraka (DWR-2801), in the Dams folder with its dam record and 10 m terrain, and opens the breach Runner with the Dams folder, the dam and the terrain filled in. It offers a quick first try at a 30 m cell (nine times fewer cells than the 10 m default, which is slow on this dam's flat plain) and says to set the cell back to 10 m afterwards. The empty Runner window (Runner 3.19.1) and an empty Dams folder in the home point to the button.
+  - **Offline pack:** the last step of a full *Build offline pack…* writes `ND_Dam_Suite_Pack/sample_dam/DWR-2801/` (about 14 MB), and the button copies it from there. `pack_build.py --sample-only` adds it to a pack built earlier. A sample that cannot be downloaded never fails the build.
+  - **No pack, or a pack without the sample:** the button asks, then downloads the terrain from the USGS 3DEP elevation service (about 29 MB) in the background. The same button cancels; the parts already downloaded are kept for the next try.
+  - The terrain is checked before it is kept (the sample's grid, plausible ground in metres, no holes). A dam record or terrain file already in the dam folder is never replaced, and the window never writes into an offline pack.
+  - The record uses the reference runs' values: 27.5 ft high, 1,615.5 ac-ft, 154.5 ac at the DWR maximum pool, top of dam 1,069.117 ft read from the LiDAR DEM (datum `DEM`, so no datum shift). A run of the sample is not a hazard determination for that dam.
+
 - **DamSafety Runner 3.19.0: several dams of a batch at the same time.** One dam gains little from more LISFLOOD-FP threads, so a long batch is shortened by running dams side by side. No number changes: the rows are the same as one dam after another.
   - **QGIS:** *Run breach models for a layer of dams (batch)* has **Dams run at the same time** (`WORKERS`, default 1 = unchanged). Above 1, each dam runs in its own `qgis_process` worker with an equal share of the cores (or your own `THREADS` each); `WORKER_TIMEOUT_MIN` stops a worker that runs too long. The output `MODE` says how the dams were run.
   - **Command line:** `ndbreach_cli.py batch DAMS.csv CONFIG.json --workers N` (and `--worker-timeout-min`).

@@ -267,6 +267,10 @@ class PackDialog(QDialog):
             msg = "The pack is in {}.".format(os.path.dirname(r.get("pack2", "")))
             if fail:
                 msg += "\n\nNot downloaded (run again to retry): " + ", ".join(sorted(fail))
+            if r.get("sample_error"):
+                msg += ("\n\nThe sample dam was not added ({}). The pack is complete without "
+                        "it: \"Try the sample dam\" in the Dam suite home downloads it when "
+                        "asked.".format(r["sample_error"]))
             QMessageBox.information(self, "Build offline pack", msg)
         else:
             QgsMessageLog.logMessage("Offline pack build stopped: " + task.error, TAG,

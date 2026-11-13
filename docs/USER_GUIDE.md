@@ -750,6 +750,28 @@ When workers cannot be used the log says why in one line and the batch runs one 
 
 The batch chain (Screening to Runner to HEC-RAS to Hazard) still takes one dam at a time.
 
+## Try the sample dam (Core 1.2.0, Data 1.11.0, Runner 3.19.1)
+
+The quickest way to see the suite work is to run it on the dam it ships with.
+
+1. Open *Plugins → Dam safety → Dam suite home…* and click **Try the sample dam…**. The empty Runner window points there too.
+2. If no Dams folder is chosen yet, the window offers the default one.
+3. The sample is copied from the offline pack. If the pack has none, the window asks first and then downloads the terrain from the USGS (about 29 MB, a minute or two). Clicking the button again cancels the download, and the next try goes on from the parts it already has.
+4. The window asks whether you want a **quick first try at a 30 m cell**. Say yes the first time. The breach Runner then opens with the Dams folder, the dam and its terrain filled in.
+5. Run the breach model, then classify it in DamSafety Hazard, as for any dam.
+
+**The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes. A 30 m cell has nine times fewer cells than the 10 m default and runs many times faster.
+
+**Set the cell back.** The 30 m cell is for a quick look at the sample only. The Runner window remembers it, so set it back to 10 m before you model a dam for real. The grid-size section above gives the reasons.
+
+**What is written.** `<Dams folder>/DWR-2801/` gets `dam.json`, the terrain `DWR-2801_10m_5070.tif` (EPSG:5070, elevations in metres, from the USGS 3D Elevation Program), `sample.json` and `README.txt`. If the folder already holds a dam record or that terrain file, yours is kept. Nothing is written into the offline pack.
+
+**In the offline pack.** A full *Build offline pack…* (DamSafety Data 1.11.0) writes the sample to `ND_Dam_Suite_Pack/sample_dam/DWR-2801/` as its last step. To add it to a pack built earlier, run `python3 -m DamSafety_Data.pack_build --out <folder> --sample-only`. A pack that *Build offline pack…* did not make is never written into; the button downloads the terrain instead.
+
+**Without a pack** the Runner has no DWR dam line for the sample, so it places the breach inflow at the lowest ground near the dam point and says so in its log. With the pack it uses the dam line.
+
+A run of the sample is for learning the tools. It is not a hazard determination for this dam.
+
 ## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
 
 Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:

@@ -770,3 +770,124 @@ def test_osm_uses_overpass_when_up(tmp_path, monkeypatch):
     assert not r["failed"], r["failed"]
     assert ("OSM_lifelines", "osm") in seen, seen
     assert r["manifest2"]["datasets"]["OSM_lifelines"]["osm_route"] == "overpass"
+
+
+# --------------------------------------------------------------- sample dam --
+def _tiny_sample(monkeypatch, lon=-100.78, lat=46.80):
+    """Data 1.11.0: a small sample dam (250 x 130 cells) in place of the real one, inside BBOX."""
+    from DamSafety_Data.damsuite import sample_dam as SD
+    monkeypatch.setattr(SD, "TILE_PX", 100)
+    monkeypatch.setattr(SD, "RETRY_WAIT_S", 0.0)
+    monkeypatch.setattr(SD, "MIN_DEM_BYTES", 1000)
+    monkeypatch.setitem(SD.SAMPLES, "T-SAMPLE", SD.Sample(
+        dam_id="T-SAMPLE", name="Tiny Test Dam",
+        fields={"dam_id": "T-SAMPLE", "name": "Tiny Test Dam", "lon": lon, "lat": lat,
+                "x": 1200.0, "y": 5700.0, "crs": "EPSG:5070", "height_ft": 20.0,
+                "storage_acft": 100.0},
+        box=(1000.0, 5000.0, 3500.0, 6300.0), z_range_m=(200.0, 500.0),
+        about="a test dam.", note="test sample"))
+    monkeypatch.setattr(SD, "DEFAULT", "T-SAMPLE")
+    return SD
+
+
+def _sample_service(calls):
+    import urllib.parse
+
+    import numpy as np
+    from osgeo import osr
+
+    def fetch(url):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+        w, h = (int(v) for v in q["size"][0].split(","))
+        calls.append(url)
+        name = "/vsimem/pack_sample_{}.tif".format(len(calls))
+        ds = gdal.GetDriverByName("GTiff").Create(name, w, h, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+        sr = osr.SpatialReference()
+        sr.ImportFromEPSG(5070)
+        ds.SetProjection(sr.ExportToWkt())
+        ds.GetRasterBand(1).WriteArray(np.full((h, w), 300.0, "float32"))
+        ds = None
+        f = gdal.VSIFOpenL(name, "rb")
+        gdal.VSIFSeekL(f, 0, 2)
+        n = gdal.VSIFTellL(f)
+        gdal.VSIFSeekL(f, 0, 0)
+        raw = bytes(gdal.VSIFReadL(1, n, f))
+        gdal.VSIFCloseL(f)
+        gdal.Unlink(name)
+        return raw
+    return fetch
+
+
+def test_build_writes_the_sample_dam_into_the_format2_pack(tmp_path, mocked, monkeypatch):
+    """1.11.0: the last step of a full build writes the sample dam (record + 10 m terrain) into
+    ND_Dam_Suite_Pack/sample_dam/<dam ID>/; the packs still verify; a second build downloads
+    nothing."""
+    SD = _tiny_sample(monkeypatch)
+    _calls, nlcd = mocked
+    out = tmp_path / "out"
+    out.mkdir()
+    got = []
+    r, lines = _build(out, nlcd, sample_fetch=_sample_service(got))
+    assert not r["failed"], r["failed"]
+    folder = out / PB.PACK2 / "sample_dam" / "T-SAMPLE"
+    assert r["sample"] == str(folder) and r["sample_error"] == "" and len(got) == 6
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "README.txt", "T-SAMPLE_10m_5070.tif", "dam.json", "sample.json"]
+    assert PB.sample_folder(str(out)) == str(folder) == SD.find(str(out / PB.PACK2))
+    assert not (out / PB.PACK1 / "sample_dam").exists()          # format 2 only
+    ok, checked = PB.verify(str(out))
+    assert ok, checked
+    assert any("Sample dam: written" in m for m in lines), lines[-6:]
+    r2, lines2 = _build(out, nlcd, sample_fetch=_sample_service(got))
+    assert r2["sample"] == str(folder) and len(got) == 6
+    assert any("already there" in m for m in lines2)
+
+
+def test_a_sample_dam_that_cannot_be_downloaded_does_not_fail_the_build(tmp_path, mocked,
+                                                                        monkeypatch):
+    _tiny_sample(monkeypatch)
+    _calls, nlcd = mocked
+    out = tmp_path / "out"
+    out.mkdir()
+
+    def down(url):
+        raise OSError("network is unreachable")
+    r, lines = _build(out, nlcd, sample_fetch=down)
+    assert not r["failed"], r["failed"]                          # the layers are all there
+    assert r["sample"] == "" and "network is unreachable" in r["sample_error"]
+    assert any("sample dam was NOT added" in m for m in lines)
+    assert PB.sample_folder(str(out)) == ""
+    ok, checked = PB.verify(str(out))
+    assert ok, checked
+    # added afterwards, without building any layer again
+    got = []
+    folder = PB.add_sample(str(out), log=lines.append, fetch=_sample_service(got))
+    assert folder == PB.sample_folder(str(out)) and len(got) == 6
+    with pytest.raises(PB.PackBuildError, match="no pack built"):
+        PB.add_sample(str(tmp_path / "empty"), fetch=_sample_service(got))
+
+
+def test_the_sample_dam_is_left_out_of_partial_builds_and_other_areas(tmp_path, mocked,
+                                                                     monkeypatch):
+    SD = _tiny_sample(monkeypatch)
+    _calls, nlcd = mocked
+    assert PB.sample_in_area(BBOX) is True
+    assert PB.sample_in_area((-99.0, 46.0, -98.0, 47.0)) is False
+    assert PB.sample_in_area(BBOX, "NO-SUCH") is False
+    # the real sample dam is in the statewide area and not in this test's box
+    assert PB.sample_in_area(PB.nd_bbox(), "DWR-2801") and not PB.sample_in_area(BBOX, "DWR-2801")
+
+    def never(url):
+        raise AssertionError("the sample dam must not be downloaded here")
+    out = tmp_path / "out"
+    out.mkdir()
+    r, _ = _build(out, nlcd, only=["ND_counties"], sample_fetch=never)
+    assert r["sample"] == "" and r["sample_error"] == ""
+    r, _ = _build(out, nlcd, sample=False, sample_fetch=never)
+    assert r["sample"] == "" and r["sample_error"] == ""
+    monkeypatch.setitem(SD.SAMPLES, "T-SAMPLE", SD.SAMPLES["T-SAMPLE"]._replace(
+        fields=dict(SD.SAMPLES["T-SAMPLE"].fields, lon=-97.0)))
+    r, _ = _build(out, nlcd, sample_fetch=never)                 # outside the pack's area
+    assert r["sample"] == "" and r["sample_error"] == ""
