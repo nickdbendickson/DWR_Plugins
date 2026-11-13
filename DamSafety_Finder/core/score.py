@@ -118,11 +118,27 @@ def matrix(rows, names=None):
     return np.array([[_FN[n](r) for n in names] for r in rows], float).reshape(len(rows), len(names))
 
 
+# the dam list's own status of a listed fill's structure (known_state): only these are a dam on
+# the ground at the point ('' = the layer has no status, e.g. the NID)
+POSITIVE_STATES = ("", "intact")
+
+
+def off_ground(r, positive_words=("dam",)):
+    """True for a fill listed on a dam layer whose structure the list itself says is not there as
+    a dam (the DWR list: Breached, Not Built, Removed, Submerged, Location Inconclusive ...):
+    neither a dam nor background - left out of training and of every check."""
+    words = [w.lower() for w in positive_words]
+    return (r.get("status") == "listed" and any(w in str(r.get("known_layer") or "").lower() for w in words)
+            and str(r.get("known_state") or "").strip().lower() not in POSITIVE_STATES)
+
+
 def labels(rows, positive_words=("dam",)):
-    """1 for a fill listed on a layer whose name holds one of the words, else 0."""
+    """1 for a fill listed on a layer whose name holds one of the words (and, when the list gives
+    a status, an intact one), else 0. Drop off_ground rows before using these as truth."""
     words = [w.lower() for w in positive_words]
     return np.array([1.0 if r.get("status") == "listed"
-                     and any(w in str(r.get("known_layer") or "").lower() for w in words) else 0.0
+                     and any(w in str(r.get("known_layer") or "").lower() for w in words)
+                     and not off_ground(r, positive_words) else 0.0
                      for r in rows])
 
 
@@ -172,9 +188,11 @@ def _design(x, names, basis, rows=None):
 def _without_marked(rows, background, extra, positive_words=("dam",), bags=False):
     """rows (and background) less every row a reviewer marked: the mark replaces the row's own
     label (listed or not) instead of joining it. Matched by identity or find_id. With bags, a
-    'yes' or 'unsure' on a listed fill stands for its listed dam: the bag's other listed fills
-    are left out too (else the next of them would become a second positive for the same dam);
-    a 'no' leaves the rest of the bag in, so the next fill is promoted."""
+    'yes' or 'unsure' on a bag's own positive (its listed fill nearest the listed point) stands
+    for the listed dam: the bag's other listed fills are left out too (else the next of them
+    would become a second positive for the same dam); a 'no' on it leaves the rest of the bag
+    in, so the next fill is promoted; a mark on any other fill of the bag replaces that fill
+    alone."""
     if not extra:
         return list(rows), background
     ids = {id(r) for r, _t, _w in extra}
@@ -190,8 +208,15 @@ def _without_marked(rows, background, extra, positive_words=("dam",), bags=False
     y = labels(rows, positive_words)
     held = set()
     if bags:
-        held = {bag(r) for r, yy in zip(rows, y) if yy > 0 and r.get("known_id") not in (None, "")
-                and (id(r) in pos_ids or (r.get("find_id") not in (None, "") and r.get("find_id") in pos_f))}
+        # the bag's own positive: its listed fill nearest the listed point (as the bags pick it)
+        near = {}
+        for r, yy in zip(rows, y):
+            if yy > 0 and r.get("known_id") not in (None, ""):
+                b = bag(r)
+                if b not in near or _fv(r, "known_ft", 1e9) < _fv(near[b], "known_ft", 1e9):
+                    near[b] = r
+        held = {b for b, r in near.items()
+                if id(r) in pos_ids or (r.get("find_id") not in (None, "") and r.get("find_id") in pos_f)}
     keep = [not (marked(r) or (yy > 0 and bag(r) in held)) for r, yy in zip(rows, y)]
     rows = [r for r, k in zip(rows, keep) if k]
     if background is not None:
@@ -213,10 +238,25 @@ def train(rows, positive_words=("dam",), l2=1.0, iters=50, note="", features=Non
     splines / groups: the terrain-aware model (version 2). group_l2: a heavier penalty on the
       per-group copies (default 3 x l2) so they move only where the data say so.
       A marked row's own entry in rows is dropped: the mark replaces its label.
+    A fill listed on a dam whose list status says it is not there (off_ground: Breached, Not Built,
+      Removed ...) is left out altogether: model['not_on_ground'] counts them.
     learner: 'logistic' or 'trees' (bagged PU boosted trees, version 3: the clean positives are
       the fill nearest each listed point; marks are in every bag at their weight, an unsure one
       as both; splines / groups do not apply)."""
+    keep = [not off_ground(r, positive_words) for r in rows]
+    n_off = len(keep) - sum(keep)
+    rows = [r for r, k in zip(rows, keep) if k]
+    if background is not None:
+        background = [b for b, k in zip(background, keep) if k]
     rows, background = _without_marked(rows, background, extra, positive_words, bags)
+    model = _train(rows, positive_words, l2, iters, note, features, bags, bag_iters, background, extra, splines,
+                   groups, group_l2, learner, n_bags, seed)
+    model["not_on_ground"] = n_off               # listed dams the list says are not there: left out
+    return model
+
+
+def _train(rows, positive_words, l2, iters, note, features, bags, bag_iters, background, extra, splines, groups,
+           group_l2, learner, n_bags, seed):
     if learner == "trees":
         return _train_trees(rows, positive_words, note, features, bags, background, extra, n_bags, seed)
     if learner != "logistic":

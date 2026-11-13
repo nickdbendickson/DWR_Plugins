@@ -87,8 +87,11 @@ def pick_batch(rows, n=90, random_frac=0.18, top_frac=0.37, second_frac=0.12, sc
     what has been looked at) to the batch's cards before evaluate.ht_share. The random control is
     the n_rand pool cards with the smallest hash of the id (with this seed), so it stays the same
     set from one score version to the next while the reviewed set is the same, and a later round
-    with the same seed takes the next-smallest hashes (the controls of all rounds together are
-    the smallest hashes of the list: one simple random sample).
+    with the same seed takes the next-smallest hashes of its pool. Each round's control is a
+    simple random sample of that round's pool only: the controls of several rounds together are
+    NOT one sample of the list (a card a round took as top or near never enters a later control).
+    A whole-list figure comes from evaluate.ht_share with the earlier rounds' cards at incl_prob
+    1; calibrate (evaluate.platt) on one round's control.
     committee: optional list of score arrays (one per model) - the near-the-cut slice then takes
     the cards they disagree on most. per_tile_cap limits the near-the-cut cards from one tile
     (the random and top cards do not count against it).

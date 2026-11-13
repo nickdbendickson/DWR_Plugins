@@ -192,9 +192,9 @@ def ht_share(labels, incl_prob, z=Z95):
     a known chance incl_prob of being picked (a random control, a top-k slice taken with chance 1,
     a near-cut-off slice ...): the Horvitz-Thompson estimate. The cards with about one chance
     (within a quarter) form a stratum (a top slice taken whole has no sampling error; a random
-    sample of the rest has it all); each sampled stratum's interval sits on its Agresti-Coull
+    sample of the rest has it all); the upper bound sits on each sampled stratum's Agresti-Coull
     share (k + z^2/2) / (n + z^2), so a random control with no dams in it still gives an honest
-    upper bound instead of 0 +/- 0. For a later review round, pass the cards reviewed before
+    upper bound instead of 0 +/- 0; the lower bound sits on the HT share. For a later review round, pass the cards reviewed before
     with their marks at incl_prob 1 (review.pick_batch samples only the cards not yet reviewed).
     {'share', 'lo', 'hi', 'n_list' (estimated list size), 'dams' (estimated real dams in the
     list)}."""
@@ -227,7 +227,9 @@ def ht_share(labels, incl_prob, z=Z95):
         var += big_n * big_n * (1.0 - n_h / big_n) * pt * (1.0 - pt) / nt
     se = math.sqrt(var) / n_hat
     c = centre / n_hat
-    lo = max(float((y[pi >= 1.0]).sum()) / n_hat, c - z * se)
+    # the lower bound off the HT share itself: the Agresti-Coull pseudo-counts of several small
+    # strata add up in the centre but only in quadrature in se, and would lift lo over the truth
+    lo = max(float((y[pi >= 1.0]).sum()) / n_hat, r - z * se)
     return {"share": r, "lo": max(0.0, min(lo, r)), "hi": min(1.0, max(c + z * se, r)), "n_list": n_hat,
             "dams": d_hat}
 

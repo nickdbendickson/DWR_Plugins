@@ -349,6 +349,12 @@ class Listed(unittest.TestCase):
     def test_empty_list_is_all_new(self):
         self.assertEqual(ls.check(0, 0, ls.Known([]), 100.0)["status"], ls.NEW)
 
+    def test_the_lists_own_status_rides_along(self):
+        kn = ls.Known([(0.0, 0.0, "20061", "DWR dams", "Breached"), (1000.0, 0.0, "ND00199", "NID")])
+        self.assertEqual(ls.check(10.0, 0.0, kn, 50.0)["known_state"], "Breached")
+        self.assertEqual(ls.check(990.0, 0.0, kn, 50.0)["known_state"], "")
+        self.assertEqual(ls.check(500.0, 0.0, kn, 50.0)["known_state"], "")
+
 
 class Crossings(unittest.TestCase):
     def test_grid(self):
@@ -674,6 +680,13 @@ class Score(unittest.TestCase):
             self.assertEqual(len(kept), len(rows) - (1 if has_decoy else 2))
         m = sc.train(rows, features=sc.ALL_FEATURES, bags=True, extra=[(dict(rows[0]), 1.0, 20.0)])
         self.assertEqual(m["clean_positives"]["bags"], 79)              # D0 is the mark now
+        # a mark on the bag's farther fill (the road fill) replaces that fill alone: the fill at
+        # the listed point stays the dam's positive, whatever the mark
+        rows[0]["known_ft"] = 20.0
+        for t in (1.0, 0.5, 0.0):
+            kept, _bg = sc._without_marked(rows, None, [(dict(rows[-1]), t, 20.0)], ("dam",), True)
+            self.assertIn("F0", ids(kept), t)
+            self.assertNotIn("FD", ids(kept), t)
 
     def test_trees_background_counts_the_marked_dams(self):
         # 3 listed dams and 30 'yes' marks: the background is 5 x 33, not 5 x 3
@@ -690,6 +703,23 @@ class Score(unittest.TestCase):
         self.assertEqual(len(fit.call_args_list[0].args[1]), 3 + 5 * 33 + 30)
         with self.assertRaises(ValueError):                 # every row a dam: a constant model
             ch.bagging_pu(x[:40], np.ones(40), n_bags=2)
+
+    def test_listed_dams_the_list_says_are_not_there_are_left_out(self):
+        rows = self.rows(n=120)
+        gone = [r for r in rows if r["status"] == "listed"][1:9]
+        for r, st in zip(gone, ("Breached", "Not Built", "Removed", "Location Incon", "Submerged",
+                                "Breached", "Pending", "Inconclusive")):
+            r["known_state"] = st
+        rows[0]["known_state"] = "Intact"
+        self.assertTrue(all(sc.off_ground(r) for r in gone))
+        self.assertFalse(sc.off_ground(rows[0]) or sc.off_ground(rows[1]))   # intact; not listed
+        self.assertEqual(int(sc.labels(rows).sum()), 40 - 8)
+        self.assertEqual(sc.labels(gone).tolist(), [0.0] * 8)
+        for kw in ({}, {"features": sc.ALL_FEATURES, "learner": "trees", "n_bags": 2}):
+            m = sc.train(rows, **kw)
+            self.assertEqual((m["not_on_ground"], m["n_listed"]), (8, 32), kw)
+            m2 = sc.train([r for r in rows if not sc.off_ground(r)], **kw)
+            self.assertTrue(np.allclose(sc.score(m, rows), sc.score(m2, rows)), kw)
 
     def test_round_trip(self):
         import os
@@ -1299,6 +1329,28 @@ class Review(unittest.TestCase):
             est.append(h["share"])
         self.assertAlmostEqual(float(np.mean(ratio)), 1.0, delta=0.07)
         self.assertAlmostEqual(float(np.mean(est)), float(np.mean(list(trait.values()))), delta=0.03)
+
+    def test_the_whole_list_interval_covers_after_two_rounds(self):
+        # dams concentrated near the top (as a score makes them); round 2 with the same seed; the
+        # whole list = round 1 at chance 1 + round 2. The interval must not sit above the truth:
+        # small strata's Agresti-Coull pseudo-counts must not lift the lower bound
+        rows = self.cands()
+        s = np.array([r["score"] for r in rows])
+        rank = np.empty(len(rows), int)
+        rank[np.argsort(-s)] = np.arange(1, len(rows) + 1)
+        rng = np.random.default_rng(12)
+        dam = {r["find_id"]: bool(rng.random() < 0.03 + 0.57 * np.exp(-(k - 1) / 80.0)) for r, k in zip(rows, rank)}
+        truth = float(np.mean(list(dam.values())))
+        low = high = 0
+        n = 120
+        for seed in range(n):
+            r1 = rv.pick_batch(rows, 90, seed=seed, per_tile_cap=1000)
+            r2 = rv.pick_batch(rows, 90, seed=seed, per_tile_cap=1000, reviewed={r["find_id"] for r in r1})
+            h = ev.ht_share([dam[r["find_id"]] for r in r1 + r2], [1.0] * len(r1) + [r["incl_prob"] for r in r2])
+            low += truth < h["lo"]
+            high += truth > h["hi"]
+        self.assertLessEqual(low, 0.08 * n)
+        self.assertLessEqual(high, 0.08 * n)
 
     def test_a_batch_that_takes_the_whole_pool_is_a_census(self):
         rows = self.cands(n=200)

@@ -23,8 +23,12 @@ class Known:
     """Known structures as points in the grid CRS, with a bucket index for the nearest search."""
 
     def __init__(self, points, bucket_m=500.0):
-        """points: iterable of (x, y, id, source)."""
-        self.pts = [(float(x), float(y), str(i), str(s)) for x, y, i, s in points]
+        """points: iterable of (x, y, id, source) or (x, y, id, source, state) - state: the
+        list's own status of the structure (a dam list's 'Intact', 'Breached', 'Not Built' ...),
+        '' when the layer has none."""
+        points = [tuple(p) for p in points]
+        self.pts = [(float(p[0]), float(p[1]), str(p[2]), str(p[3])) for p in points]
+        self.state = [str(p[4]) if len(p) > 4 and p[4] is not None else "" for p in points]
         self.b = float(bucket_m)
         self.grid = {}
         for k, (x, y, _i, _s) in enumerate(self.pts):
@@ -93,7 +97,7 @@ def dist_to_polygon(x, y, rings):
 
 
 def check(x, y, known, radius_m, unsure_factor=2.0, polygons=None):
-    """{'status', 'known_id', 'known_src', 'known_m'} for one candidate at (x, y). `polygons`
+    """{'status', 'known_id', 'known_src', 'known_state', 'known_m'} for one candidate at (x, y). `polygons`
     (a list of polygons, each a list of rings) is the candidate's outline: a known point inside it
     or within radius_m of its edge makes it listed."""
     far = radius_m * max(1.0, unsure_factor)
@@ -112,10 +116,11 @@ def check(x, y, known, radius_m, unsure_factor=2.0, polygons=None):
     else:
         hits = known.near(x, y, far)[:1]
     if not hits:
-        return {"status": NEW, "known_id": "", "known_src": "", "known_m": None}
+        return {"status": NEW, "known_id": "", "known_src": "", "known_state": "", "known_m": None}
     d, k = hits[0]
     return {"status": LISTED if d <= radius_m else UNSURE, "known_id": known.pts[k][2],
-            "known_src": known.pts[k][3], "known_m": round(d, 1)}
+            "known_src": known.pts[k][3], "known_state": known.state[k] if k < len(known.state) else "",
+            "known_m": round(d, 1)}
 
 
 def status_counts(rows):

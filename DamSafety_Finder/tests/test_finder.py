@@ -310,6 +310,13 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in rows), ["culvert", "dam"])
         kn = self.f.read_known([src])
         self.assertEqual(len(kn), 2)
+        # a dam list with a status field: each point's status rides along (known_state)
+        dams = write_layer(os.path.join(self.tmp, "dams.gpkg"), "dams",
+                           [("POINT ({} {})".format(X0, Y0), {"structure_id": "20061", "status": "Breached"}),
+                            ("POINT ({} {})".format(X0 + 900.0, Y0), {"structure_id": "20071", "status": "Intact"})],
+                           fields=("structure_id", "status"))
+        kn = self.f.read_known([(dams, "DWR dams", None)])
+        self.assertEqual(sorted(zip(kn.state, (p[2] for p in kn.pts))), [("Breached", "20061"), ("Intact", "20071")])
 
     def test_score_run(self):
         from . import test_core as c
@@ -739,6 +746,68 @@ class Runs(unittest.TestCase):
         self.assertIsNone(self.lidar_of(fills, one)["IN"].get("lidar_pool_empty"))
         gdal.BuildVRT(one, [ta, tb])                    # the same path, now over both tiles
         self.assertEqual(self.lidar_of(fills, one)["IN"]["lidar_pool_empty"], 0.0)
+
+    def test_evidence_lidar_gap_between_two_surveys(self):
+        # project P1's tile box runs to x0+600 but its survey stops at x0+500; project P2 starts at
+        # x0+700. Returns of P2 must not close P1's unsurveyed strip: a pool over the strip reads
+        # dry on its surveyed cells, not 'empty'
+        x = np.arange(600)[None, :] + 0.5
+        a = np.where(np.broadcast_to(x, (600, 600)) < 500.0, 6, 0)
+        p1 = os.path.join(self.tmp, "P1", "point_count.vrt")
+        p2 = os.path.join(self.tmp, "P2", "point_count.vrt")
+        for d in (p1, p2):
+            os.makedirs(os.path.dirname(d))
+        gdal.BuildVRT(p1, [self.count_tile("P1/t.tif", X0, Y0, a)])
+        gdal.BuildVRT(p2, [self.count_tile("P2/t.tif", X0 + 700.0, Y0, np.full((600, 600), 6))])
+        state = os.path.join(self.tmp, "state_gap.vrt")
+        gdal.BuildVRT(state, [p1, p2])
+        fills = self.evid_fills([{"x": X0 + 545.0, "y": Y0 + 300.0, "find_id": "GAP", "kind": "dam", "area_ac": 5.0}])
+        got = self.lidar_of(fills, state)["GAP"]
+        for k in ("lidar_pool_empty", "lidar_ring_empty", "lidar_contrast"):
+            self.assertIn(got.get(k), (None, 0.0), k)
+
+    def test_evidence_lidar_pond_on_a_tile_seam_and_odd_vrts(self):
+        # a pond void on the seam of two tiles still reads empty; a warped VRT and a VRT source
+        # with no DstRect still count as surveyed; a missing project VRT costs only its own fills
+        a = np.full((400, 800), 6)
+        yy, xx = np.mgrid[0:400, 0:800]
+        a[((xx + 0.5) - 400.0) ** 2 + ((400 - yy - 0.5) - 200.0) ** 2 < 30.0 ** 2] = 0
+        ta = self.count_tile("seam_a.tif", X0, Y0, a[:, :400])
+        tb = self.count_tile("seam_b.tif", X0 + 400.0, Y0, a[:, 400:])
+        seam = os.path.join(self.tmp, "seam.vrt")
+        gdal.BuildVRT(seam, [ta, tb])
+        fills = self.evid_fills([{"x": X0 + 400.0, "y": Y0 + 200.0, "find_id": "POND", "kind": "dam", "area_ac": 0.7},
+                                 {"x": X0 + 150.0, "y": Y0 + 200.0, "find_id": "DRY", "kind": "dam", "area_ac": 1.0}])
+        got = self.lidar_of(fills, seam)
+        self.assertGreater(got["POND"]["lidar_pool_empty"], 0.8)
+        self.assertLess(got["POND"]["lidar_ring_empty"], 0.2)
+        warped = os.path.join(self.tmp, "warped.vrt")
+        gdal.Warp(warped, ta, format="VRT")
+        hand = os.path.join(self.tmp, "hand.vrt")
+        with open(hand, "w") as fh:
+            fh.write('<VRTDataset rasterXSize="400" rasterYSize="400"><SRS>{}</SRS>'
+                     '<GeoTransform>{}, 1, 0, {}, 0, -1</GeoTransform>'
+                     '<VRTRasterBand dataType="Int32" band="1"><NoDataValue>0</NoDataValue><SimpleSource>'
+                     '<SourceFilename relativeToVRT="0">{}</SourceFilename><SourceBand>1</SourceBand>'
+                     '</SimpleSource></VRTRasterBand></VRTDataset>'.format(srs(5070).ExportToWkt().replace('"', "&quot;"),
+                                                                           X0, Y0 + 400.0, ta))
+        for src in (warped, hand):
+            self.assertEqual(self.lidar_of(fills, src)["DRY"]["lidar_pool_empty"], 0.0, src)
+        pa = os.path.join(self.tmp, "PA", "point_count.vrt")
+        pb = os.path.join(self.tmp, "PB", "point_count.vrt")
+        for d in (pa, pb):
+            os.makedirs(os.path.dirname(d))
+        gdal.BuildVRT(pa, [ta])
+        gdal.BuildVRT(pb, [self.count_tile("PB/far.tif", X0 + 3000.0, Y0, np.full((400, 400), 6))])
+        state = os.path.join(self.tmp, "state_missing.vrt")
+        gdal.BuildVRT(state, [pa, pb])
+        import shutil
+        shutil.rmtree(os.path.dirname(pb))
+        said = []
+        ev = self.f.run_evidence(fills, os.path.join(self.tmp, "lm.gpkg"), lidar_points=state, log=said.append)
+        got = {r["find_id"]: r for r in ev["rows"]}
+        self.assertEqual(got["DRY"]["lidar_pool_empty"], 0.0)
+        self.assertTrue(any("could not be read" in m and "PB" in m for m in said), said)
 
     def test_evidence_two_services_one_year(self):
         # the CIR and the 4-band of one year: each its own tiles, and water in either counts

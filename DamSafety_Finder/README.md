@@ -211,6 +211,10 @@ unsure) from a review: each mark replaces that fill's own listed / not-listed la
 `marks_weight` (an unsure one as half a dam, half not). Learn marks per region (a prairie model, a
 breaks model): marks from one terrain can misrank another. Each fill gets `score` and
 `score_note` (outside the training range, or a terrain group with few listed dams to learn from).
+A fill on a listed dam that the list itself says is not there (a dam layer with a `status` field,
+as the DWR list has: Breached, Not Built, Removed, Submerged, Location Inconclusive ...; only
+Intact counts) is left out of training and of the checks: neither a dam nor background. Every
+candidate carries that status as `known_state`.
 
 ## Evidence the DEM cannot give (`ndfind:evidence`, `core/evidence.py`)
 
@@ -231,7 +235,8 @@ For each fill of an `embankments` layer, every source optional:
   `lidar_ring_empty`, `lidar_contrast`, `lidar_class9`; blank where no survey covers the pool
   (a gap between tiles, the empty corner of a tile cut by a project edge or a VRT of
   per-project VRTs is not "empty": a cell counts as surveyed inside a tile and within reach of
-  returns, so a pond void inside the survey still reads empty).
+  that tile's own returns, so a pond void inside the survey still reads empty and a gap between
+  two surveys is not bridged).
 * **What is below** (with a DEM and buildings / roads): buildings and road crossings down the flow
   path within 1, 3 and 5 miles, and `conseq`, a second sort for the review. `permit_check` = yes
   when the storage is over 12.5 acre-feet (an ND water permit), for every fill with a storage.
@@ -270,7 +275,7 @@ regression, USGS StreamStats), and a basin longer than the DEM read is a minimum
 One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and a CSV beside it:
 
 * `embankments` / `ponds` / `crossings`: every candidate, new first, with `status`, `known_id`,
-  `known_layer`, `known_ft`, heights in feet, storage in acre-feet, areas in acres, `confidence`
+  `known_layer`, `known_state` (the list's own status of that structure, when it has one), `known_ft`, heights in feet, storage in acre-feet, areas in acres, `confidence`
   and `notes`.
 * `screening_dams` / `screening_ponds`: the not-listed candidates that could release water
   (dams, dry embankments, levees; never a road fill, which Screening cuts to open its culvert), as
