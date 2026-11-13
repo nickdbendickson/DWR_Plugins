@@ -184,7 +184,9 @@ If a desktop webview ever needs something the policy blocks, start the app with 
 
 `npm run test:e2e` opens all three in Chromium, walks the eight steps on the first sample dam with every service
 stubbed, and fails on anything the policy blocks (`e2e/`; needs `npx playwright install chromium` once, and
-`npm run build` for the web app).
+`npm run build` for the web app). It then runs a batch of nine structures on each of the three and does to it what a
+long batch meets: Stop part way, a reloaded page, Resume, the terrain service dropping (the batch pauses and retries),
+Stop retrying, Resume to the end, the CSV, and a row opened on the desk (`e2e/batch-walk.mjs`).
 
 ## North Dakota dam picker (NID, with DWR values)
 

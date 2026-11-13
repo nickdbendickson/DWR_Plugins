@@ -19,8 +19,8 @@ const STEPS = [
   "Report",
 ];
 
-/** Collect what must stay empty for the page's whole life. Call before goto. */
-export async function watch(page, ownOrigin) {
+/** Collect what must stay empty for the page's whole life. Call before goto. `network` goes to fakeNetwork. */
+export async function watch(page, ownOrigin, network = {}) {
   const problems = [];
   page.on("pageerror", (e) => problems.push(`uncaught error: ${e.message}`));
   page.on("console", (m) => {
@@ -31,7 +31,7 @@ export async function watch(page, ownOrigin) {
       console.error(`CSP blocked ${e.violatedDirective}: ${e.blockedURI || "(inline)"}`);
     });
   });
-  const net = await fakeNetwork(page, ownOrigin);
+  const net = await fakeNetwork(page, ownOrigin, network);
   return { problems, net };
 }
 

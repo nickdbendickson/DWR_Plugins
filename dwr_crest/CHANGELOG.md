@@ -71,6 +71,15 @@
     and those failed structures are retried, never kept. The screen is kept awake while it runs. Only the 300 most
     recent records are held in memory; any other finished row's record is rebuilt on **Open in desk**, which also
     makes Open in desk work after a reload. Tests: `batch-job.test.ts`.
+- **Batch click-through test.** `npm run test:e2e` now also walks the batch screen on `Crest.html`, the desktop bundle
+  and the web app (`e2e/batch-walk.mjs`): pick nine structures, Run, Stop after two, reload the page, Resume with the
+  terrain service gone (the batch pauses after six structures in a row cannot reach it and says when it tries again),
+  the connection coming back with the service still down (it tries at once, then waits 2 min), Stop retrying, Resume
+  to the end, Download CSV, Open in desk for a row from before the reload, and Clear results. It checks that the two
+  finished rows survive the reload, that no finished structure is run again, that the CSV has one done line per
+  structure, and that the page reports no error other than the dropped connection the test caused. The network stub
+  (`e2e/fake-network.mjs`) can now hold or drop terrain requests and hand any structure the ND00199 fixture terrain.
+  Test-only: no change to the app or the bundles.
 
 ## 2026-11-08
 
