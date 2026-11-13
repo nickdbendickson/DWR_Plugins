@@ -22,13 +22,16 @@
 #  1. THE MODEL CRS FOLLOWS THE DEM. Both Runners do
 #        if dem_crs.isValid() and not dem_crs.isGeographic() and dem_unit == 1.0: work = dem_crs
 #     (nd_breach_runner/algorithms.py, DamSafety_Runner/algorithms.py), so a projected-metre DEM
-#     REPLACES the work CRS. The nickreview runs fix WORK_CRS at EPSG:5070; with an EPSG:26914
-#     VRT the model grid becomes 26914. Nothing warns you. Results are not wrong - the grid is
-#     simply no longer the box run's grid - but an absaraka run on this terrain is NOT a
-#     reproduction of the Grok box run and should not be compared to it cell for cell.
+#     REPLACES the work CRS: WORK_CRS is consulted only when the DEM is NOT projected in metres.
+#     The nickreview runs fix WORK_CRS at EPSG:5070, and that setting is overridden by any metre
+#     DEM, this VRT included. The run log prints "Model CRS <authid>", so the grid it actually
+#     used is readable; what it never says is that WORK_CRS was overridden. NOTE this does not
+#     by itself mean the grid moves: the DWR-2801 kit DEM is built from NATIVE 3DEP tiles
+#     (USGS_1M_14_... = UTM zone 14, metres), so the box run was most likely already on a UTM 14N
+#     grid. Settle it with: gdalsrsinfo -o epsg <the kit composite VRT>.
 #
 #  2. ABSARAKA LOSES THE COMPOSITE. The kit DEM for DWR-2801 is a composite: native 1 m over the
-#     dam with a 5 m DEM underneath outside the 1 m tiles, in EPSG:5070. A statewide 1 m VRT has
+#     dam with a 5 m DEM underneath outside the 1 m tiles. A statewide 1 m VRT has
 #     no 5 m underlay, so anywhere the 1 m coverage stops, the model gets nodata instead of
 #     coarse ground.
 #
@@ -224,6 +227,7 @@ run_it() {
 consequences() {
   say "What changes"
   echo "  * the model grid becomes the DEM's CRS, not the configured work CRS"
+  echo "    (the run log prints 'Model CRS <authid>'; it never says WORK_CRS was overridden)"
   case "$CMD" in
     absaraka|check)
       echo "  * absaraka: DWR-2801 loses the kit composite's 5 m underlay outside the 1 m"
