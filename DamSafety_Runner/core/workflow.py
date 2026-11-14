@@ -707,6 +707,10 @@ def compare(a_env, b_env, thr_m):
     return out
 
 
+# a gauge section shorter than this gets a warning (a flood plain can be wider)
+GAUGE_SHORT_SECTION_M = 1000.0
+
+
 def _direction_at(path, xy, span=200.0):
     """Unit vector of the flow path around the vertex nearest `xy`."""
     p = np.asarray(path)
@@ -1891,6 +1895,21 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 if msg not in warnings:
                     warnings.append(msg)
                 continue
+            # 3.20.4: LISFLOOD-FP measures a shorter section the nearer the gauge is to the
+            # east (E/W gauges) or south (N/S gauges) edge of the model: say so when the
+            # section is short enough to miss part of a flood
+            reach = lfmod.gauge_reach_m(
+                g["xy"][0] - bnds[0], g["xy"][1] - bnds[1], gg["direction"],
+                int(round((bnds[2] - bnds[0]) / cs)), int(round((bnds[3] - bnds[1]) / cs)), cs)
+            if reach < min(w_full, GAUGE_SHORT_SECTION_M):
+                msg = ("Gauge '{}' is {:,.0f} m from the {} edge of the model, and LISFLOOD-FP "
+                       "measures a section no longer than that there ({:,.0f} m, centred on "
+                       "the gauge): flow further out is not in its record. Move the gauge or "
+                       "extend the model that way.".format(
+                           g["name"], reach, "east" if gg["direction"] in ("E", "W") else "south",
+                           reach))
+                if msg not in warnings:
+                    warnings.append(msg)
             gl.append(gg)
         return gl
 
