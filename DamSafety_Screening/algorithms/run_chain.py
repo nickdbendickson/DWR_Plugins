@@ -6,7 +6,7 @@ import json
 import os
 
 from qgis import processing
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsProcessingParameterString,
+from qgis.core import (QgsProcessingParameterFile, QgsProcessingParameterString,
                        QgsProcessingParameterEnum, QgsProcessingParameterBoolean,
                        QgsProcessingParameterFileDestination, QgsProcessingException)
 

@@ -2,7 +2,7 @@
 import csv
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterEnum,
                        QgsProcessingParameterNumber, QgsProcessingParameterBoolean,
                        QgsProcessingParameterFileDestination)
