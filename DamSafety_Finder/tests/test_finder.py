@@ -1248,6 +1248,90 @@ class FixedLattice(unittest.TestCase):
             got.append((res["rows"][0]["water_id"], res["rows"][0]["area_ac"], res["rows"][0]["ndwi"]))
         self.assertEqual(len(set(got)), 1, got)
 
+    def test_open_water_cells_are_on_the_lattice_at_a_cell_that_does_not_divide_the_square(self):
+        # cell 0.6 m: 200 m and 300 m squares are not whole numbers of cells. Each window is grown
+        # to whole multiples of 0.6 m, so the cells fall on the same ground for any square size
+        # and any box: the same patch, and its outline on the 0.6 m lattice
+        g, nir, _pond = tc.image()
+        img = os.path.join(self.tmp, "img.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(img, g.shape[1], g.shape[0], 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 + 0.37, 1.0, 0.0, Y0 + g.shape[0] + 0.61, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        for b, a in zip((1, 2, 3, 4), (g, g, g, nir)):
+            ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+        ds = None
+        got = []
+        for tile_m, (dx, dy) in ((200.0, (0.0, 0.0)), (300.0, (0.0, 0.0)), (200.0, (0.45, 0.2)), (300.0, (7.0, -3.3))):
+            box = (X0 + 20.0 + dx, Y0 + 20.0 + dy, X0 + 280.0 + dx, Y0 + 280.0 + dy)
+            out = os.path.join(self.tmp, "w{}.gpkg".format(len(got)))
+            res = self.f.run_water(img, out, bbox=box, cell=0.6, tile_m=tile_m, log=lambda *_: None)
+            self.assertEqual(len(res["rows"]), 1)
+            got.append((res["rows"][0]["water_id"], res["rows"][0]["area_ac"], res["rows"][0]["ndwi"]))
+            ds = ogr.Open(out)
+            feat = next(iter(ds.GetLayerByName("water")))
+            geom = feat.GetGeometryRef()
+            pts = []
+            for k in range(geom.GetGeometryCount()):
+                part = geom.GetGeometryRef(k)
+                for m in range(part.GetGeometryCount()):
+                    ring = part.GetGeometryRef(m)
+                    pts += [ring.GetPoint_2D(q) for q in range(ring.GetPointCount())]
+            ds = None
+            off = max(abs(v / 0.6 - round(v / 0.6)) for xy in pts for v in xy)
+            self.assertLess(off, 1e-4, "tile_m {}: an outline vertex is not on the 0.6 m lattice".format(tile_m))
+        self.assertEqual(len(set(got)), 1, got)
+
+    def test_crossings_and_flow_paths_are_routed_on_lattice_squares(self):
+        # the crossings tool (drainage area) and the evidence tool (what is below a fill) route
+        # each point in the window of the lattice square that holds it (grown by the tool's pad),
+        # whatever other points are in the run
+        from unittest import mock
+        dem, _n = country(600)
+        tif = os.path.join(self.tmp, "c.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 600, 600, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0 + 0.4, 1.0, 0.0, Y0 + 600.7, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.GetRasterBand(1).WriteArray(dem.astype(np.float32))
+        ds = None
+        pts = [(X0 + 130.0, Y0 + 140.0), (X0 + 330.0, Y0 + 90.0), (X0 + 450.0, Y0 + 420.0), (X0 + 90.0, Y0 + 510.0)]
+        far = [(X0 - 5130.0, Y0 - 7270.0), (X0 + 9870.0, Y0 + 333.0)]   # off the DEM: they move a box laid from the points
+        sq = 200.0
+
+        def squares(pad, points):
+            return sorted({(math.floor(x / sq) * sq - pad, math.floor(y / sq) * sq - pad,
+                            math.floor(x / sq) * sq + sq + pad, math.floor(y / sq) * sq + sq + pad) for x, y in points})
+        roads = write_layer(os.path.join(self.tmp, "roads.gpkg"), "roads", [
+            ("LINESTRING ({} {}, {} {})".format(X0, Y0 + 60.0 + 110.0 * k, X0 + 600.0, Y0 + 75.0 + 110.0 * k), {})
+            for k in range(5)], epsg=5070)
+
+        def run(extra):
+            boxes = []
+            real = self.f.warp_dem
+
+            def spy(dem_, box, cell, *a, **k):
+                boxes.append(tuple(round(v, 6) for v in box))
+                return real(dem_, box, cell, *a, **k)
+            cr = [{"x": x, "y": y} for x, y in pts + extra]
+            fl = [{"x": x, "y": y, "height_ft": 8.0, "storage_af": 3.0} for x, y in pts + extra]
+            with mock.patch.object(self.f, "warp_dem", spy):
+                self.f._size_crossings(cr, tif, False, 0.35, 2.0, 8.0, 10.0, sq, lambda *_: None)
+                nc = len(boxes)
+                self.f._consequences(fl, tif, False, None, roads, 500.0, 10.0, lambda *_: None, lambda: False,
+                                     tile_m=sq)
+            got = ([(r.get("drainage_ac"), r.get("flow_len_ft")) for r in cr[:len(pts)]],
+                   [tuple(sorted((k, v) for k, v in r.items() if k not in ("x", "y"))) for r in fl[:len(pts)]])
+            return sorted(boxes[:nc]), sorted(boxes[nc:]), got
+        cb, fb, alone = run([])
+        self.assertEqual(cb, squares(4000.0, pts))
+        self.assertEqual(fb, squares(500.0, pts))
+        self.assertTrue(all(d is not None for d, _f in alone[0]))
+        self.assertTrue(all(dict(c).get("roads_1mi") is not None for c in alone[1]))
+        cb2, fb2, more = run(far)
+        self.assertEqual(cb2, squares(4000.0, pts + far))
+        self.assertEqual(fb2, squares(500.0, pts + far))
+        self.assertEqual(more, alone)
+
     def test_image_tiles_are_asked_on_the_cell_lattice_and_an_old_tile_is_not_reused(self):
         import urllib.parse
         asked = []

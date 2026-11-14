@@ -394,6 +394,37 @@ class EdgeOfTheTerrainData(unittest.TestCase):
         self.assertEqual([e.kind for e in every], [em.K_EDGE])
         self.assertNotIn("which its pool reaches", every[0].notes[0])
 
+    def test_missing_terrain_that_touches_the_pool_only_at_a_corner_reaches_it(self):
+        # the pool spreads through edges (4 neighbours) but water can pass between two cells that
+        # meet at a corner, so missing cells diagonal to the pool's corner cell count as reached
+        # (the rim of the missing cells is taken with all 8 neighbours); one cell farther off they
+        # do not
+        dem, y = valley()
+        dem = add_fill(dem, y, 200, 2.0)
+        e0 = em.find(dem, GT, [LINE])[0]
+        r, c = int((GT[3] - e0.y) / CELL), int((e0.x - GT[0]) / CELL)
+        r0, r1, c0, c1 = em._window(dem, r, c, int(round(1200.0 / CELL)))
+        win = dem[r0:r1, c0:c1]
+        u = (int((GT[3] - e0.up_xy[1]) / CELL) - r0, int((e0.up_xy[0] - GT[0]) / CELL) - c0)
+        pool = np.zeros(dem.shape, bool)
+        pool[r0:r1, c0:c1] = em.pool_mask(win, u, e0.spill_m)
+        east = int(np.nonzero(pool.any(axis=0))[0].max())
+        top = int(np.nonzero(pool[:, east])[0].min())           # the pool's north-east corner cell
+        diag = dem.copy()
+        diag[top - 6:top, east + 1:east + 7] = np.nan            # a 6 x 6 block off that corner
+        self.assertFalse(pool[top - 6:top + 1, east + 1:east + 7].any())          # no edge contact
+        self.assertFalse(pool[top - 7:top, east:east + 7].any())
+        got = em.find(diag, GT, [LINE])
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].kind, em.K_EDGE)
+        self.assertTrue(got[0].edge_pool)
+        off = dem.copy()
+        off[top - 7:top - 1, east + 2:east + 8] = np.nan         # one cell farther: no contact at all
+        got = em.find(off, GT, [LINE])
+        self.assertEqual(len(got), 1)
+        self.assertNotEqual(got[0].kind, em.K_EDGE)
+        self.assertFalse(got[0].edge_pool)
+
     def test_missing_terrain_far_from_the_fill_and_its_pool_changes_nothing(self):
         dem, road = scene()
         whole = sorted(em.find(dem, GT, [LINE], road_mask=road), key=lambda e: -e.y)
