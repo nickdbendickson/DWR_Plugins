@@ -759,6 +759,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()
+    if 0 < p.window_m < p.edge_m_max:
+        log("warning: window_m {:g} m is under edge_m_max {:g} m: the edge rule sees a fill's pool only inside "
+            "the window, so a pool that reaches missing terrain beyond it is not set aside".format(p.window_m, p.edge_m_max))
     if pool_lines is None:
         pool_lines = bool(drainage_ac)
     progress = progress or _noop

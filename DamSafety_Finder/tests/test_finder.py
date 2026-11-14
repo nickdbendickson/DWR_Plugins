@@ -319,6 +319,17 @@ class Runs(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in res["rows"]), ["dam", "dry embankment", "road fill"])
         self.assertTrue(all(r["edge_ft"] is None for r in res["rows"]))
 
+    def test_a_window_under_the_edge_distance_is_warned_of(self):
+        # the edge rule sees a fill's pool only inside the spill-test window: a script that sets
+        # window_m under edge_m_max is told so (the defaults, 1200 m and 150 m, are not)
+        said = []
+        self.f.run_embankments(self.dem, self.streams, self.out, hillshade=False, log=said.append,
+                               params=self.f.em.FinderParams(window_m=100.0))
+        self.assertEqual(sum(1 for m in said if "is under edge_m_max" in m), 1)
+        said = []
+        self.f.run_embankments(self.dem, self.streams, self.out, hillshade=False, log=said.append)
+        self.assertFalse(any("is under edge_m_max" in m for m in said))
+
     def test_known_ids_of_a_sarp_layer(self):
         # a SARP barrier layer has SARPID on every row, NIDID on some and a Name on most: a row with
         # an NID id gets it (what people look a dam up by), every other row its SARPID (field names

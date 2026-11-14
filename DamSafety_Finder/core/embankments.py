@@ -122,7 +122,10 @@ WHAT IT LOOKS FOR
      touches the missing cells. Taking the missing cells as open ground instead of a wall
      (edge_open, off) is not the default: it does not remove the real case (its pool meets the
      missing cells only 0.1 ft under its spill level), and it would drop a real dam whose flat
-     water surface is cut by the edge of the data.
+     water surface is cut by the edge of the data. The pool is only seen inside the spill-test
+     window (window_m each side of the crest): with window_m under edge_m_max (a script setting;
+     the defaults are 1200 m and 150 m) a pool that reaches the missing cells beyond the window
+     is not seen to, and finder.run_embankments warns.
 
 Every threshold is a FinderParams value the engineer chooses; the defaults are starting values,
 not standards. The result is a list of candidates for review against an aerial image, not a
@@ -162,7 +165,7 @@ class FinderParams:
     toe_search_m: float = 150.0         # how far below the hump to look for the toe
     face_deg: float = 8.0               # ground falling steeper than this below the fill is its face
     tol_m: float = 0.15                 # rise above the lowest ground passed that starts a hump
-    window_m: float = 1200.0            # half-width of the window for the spill / storage test
+    window_m: float = 1200.0            # half-width of the window for the spill / storage test (the edge rule's pool test sees only this window: keep it >= edge_m_max)
     flat_tol_m: float = 0.10            # ground within this of the upstream level = flat pool
     min_pool_m2: float = 400.0          # flat area behind the fill that counts as a pool
     min_storage_m3: float = 0.0         # smaller storage is not reported (0 = all)
