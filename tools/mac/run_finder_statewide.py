@@ -988,22 +988,52 @@ class Dem:
         """band.ReadAsArray, with GDAL's own error lines kept off the screen. None when the read
         fails (a source file of the VRT is missing, the drive is gone); read_error then says why."""
         gdal, _o, _s = gdal_mods()
-        gdal.PushErrorHandler("CPLQuietErrorHandler")
+        said = []                                           # every error line GDAL gives during the read
+
+        def keep(cls, _no, msg):
+            if cls >= gdal.CE_Failure and msg:
+                said.append(str(msg).strip())
+        gdal.PushErrorHandler(keep)
         try:
             gdal.ErrorReset()
             try:
                 a = self.band.ReadAsArray(*args, **kw)
             except RuntimeError as e:                       # GDAL with its exceptions switched on
                 a = None
-                self.read_error = str(e).strip()
-            if a is not None and gdal.GetLastErrorType() >= gdal.CE_Failure:
+                said.append(str(e).strip())
+            if a is not None and (said or gdal.GetLastErrorType() >= gdal.CE_Failure):
                 a = None                                    # an answer GDAL itself called an error
             if a is None:
-                self.read_error = ((gdal.GetLastErrorMsg() or "").strip() or self.read_error
-                                   or "the read failed")
+                said.append((gdal.GetLastErrorMsg() or "").strip())
+                said = [m for m in said if m]
+                # the line that names a file says most; older GDAL (3.4) may name none, so then the
+                # VRT's own list of source files that are not there is given
+                named = [m for m in said if os.sep in m or ".tif" in m.lower() or ".vrt" in m.lower()]
+                gone = self._missing_sources()
+                self.read_error = (named[0] if named else
+                                   "source file(s) not found: {}".format(", ".join(gone)) if gone else
+                                   said[0] if said else "the read failed")
         finally:
             gdal.PopErrorHandler()
         return a
+
+    def _missing_sources(self, most=3):
+        """The source files the VRT lists that are not on disk (at most `most`, then '...')."""
+        if not self.path.lower().endswith(".vrt"):
+            return []
+        try:
+            root = ET.parse(self.path).getroot()
+        except (ET.ParseError, OSError):
+            return []
+        out, base = [], os.path.dirname(os.path.abspath(self.path))
+        for el in root.iter("SourceFilename"):
+            name = (el.text or "").strip()
+            if not name or name.startswith("/vsi"):
+                continue
+            path = os.path.join(base, name) if el.get("relativeToVRT") == "1" else name
+            if not os.path.exists(path) and path not in out:
+                out.append(path)
+        return out[:most] + (["..."] if len(out) > most else [])
 
     def terrain(self, win, box5070=None):
         """(has, share) for a pixel window: has = True / False, or None when the terrain there
