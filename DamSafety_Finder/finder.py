@@ -1494,13 +1494,41 @@ def _http_get(req, timeout=300.0):
         raise RuntimeError("the image service refused {}: {}".format(req, e)) from None
 
 
+def _tile_is(path, x, y, w, h, cell):
+    """True when the GeoTIFF at path is the w x h tile of cell metres whose lower-left corner is
+    (x, y), to a hundredth of a cell. False when there is no such file, it cannot be opened, or
+    it covers other ground."""
+    if not os.path.exists(path):
+        return False
+    try:
+        gdal.PushErrorHandler("CPLQuietErrorHandler")
+        try:
+            ds = gdal.Open(str(path))
+        finally:
+            gdal.PopErrorHandler()
+        if ds is None:
+            return False
+        gt, nx, ny = ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize
+        ds = None
+    except RuntimeError:
+        return False
+    tol = 0.01 * cell
+    return ((nx, ny) == (w, h) and gt[2] == 0.0 and gt[4] == 0.0
+            and abs(gt[0] - x) <= tol and abs(gt[3] - (y + h * cell)) <= tol
+            and abs(gt[1] * w - cell * w) <= tol and abs(-gt[5] * h - cell * h) <= tol)
+
+
 def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=None, timeout=300.0,
                       snap=False):
     """Download an ArcGIS ImageServer (exportImage) over ext (EPSG:5070) at cell metres as
     GeoTIFF tiles in folder (2000 px: the ND GIS Hub image services answer 500 to 3000 px);
     returns a VRT of them. `url` is the service address
-    (.../ImageServer). Tiles already there are reused (a rerun resumes). Each request waits at
-    most `timeout` seconds for its answer. urllib honours the proxy environment;
+    (.../ImageServer). A tile already there is reused (a rerun resumes) only when it is the tile
+    this request asks for: its corner and size within a hundredth of a cell (_tile_is). A tile of
+    the same file name laid out from another corner (the name rounds the corner to the metre: a
+    tile kept from an older run whose box was not snapped), or one that cannot be opened, is
+    downloaded again. `timeout` is how long to wait for the service to connect, and then for
+    each further part of its answer. urllib honours the proxy environment;
     `opener(url) -> bytes` replaces it in tests. snap: ext is grown outward to whole multiples of
     cell first, so the service resamples on to the same cells whatever box is asked for (the
     open-water tool; the fixed lattice of warp_dem)."""
@@ -1521,7 +1549,7 @@ def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=No
             w = max(1, int(round((x1 - x) / cell)))
             h = max(1, int(round((y1 - y) / cell)))
             path = os.path.join(folder, "img_{:.0f}_{:.0f}_{:g}.tif".format(x, y, cell))
-            if not os.path.exists(path):
+            if not _tile_is(path, x, y, w, h, cell):
                 q = urllib.parse.urlencode({
                     "bbox": "{},{},{},{}".format(x, y, x + w * cell, y + h * cell), "bboxSR": WORK_EPSG,
                     "imageSR": WORK_EPSG, "size": "{},{}".format(w, h), "format": "tiff",

@@ -1241,6 +1241,80 @@ class FixedLattice(unittest.TestCase):
             got.append((res["rows"][0]["water_id"], res["rows"][0]["area_ac"], res["rows"][0]["ndwi"]))
         self.assertEqual(len(set(got)), 1, got)
 
+    def test_image_tiles_are_asked_on_the_cell_lattice_and_an_old_tile_is_not_reused(self):
+        import urllib.parse
+        asked = []
+
+        def opener(url):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+            w, h = (int(v) for v in q["size"][0].split(","))
+            asked.append((x0, y0, x1, y1))
+            return image_bytes(x0, y0, x1, y1, w, h)
+        url = "https://example.test/ImageServer"
+
+        def fetch(box, cell, name, snap):
+            vrt = self.f.fetch_imageserver(url, box, cell, os.path.join(self.tmp, name), tile_px=100,
+                                           log=lambda *_: None, opener=opener, snap=snap)
+            ds = gdal.Open(vrt)
+            gt = ds.GetGeoTransform()
+            ds = None
+            return gt
+
+        def on(v, cell):
+            return abs(round(v / cell) * cell - v) < 1e-6
+        # snap=True (the open-water tool): every request's corners on whole multiples of the
+        # cell, a cell (0.6 m) that does not divide the 100 m of a tile
+        box = (X0 + 100.37, Y0 + 50.21, X0 + 190.0, Y0 + 131.1)
+        gt = fetch(box, 0.6, "snap", True)
+        self.assertEqual(len(asked), 4)                      # 2 x 2 tiles of 100 px
+        self.assertTrue(all(on(v, 0.6) for a in asked for v in a), asked)
+        self.assertTrue(on(gt[0], 0.6) and on(gt[3], 0.6), gt)
+        # a tile kept from an older run that was not snapped, whose rounded file name is the one
+        # this run asks for (corner 0.4 m and 0.3 m off the lattice: both round down), is
+        # downloaded again, not read as if it were on the lattice
+        del asked[:]
+        old = (X0 + 0.4, Y0 + 0.3, X0 + 80.4, Y0 + 80.3)
+        fetch(old, 1.0, "old", False)
+        self.assertEqual(len(asked), 1)
+        gt = fetch(old, 1.0, "old", True)
+        self.assertEqual(len(asked), 2)
+        self.assertEqual((gt[0], gt[3]), (X0, Y0 + 81.0))
+        fetch(old, 1.0, "old", True)                         # the lattice tile is now kept: reused
+        self.assertEqual(len(asked), 2)
+        # snap=False (the evidence tool's windows, read with read_bands(snap=False)): its own
+        # tiles are reused as they are
+        fetch(old, 1.0, "own", False)
+        gt = fetch(old, 1.0, "own", False)
+        self.assertEqual(len(asked), 3)
+        self.assertEqual((round(gt[0], 6), round(gt[3], 6)), (X0 + 0.4, Y0 + 80.3))
+        # a kept tile that cannot be opened is downloaded again
+        tif = [n for n in os.listdir(os.path.join(self.tmp, "own")) if n.endswith(".tif")]
+        self.assertEqual(len(tif), 1)
+        with open(os.path.join(self.tmp, "own", tif[0]), "wb") as fh:
+            fh.write(b"II*\x00 cut short")
+        fetch(old, 1.0, "own", False)
+        self.assertEqual(len(asked), 4)
+
+
+def image_bytes(x0, y0, x1, y1, w, h):
+    """The bytes of a 4-band GeoTIFF over (x0, y0, x1, y1) of w x h pixels: an image service's answer."""
+    mem = "/vsimem/answer_{}_{}.tif".format(x0, y0)
+    ds = gdal.GetDriverByName("GTiff").Create(mem, w, h, 4, gdal.GDT_Byte)
+    ds.SetGeoTransform((x0, (x1 - x0) / w, 0.0, y1, 0.0, -(y1 - y0) / h))
+    ds.SetProjection(srs(5070).ExportToWkt())
+    for b in range(1, 5):
+        ds.GetRasterBand(b).WriteArray(np.full((h, w), 50 * b, np.uint8))
+    ds = None
+    fh = gdal.VSIFOpenL(mem, "rb")
+    gdal.VSIFSeekL(fh, 0, 2)
+    n = gdal.VSIFTellL(fh)
+    gdal.VSIFSeekL(fh, 0, 0)
+    data = gdal.VSIFReadL(1, n, fh)
+    gdal.VSIFCloseL(fh)
+    gdal.Unlink(mem)
+    return bytes(data)
+
 
 # ------------------------------------------------------------------ evidence on the review cards --
 N_CARDS = 30

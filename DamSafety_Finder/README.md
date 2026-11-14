@@ -364,9 +364,11 @@ process. Build the mosaic once, then feed `water_count.vrt` to the open-water to
 mean-elevation mosaic is the pond starting level for a later *Find ponds* / Runner step.
 
 An image service is downloaded for the extent only (grown outward to whole multiples of the
-cell size since 0.7.0, so the service resamples on to the same cells for any box; tiles kept from
-an older run whose corner was not on that grid are downloaded again), in 2000-pixel GeoTIFF tiles
-kept beside the output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
+cell size since 0.7.0, so the service resamples on to the same cells for any box), in 2000-pixel
+GeoTIFF tiles kept beside the output (`<output>_imagery/`; a rerun reuses them). A kept tile is
+read again only when its corner and size are the ones asked for, to a hundredth of a cell; any
+other file of that name (a tile kept from an older run whose corner was not on that grid: the
+file name rounds the corner to the metre) or a tile that cannot be opened is downloaded again. The ND GIS Hub's 2021-2024 statewide NAIP is
 natural colour only (no near-infrared band) and cannot be used. Imagery shows the day it was flown: a dry year misses ponds, a wet year adds flooded
 fields. Pick several years: a cell is then water when it is water in at least `PERSIST` (half)
 of the images that cover it, so the ponds stay and a field flooded in one wet year goes
