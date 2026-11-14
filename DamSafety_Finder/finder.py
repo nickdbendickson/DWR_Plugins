@@ -793,13 +793,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     kn = read_known(known)
     log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(
         len(lines), len(road_lines), len(kn)))
-    tiles = lattice_squares(ext, tile_m)
-    try:                                            # a square the DEM file does not reach holds no fill
-        db = _image_box(dem)
-        db = (db[0] - 100.0, db[1] - 100.0, db[2] + 100.0, db[3] + 100.0)
-        tiles = [t for t in tiles if t[0] < db[2] and t[2] > db[0] and t[1] < db[3] and t[3] > db[1]]
-    except Exception:                                                   # noqa - a saving only
-        pass
+    tiles = _squares_on(dem, lattice_squares(ext, tile_m))
     found, ridge_rows, dug_rows, t0 = [], [], [], time.time()
     for ti, core_box in enumerate(tiles):
         if cancelled():
@@ -1613,6 +1607,37 @@ def read_bands(image, ext, cell, bands, snap=True):
         a[a <= -9998.0] = np.nan
         res[b] = a
     return res, out.GetGeoTransform()
+
+
+def _outline_box(image, n=64):
+    """The EPSG:5070 box of a raster's whole outline: each of its four edges is followed at n + 1
+    points, not only its corners. A DEM in geographic coordinates has curved edges in EPSG:5070:
+    one 2 x 1 degree across the -96 meridian bulges 408 m south of the box of its four corners."""
+    ds = _checked(gdal.Open(str(image)), "opening the image {}".format(image))
+    gt, nx, ny = ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize
+    s = osr.SpatialReference()
+    s.ImportFromWkt(ds.GetProjection())
+    ds = None
+    if hasattr(s, "SetAxisMappingStrategy"):
+        s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    ct = osr.CoordinateTransformation(s, _srs(WORK_EPSG))
+    pts = []
+    for k in range(n + 1):
+        t = float(k) / n
+        for px, py in ((t * nx, 0.0), (t * nx, ny), (0.0, t * ny), (nx, t * ny)):
+            pts.append(ct.TransformPoint(gt[0] + px * gt[1] + py * gt[2], gt[3] + px * gt[4] + py * gt[5])[:2])
+    return (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))
+
+
+def _squares_on(dem, squares, margin=100.0):
+    """The squares that meet the DEM's outline grown by margin metres (a square the DEM file
+    does not reach holds no fill and is not read). All of them when the outline cannot be read."""
+    try:
+        db = _outline_box(dem)
+    except Exception:                                                   # noqa - a saving only
+        return list(squares)
+    db = (db[0] - margin, db[1] - margin, db[2] + margin, db[3] + margin)
+    return [t for t in squares if t[0] < db[2] and t[2] > db[0] and t[1] < db[3] and t[3] > db[1]]
 
 
 def _image_box(image):

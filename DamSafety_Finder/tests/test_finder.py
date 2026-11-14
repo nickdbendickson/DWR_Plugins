@@ -1332,6 +1332,28 @@ class FixedLattice(unittest.TestCase):
         self.assertEqual(fb2, squares(500.0, pts + far))
         self.assertEqual(more, alone)
 
+    def test_a_square_under_the_curved_edge_of_a_geographic_dem_is_read(self):
+        # a DEM in degrees (2 x 1 degree across the -96 meridian, a few cells: only its outline
+        # matters): in EPSG:5070 its south edge bulges about 400 m south of the box of its four
+        # corners. A lattice square holding only that strip is still read
+        tif = os.path.join(self.tmp, "geo.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 20, 10, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((-97.0, 0.1, 0.0, 47.0, 0.0, -0.1))
+        ds.SetProjection(srs(4269).ExportToWkt())
+        ds = None
+        ct = osr.CoordinateTransformation(srs(4269), srs(5070))
+        corners = [ct.TransformPoint(x, y)[:2] for x in (-97.0, -95.0) for y in (46.0, 47.0)]
+        south = min(c[1] for c in corners)
+        px, py = ct.TransformPoint(-96.0, 46.0)[:2]                  # the south edge at the meridian
+        self.assertLess(py, south - 300.0)
+        sq = (px - 100.0, py - 100.0, px + 100.0, py + 50.0)       # holds only the strip beyond the corners' box
+        self.assertLess(sq[3], south - 100.0)
+        self.assertEqual(self.f._squares_on(tif, [sq]), [sq])
+        far = (px - 100.0, py - 400.0, px + 100.0, py - 200.0)      # beyond the outline and its 100 m: left out
+        self.assertEqual(self.f._squares_on(tif, [far]), [])
+        box = self.f._outline_box(tif)
+        self.assertAlmostEqual(box[1], py, delta=1.0)
+
     def test_image_tiles_are_asked_on_the_cell_lattice_and_an_old_tile_is_not_reused(self):
         import urllib.parse
         asked = []
