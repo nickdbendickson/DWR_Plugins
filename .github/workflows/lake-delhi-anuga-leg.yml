@@ -1,0 +1,203 @@
+name: Lake Delhi 2010 ANUGA leg
+
+# One leg of the Lake Delhi 2010 LISFLOOD-FP + ANUGA run (validation.yml calls it up to eight
+# times in a row). GitHub stops a job at 6 hours and ANUGA on the gmsh mesh needs much longer
+# than that: the first try (DWR #371, 2026-11-14) took 55 min for LISFLOOD-FP, then ANUGA
+# reached 16.1 h of the 48 h flood in 4 h 24 min, before the breach (at 24.5 h).
+#
+# So each leg runs the Runner for as long as the job allows, stops it, and keeps the whole case
+# folder (with ANUGA's checkpoints, written every 15 minutes) as the artifact
+# "lake-delhi-2010-anuga-work". The next leg takes that folder and runs the same configuration
+# with --resume: the finished LISFLOOD-FP run and the gmsh mesh are reused and ANUGA goes on
+# from its newest checkpoint. The leg that finishes scores the run.
+on:
+  workflow_call:
+    inputs:
+      leg:
+        description: 1 builds the case; later legs carry on from the last leg's folder
+        type: number
+        required: true
+      cell:
+        type: string
+        default: "30"
+    outputs:
+      done:
+        description: "true when the run finished in this leg, false when it stopped for time"
+        value: ${{ jobs.leg.outputs.done }}
+
+permissions:
+  contents: read
+
+jobs:
+  leg:
+    name: leg ${{ inputs.leg }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    outputs:
+      done: ${{ steps.run.outputs.done }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      CELL: ${{ inputs.cell }}
+      LEG: ${{ inputs.leg }}
+      NDBREACH_ANUGA_MESHER: gmsh
+      # the runner has 4 CPUs; the automatic rule leaves two spare (2 threads in the first try).
+      # The thread count never changes the results and is not in the checkpoint fingerprint.
+      NDBREACH_ANUGA_THREADS: "4"
+      # a checkpoint every 15 minutes of wall clock (automatic: 30), so a stopped leg loses
+      # at most that much
+      NDBREACH_ANUGA_CHECKPOINT_MIN: "15"
+      # minutes from the start of the job at which the Runner is stopped, leaving time to
+      # stop ANUGA, pack the folder and upload it inside the 360
+      STOP_AT_MIN: "335"
+    steps:
+      - name: Start time
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      # ANUGA in its own environment, as on a user's machine (ci.yml model-tests does the same),
+      # with gmsh's Python module for the mesh
+      - name: ANUGA + gmsh environment (conda-forge)
+        run: |
+          micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy python-gmsh
+          py="$(micromamba run -n anuga python -c 'import sys; print(sys.executable)')"
+          "$py" -c "import anuga, gmsh; print('anuga', anuga.__version__, 'gmsh', gmsh.__version__)"
+          echo "ANUGA_PY=$py" >> "$GITHUB_ENV"
+          # the crest burn caches USGS 3DEP 1 m tiles in the suite data folder
+          mkdir -p "$RUNNER_TEMP/suite_data"
+          echo "NDSUITE_DATA=$RUNNER_TEMP/suite_data" >> "$GITHUB_ENV"
+          nproc
+      - name: The case's own tests
+        if: inputs.leg == 1
+        run: python -W error tools/validation/lake_delhi_2010/test_case.py
+      - name: Build the case (terrain, inflow, gate rating, road lines)
+        if: inputs.leg == 1
+        run: |
+          python tools/validation/lake_delhi_2010/build_case.py \
+            --out "$RUNNER_TEMP/delhi_anuga" --cell "$CELL" --anuga
+      - name: The case folder the last leg left
+        if: inputs.leg > 1
+        uses: actions/download-artifact@v4
+        with:
+          name: lake-delhi-2010-anuga-work
+          path: ${{ runner.temp }}/work_in
+      - name: Unpack it
+        if: inputs.leg > 1
+        run: |
+          tar -I zstd -xf "$RUNNER_TEMP/work_in/work.tar.zst" -C "$RUNNER_TEMP"
+          rm -rf "$RUNNER_TEMP/work_in"
+          du -sh "$RUNNER_TEMP/delhi_anuga" "$RUNNER_TEMP/suite_data"
+          ls "$RUNNER_TEMP/delhi_anuga/runs/as_observed/IA01297/_breach_model/anuga/anuga_checkpoints"/* | tail -n 5 || true
+      - name: Run the observed breach (LISFLOOD-FP, then ANUGA on the gmsh mesh)
+        id: run
+        run: |
+          cd "$RUNNER_TEMP/delhi_anuga"
+          left=$(( JOB_T0 + STOP_AT_MIN * 60 - $(date +%s) ))
+          echo "leg $LEG: $(date -u), the Runner may run $(( left / 60 )) min"
+          rc=0
+          # --resume on every leg: nothing to resume in the first, the newest checkpoint after
+          timeout --signal=TERM --kill-after=150 "$left" \
+            python "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py" run as_observed.json \
+            --resume --lisflood "$HOME/lisflood-nd/lisflood" --anuga-python "$ANUGA_PY" \
+            > "leg_${LEG}.log" 2>&1 || rc="$?"
+          echo "leg $LEG: $(date -u), exit $rc"
+          # the ANUGA worker runs detached from the Runner: stop it too (SIGTERM writes the
+          # partial envelope), so nothing changes the folder while it is packed
+          pkill -TERM -f anuga_worker.py || true
+          for _ in $(seq 60); do pgrep -f anuga_worker.py > /dev/null || break; sleep 2; done
+          pkill -KILL -f anuga_worker.py || true
+          grep -v "^\[ *[0-9]*%\]" "leg_${LEG}.log" | tail -n 120
+          if [ "$rc" = "0" ]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+            echo "leg $LEG stopped for time; the next leg carries on"
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::the Runner failed (exit $rc) in leg $LEG"
+            exit 1
+          fi
+      - name: What the run reached
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/delhi_anuga" || exit 0
+          m="runs/as_observed/IA01297/_breach_model"
+          echo "::group::progress lines (every 20th)"
+          grep "^\[ *[0-9]*%\]" "leg_${LEG}.log" | awk 'NR % 20 == 1' || true
+          echo "::endgroup::"
+          tail -n 25 "leg_${LEG}.log" || true
+          ls -la "$m" "$m/anuga" 2>/dev/null | head -n 80 || true
+          f="$m/anuga/anuga.log"
+          if [ -f "$f" ]; then
+            echo "::group::$f (start: the mesh and the job)"; head -n 80 "$f"; echo "::endgroup::"
+            echo "::group::$f (end)"; tail -n 30 "$f"; echo "::endgroup::"
+          fi
+          python - "$m/run_report.json" <<'PY' || true
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          for k in ("anuga_mesh", "anuga_runs", "anuga_threads", "anuga_elevation_source",
+                    "anuga_checkpoint", "crest_burn", "comparison", "runtime_min",
+                    "anuga_runtime_min", "warnings"):
+              if k in r:
+                  print(k, json.dumps(r[k], indent=1, default=str)[:4000])
+          s = r.get("summary") or {}
+          print("summary", json.dumps({k: v for k, v in s.items()
+                                       if "anuga" in k or "crest" in k or "mesh" in k}, indent=1))
+          PY
+      - name: Pack the case folder for the next leg
+        if: steps.run.outputs.done == 'false'
+        run: |
+          tar -I "zstd -3 -T0" -cf "$RUNNER_TEMP/work.tar.zst" -C "$RUNNER_TEMP" delhi_anuga suite_data
+          ls -la "$RUNNER_TEMP/work.tar.zst"
+      - name: Keep it
+        if: steps.run.outputs.done == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-delhi-2010-anuga-work
+          path: ${{ runner.temp }}/work.tar.zst
+          compression-level: 0
+          overwrite: true
+          retention-days: 3
+      - name: Score against the surveyed high-water marks
+        if: steps.run.outputs.done == 'true'
+        run: |
+          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi_anuga" || true
+          { printf '# LISFLOOD-FP + ANUGA (gmsh mesh, road breaklines, crest burn), leg %s\n\n' "$LEG"
+            cat "$RUNNER_TEMP/delhi_anuga/Lake_Delhi_2010_Score.md" 2>/dev/null || echo "(no score)"; } \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the score, the report and the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-delhi-2010-anuga-leg${{ inputs.leg }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/delhi_anuga/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/delhi_anuga/*.json
+            ${{ runner.temp }}/delhi_anuga/*.log
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/_breach_model/run_report.*
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/_breach_model/gauge_*.csv
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/_breach_model/anuga/anuga.log
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/WSE (Max).tif

@@ -45,7 +45,13 @@ same lines drive the crest burn: each 30 m cell a road crosses is raised to the 
 `NDSUITE_DATA`). `--lines` alone gives the crest burn to the LISFLOOD-FP runs. The
 workflow's second job does this for the observed breach (by hand with `engine` set to `anuga`
 or `both`, or on a pull request whose title holds `[anuga]`). It needs gmsh's Python module in
-the ANUGA environment (`python-gmsh` from conda-forge) and takes hours.
+the ANUGA environment (`python-gmsh` from conda-forge). It takes far longer than GitHub's
+6-hour job: on the first try (2026-11-14, 2 ANUGA threads) LISFLOOD-FP took 55 min, then ANUGA
+reached 16.1 h of the 48 h flood in 4 h 24 min, before the breach (24.5 h). So the workflow runs
+it in up to eight legs (`.github/workflows/lake-delhi-anuga-leg.yml`, 4 threads, a checkpoint
+every 15 min): each stops the Runner before the job limit and keeps the case folder as an
+artifact, and the next runs the same configuration with `--resume`, which reuses the finished
+LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint.
 
 | Run | The breach |
 |---|---|
