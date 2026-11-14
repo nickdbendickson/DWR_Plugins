@@ -14,7 +14,7 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 
 | Tool | Input | Finds |
 |---|---|---|
-| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the score tool |
+| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss), **at the edge of the terrain data** (a fill within 150 m of missing terrain that its pool reaches: kept, not a candidate); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the score tool |
 | `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM; optionally the class-9 water-surface mosaic (`water_elev.vrt`) to set each pool level from the LiDAR water | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
 | `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills, a DEM (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there and, with a DEM, the drainage area and the round pipe the rational method asks for |
 | `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; **or** a classified LiDAR tile / folder (.las/.laz, ASPRS class 9 = water), **or** a prebuilt class-9 water-count raster / VRT (the statewide LiDAR water mosaic); mapped water bodies, buildings / streets (both optional) | Open-water outlines (one year, or the water of most of several years), each marked **mapped** or not (cast shadows and, with a buildings / streets layer, roofs and pavement in town are left out): the pond outlines for the second tool when no layer has them |
@@ -66,8 +66,8 @@ ND LiDAR tiles the nearest fill to an intact DWR dam was a median 194 m (640 ft)
 again at 10 m, the narrow raised features (fills, roads, embankments narrower than 60 m) are opened
 away, and flow is routed by a priority flood (each cell drains to the cell it was reached from, so
 a pit drains over its rim). Every draw that drains at least `DRAIN_AC` becomes a line and is walked
-exactly like a stream line; `line_source` says which kind of line found the fill. The tile pad is
-3 km so most of a draw's basin is in the tile.
+exactly like a stream line; `line_source` says which kind of line found the fill. The pad round
+each 5 km square is 3 km so most of a draw's basin is in the window.
 
 **Lines out of each pond** (`POOLS`, on whenever the draws are; `POOL_MAX_AC`, 50 acres; 0.6.0;
 `core/terrain.py` `pool_seeds` / `pool_lines`, step 11 of `core/embankments.py`). Most farm ponds
@@ -78,7 +78,8 @@ swale with gentle sides is tried again on its own water level) and the deepest c
 depression at least 0.15 m deep, walked out through its outlet down the same opened 10 m routing as
 the draws. On such a line only a hump within 50 m below where it leaves its own pool is tested (the
 pool's own fill), the toe is looked for within `pool_toe_m` (40 m) of it, the line is never turned
-round, the pool must reach `min_pool_m2`, a road over the outlet is left to the road tools, and a
+round, the pool must reach `min_pool_m2` (400 m2; see small ponds below), a road over the outlet is
+left to the road tools, and a
 pool line whose own path drains `POOL_MAX_AC` or more at the crest is left to the draws. Its
 `drain_ac` is the most of: its own path at the crest, all the ground whose water reaches the seed's
 own pool (each cell once, though flat routing can split a pond's water over several outlet cells
@@ -86,11 +87,58 @@ and a path can step out of the pool and back), and, when the fill holds a closed
 outlet, all the ground draining into that pool whose water the routing takes out near this fill
 (a creek the routing sends out through a culvert elsewhere is not this fill's; a pool the window
 cuts is not read). A pool covers a 10 m routing cell only where it holds at least 40 % of it, so a
-creek or another pond beside it is not part of its pool. Where a draw and a pool line read the
+creek or another pond beside it is not part of its pool. So `drain_ac` on a pool line is the
+ground that feeds the pool, not the flow at one point, and it can differ from the flow over the
+crest either way. It is written and it feeds the score; it does not decide whether a fill is
+kept or what kind it is. For 0.7.0 a change was looked at for long fills (road, rail, canal
+or levee), whose drainage looked too big: leave out the seed's pool when the held pool was read.
+It was **not** made. On two ND tiles (`z14x48y523` and `z14x63y516`, 574 long fills on pool
+lines) 20 long fills (3.5 %) have a `drain_ac` over twice the largest flow within two routing
+cells of the crest and more than 1 acre above it; in 17 of the 20 that comes from the pool the
+fill holds (a road ponds water from more ground than runs over any one point of it), which the
+change would have kept, and in 3 from the seed's pool. The change would have altered 17 of the
+574, most by under an acre, and left 2 under half the flow at the crest. Many more long fills
+read low than high (74 of the 574 under half the largest flow near the crest, which is often a
+draw beside the pool and not its own water). The limit stands: on a pool line `drain_ac` is good
+to tell a few acres from a few hundred, not to size a pipe. Where a draw and a pool line read the
 same fill, the draw's reading is kept. `line_source` = `DEM pool outlet`. The flat-water rim test
-reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water,
-so a pond near that cut can pass on one grid alignment and fail on another (seen on one Iowa
-census pond: 14 % and 20 %).
+reads the ground two 3 m cells out and allows at most 16 % of it 0.1 m or more below the water
+(`max_lower` in `terrain.flat_pools`). That cut is a known limit and is left as it is in 0.7.0: a
+pond whose rim reads right at 16 % is found or missed on a small difference (one Iowa census pond
+read 14 % with the cells laid one way and 20 % laid another). What has changed is that the cells
+are now on a fixed grid, so such a pond gets the same answer in every run - found every time or
+missed every time - instead of an answer that moved with the run's box.
+
+**Small ponds** (0.7.0). On Iowa's census of pond dams most of the missed dams with a crest under
+40 m had a pond under 400 m2, too small for the pool-line tests (on three tiles: 60 of the 85
+missed by the study's measure and 67 of 85 by an independent check; median pond 270 m2 and
+194 m2). Two things changed: a flat water surface now seeds a line from 100 m2 (it was 300 m2;
+the area counted is that of the cells whose neighbours are all at the water level, which leaves
+out the water's edge cells, so this is a pond of about 250 m2 on 3 m cells), and on a line that
+comes out of a flat water surface a pool of `own_pool_m2` (100 m2) is enough when the pool the
+fill holds contains that water surface. A small pond is usually a flat water surface and a closed
+depression at once, and their two seeds often fall in one 10 m routing cell, where only one line
+starts: that line counts as coming out of the flat water too. A line out of a closed depression
+with no flat water in its cell keeps the 400 m2: there the small pools were mostly field hollows
+and ditch pits (in the study, letting every seed keep a 100 m2 pool gained 17 dams for 375 fills
+that were not on one).
+
+What this buys is small and uneven, and no dam was lost to it on any tile tried. With the 0.6
+engine, on the four Iowa tiles of the study: 14 more census dams found for 21 more fills not on
+one. On six Iowa tiles the study had not used: 2 more dams for 43 more fills not on one, and on
+the two of those where both were run the second change added no dam over the first. Expect a few
+more dams per thousand outside pond country like south-west and east Iowa, for about 1 % more
+fills. With 0.7.0's fixed grid, on the four Iowa tiles of the study (768 census dams present),
+the two changes together find 21 more dams and lose none (583 against 562; crests under 40 m:
+111 against 99 of 203) for 15 more fills not on a census dam. On six ND tiles they add 31 fills
+and drop 13 of 2,545, and the same 61 of 76 Intact listed dams have a fill within 300 ft.
+
+`pool_toe_reach_m` (a script setting, off = 0) takes the toe of a pool-line fill as at least the
+lowest ground that far below the fill. With 10 m it found 28 more dams for 223 more fills not on
+one on the study's tiles, and on three tiles the study had not used 12 more dams for 396 more
+fills not on one; it also raised the height of 4 in 10 pool-line fills already found (median
+1 ft). It is left off: it costs many fills per dam, and turning it on changes the heights the
+score was learned on.
 
 **Brim-full ponds** (step 12; 0.6.0). A pond full to within 0.15 m of its spill level reads as
 joined to the ground below its dam from the beach cell just above the dam, so it used to be
@@ -120,8 +168,14 @@ dams, not a probability. DamSafety Finder ships two models:
 - `models/nd_fill_score_trees_2026-11.json`, **the default since 0.5.0**. It is the **0.5 trees**
   kind (see Scores below), learned 2026-11-13 on 66 USGS 1 m tiles in 7 ND regions (Red River
   Valley, drift prairie north and south, Coteau north, central south, northwest, southwest) with
-  the 0.5 engine. That is 7,612 fills, 678 of them within 300 ft of an Intact dam on the ND dam
-  list. Left out: fills listed 300-1000 ft away, and 64 fills on listed dams that the list calls
+  the 0.5 engine. That is 7,612 fills, 678 of them "listed": within 300 ft of a dam on one of the
+  dam layers the runs were given - the State's dam layers, the NID and the SARP barrier layer -
+  not only of an Intact dam on the ND dam list, as this page said until 0.7.0. 206 of the 678
+  were matched to the SARP layer and 6 to the NID, the rest to the State's layers. Of the 206
+  SARP rows, 94 are dams SARP itself estimated (they are on no dam list), 71 are copies of the
+  State list, 36 come from the NID, 4 from OpenStreetMap and 1 from another source. (Until
+  0.7.0 a SARP row's `known_id` was its dam name; it is now its SARPID. The model was not
+  relearned.) Left out: fills listed 300-1000 ft away, and 64 fills on listed dams that the list calls
   breached, removed, not built, submerged or inconclusive. No reviewer marks are in it.
   - **Each region held out** and scored by a model learned on the other six (AUC against listed
     dams): Red River 0.87, drift north 0.87, drift south 0.85, Coteau north 0.89, central south
@@ -142,8 +196,118 @@ these figures compare rankings within that set. Most not-listed fills are still 
 them. Relearn the score for your area with the score tool, from runs over areas with many listed
 dams. The cross-validated AUC it reports says how well it ranks dams it has not seen.
 
-Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
-bounded memory. The elevation unit is what the raster records (its band unit or a vertical CRS;
+Fills closer than 60 m are one. The DEM is read in 5 km squares with a pad, so a county runs in
+bounded memory.
+
+**The same ground gives the same fills, whatever box you run** (0.7.0). Up to 0.6 the squares and
+the 3 m and 10 m cells were laid out from the south-west corner of the run's box, so moving the box
+by one metre moved every cell: most crest points shifted by a cell or two and almost every
+`find_id` changed. Now:
+
+- the squares are those of a **fixed lattice** in EPSG:5070 (corners at whole multiples of the
+  square size, 5 km). A square the box only touches is still read and searched whole, with its
+  full pad; one fill per pool and one fill per 60 m are settled over those whole squares, and only
+  then are the fills outside your box left out;
+- every DEM window is grown outward to a fixed grid: whole multiples of 30 m, the smallest length
+  that both the 3 m fill cells and the 10 m routing cells divide. For other cell sizes it is their
+  smallest common multiple (2 m and 10 m: 10 m). When that is over 300 m, or a cell size is not a
+  whole millimetre (3.3 m and 10 m meet only every 330 m), each grid is grown to whole multiples
+  of its own cell size instead: the cells still fall on the same ground in every run, the two
+  windows just end up to one routing cell apart.
+
+So a fill inside two different boxes is the same fill in both: same point, same `find_id`, same
+readings. What can still differ is a fill near a line of the 5 km lattice when the square on the
+other side of that line is in one run and not in the other: two squares can read the same fill or
+the same pool, and which reading is kept is settled between the squares a run has (the log says
+how many fills were dropped that way). A box that only clips a square costs the whole square in
+time. The square size (`tile_m` in a script) is part of the lattice: change it and fills near the
+square edges can change.
+
+**A 0.7.0 run next to a 0.6 run of the same area.** Where the cells fall decides more than one
+would like: a pond near a threshold (5 ft of height, 400 m2 of pool, a rim reading) is found with
+the cells laid one way and missed with them laid another. Measured with 0.6.0 itself on two Iowa
+tiles, by moving its box 7 m: 474 of 1,569 fills (3 in 10) had no fill within 30 m in the other
+run, and of 277 census dams found 22 were lost and 18 others gained. On one of those tiles three
+box positions of 0.6.0 found 118, 118 and 111 of the census dams, and three cell positions of
+0.7.0's first change found 113, 111 and 111. Fixing the grid ends that change from run to run. It
+does not make the choice of grid a better one: the fills of 0.7.0 differ from a 0.6 run's by
+about as much as two 0.6 runs differed (six ND tiles, the fixed grid alone: 738 of 2,535 fills of
+0.6.0 have no fill within 30 m, 748 are new; Intact listed dams with a fill within 300 ft 63,
+then 61; four Iowa tiles: 586 census dams found, then 562, and 583 with the small-pond changes
+above), and a real pond near a threshold that the fixed grid misses is now missed in every run.
+Review marks are matched by location for the same reason: of 24 cards marked on 0.6 fills in
+those ND tiles, 19 still have a fill within 30 m (6 of the 8 marked yes) and 21 within 60 m
+(all 8 marked yes).
+
+**Ids.** `find_id` is made from the crest point (an 8-digit code of its x, y rounded to 1 m), so
+it is stable between runs of 0.7.0 and later over the same terrain data and settings, whatever
+the box. It is **not** stable across versions: ids from 0.6 and earlier do not carry over, and a
+later version that moves a crest point by a cell changes that id. Marks made on an older version
+are matched to the new fills by location, not by id.
+
+The crossings tool (drainage areas) and the evidence tool (flow paths below a fill) route the DEM
+in squares of the same kind of fixed lattice, and the open-water tool lays its squares and its
+cells the same way, so their results do not depend on what else is in the run either. The pond
+tool reads each water body in a window round its own outline, and the evidence tool reads imagery
+in a window round each fill's pool: neither depends on a run's box, so they are as they were.
+
+**The edge of the terrain data** (0.7.0; step 13 of `core/embankments.py`). Where the DEM has no
+cells - outside a LiDAR project, past the end of the file, in a hole - the spill test cannot see
+the ground, and the missing cells stand as a wall. A spur beside the edge then reads as a dam
+holding back everything on its other side. The case that showed it is on the ND / SD line (tile
+`USGS_1M_14_x61y509`, 45.935419, -97.520507): a 17 ft "dam" with a 262 acre pool and a score of
+0.69, 39 m from where the terrain stops; its "toe" is a draw that really drains away through the
+missing ground. So:
+
+- every fill has `edge_ft`, the distance from its crest to the nearest missing terrain cell (blank
+  when there is none within 1,000 m). It is measured on the 3 m cells of the run, so no edge can
+  be stepped over. Holes smaller than 100 m2 are not counted (`edge_min_m2`): a few missing cells
+  inside the data are not its edge;
+- the wall can only change a reading when the fill's pool, at its spill level, touches the
+  missing cells. So a fill within 150 m of missing terrain (`edge_m_max` in a script; 0 = off)
+  **whose pool reaches the missing terrain** is kept, with the kind **at the edge of the terrain
+  data** and a note that starts "at the edge of the terrain data: missing terrain acts as a wall
+  here" and says what it would otherwise have been called. It is **not a candidate**: it has no
+  score, it is not handed to Screening, a review batch does not pick it, and the score tool
+  neither learns from it nor scores it. Its height and pool are written as read, wall and all;
+- a fill that near the edge whose pool stays clear of the missing cells keeps its kind: nothing
+  missing takes part in its reading. `edge_ft` says how near it is;
+- farther off than 150 m, a fill whose pool reaches missing terrain keeps its kind, with low
+  confidence and a note of how high above its toe the pool first touches the missing cells.
+
+Why not every fill within 150 m (`edge_needs_pool` False in a script does that)? It was tried
+first. On an Iowa tile that is 45 % outside its LiDAR project (`z15x41y460`) it set aside 10
+fills, 6 of them on dams of the State's pond-dam census: real ponds read correctly, with no
+missing cell anywhere near their water. With the pool test 1 of the 10 is set aside (a census dam
+whose 1.5 acre pond does run into the edge of the data) and the other 9 keep their kinds. On the ND
+tile of the case above it is 4 of 246 fills with the pool test, the 17 ft case among them (128 ft
+from missing terrain, which its pool reaches), against 7 without it; none of them is listed.
+
+It is a kind, not a yes / no field, because everything downstream already chooses by kind:
+Screening is handed the kind `dam` only and a review batch takes `dam` and `dry embankment`. A
+new kind falls out of both with no further change, and anyone filtering or colouring the layer by
+`kind` sees it at once; a flag would have needed a test added in each place, and a place missed
+would have passed these fills on as candidates.
+
+Taking the missing cells as open ground, where water gets out, instead of as a wall was tried and
+is **not** done (`edge_open`, a script setting, off). It does not remove the case above: that pool
+meets the missing cells only 0.1 ft under its spill level, so with the cells open it is still a
+15 ft "dam". What makes it is the ground behind the spur: a valley far deeper than the "toe" (the
+"pool" averages 32 ft deep for a 15 ft "dam") that leaves through the side of the 1,200 m search
+window, which stands as a wall too. And it would drop real dams: a reservoir's flat water surface cut by the end of the data gets out at
+once through open cells.
+
+Limits. A real dam within 150 m of the edge of the data whose pool reaches the edge is set aside
+too: run it again with terrain that covers both sides. A false dam of this kind more than 150 m
+from missing terrain is not set aside (it carries the pool note when its pool reaches the missing
+cells). The search window acts as a wall in the same way wherever a pool runs off it (`open_pool`
+= yes, "storage is a minimum"): that is as it was. A DEM that stores open water as missing cells
+would put many pond dams at an "edge": raise `edge_min_m2` above the largest water body, or set
+`edge_m_max` to 0, for such data (USGS 3DEP 1 m tiles store water as a level surface, not as
+missing cells). An edge fill can still take the place of a real fill within 60 m of it or on the
+same pool, as before.
+
+The elevation unit is what the raster records (its band unit or a vertical CRS;
 USGS 3DEP files, `USGS_*`, are metres); a DEM that records none is refused until you choose Metres
 or Feet (feet read as metres made every fill 3.28 times too high). The log says which unit was
 used and warns when the ground it reads is outside North Dakota's 229-1070 m. The warp reads the
@@ -199,8 +363,10 @@ grid so the VRT has no seams, and the builder reuses `core/lidar` so it launches
 process. Build the mosaic once, then feed `water_count.vrt` to the open-water tool above; the
 mean-elevation mosaic is the pond starting level for a later *Find ponds* / Runner step.
 
-An image service is downloaded for the extent only, in 2000-pixel GeoTIFF tiles kept beside the
-output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
+An image service is downloaded for the extent only (grown outward to whole multiples of the
+cell size since 0.7.0, so the service resamples on to the same cells for any box; tiles kept from
+an older run whose corner was not on that grid are downloaded again), in 2000-pixel GeoTIFF tiles
+kept beside the output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
 natural colour only (no near-infrared band) and cannot be used. Imagery shows the day it was flown: a dry year misses ponds, a wet year adds flooded
 fields. Pick several years: a cell is then water when it is water in at least `PERSIST` (half)
 of the images that cover it, so the ponds stay and a field flooded in one wet year goes
@@ -318,7 +484,7 @@ regression, USGS StreamStats), and a basin longer than the DEM read is a minimum
 One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and a CSV beside it:
 
 * `embankments` / `ponds` / `crossings`: every candidate, new first, with `status`, `known_id`,
-  `known_layer`, `known_state` (the list's own status of that structure, when it has one), `known_ft`, heights in feet, storage in acre-feet, areas in acres, `confidence`
+  `known_layer`, `known_state` (the list's own status of that structure, when it has one), `known_ft`, heights in feet, storage in acre-feet, areas in acres, `edge_ft` (fills: feet from the crest to the nearest missing terrain), `confidence`
   and `notes`.
 * `screening_dams` / `screening_ponds`: the not-listed candidates that could release water
   (dams, dry embankments, levees; never a road fill, which Screening cuts to open its culvert), as

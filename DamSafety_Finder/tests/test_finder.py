@@ -260,6 +260,84 @@ class Runs(unittest.TestCase):
         self.assertEqual(res["rows"][0]["status"], "new")
 
 
+    def test_fills_at_the_edge_of_the_terrain_data(self):
+        # Finder 0.7: the whole scene first - the end of the DEM file is missing terrain too (600 m
+        # east and west of the valley line, nearer for the two fills towards its south end), all
+        # over 150 m off: the kinds are as ever and edge_ft says how far
+        res = self.emb(hillshade=False)
+        by = {r["kind"]: r["edge_ft"] for r in res["rows"]}
+        self.assertEqual(sorted(by), ["dam", "dry embankment", "road fill"])
+        self.assertAlmostEqual(by["dam"], 600.0 / 0.3048, delta=30.0)
+        self.assertTrue(all(v > 150.0 / 0.3048 for v in by.values()), by)
+        self.assertEqual(res["counts"]["data_edge"], 0)
+        # the east part of the DEM is NoData from 90 m east of the valley line: every fill is kept, as
+        # "at the edge of the terrain data", and none is a candidate
+        from . import test_core as c
+        rows = c.Score().rows()
+        for i, r in enumerate(rows):
+            r.update({"x": X0 + 100.0 * i, "y": Y0, "find_id": "FIND-{}".format(i), "kind": "dam", "lat": 0.0, "lon": 0.0})
+        listed = os.path.join(self.tmp, "listed.gpkg")
+        self.f.write_points(listed, "embankments", self.f.EMB_FIELDS, rows)
+        model = self.f.run_score([listed + "|layername=embankments"], os.path.join(self.tmp, "s.gpkg"),
+                                 log=lambda *_: None)
+        dem, _road = tc.scene()
+        dem[:, 230:] = np.nan
+        write_dem(self.dem, dem)
+        said = []
+        res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, model=model["model_path"],
+                                     hillshade=False, log=said.append)
+        self.assertEqual([r["kind"] for r in res["rows"]], [self.f.em.K_EDGE] * 3)
+        self.assertEqual(res["counts"]["data_edge"], 3)
+        self.assertTrue(any("3 of them at the edge of the terrain data" in m for m in said), said)
+        for r in res["rows"]:
+            self.assertAlmostEqual(r["edge_ft"], 90.0 / 0.3048, delta=12.0)
+            self.assertTrue(r["notes"].startswith("at the edge of the terrain data: missing terrain acts as a wall here"))
+            self.assertIsNone(r["score"])
+            self.assertEqual(r["score_note"], "not scored: at the edge of the terrain data")
+        self.assertEqual({r["notes"].split("it would otherwise read as: ")[1].split(";")[0] for r in res["rows"]},
+                         {"dam", "dry embankment", "road fill"})
+        ds = ogr.Open(self.out)
+        lyr = ds.GetLayerByName("embankments")
+        self.assertEqual(lyr.GetFeatureCount(), 3)
+        self.assertGreaterEqual(lyr.GetLayerDefn().GetFieldIndex("edge_ft"), 0)
+        self.assertEqual(ds.GetLayerByName("screening_dams").GetFeatureCount(), 0)     # nothing for Screening
+        ds = None
+        fills = self.out + "|layername=embankments"
+        with self.assertRaises(RuntimeError):                                          # nothing for a review batch
+            self.f.run_review_batch(fills, os.path.join(self.tmp, "rb.gpkg"), n=3, log=lambda *_: None)
+        # the score tool does not learn from them and does not score them
+        said = []
+        sc = self.f.run_score([listed + "|layername=embankments", fills], os.path.join(self.tmp, "s2.gpkg"),
+                              log=said.append)
+        self.assertTrue(any("3 fill(s) at the edge of the terrain data: not learned from and not scored" in m for m in said))
+        self.assertEqual(sc["model"]["n_listed"] + sc["model"]["n_other"], len(rows))
+        self.assertEqual([r["score"] for r in sc["rows"][-3:]], [None] * 3)
+        self.assertTrue(all(r["score"] is not None for r in sc["rows"][:-3]))
+        # the distance is yours: 0 = the rule is off, and the kinds are as in 0.6
+        res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, hillshade=False,
+                                     params=self.f.em.FinderParams(edge_m_max=0.0), log=lambda *_: None)
+        self.assertEqual(sorted(r["kind"] for r in res["rows"]), ["dam", "dry embankment", "road fill"])
+        self.assertTrue(all(r["edge_ft"] is None for r in res["rows"]))
+
+    def test_known_ids_of_a_sarp_layer(self):
+        # a SARP barrier layer has SARPID on every row, NIDID on some and a Name on most: its own id
+        # is used (field names in any case), never the name; other layers are as before
+        path = os.path.join(self.tmp, "known.gpkg")
+        x, y = gx(100.0), gy(100.0)
+        sarp = write_layer(path, "sarp", [
+            ("POINT ({} {})".format(x, y), {"Name": "Wetland 2", "SARPID": "ND55127"}),
+            ("POINT ({} {})".format(x + 50, y), {"Name": "Big Dam", "SARPID": "ND00012", "NIDID": "ND00345"}),
+            ("POINT ({} {})".format(x + 100, y), {"Name": "No id here"})], fields=("Name", "SARPID", "NIDID"))
+        lower = write_layer(path, "sarp_lower", [("POINT ({} {})".format(x, y), {"name": "Pond", "sarpid": "ND7"})],
+                            fields=("name", "sarpid"))
+        nid = write_layer(path, "nid", [("POINT ({} {})".format(x, y), {"NAME": "Big Dam", "NIDID": "ND00345"})],
+                          fields=("NAME", "NIDID"))
+        ids = lambda src, idf=None: [p[2] for p in self.f.read_known([(src, "layer", idf)]).pts]
+        self.assertEqual(ids(sarp), ["ND55127", "ND00012", "No id here"])
+        self.assertEqual(ids(lower), ["ND7"])
+        self.assertEqual(ids(nid), ["ND00345"])
+        self.assertEqual(ids(sarp, "NIDID")[1], "ND00345")          # the field you name comes first
+
     def test_dem_drainage_alone_finds_the_fills(self):
         res = self.f.run_embankments(self.dem, None, self.out, roads=self.roads,
                                      known=[(self.known, "DWR dams", None)], match_ft=200.0,
@@ -305,6 +383,29 @@ class Runs(unittest.TestCase):
                                       pool_max_drain_ac=None, log=lambda *_: None)
         self.assertEqual(sorted(r["kind"] for r in both["rows"]), ["dam", "dry embankment", "road fill"])
         self.assertTrue(all(r["line_source"] == "DEM drainage" for r in both["rows"]))
+
+    def test_a_small_pond_is_found_wherever_the_routing_cells_fall(self):
+        # 324 m2 of flat water on a hillside behind its own fill, no draw near it (Finder 0.7).
+        # It is a flat water surface and a closed depression at once; on most placements both seeds
+        # fall in one 10 m routing cell and only the depression starts a line - which still comes
+        # out of the flat water. Found on every placement; not with the 0.6 seed size.
+        z, _wat, _lvl = tc.hill_pond(6)
+        kw = dict(drainage_ac=1e6, hillshade=False, log=lambda *_: None)
+        global X0
+        keep = X0
+        try:
+            for dx in (0.0, 3.0, 6.0, 9.0, 12.0):
+                X0 = keep + dx                                # the DEM moved over the 10 m cells
+                dem = os.path.join(self.tmp, "pond{:.0f}.tif".format(dx))
+                write_dem(dem, z)
+                rows = self.f.run_embankments(dem, None, self.out, **kw)["rows"]
+                self.assertEqual([(r["kind"], r["line_source"]) for r in rows], [("dam", "DEM pool outlet")], dx)
+                self.assertLess(rows[0]["area_ac"] * 4046.86, 400.0)
+                self.assertIn("small pond", rows[0]["notes"])
+                old = self.f.run_embankments(dem, None, self.out, pool_opts={"flat_min_m2": 300.0}, **kw)["rows"]
+                self.assertEqual(old, [], dx)
+        finally:
+            X0 = keep
 
     def test_near10_is_the_points_cell(self):
         # the fill's position on the 10 m routing grid: the cell holding it, radius in cells
@@ -990,6 +1091,155 @@ class Runs(unittest.TestCase):
         self.assertEqual(dict(self.f._fields_of(ev["rows"]))["height_ft"], "float")
         back = self.f.read_rows(os.path.join(self.tmp, "pb.gpkg") + "|layername=evidence")
         self.assertIsInstance([r for r in back if r["find_id"] == "F2"][0]["height_ft"], float)
+
+
+def country(size=3600, seed=3):
+    """(DEM at 1 m cells, number of fills built) of rolling ground falling south with seven draws
+    that wander, an earth fill across each every 410 m (3.0 to 4.2 m high, 2.5:1 faces, a 6 m top)
+    and a flat pond behind every other one. The ground is rough at the scale of a 3 m cell, so
+    where the cells fall changes every reading (as on real LiDAR)."""
+    from scipy import ndimage as ndi
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[0:size, 0:size].astype(float)
+    rough = ndi.zoom(ndi.gaussian_filter(rng.standard_normal((size // 8, size // 8)), 3.0), 8, order=1)[:size, :size]
+    z = 300.0 - 0.012 * y + 6.0 * rough
+    n = 0
+    for k, xc in enumerate((330.3, 800.6, 1290.2, 1760.9, 2240.4, 2700.5, 3200.8)):
+        wig = xc + 60.0 * np.sin(y / 310.0 + k)
+        z = z + np.minimum(np.abs(x - wig) * 0.035, 9.0) - 9.0
+        for j, yr in enumerate(np.arange(380.4 + 37 * k, size - 300, 410.3)):
+            h = 3.0 + 0.6 * ((k + j) % 3)
+            xw = xc + 60.0 * np.sin(yr / 310.0 + k)
+            base = 300.0 - 0.012 * yr - 9.0 + 6.0 * rough[int(yr), int(xw)]
+            face = np.clip(1.0 - (np.abs(y - yr) - 3.0) / (2.5 * h), 0.0, 1.0)
+            z = np.where(face > 0, np.maximum(z, base + h * face), z)
+            n += 1
+            if (k + j) % 2 == 0:
+                lvl = base + h - 0.9
+                z = np.where((y < yr - 3.0) & (y > yr - 400) & (np.abs(x - wig) < 200) & (z < lvl), lvl, z)
+    return z, n
+
+
+@unittest.skipIf(gdal is None, "no GDAL (osgeo) in this Python")
+class FixedLattice(unittest.TestCase):
+    """Finder 0.7: a result does not depend on where the run's box is."""
+
+    def setUp(self):
+        from .. import finder
+        self.f = finder
+        self.tmp = tempfile.mkdtemp(prefix="finder_lat_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_lattice(self):
+        f = self.f
+        self.assertEqual(f.grid_lattice(3.0, 10.0), 30.0)
+        self.assertEqual(f.grid_lattice(2.0, 10.0), 10.0)
+        self.assertEqual(f.grid_lattice(2.5, 10.0), 10.0)
+        self.assertEqual(f.grid_lattice(1.5, 10.0), 30.0)
+        self.assertEqual(f.grid_lattice(3.0, 3.0), 3.0)
+        self.assertIsNone(f.grid_lattice(3.3, 10.0))         # they meet only every 330 m
+        self.assertIsNone(f.grid_lattice(math.pi, 10.0))     # not a whole millimetre
+        self.assertEqual(f.snap_out((100001.0, 2700007.0, 100061.0, 2700059.5), 30.0),
+                         (99990.0, 2700000.0, 100080.0, 2700060.0))
+        on = (99990.0, 2699970.0, 100080.0, 2700060.0)
+        self.assertEqual(f.snap_out(on, 30.0), on)           # a box on the lattice stays
+        self.assertEqual(f.snap_out((5.0, 5.0, 5.0, 5.0), 3.0), (3.0, 3.0, 6.0, 6.0))
+        self.assertEqual(f.snap_out((-7.0, -7.0, -1.0, 2.0), 3.0), (-9.0, -9.0, 0.0, 3.0))
+        sq = f.lattice_squares((4999.0, -1.0, 5001.0, 1.0), 5000.0)
+        self.assertEqual(sq, [(0.0, -5000.0, 5000.0, 0.0), (0.0, 0.0, 5000.0, 5000.0),
+                              (5000.0, -5000.0, 10000.0, 0.0), (5000.0, 0.0, 10000.0, 5000.0)])
+        self.assertEqual(f.lattice_squares((5000.0, 0.0, 10000.0, 5000.0), 5000.0),
+                         [(5000.0, 0.0, 10000.0, 5000.0)])    # a box that is a square is that square
+
+    def test_the_dem_cells_do_not_move_with_the_box(self):
+        dem, _n = country(600)
+        tif = os.path.join(self.tmp, "c.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, 600, 600, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0 + 0.4, 1.0, 0.0, Y0 + 600.7, 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.GetRasterBand(1).WriteArray(dem.astype(np.float32))
+        ds = None
+        box = (X0 + 101.0, Y0 + 100.0, X0 + 400.0, Y0 + 421.0)
+        za, ga = self.f.warp_dem(tif, box, 3.0)
+        for dx, dy in ((1.0, 1.0), (7.0, -2.0), (0.3, 100.1)):
+            zb, gb = self.f.warp_dem(tif, (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy), 3.0)
+            for g in (ga, gb):                               # cell edges at whole multiples of 3 m
+                self.assertEqual((g[0] % 3.0, g[3] % 3.0, g[1], g[5]), (0.0, 0.0, 3.0, -3.0))
+            c, r = int(round((gb[0] - ga[0]) / 3.0)), int(round((ga[3] - gb[3]) / 3.0))
+            a = za[max(r, 0):, max(c, 0):]
+            b = zb[max(-r, 0):, max(-c, 0):]
+            h, w = min(a.shape[0], b.shape[0]), min(a.shape[1], b.shape[1])
+            self.assertGreater(h * w, 5000)
+            self.assertTrue(np.array_equal(a[:h, :w], b[:h, :w]))     # the same cells, to the bit
+
+    def test_a_moved_box_gives_the_same_fills(self):
+        # draws, pool lines and stream lines over rough ground; a box moved by 1 m, 7 m and 1,234 m
+        # (the last touches other squares of the lattice): every fill inside both boxes is the same
+        # fill with the same id and the same readings. On 0.6 (squares and cells laid from the box's
+        # corner) no id survived a 1 m move on this ground.
+        dem, built = country()
+        self.assertEqual(built, 51)
+        tif = os.path.join(self.tmp, "country.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(tif, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
+        x0, y0 = X0 + 0.4, Y0 + 0.7                          # the DEM's own corner is on no lattice
+        ds.SetGeoTransform((x0, 1.0, 0.0, y0 + dem.shape[0], 0.0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.GetRasterBand(1).WriteArray(dem.astype(np.float32))
+        ds = None
+        vec = os.path.join(self.tmp, "in.gpkg")              # a mapped stream down the third draw
+        ys = np.arange(40.0, 3560.0, 25.0)
+        xs = 1290.2 + 60.0 * np.sin(ys / 310.0 + 2)
+        streams = write_layer(vec, "streams", [("LINESTRING ({})".format(", ".join(
+            "{} {}".format(x0 + a, y0 + 3600.0 - b) for a, b in zip(xs, ys))), {})])
+        from ..core import embankments as em
+        p = em.FinderParams(window_m=400.0, ridge_half_m=200.0, terrain_m=200.0)
+        base = (x0 + 100.0, y0 + 100.0, x0 + 2300.0, y0 + 2300.0)
+
+        def run(d):
+            b = tuple(v + d for v in base)
+            res = self.f.run_embankments(tif, streams, os.path.join(self.tmp, "o.gpkg"), bbox=b, drainage_ac=3.0,
+                                         tile_m=1000.0, hillshade=False, dikes=False, params=p,
+                                         pool_margin_m=90.0, log=lambda *_: None)
+            for r in res["rows"]:
+                self.assertTrue(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3])   # only the box's own
+            return b, res["rows"]
+
+        b0, r0 = run(0.0)
+        self.assertGreater(len(r0), 40)
+        self.assertGreater(len({r["line_source"] for r in r0}), 1)
+        self.assertEqual(len({r["find_id"] for r in r0}), len(r0))
+        for d, least in ((1.0, 40), (7.0, 40), (1234.0, 10)):
+            b1, r1 = run(d)
+            both = lambda r: all(b[0] <= r["x"] < b[2] and b[1] <= r["y"] < b[3] for b in (b0, b1))   # noqa: E731
+            a = {r["find_id"]: r for r in r0 if both(r)}
+            c = {r["find_id"]: r for r in r1 if both(r)}
+            self.assertGreaterEqual(len(a), least)
+            self.assertEqual(sorted(a), sorted(c), "box moved by {} m".format(d))
+            for k in a:
+                self.assertEqual({f: v for f, v in a[k].items() if f != "known_ft"},
+                                 {f: v for f, v in c[k].items() if f != "known_ft"})
+
+    def test_open_water_does_not_move_with_the_box(self):
+        g, nir, _pond = tc.image()
+        img = os.path.join(self.tmp, "img.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(img, g.shape[1], g.shape[0], 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0 + 0.37, 1.0, 0.0, Y0 + g.shape[0] + 0.61, 0.0, -1.0))   # pixels on no lattice
+        ds.SetProjection(srs(5070).ExportToWkt())
+        for b, a in zip((1, 2, 3, 4), (g, g, g, nir)):
+            ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+        ds = None
+        got = []
+        for dx, dy in ((0.0, 0.0), (0.45, 0.2), (7.0, -3.3)):
+            box = (X0 + 20.0 + dx, Y0 + 20.0 + dy, X0 + 280.0 + dx, Y0 + 280.0 + dy)
+            res = self.f.run_water(img, os.path.join(self.tmp, "w.gpkg"), bbox=box, cell=1.0, tile_m=200.0,
+                                   log=lambda *_: None)
+            self.assertEqual(len(res["rows"]), 1)
+            got.append((res["rows"][0]["water_id"], res["rows"][0]["area_ac"], res["rows"][0]["ndwi"]))
+        self.assertEqual(len(set(got)), 1, got)
 
 
 if __name__ == "__main__":

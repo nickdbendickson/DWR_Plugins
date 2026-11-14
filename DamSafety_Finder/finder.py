@@ -135,10 +135,14 @@ def read_lines(src, bbox=None):
 
 
 def _id_of(f, id_field):
+    """A known structure's id: the field you name, else the first of the usual id fields that holds
+    a value (field names in any case), else its name, else its feature number. A SARP barrier
+    layer's own id (SARPID) comes before the NID id some of its rows also carry, so every row of
+    that layer is named the same way and none falls back to a dam name such as 'Wetland 2'."""
     names = [f.GetFieldDefnRef(i).GetName() for i in range(f.GetFieldCount())]
     want = [id_field] if id_field else []
-    want += ["structure_id", "structure_", "nidid", "nid_id", "dam_id", "federal_id", "STRUCTURE_NUMBER_008",
-             "BRIDGE_ID", "id", "ID", "name"]
+    want += ["structure_id", "structure_", "sarpid", "nidid", "nid_id", "dam_id", "federal_id",
+             "STRUCTURE_NUMBER_008", "BRIDGE_ID", "id", "ID", "name"]
     low = {n.lower(): n for n in names}
     for w in want:
         n = low.get(str(w).lower())
@@ -335,14 +339,86 @@ def check_dem_unit(dem, z_feet, log=print):
     return z_feet
 
 
+# ------------------------------------------------------------------------ the fixed lattice --
+# Finder 0.7: where a cell falls on the ground never depends on the box a run was given. Every
+# raster the engine resamples (the DEM at the fill cell size and at the routing cell size, the
+# imagery, the water mosaics) is read on a grid whose cell edges are whole multiples of the cell
+# size in EPSG:5070, and a run is cut into squares whose corners are whole multiples of the square
+# size. Up to 0.6 both started at the south-west corner of the run's box, so moving the box by one
+# metre moved every cell and with it most crest points (and the ids made from them).
+LATTICE_MAX_M = 300.0                 # the longest common lattice the two DEM grids are snapped to
+
+
+def _floor_to(v, step):
+    q = v / step
+    r = round(q)
+    return (r if abs(q - r) <= 1e-6 else math.floor(q)) * step
+
+
+def _ceil_to(v, step):
+    q = v / step
+    r = round(q)
+    return (r if abs(q - r) <= 1e-6 else math.ceil(q)) * step
+
+
+def snap_out(ext, step):
+    """ext (xmin, ymin, xmax, ymax) grown outward to whole multiples of step (a box already on
+    them stays as it is); at least one step wide and high."""
+    x0, y0 = _floor_to(ext[0], step), _floor_to(ext[1], step)
+    return (x0, y0, max(_ceil_to(ext[2], step), x0 + step), max(_ceil_to(ext[3], step), y0 + step))
+
+
+def grid_lattice(*cells):
+    """The spacing (m) of the lattice the DEM windows of one run are snapped to: the smallest
+    length every one of the cell sizes divides (30 m for 3 m fill cells and 10 m routing cells),
+    so the grids of one square cover exactly the same ground. None when the cell sizes have no
+    common multiple of LATTICE_MAX_M or less (3.3 m and 10 m meet only every 330 m; a cell size
+    that is not a whole millimetre): each grid is then snapped to whole multiples of its own cell
+    size (warp_dem does that in any case), which fixes where its cells fall just the same - the
+    two windows then only end up to one routing cell apart."""
+    step = None
+    for c in cells:
+        mm = float(c) * 1000.0
+        k = int(round(mm))
+        if k <= 0 or abs(mm - k) > 1e-6:
+            return None
+        step = k if step is None else step * k // math.gcd(step, k)
+    if step is None or step / 1000.0 > LATTICE_MAX_M:
+        return None
+    return step / 1000.0
+
+
+def lattice_squares(ext, size):
+    """The squares (xmin, ymin, xmax, ymax) of the fixed lattice - corners at whole multiples of
+    `size` in the working CRS - that the box ext overlaps, west to east, then south to north. A
+    square is always whole: the same square is the same ground whatever box asked for it."""
+    i0, j0 = int(round(_floor_to(ext[0], size) / size)), int(round(_floor_to(ext[1], size) / size))
+    i1 = max(int(round(_ceil_to(ext[2], size) / size)), i0 + 1)
+    j1 = max(int(round(_ceil_to(ext[3], size) / size)), j0 + 1)
+    return [(i * size, j * size, (i + 1) * size, (j + 1) * size)
+            for i in range(i0, i1) for j in range(j0, j1)]
+
+
+def _inside(x, y, b):
+    """The point is in the box (xmin, ymin, xmax, ymax), its west and south edges included."""
+    return b[0] <= x < b[2] and b[1] <= y < b[3]
+
+
+def _grid_size(ext, cell):
+    """(ext snapped outward to whole multiples of cell, columns, rows)."""
+    ext = snap_out(ext, cell)
+    return (ext, max(1, int(round((ext[2] - ext[0]) / cell))), max(1, int(round((ext[3] - ext[1]) / cell))))
+
+
 def warp_dem(dem, ext, cell, z_feet=None):
     """(array m, NaN = no data; geotransform) of the DEM over ext (EPSG:5070) at cell metres,
     averaged from the full-resolution cells (no overviews), values as stored (no vertical shift).
+    ext is grown outward to whole multiples of cell first, so the cells fall on the same ground
+    whatever box is asked for (the fixed lattice above).
     z_feet None = what the DEM records (dem_unit; refused when it records nothing)."""
     if z_feet is None:
         z_feet = dem_in_feet(dem)
-    n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
-    n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
+    ext, n_x, n_y = _grid_size(ext, cell)
     ds = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
     nod = ds.GetRasterBand(1).GetNoDataValue()
     opts = dict(format="MEM", dstSRS="EPSG:{}".format(WORK_EPSG),
@@ -368,8 +444,7 @@ def write_hillshade(dem, ext, cell, path, z_feet=None, max_cells=400e6):
     have to fit in memory. None (nothing written) when it would exceed max_cells."""
     if z_feet is None:
         z_feet = dem_in_feet(dem)
-    n_x = int(math.ceil((ext[2] - ext[0]) / cell))
-    n_y = int(math.ceil((ext[3] - ext[1]) / cell))
+    ext, n_x, n_y = _grid_size(ext, cell)
     if n_x * n_y > max_cells:
         return None
     src = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
@@ -618,6 +693,8 @@ EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new",
               ("below_frac", "float"), ("rect", "float"), ("elong", "float"), ("wall_slope", "float"),
               ("mounds", "int"), ("top_w_ft", "float"), ("side_sum", "float"), ("relief_ft", "float"),
               ("slope_pct", "float"), ("fill_road", "str"), ("pool_lat", "float"), ("pool_lon", "float"),
+              # Finder 0.7 (step 13): crest to the nearest missing terrain (blank: none within the search)
+              ("edge_ft", "float"),
               ("confidence", "str"), ("notes", "str"), ("lat", "float"), ("lon", "float")]
 SPILL_FIELDS = [("find_id", "str"), ("kind", "str"), ("spill_ft", "float"), ("width_ft", "float"),
                 ("dist_ft", "float"), ("lat", "float"), ("lon", "float")]
@@ -659,11 +736,25 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     its outlet, routed as the draws are, so a pond that drains less than drainage_ac still has its
     fill profiled (line_source "DEM pool outlet"; core/embankments.py step 11). On such a line only
     a hump starting within pool_reach_m below where the line leaves the pool is tested, it must
-    hold a pool of params.min_pool_m2 or more, not stand on a road, and drain under
+    hold a pool of params.min_pool_m2 or more (params.own_pool_m2, 100 m2, when the line comes
+    out of a flat water surface that pool holds: 0.7), not stand on a road, and drain under
     pool_max_drain_ac at its crest (a bigger draw is walked by the draws); a pool whose seed
     already drains pool_max_drain_ac gets no line. pool_margin_m: pools are looked for this far
     round each tile's core; pool_opts: keyword overrides for terrain.pool_seeds. Where a pool line
     and another line read the same fill, the other line's reading is kept.
+    THE FIXED LATTICE (0.7): the run works square by square, the squares being those of side
+    tile_m whose corners are whole multiples of tile_m in EPSG:5070 (lattice_squares), each read
+    with its pad on DEM grids snapped to grid_lattice(cell, drain_cell) (30 m for 3 m and 10 m).
+    A square bbox only touches is still searched whole; one fill per pool and per dedupe_m are
+    settled over the whole squares, then the fills outside bbox are left out. So a fill does not
+    depend on where bbox is - except near a lattice line whose other square is not in the run
+    (two squares can read one fill or pool; counts['dropped_between_squares'] says how many
+    readings were dropped between the squares of this run).
+    THE EDGE OF THE TERRAIN DATA (0.7, core/embankments.py step 13): edge_ft = how far the crest is
+    from the nearest missing DEM cell; a fill within params.edge_m_max (150 m) of one
+    whose pool reaches the missing cells has the kind em.K_EDGE: it is written, but it is not
+    scored, not handed to Screening and not picked for a review batch (the ground past the end
+    of the DEM file counts as missing too).
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()
@@ -672,8 +763,28 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     progress = progress or _noop
     cancelled = cancelled or _noop
     z_feet = check_dem_unit(dem, z_feet, log)
-    lines = read_lines(streams, bbox) if streams else []
     dem_only = bool(drainage_ac or ridges or dugouts)
+    pad = p.window_m + p.toe_search_m + p.max_len_m + 2 * cell
+    if drainage_ac:
+        pad = max(pad, 3000.0)                      # most of a draw's basin is in the tile
+    # The fixed lattice (Finder 0.7): the run is cut into the squares of side tile_m whose corners
+    # are whole multiples of tile_m, each read whole with its pad whatever part of it the box
+    # covers, on DEM grids whose cells are whole multiples of the cell sizes. A square's fills are
+    # therefore the same in every run that touches it; the box only chooses which are written.
+    snap = grid_lattice(cell, max(drain_cell, cell))
+
+    def window(sq):
+        b = (sq[0] - pad, sq[1] - pad, sq[2] + pad, sq[3] + pad)
+        return snap_out(b, snap) if snap else b
+
+    lines = []
+    if streams:
+        if bbox is None:
+            lines = read_lines(streams, None)
+        else:                                       # every line a touched square's window reads
+            wins = [window(sq) for sq in lattice_squares(bbox, tile_m)]
+            lines = read_lines(streams, (min(w[0] for w in wins), min(w[1] for w in wins),
+                                         max(w[2] for w in wins), max(w[3] for w in wins)))
     if not lines and not dem_only:
         raise RuntimeError("no stream lines in the area (or turn on the DEM drainage lines)")
     ext = bbox or (layer_extent(lines) if lines else _image_box(dem))
@@ -681,22 +792,18 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     kn = read_known(known)
     log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(
         len(lines), len(road_lines), len(kn)))
-    pad = p.window_m + p.toe_search_m + p.max_len_m + 2 * cell
-    tiles = []
-    x = ext[0]
-    while x < ext[2]:
-        y = ext[1]
-        while y < ext[3]:
-            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
-            y += tile_m
-        x += tile_m
-    if drainage_ac:
-        pad = max(pad, 3000.0)                      # most of a draw's basin is in the tile
+    tiles = lattice_squares(ext, tile_m)
+    try:                                            # a square the DEM file does not reach holds no fill
+        db = _image_box(dem)
+        db = (db[0] - 100.0, db[1] - 100.0, db[2] + 100.0, db[3] + 100.0)
+        tiles = [t for t in tiles if t[0] < db[2] and t[2] > db[0] and t[1] < db[3] and t[3] > db[1]]
+    except Exception:                                                   # noqa - a saving only
+        pass
     found, ridge_rows, dug_rows, t0 = [], [], [], time.time()
     for ti, core_box in enumerate(tiles):
         if cancelled():
             break
-        box = (core_box[0] - pad, core_box[1] - pad, core_box[2] + pad, core_box[3] + pad)
+        box = window(core_box)
         tl = [ln for ln in lines if _meets(ln, box)]
         if not tl and not dem_only:
             continue
@@ -714,10 +821,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             k = max(1, int(round(road_buffer_m / cell)))
             rmask = ndi.binary_dilation(rmask, iterations=k)
 
-        def keep(xx, yy, b=core_box):
-            return b[0] <= xx < b[2] and b[1] <= yy < b[3]
+        def keep(xx, yy, b=core_box):               # the whole square, not only its part in the box
+            return _inside(xx, yy, b)
 
-        dl, deep, darea, pls, pex, pdr = [], None, None, [], [], []
+        dl, deep, darea, pls, pex, pdr, psd = [], None, None, [], [], [], []
         if drainage_ac or ridges or dikes or contrib or pool_lines:
             z10, gt10 = warp_dem(dem, box, max(drain_cell, cell), z_feet)
             if drainage_ac or contrib or pool_lines:
@@ -729,7 +836,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             if drainage_ac:
                 dl = tr.drainage_lines(rec, area, gt10, drainage_ac * AC_M2)
             if pool_lines and not cancelled():
-                pls, pex, pdr = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
+                pls, pex, pdr, psd = _pool_lines(z, gt, core_box, pool_margin_m, rec, gt10, area,
                                        pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                                        pool_opts or {})
             if ridges or dikes:
@@ -745,6 +852,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      max_drain_m2=pool_max_drain_ac * AC_M2 if pool_max_drain_ac else None,
                      line_area={len(tl) + len(dl) + i: _line_area(ln, area, gt10) for i, ln in enumerate(pls)},
                      pool_drain={len(tl) + len(dl) + i: v for i, v in enumerate(pdr)},
+                     seed={len(tl) + len(dl) + i: [(sd[0], sd[1], sd[3]) for sd in sds]
+                           for i, sds in enumerate(psd)},
                      inflow=(lambda xs, ys, near=None, rec=rec, area=area, g=gt10, c3=abs(gt[1]):
                              _held_inflow(xs, ys, near, rec, area, g, c3)) if pls else None)
         got = em.find(z, gt, tl + dl + pls, road_mask=rmask, params=p, keep=keep, cancelled=cancelled,
@@ -780,9 +889,18 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
             msg += ", {} dug pit(s)".format(len(dg))
         log(msg + " ({:.0f} s)".format(time.time() - t0))
         progress(100.0 * (ti + 1) / len(tiles))
+    n_sq = len(found)
     if p.one_per_pool:
         found = em.one_per_pool(found, cell)
     found = em.dedupe(found, p.dedupe_m)
+    n_seam = n_sq - len(found)
+    # only now the box: one fill per pool and one per dedupe_m were settled over the whole squares,
+    # so a fill near the box edge is the same fill a larger box would have reported there
+    found = [e for e in found if _inside(e.x, e.y, ext)]
+    log("{} lattice square(s) of {:g} m: {} fill(s) in them, {} dropped where two squares read the same "
+        "fill or pool, {} outside the box".format(len(tiles), tile_m, n_sq, n_seam, n_sq - n_seam - len(found)))
+    ridge_rows = [g for g in ridge_rows if _inside(g["x"], g["y"], ext)]
+    dug_rows = [g for g in dug_rows if _inside(g["x"], g["y"], ext)]
     ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
     rows = []
     for e in found:
@@ -813,7 +931,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      "rect": _rnd(e.rect, 2), "elong": _rnd(e.elong, 2), "wall_slope": _rnd(e.wall_slope, 3),
                      "mounds": e.mounds, "top_w_ft": _rnd(e.top_w_m / FT, 0), "side_sum": _rnd(e.side_sum, 1),
                      "relief_ft": _rnd(e.relief_m / FT, 1), "slope_pct": _rnd(e.slope_pct, 2),
-                     "fill_road": "yes" if e.fill_road else "no",
+                     "fill_road": "yes" if e.fill_road else "no", "edge_ft": _rnd(e.edge_m / FT, 0),
                      "pool_lat": None if plat is None else round(plat, 6),
                      "pool_lon": None if plon is None else round(plon, 6),
                      "confidence": e.confidence,
@@ -822,6 +940,9 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         from .core import score as sc
         m = sc.load(model) if isinstance(model, str) else model
         for r, (s_, why) in zip(rows, sc.score_detail(m, rows)):
+            if r["kind"] == em.K_EDGE:              # not a candidate: its readings lean on a wall
+                r["score"], r["score_note"] = None, "not scored: at the edge of the terrain data"
+                continue
             r["score"] = round(float(s_), 3)
             r["score_note"] = why
     rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}[r["status"]],
@@ -862,8 +983,13 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
               "ridges": len(extra), "dugouts": len(dugs),
               "dem_drainage": sum(1 for r in rows if r["line_source"] == LINE_DEM),
               "pool_outlet": sum(1 for r in rows if r["line_source"] == LINE_POOL),
-              "rescued": sum(1 for r in rows if r["rescued"] == "yes")}
+              "rescued": sum(1 for r in rows if r["rescued"] == "yes"),
+              "squares": len(tiles), "dropped_between_squares": n_seam,
+              "data_edge": sum(1 for r in rows if r["kind"] == em.K_EDGE)}
     log(_summary(rows, "fill(s) across streams"))
+    if counts["data_edge"]:
+        log("{} of them at the edge of the terrain data (missing terrain acts as a wall there): kept, "
+            "not candidates".format(counts["data_edge"]))
     hs = None
     if hillshade and not cancelled():
         w = p.window_m if bbox is None else 0.0             # the stream box plus the search window
@@ -886,12 +1012,14 @@ def _rnd(v, nd):
 
 
 def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=None):
-    """(lines, exits, drains) of one tile: the pools of the DEM z (grid gt) over the core box plus
+    """(lines, exits, drains, seeds) of one tile: the pools of the DEM z (grid gt) over the core box plus
     margin_m (terrain.pool_seeds), each walked out through its outlet down the opened routing `rec`
     (grid gt10, the draws' receivers); exits = the distance along each line at which it leaves its
     own pool; drains = the ground draining into that pool (m2, terrain.pool_inflow over `area` on
     gt10): flat routing can split a pool's water over many outlet cells, so no one cell on the line
-    holds it all. A pool is the seed's own (its flat or depression), on the 10 m cells at least
+    holds it all; seeds = for each line the pool seeds (x, y, area m2, 'flat' or 'depression') it
+    starts from: its own, then any flat water surface whose seed lies in the same routing cell
+    (which got no line of its own). A pool is the seed's own (its flat or depression), on the 10 m cells at least
     40 % of whose 3 m cells it covers, so a creek or another pond beside it is not part of it. A pool
     whose seed already drains max_area gets no line: the draws walk it."""
     c0 = max(0, int((core_box[0] - margin_m - gt[0]) / gt[1]))
@@ -899,7 +1027,7 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     r0 = max(0, int((core_box[3] + margin_m - gt[3]) / gt[5]))
     r1 = min(z.shape[0], int(math.ceil((core_box[1] - margin_m - gt[3]) / gt[5])))
     if r1 <= r0 or c1 <= c0:
-        return [], [], []
+        return [], [], [], []
     sub = z[r0:r1, c0:c1]
     gs = (gt[0] + c0 * gt[1], gt[1], 0.0, gt[3] + r0 * gt[5], 0.0, gt[5])
     seeds, _mask, cells = tr.pool_seeds(sub, gs, cells=True, **(opts or {}))
@@ -931,7 +1059,18 @@ def _pool_lines(z, gt, core_box, margin_m, rec, gt10, area, max_area=None, opts=
     seeds = [pc[0] for pc in pairs]
     pools = [own10(*pc) for pc in pairs]
     lines, exits, index = tr.pool_lines(seeds, rec, gt10, (H10, W10), pools=pools, with_index=True)
-    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index]
+    # A small pond is usually both a flat water surface and a closed depression, and the two seeds
+    # often fall in one 10 m routing cell: only the bigger (the depression) then starts a line. The
+    # line out of that cell comes out of the flat water all the same, so it carries that seed too.
+    sds = [[seeds[i]] for i in index]
+    start = {rc10(seeds[i][0], seeds[i][1]): k for k, i in enumerate(index)}
+    lined = set(index)
+    for i, sd in enumerate(seeds):
+        if i not in lined and sd[3] == "flat":
+            k = start.get(rc10(sd[0], sd[1]))
+            if k is not None:
+                sds[k].append(sd)
+    return lines, exits, [tr.pool_inflow(pools[i], rec, area) for i in index], sds
 
 
 def _cells10(xs, ys, gt, shape, share=0.0, cell=None):
@@ -1227,12 +1366,10 @@ def _size_crossings(rows, dem, z_feet, c_runoff, intensity, v_fps, drain_cell, t
     if not rows:
         return
     pad = 4000.0
-    xs, ys = [r["x"] for r in rows], [r["y"] for r in rows]
-    x0 = min(xs)
-    y0 = min(ys)
-    groups = {}
+    x0 = y0 = 0.0                       # squares of the fixed lattice: the same crossing is routed
+    groups = {}                         # on the same DEM cells whatever else is in the run
     for r in rows:
-        groups.setdefault((int((r["x"] - x0) // tile_m), int((r["y"] - y0) // tile_m)), []).append(r)
+        groups.setdefault((int(math.floor(r["x"] / tile_m)), int(math.floor(r["y"] / tile_m))), []).append(r)
     snap = max(1, int(round(30.0 / drain_cell)))
     cancelled = cancelled or _noop
     for (i, j), rs in groups.items():
@@ -1346,14 +1483,18 @@ def is_service(src):
     return s.startswith("http://") or s.startswith("https://")
 
 
-def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=None):
+def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=None, snap=False):
     """Download an ArcGIS ImageServer (exportImage) over ext (EPSG:5070) at cell metres as
     GeoTIFF tiles in folder (2000 px: the ND GIS Hub image services answer 500 to 3000 px);
     returns a VRT of them. `url` is the service address
     (.../ImageServer). Tiles already there are reused (a rerun resumes). urllib honours the
-    proxy environment; `opener(url) -> bytes` replaces it in tests."""
+    proxy environment; `opener(url) -> bytes` replaces it in tests. snap: ext is grown outward to
+    whole multiples of cell first, so the service resamples on to the same cells whatever box is
+    asked for (the open-water tool; the fixed lattice of warp_dem)."""
     import urllib.parse
     import urllib.request
+    if snap:
+        ext = snap_out(ext, cell)
     base = url.rstrip("/")
     if base.lower().endswith("/exportimage"):
         base = base[: -len("/exportImage")]
@@ -1397,10 +1538,16 @@ def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=No
     return vrt
 
 
-def read_bands(image, ext, cell, bands):
-    """{band number: array} of a raster over ext (EPSG:5070) at cell metres (averaged)."""
-    n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
-    n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
+def read_bands(image, ext, cell, bands, snap=True):
+    """{band number: array} of a raster over ext (EPSG:5070) at cell metres (averaged); ext is
+    grown outward to whole multiples of cell first (the fixed lattice, as warp_dem). snap False:
+    the grid starts at ext's own corner (the evidence tool, whose windows are centred on each
+    fill's pool and whose downloaded image tiles are laid out from that corner)."""
+    if snap:
+        ext, n_x, n_y = _grid_size(ext, cell)
+    else:
+        n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
+        n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
     ds = _checked(gdal.Open(str(image)), "opening the image {}".format(image))
     if max(bands) > ds.RasterCount:
         raise RuntimeError("the image has {} band(s); band {} was asked for (a near-infrared band "
@@ -1524,7 +1671,7 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
             if len(srcs) > 1:
                 folder = os.path.join(folder, "{:08x}".format(zlib.crc32(src.encode("utf-8")) & 0xFFFFFFFF))
             log("downloading imagery from {} at {:g} m into {}".format(src, cell, folder))
-            src = fetch_imageserver(src, bbox, cell, folder, log=log, opener=opener)
+            src = fetch_imageserver(src, bbox, cell, folder, log=log, opener=opener, snap=True)
         got.append((src, int(gb), int(nb)))
     srcs = got
     image = srcs[0][0]
@@ -1542,21 +1689,12 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
     kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
     for name, t in WATER_FIELDS:
         lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
-    tiles = []
-    x = ext[0]
-    while x < ext[2]:
-        y = ext[1]
-        while y < ext[3]:
-            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
-            y += tile_m
-        x += tile_m
+    tiles = _water_tiles(ext, tile_m, cell)
     rows = []
     mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")      # GDAL < / >= 3.11
-    for ti, core in enumerate(tiles):
+    for ti, (core, box) in enumerate(tiles):
         if cancelled():
             break
-        pad = 300.0                                 # a pond across a tile edge is whole in one tile
-        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
         if len(srcs) == 1:
             bands, gt = read_bands(image, box, cell, (srcs[0][1], srcs[0][2]))
             idx = wt.ndwi(bands[srcs[0][1]], bands[srcs[0][2]])
@@ -1586,6 +1724,20 @@ def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, th
         len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
     return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
             "csv": out_csv, "image": image}
+
+
+def _water_tiles(ext, tile_m, cell, pad=300.0):
+    """[(core, window)] of an open-water run over ext: the squares of the fixed lattice (side
+    tile_m) that ext overlaps. The window is the whole square plus pad (a pond across a square's
+    edge is whole in one window), snapped to the cell lattice, whatever part of the square ext
+    covers; the core is the part of the square inside ext, and a patch is written by the square
+    whose core holds its first cell. So a patch has the same outline, area and id in every run
+    whose box holds that cell."""
+    out = []
+    for sq in lattice_squares(ext, tile_m):
+        core = (max(sq[0], ext[0]), max(sq[1], ext[1]), min(sq[2], ext[2]), min(sq[3], ext[3]))
+        out.append((core, snap_out((sq[0] - pad, sq[1] - pad, sq[2] + pad, sq[3] + pad), cell)))
+    return out
 
 
 def _emit_water_patches(lab, n, idx, frac, gt, core, cell, mapped, box, max_ac, n_images,
@@ -1675,21 +1827,12 @@ def _run_water_las(sources, out_gpkg, bbox, cell, src_epsg, classes, min_pts, op
     kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
     for name, t in WATER_FIELDS:
         lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
-    tiles = []
-    x = ext[0]
-    while x < ext[2]:
-        y = ext[1]
-        while y < ext[3]:
-            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
-            y += tile_m
-        x += tile_m
+    tiles = _water_tiles(ext, tile_m, cell)
     rows = []
     mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")
-    for ti, core in enumerate(tiles):
+    for ti, (core, box) in enumerate(tiles):
         if cancelled():
             break
-        pad = 300.0
-        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
         grid = gt = None
         for path, bb in bounds:
             if bb[2] <= box[0] or bb[0] >= box[2] or bb[3] <= box[1] or bb[1] >= box[3]:
@@ -1736,21 +1879,12 @@ def _run_water_raster(src, band, count_min, out_gpkg, bbox, cell, open_px, min_a
     kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
     for name, t in WATER_FIELDS:
         lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
-    tiles = []
-    x = ext[0]
-    while x < ext[2]:
-        y = ext[1]
-        while y < ext[3]:
-            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
-            y += tile_m
-        x += tile_m
+    tiles = _water_tiles(ext, tile_m, cell)
     rows = []
     mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")
-    for ti, core in enumerate(tiles):
+    for ti, (core, box) in enumerate(tiles):
         if cancelled():
             break
-        pad = 300.0
-        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
         bands, gt = read_bands(src, box, cell, (band,))
         counts = bands[band]
         idx = np.where(np.isnan(counts), np.nan, np.where(counts >= count_min, 1.0, 0.0))
@@ -1931,7 +2065,9 @@ def parse_images(text):
 
 def _read_grid(src, ext, cell, alg="near"):
     """(band-1 array, NaN = no data; geotransform) of a raster over ext (EPSG:5070) - class
-    rasters (land cover) and count rasters keep their values (nearest), not an average."""
+    rasters (land cover) and count rasters keep their values (nearest), not an average. Only the
+    evidence tool reads this way, in windows centred on each fill (not on a run's box), so the
+    grid starts at ext's own corner."""
     n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
     n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
     ds = _checked(gdal.Open(str(src)), "opening {}".format(src))
@@ -2248,7 +2384,7 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
                     # 4-band) must not read each other's tiles
                     tag = "{}_{:08x}".format(yr, zlib.crc32(str(src).encode()) & 0xFFFFFFFF)
                     src = fetch_imageserver(src, box, image_cell, os.path.join(cache, tag), log=lambda *a: None)
-                b, gt = read_bands(src, box, image_cell, bands)
+                b, gt = read_bands(src, box, image_cell, bands, snap=False)
             except Exception as e:                          # a gap in the service, a dead tile
                 log("{} {}: no image ({})".format(r.get("find_id"), yr, e))
                 seen.setdefault(yr, None)
@@ -2336,17 +2472,15 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
 
 def _consequences(rows, dem, z_feet, buildings, roads, reach_m, flow_cell, log, cancelled, tile_m=10000.0):
     """Buildings and roads down the flow path of each fill (core/evidence.py), routed over the
-    DEM at flow_cell metres a 10 km tile (plus the reach) at a time."""
+    DEM at flow_cell metres a 10 km square of the fixed lattice (plus the reach) at a time."""
     z_feet = check_dem_unit(dem, z_feet, log)
-    xs = [r["x"] for r in rows]
-    ys = [r["y"] for r in rows]
-    groups = {}
-    for k, r in enumerate(rows):
-        groups.setdefault((int((r["x"] - min(xs)) // tile_m), int((r["y"] - min(ys)) // tile_m)), []).append(k)
+    groups = {}                         # squares of the fixed lattice: a fill's flow path is routed
+    for k, r in enumerate(rows):        # on the same DEM cells whatever other fills are in the layer
+        groups.setdefault((int(math.floor(r["x"] / tile_m)), int(math.floor(r["y"] / tile_m))), []).append(k)
     for (gi, gj), ks in groups.items():
         if cancelled():
             break
-        x0, y0 = min(xs) + gi * tile_m, min(ys) + gj * tile_m
+        x0, y0 = gi * tile_m, gj * tile_m
         box = (x0 - reach_m, y0 - reach_m, x0 + tile_m + reach_m, y0 + tile_m + reach_m)
         z, gt = warp_dem(dem, box, flow_cell, z_feet)
         if not np.isfinite(z).any():
@@ -2599,6 +2733,12 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
         for r in read_rows(s_):
             r["source"] = s_
             rows.append(r)
+    # a fill at the edge of the terrain data is not learned from and not scored: its height and pool
+    # lean on missing terrain standing as a wall
+    edge = [r for r in rows if r.get("kind") == em.K_EDGE]
+    rows = [r for r in rows if r.get("kind") != em.K_EDGE]
+    if edge:
+        log("{} fill(s) at the edge of the terrain data: not learned from and not scored".format(len(edge)))
     if not rows:
         raise RuntimeError("no fills in the layers given")
     y = sc.labels(rows, positive_words)
@@ -2664,6 +2804,9 @@ def run_score(fills, out_gpkg, positive_words=("dam",), model_in=None, model_out
         r["score"] = round(float(v), 3)
         r["score_note"] = why
     rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}.get(r.get("status"), 3), -r["score"]))
+    for r in edge:                                      # written last, with no score
+        r["score"], r["score_note"] = None, "not scored: at the edge of the terrain data"
+    rows = rows + edge
     fields = [f for f in EMB_FIELDS] + [("source", "str")]
     write_points(out_gpkg, "scored_fills", fields, rows)
     write_csv(os.path.splitext(out_gpkg)[0] + "_scored_fills.csv", fields, rows)
