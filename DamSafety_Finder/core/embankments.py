@@ -109,7 +109,8 @@ WHAT IT LOOKS FOR
   13. THE EDGE OF THE TERRAIN DATA. Where the DEM has no cells (outside a LiDAR project, a hole)
      the spill test cannot see the ground, and the missing cells stand as a wall: a spur beside
      the data edge reads as a dam holding everything on its other side (a real case on the ND / SD
-     line: a 17 ft "dam" with a 262 acre pool, 39 m from the edge). Every fill gets edge_m, the
+     line, read by 0.6 as a 17 ft "dam" with a 262 acre pool, 39 m from the edge; 15.3 ft on the
+     0.7 grid). Every fill gets edge_m, the
      distance from its crest to the nearest missing cell (pieces of missing cells under
      edge_min_m2 are ignored; not measured beyond edge_search_m). The wall can only change a
      reading when the pool at its spill level touches the missing cells. So a fill within
@@ -944,8 +945,12 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None, cancelled=None,
             if lim is not None and pool_rules:
                 if parea < pool_rules.get("min_area_m2", 0.0):
                     # ... unless the line comes out of a flat water surface and this pool holds it: a
-                    # pond of 100-400 m2 behind its own dam (Iowa census, 4 tiles: 28 such fills on a
-                    # pond dam, 21 not; from any seed it was 17 dams gained for 375 fills not on one)
+                    # pond of 100-400 m2 behind its own dam. On the 0.7 grid this rule alone keeps 4
+                    # fills on the 4 Iowa census tiles of the small-pond study, 1 of them on a census
+                    # dam; the lower flat-seed minimum (pool_seeds) gives nearly all of the 21 dams
+                    # the two changes gained there. (The 0.6-engine figures of the two changes
+                    # together: 28 new fills on a pond dam, 21 not; this rule from any seed, not only
+                    # flat water: 17 dams gained for 375 fills not on one.)
                     sds = (pool_rules.get("seed") or {}).get(li) or ()
                     if sds and not isinstance(sds[0], (tuple, list)):
                         sds = (sds,)                    # one seed (x, y, kind)

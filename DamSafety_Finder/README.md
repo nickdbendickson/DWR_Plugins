@@ -131,7 +131,9 @@ more dams per thousand outside pond country like south-west and east Iowa, for a
 fills. With 0.7.0's fixed grid, on the four Iowa tiles of the study (768 census dams present),
 the two changes together find 21 more dams and lose none (583 against 562; crests under 40 m:
 111 against 99 of 203) for 15 more fills not on a census dam. On six ND tiles they add 31 fills
-and drop 13 of 2,545, and the same 61 of 76 Intact listed dams have a fill within 300 ft.
+and drop 13 of 2,545 (a fill counts as the same when one is within 30 m in the other run; matched
+by `find_id` it is 40 added and 22 dropped, the same 18 more: nine fills moved 10 to 30 m), and
+the same 61 of 76 Intact listed dams have a fill within 300 ft.
 
 `pool_toe_reach_m` (a script setting, off = 0) takes the toe of a pool-line fill as at least the
 lowest ground that far below the fill. With 10 m it found 28 more dams for 223 more fills not on
@@ -257,9 +259,11 @@ in a window round each fill's pool: neither depends on a run's box, so they are 
 cells - outside a LiDAR project, past the end of the file, in a hole - the spill test cannot see
 the ground, and the missing cells stand as a wall. A spur beside the edge then reads as a dam
 holding back everything on its other side. The case that showed it is on the ND / SD line (tile
-`USGS_1M_14_x61y509`, 45.935419, -97.520507): a 17 ft "dam" with a 262 acre pool and a score of
-0.69, 39 m from where the terrain stops; its "toe" is a draw that really drains away through the
-missing ground. So:
+`USGS_1M_14_x61y509`, 45.935419, -97.520507): 0.6 read it as a 17 ft "dam" with a 262 acre pool
+and a score of 0.69, 39 m from where the terrain stops; its "toe" is a draw that really drains
+away through the missing ground. (0.7.0, on its fixed grid, reads the same fill as 15.3 ft with a
+263 acre pool, 128 ft from the missing cells, and with the edge rule off scores it 0.34 with the
+default model.) So:
 
 - every fill has `edge_ft`, the distance from its crest to the nearest missing terrain cell (blank
   when there is none within 1,000 m). It is measured on the 3 m cells of the run, so no edge can
@@ -282,8 +286,9 @@ first. On an Iowa tile that is 45 % outside its LiDAR project (`z15x41y460`) it 
 fills, 6 of them on dams of the State's pond-dam census: real ponds read correctly, with no
 missing cell anywhere near their water. With the pool test 1 of the 10 is set aside (a census dam
 whose 1.5 acre pond does run into the edge of the data) and the other 9 keep their kinds. On the ND
-tile of the case above it is 4 of 246 fills with the pool test, the 17 ft case among them (128 ft
-from missing terrain, which its pool reaches), against 7 without it; none of them is listed.
+tile of the case above it is 4 of 246 fills with the pool test, the case above among them (15.3 ft
+on 0.7.0, 128 ft from missing terrain, which its pool reaches), against 7 without it; none of
+them is listed.
 
 It is a kind, not a yes / no field, because everything downstream already chooses by kind:
 Screening is handed the kind `dam` only and a review batch takes `dam` and `dry embankment`. A
