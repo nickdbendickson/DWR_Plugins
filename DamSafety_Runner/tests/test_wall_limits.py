@@ -214,9 +214,12 @@ def a_lisflood_file_that_is_no_program_is_named_in_plain_words():
             assert "could not be started" in str(e) and exe in str(e), str(e)
             assert "is not executable on this computer" in str(e), str(e)
         assert lf._not_a_program(OSError(8, "Exec format error"))
-        win = OSError(22, "%1 is not a valid Win32 application")
-        win.winerror = 193
-        assert lf._not_a_program(win)
+        for code, text in ((193, "%1 is not a valid Win32 application"),
+                           (216, "This version of %1 is not compatible with the version of "
+                                 "Windows you're running")):      # 216: a .exe that is none
+            win = OSError(22, text)
+            win.winerror = code
+            assert lf._not_a_program(win), code
         assert not lf._not_a_program(FileNotFoundError(2, "No such file or directory"))
         assert not lf._not_a_program(PermissionError(13, "Permission denied"))
     finally:

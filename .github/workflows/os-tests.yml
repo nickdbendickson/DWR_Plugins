@@ -76,6 +76,22 @@ jobs:
         run: |
           python tools/ci_qgis_env.py >> "$GITHUB_ENV"
           python -c "import qgis.core; print('qgis from', qgis.__file__)"
+      # Qt's offscreen platform has no fonts of its own on Windows (it reads a "fonts" folder
+      # that Qt stopped shipping), so every character was measured as a box of one width and
+      # every window came out about a quarter wider than it is: eight windows over the GUI
+      # lint's limit, the Classify page and the two docks over theirs (13 Nov 2026; the lint's
+      # "measured with" line showed a font with no name and no size). It is given Segoe UI, the
+      # font of Windows itself. Linux and macOS find the system's fonts by themselves.
+      - name: Give Qt's offscreen platform the Windows font
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/qtfonts"
+          for f in segoeui.ttf segoeuib.ttf segoeuii.ttf segoeuiz.ttf; do
+            cp "/c/Windows/Fonts/$f" "$RUNNER_TEMP/qtfonts/"
+          done
+          ls -l "$RUNNER_TEMP/qtfonts"
+          echo "QT_QPA_FONTDIR=$(cygpath -w "$RUNNER_TEMP/qtfonts")" >> "$GITHUB_ENV"
       - name: Versions in this environment
         run: |
           python -c "import sys, platform, numpy, scipy; print(sys.version); print(platform.platform()); print('numpy', numpy.__version__, 'scipy', scipy.__version__)"

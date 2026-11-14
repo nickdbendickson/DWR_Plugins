@@ -284,9 +284,11 @@ class ModelError(RuntimeError):
 
 def _not_a_program(err):
     """True when the system refused to start a file because it is no program for it: Windows
-    error 193, 'Exec format error' elsewhere."""
+    errors 193 ("not a valid Win32 application") and 216 ("not compatible with the version of
+    Windows you're running": what a file named .exe that is no program gets, and a build for
+    another kind of processor), 'Exec format error' elsewhere."""
     import errno
-    return getattr(err, "winerror", None) == 193 or err.errno == errno.ENOEXEC
+    return getattr(err, "winerror", None) in (193, 216) or err.errno == errno.ENOEXEC
 
 
 class Cancelled(RuntimeError):
