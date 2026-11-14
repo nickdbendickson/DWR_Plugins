@@ -336,6 +336,13 @@ def build(root, sample_id=None, fetch=None, log=None, cancel=None, refresh=False
     except SampleError:
         _rm(tmp)
         raise
+    except PermissionError as e:
+        # Core 1.5.1: Windows does not replace a file that is open, and the sample terrain is
+        # open whenever its layer is in the project. Say so, not only "Access is denied".
+        _rm(tmp)
+        raise SampleError("the sample dam's terrain could not be replaced: {} is open in QGIS or "
+                          "in another program, or its folder cannot be written ({}). Remove the "
+                          "terrain layer from the project and try again".format(dem, e))
     except Exception as e:                                        # noqa: BLE001
         _rm(tmp)
         raise SampleError("the sample dam's terrain could not be written ({})".format(e))

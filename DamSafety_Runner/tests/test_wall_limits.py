@@ -126,6 +126,24 @@ def _fake_child(d, body):
     return exe
 
 
+def _fake_child_py(d, body):
+    """A stand-in LISFLOOD-FP that every system can start: a Python script behind a .bat on
+    Windows and behind a shell script elsewhere (as tools/test_lisflood_smoke.py does)."""
+    py = os.path.join(d, "lisflood_stand_in.py")
+    with open(py, "w") as f:
+        f.write(body)
+    if os.name == "nt":
+        exe = os.path.join(d, "lisflood_py.bat")
+        with open(exe, "w") as f:
+            f.write('@"{}" "{}" %*\r\n'.format(sys.executable, py))
+    else:
+        exe = os.path.join(d, "lisflood_py")
+        with open(exe, "w") as f:
+            f.write('#!/bin/sh\nexec "{}" "{}" "$@"\n'.format(sys.executable, py))
+        os.chmod(exe, 0o755)
+    return exe
+
+
 def _inputs(d, exe, sim_s=3600.0, **kw):
     """write_inputs on the 20-cell synthetic channel with the stand-in executable."""
     from nd_breach_runner.core import lisflood as lf
@@ -176,6 +194,39 @@ def slow_lisflood_child_is_killed_at_the_wall_limit_with_a_plain_message():
 
 
 @test
+def a_lisflood_file_that_is_no_program_is_named_in_plain_words():
+    """3.20.5 (found by the Windows test run): a LISFLOOD-FP path that is not a program for this
+    computer stopped the run with the system's own words ('[WinError 193] %1 is not a valid
+    Win32 application'). The Runner now names the file and says it is not executable here. A
+    file that is simply missing still raises what it did."""
+    from nd_breach_runner.core import lisflood as lf
+    d = _tmp()
+    try:
+        exe = os.path.join(d, "lisflood.exe" if os.name == "nt" else "lisflood")
+        with open(exe, "w") as f:
+            f.write("this is not a program\n")
+        os.chmod(exe, 0o755)
+        wd, par, st, _dem = _inputs(d, exe)
+        try:
+            lf.run(wd, par, st)
+            raise AssertionError("expected ModelError")
+        except lf.ModelError as e:
+            assert "could not be started" in str(e) and exe in str(e), str(e)
+            assert "is not executable on this computer" in str(e), str(e)
+        assert lf._not_a_program(OSError(8, "Exec format error"))
+        for code, text in ((193, "%1 is not a valid Win32 application"),
+                           (216, "This version of %1 is not compatible with the version of "
+                                 "Windows you're running")):      # 216: a .exe that is none
+            win = OSError(22, text)
+            win.winerror = code
+            assert lf._not_a_program(win), code
+        assert not lf._not_a_program(FileNotFoundError(2, "No such file or directory"))
+        assert not lf._not_a_program(PermissionError(13, "Permission denied"))
+    finally:
+        shutil.rmtree(d)
+
+
+@test
 def automatic_wall_limit_uses_the_par_grid_and_the_known_rate():
     from nd_breach_runner.core import lisflood as lf
     d = _tmp()
@@ -198,7 +249,8 @@ def automatic_wall_limit_uses_the_par_grid_and_the_known_rate():
         lf.RATES.pop(os.path.abspath(exe), None)
         # a run that finishes under the limit records it and raises nothing
         wd2 = os.path.join(d, "ok")
-        exe2 = _fake_child(d, "mkdir -p results\ntouch results/run.mass\nexit 0\n")
+        exe2 = _fake_child_py(d, "import os\nos.makedirs('results', exist_ok=True)\n"
+                                 "open(os.path.join('results', 'run.mass'), 'w').close()\n")
         from nd_breach_runner.core.grid import Grid
         from nd_breach_runner.core.breach import Hydrograph
         hy = Hydrograph(np.array([0.0, 600.0, 1200.0]), np.array([30.0, 30.0, 0.0]), "test")

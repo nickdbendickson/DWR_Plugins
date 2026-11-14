@@ -6,6 +6,7 @@ truncated) on the four combined Cascade rasters - the EAP map deliverables. Thes
 no hazard class (each dam's class comes from its own run), but they are life-safety maps, so a
 feature must land at its real-world location whatever cell size its run used.
 """
+import os
 import types
 
 import numpy as np
@@ -32,7 +33,7 @@ def _combine(runs):
     captured = {}
     out = types.SimpleNamespace(runs=[(None, r) for r in runs], folder="/tmp/_h07", combined={})
     cascade._combine(out, types.SimpleNamespace(),
-                     lambda g, p: captured.__setitem__(p.rsplit("/", 1)[-1], g))
+                     lambda g, p: captured.__setitem__(os.path.basename(p), g))
     return out.combined_grid, captured
 
 

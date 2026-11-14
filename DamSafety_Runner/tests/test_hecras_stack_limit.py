@@ -10,6 +10,7 @@ Windows launcher), a value the user set is kept. Mocked Popen plus tiny real /bi
 children; no HEC-RAS, no Wine."""
 import os
 import shutil
+import subprocess
 import tempfile
 
 from nd_breach_runner.core import hecras_engine as he
@@ -123,6 +124,23 @@ def hecras_compute_passes_the_stack_preexec_fn_to_rasunsteady():
         shutil.rmtree(t, ignore_errors=True)
 
 
+def _a_child_can_raise_its_stack_limit(R, hard):
+    """(True / False, what the child reported). Asked of the system with the test's own code,
+    not the Runner's: a child that sets its soft stack limit to the hard limit before exec and
+    then prints `ulimit -s`. Linux allows it. macOS leaves the child's limit where it was."""
+    def pre():
+        try:
+            R.setrlimit(R.RLIMIT_STACK, (hard, hard))
+        except (ValueError, OSError):
+            pass
+    try:
+        seen = subprocess.run(["/bin/sh", "-c", "ulimit -s"], preexec_fn=pre,
+                              stdout=subprocess.PIPE, timeout=30).stdout.decode().strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    return seen == ("unlimited" if hard == R.RLIM_INFINITY else str(hard // 1024)), seen
+
+
 @test
 def hecras_compute_child_sees_the_raised_stack_limit():
     # a real child (nice -> /bin/sh, as a wrapper script would be) reports `ulimit -s`; the
@@ -143,19 +161,39 @@ def hecras_compute_child_sees_the_raised_stack_limit():
                     "echo \"OMP=$KMP_STACKSIZE,$OMP_STACKSIZE\"\n"
                     "echo ' Finished Unsteady Flow Simulation'\n")
         os.chmod(exe, 0o755)
-        R.setrlimit(R.RLIMIT_STACK, (eight, hard))
+        def put(soft):
+            # macOS refuses a stack limit below the stack size this Python was linked with
+            # ("current limit exceeds maximum limit"), even the limit it reports itself:
+            # there the test starts from the limit as it is, and has nothing to put back
+            try:
+                R.setrlimit(R.RLIMIT_STACK, (soft, hard))
+            except (ValueError, OSError):
+                pass
+        put(eight)
+        start, _h = R.getrlimit(R.RLIMIT_STACK)
+        if start == hard:
+            put(soft0)
+            return                          # already at the hard limit: no raise to see
+        can, seen = _a_child_can_raise_its_stack_limit(R, hard)
+        if not can:
+            # macOS (os-tests.yml, 13 Nov 2026): the child still had 8176 KB after asking
+            # for the hard limit of 65520 KB. The Linux RasUnsteady does not run there.
+            put(soft0)
+            print("      (skipped: this system does not let a child raise its stack limit: "
+                  "asked for {}, the child has {})".format(he._rlim_text(hard), seen))
+            return
         logs = []
         try:
             he.compute(t, "M", d={"linux_dir": t, "rasunsteady": exe}, env={}, log=logs.append)
         finally:
-            R.setrlimit(R.RLIMIT_STACK, (soft0, hard))
+            put(soft0)
         txt = open(os.path.join(t, "linux_run", "run.log")).read()
         want = "unlimited" if hard == R.RLIM_INFINITY else str(hard // 1024)
         assert "STACK={}".format(want) in txt, (txt, want)
-        assert "STACK=8192" not in txt, txt
+        assert "STACK={}\n".format(start // 1024) not in txt, txt
         assert "OMP=1g,1g" in txt, txt                 # through nice, as a wrapper would
         line = [m for m in logs if "stack limit for RasUnsteady" in m]
-        assert line and "(was 8 MB" in line[0], logs
+        assert line and "(was {}".format(he._rlim_text(start)) in line[0], logs
     finally:
         shutil.rmtree(t, ignore_errors=True)
 

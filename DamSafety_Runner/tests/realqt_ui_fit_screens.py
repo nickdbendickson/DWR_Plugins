@@ -25,7 +25,15 @@ try:
 except ImportError:
     print("SKIP: no real QGIS Python here (run it with the QGIS Python)")
     sys.exit(0)
+from qgis.PyQt.QtCore import QSettings  # noqa: E402
+# Never the user's settings, and on Windows never the registry: there, with no organisation name
+# (only QGIS itself sets one), a native QSettings keeps nothing and a saved size reads back empty.
+_SETTINGS = tempfile.mkdtemp(prefix="uifit_settings_")
+QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, _SETTINGS)
 _app = QgsApplication.instance() or QgsApplication([], True)
+if not _app.organizationName():
+    _app.setOrganizationName("DamSafetyTests")
 
 from qgis.PyQt.QtCore import QRect  # noqa: E402
 from qgis.PyQt.QtWidgets import QApplication, QDialog, QWidget  # noqa: E402

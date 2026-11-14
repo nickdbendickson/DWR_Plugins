@@ -2,6 +2,28 @@
 
 This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads), #137 (HEC-RAS time limit) and #126 (zone colours). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
+## The windows
+
+The pictures in this guide are made by `tools/guide_shots.py` from the real windows, on Linux, with the sample dam. Your windows have the same fields in the same places; the frame, fonts and buttons take your system's look.
+
+**Dam suite home** (*Plugins → Dam safety → Dam suite home…*). Every dam folder of the Dams folder, how far each one is, and the next step the suite suggests. A new user starts here, with **Try the sample dam…**.
+
+![Dam suite home with the sample dam in the Dams folder](img/guide/suite_home_sample.png)
+
+**DamSafety Screening.** One county at a time: every intact dam screened and ranked High, Medium or Low.
+
+![DamSafety Screening as it first opens](img/guide/screening_main.png)
+
+**DamSafety Runner.** One dam: the breach flood modelled on the terrain. The strip at the top (Dam, Terrain, Model run, Products) shows what the dam folder has so far.
+
+![The breach Runner as it first opens](img/guide/runner_empty.png)
+
+The *Engines* line shows what this computer has. The pictures were made on a machine with neither LISFLOOD-FP nor ANUGA, so both are crossed out there.
+
+**DamSafety Hazard.** The classification: the flood rasters of a dam folder against the structures, roads and lifelines below the dam.
+
+![DamSafety Hazard on the sample dam's folder](img/guide/hazard_main.png)
+
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
 
@@ -766,7 +788,10 @@ The quickest way to see the suite work is to run it on the dam it ships with.
 
 **The dam.** Swan Buffalo Detention Dam 12 near Absaraka in Cass County (DWR-2801, NID ND00199): 27.5 ft high, 1,615.5 ac-ft, top of dam 1,069.117 ft. It sits on a flat plain, which is the hard case for a breach model: the flood spreads over many square miles and keeps creeping for a day or more, so the model area and the simulated time both grow as the run goes.
 
-**What the quick first try sets**, in the Runner window:
+**What the quick first try sets**, in the Runner window (open *Advanced* to see them):
+
+![The breach Runner on the sample dam, Advanced open, with the quick first try's four values](img/guide/runner_sample_quick_try.png)
+
 
 | Setting | Quick first try | The window starts with | Why |
 |---|---|---|---|
@@ -845,6 +870,34 @@ The message names the size and the limit. If a real archive is larger, set `NDSU
 - *"... % fewer than the ... of the inventory in use"* or *"counties with structures ... came back empty"*: the same. If USACE really did remove that many structures, set `NDSUITE_NSI_ALLOW_DROP=1` and update again.
 
 `nsi/nsi_summary.json` lists how many structures were installed, how many bad records were left out, and the SHA-256 of each answer from the API.
+
+## The hazard creep watch every year, by itself (Hazard 2.25.3)
+
+A classification is only as current as the houses and roads it counted. The hazard creep watch re-classifies every dam of a folder with its own flood rasters and fresh data, and lists the dams that changed. Until now it ran when someone remembered to start it.
+
+**Schedule it.** Processing Toolbox → DamSafety Hazard → *Schedule the hazard creep watch*. Give it the folder that holds the dam folders and press Run. The default is once a year, on 15 January at 06:00. *How often* also offers every 3 months and every month; *Month*, *Day* and *Hour* move it.
+
+- The schedule belongs to this computer and this user. It is a launchd agent on macOS, a systemd timer on Linux and a task in the Task Scheduler on Windows.
+- The computer has to be on. macOS runs a missed watch when it wakes from sleep, but skips it if it was switched off. Linux makes it up at the next start. On Windows, tick *Run task as soon as possible after a scheduled start is missed* in the Task Scheduler if you want that.
+- Run the tool from the QGIS profile that has the suite. The scheduled run opens that same profile.
+- *Dams classified at the same time* is 2 by default. A statewide folder takes hours; give it more on a machine with the cores.
+- To change the schedule, run the tool again. To stop it, choose *Remove the schedule*. One schedule per folder.
+- *Only write the script and show the command* registers nothing. Use it when an administrator has to register the job.
+
+**What you get after each run**, in the folder of dams:
+
+| File | What it is |
+|---|---|
+| `Hazard_Creep_Changed_Dams_<date>.html` | **The page to read.** Only the dams whose class changed, that have newly flooded structures, roads or lifelines, or that need a look. Then the dams that could not be checked. Made to print on one page. |
+| `Hazard_Creep_Changed_Dams.csv` | The same rows, from the latest run. |
+| `Hazard_Creep_Watch_<date>.html`, `Hazard_Creep_Watch.csv` | Every dam, changed or not (as before). |
+| `_creep_watch/creep_watch_log.txt` | What every scheduled run printed, with its date and how it ended. Look here when no page arrived. |
+
+A watch started by hand from the Hazard window writes the same page and opens it.
+
+The page is a list of dams to look at. It does not change any dam's classification.
+
+On Linux without systemd the tool writes the script and gives you the line to add with `crontab -e`. Not checked here: no schedule was registered on a real Mac, Linux desktop or Windows machine.
 
 ## A class that rests on velocity (Hazard 2.25.0)
 

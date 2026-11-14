@@ -13,6 +13,8 @@ import time
 from nd_breach_runner.core import hecras_engine as he, wallclock as wc
 from nd_breach_runner.tests.registry import test
 
+SIGKILL = wc.SIGKILL          # signal.SIGKILL, or 9 where Python has none (Windows)
+
 H = 3600.0
 
 
@@ -51,11 +53,11 @@ class Proc:
         self.signals.append((sig, self.clock.w))
         if sig == signal.SIGTERM and self.term_at is None:
             self.term_at = self.clock.w
-        if sig == signal.SIGKILL:
+        if sig == SIGKILL:
             self.returncode = -9
 
     def kill(self):
-        self.got(signal.SIGKILL)
+        self.got(SIGKILL)
 
     def terminate(self):
         self.got(signal.SIGTERM)
@@ -137,7 +139,7 @@ def wallclock_sigterm_then_sigkill_after_the_grace_period():
         sent.append(sig)
         p.got(sig)
     r = wc.stop_group(p, grace=60, wall=c.wall, mono=c.mono, sleep=c.sleep, killpg=killpg)
-    assert sent == [signal.SIGTERM, signal.SIGKILL], sent
+    assert sent == [signal.SIGTERM, SIGKILL], sent
     (_, t_term), (_, t_kill) = p.signals
     assert t_kill - t_term >= 60 - 1e-9 and t_kill - t_term < 61, p.signals
     assert r["exited_after"] == "SIGKILL" and r["returncode"] == -9, r
@@ -170,7 +172,7 @@ def wallclock_grace_is_on_the_wall_clock_too():
         c.w += 30                      # every sleep, 30 s of pause
     r = wc.stop_group(p, grace=60, wall=c.wall, mono=c.mono, sleep=sleep,
                       killpg=lambda pid, sig: (sent.append(sig), p.got(sig)))
-    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert sent == [signal.SIGTERM, SIGKILL]
     assert p.signals[1][1] - p.signals[0][1] < 62, p.signals
 
 
@@ -182,7 +184,7 @@ def wallclock_stop_group_falls_back_without_a_process_group():
     def killpg(pid, sig):
         raise PermissionError("not ours")
     r = wc.stop_group(p, grace=5, wall=c.wall, mono=c.mono, sleep=c.sleep, killpg=killpg)
-    assert [s for s, _ in p.signals] == [signal.SIGTERM, signal.SIGKILL], p.signals
+    assert [s for s, _ in p.signals] == [signal.SIGTERM, SIGKILL], p.signals
     assert r["sent"] == ["SIGTERM to the process", "SIGKILL to the process"], r
 
 
@@ -203,7 +205,7 @@ def wallclock_real_process_that_ignores_sigterm_is_killed():
     time.sleep(0.3)
     t0 = time.time()
     r = wc.stop_group(p, grace=1.0, poll_s=0.05)
-    assert r["exited_after"] == "SIGKILL" and p.returncode == -signal.SIGKILL, r
+    assert r["exited_after"] == "SIGKILL" and p.returncode == -SIGKILL, r
     assert time.time() - t0 >= 1.0
     p = subprocess.Popen(["/bin/sh", "-c", "sleep 30"], start_new_session=True)
     r = wc.stop_group(p, grace=5.0, poll_s=0.05)

@@ -145,6 +145,11 @@ def wait(proc, deadline, poll_s=1.0, sleep=time.sleep, cancel=None, grace=DEFAUL
         sleep(max(0.01, min(step, left)))
 
 
+# Python on Windows has no signal.SIGKILL. The number stands for "the kill stage" there, so the
+# fallback below still calls proc.kill() and not proc.terminate() a second time (3.20.5).
+SIGKILL = getattr(signal, "SIGKILL", 9)
+
+
 def _signal_group(proc, sig, killpg):
     try:
         killpg(proc.pid, sig)
@@ -153,7 +158,7 @@ def _signal_group(proc, sig, killpg):
         return "gone"
     except (OSError, AttributeError):          # not a group leader / no killpg (Windows)
         try:
-            (proc.kill if sig == getattr(signal, "SIGKILL", None) else proc.terminate)()
+            (proc.kill if sig == SIGKILL else proc.terminate)()
             return "process"
         except OSError:
             return "gone"
@@ -171,7 +176,7 @@ def stop_group(proc, grace=DEFAULT_GRACE_S, log=None, wall=time.time, mono=time.
     out = {"sent": [], "exited_after": None, "returncode": None, "grace_s": float(grace),
            "term_wait_s": 0.0}
     term = getattr(signal, "SIGTERM", 15)
-    kill = getattr(signal, "SIGKILL", 9)
+    kill = SIGKILL
     if proc.poll() is not None:
         out.update(exited_after="before SIGTERM", returncode=proc.returncode)
         return out

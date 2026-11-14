@@ -1149,11 +1149,15 @@ class ClassificationTabMixin(object):
             if info.get("text"):
                 self._log(">>> Creep watch ran: " + info["text"])
             self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
+            # 2.25.3: the page that opens is the one-page list of the dams that changed
+            page = paths.get("changed_html") or paths["html"]
+            if page != paths["html"]:
+                self._log(">>> Changed dams (one page): {}".format(page))
             self._update_status("Creep watch: " + text, True)
             # a success .information is allowed (it is not a check; the CheckPanel rule only
             # bans .warning / .critical in run handlers), and it names the report that opens
-            QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, paths["html"]))
-            self._open_path(paths["html"])
+            QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, page))
+            self._open_path(page)
         self._start_background("Hazard creep watch\u2026", work, done, project_bound=False)
 
     def _make_submittal(self, *args):

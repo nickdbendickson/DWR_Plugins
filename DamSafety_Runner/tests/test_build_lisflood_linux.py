@@ -55,8 +55,8 @@ def linux_build_script_applies_the_arrival_depth_patch():
     i_patch, i_cmake = text.find("patch_lisflood.py"), text.find("cmake -S")
     assert 0 < i_patch < i_cmake, "patch_lisflood.py must run before cmake"
     assert "grep -q inittm_depth" in text
-    if shutil.which("bash") is None:
-        return
+    if os.name != "posix" or shutil.which("bash") is None:
+        return                      # a Linux script; on Windows `bash` is WSL's launcher
     work = tempfile.mkdtemp(prefix="ndbreach_buildlinux_")
     try:
         src, out, stub = (os.path.join(work, n) for n in ("src", "out", "stub"))

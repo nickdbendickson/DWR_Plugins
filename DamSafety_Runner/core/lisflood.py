@@ -282,6 +282,15 @@ class ModelError(RuntimeError):
     pass
 
 
+def _not_a_program(err):
+    """True when the system refused to start a file because it is no program for it: Windows
+    errors 193 ("not a valid Win32 application") and 216 ("not compatible with the version of
+    Windows you're running": what a file named .exe that is no program gets, and a build for
+    another kind of processor), 'Exec format error' elsewhere."""
+    import errno
+    return getattr(err, "winerror", None) in (193, 216) or err.errno == errno.ENOEXEC
+
+
 class Cancelled(RuntimeError):
     pass
 
@@ -402,22 +411,40 @@ def gauge_section(center_xy, flow_dir, width_m):
 
 
 def _gauge_line(gx, gy, direction, width_m, nx, ny, dx):
-    """One .gauge line (x, y, direction, length), the section clipped to the grid. gx, gy are
-    the centre in grid coordinates (lower-left origin). E/W sections run south from (x, y),
-    N/S sections east. LISFLOOD-FP clips an E/W section against the column count and a N/S
-    one against the row count (swapped), so a section longer than the grid is across reads
-    past the flux arrays and the discharge is garbage (1e297): clip it here, ending at least
-    one cell short of the far edge as LISFLOOD-FP's own clip intends."""
-    half = 0.5 * width_m
+    """One .gauge line (x, y, direction, length): the section centred on the gauge, as long as
+    LISFLOOD-FP will measure. gx, gy are the centre in grid coordinates (lower-left origin).
+    E/W sections run south from (x, y), N/S sections east.
+
+    LISFLOOD-FP limits a section's cell count against the other axis (input.cpp, LoadGauges):
+    an E/W section to (columns - 1 - the gauge's column), a N/S section to (rows - 1 - the
+    gauge's row, counted from the top). Two things follow.
+    * A section longer than the grid is across is read past the flux arrays and the discharge
+      is garbage (1e297): it is clipped here, ending at least one cell short of the far edge.
+    * LISFLOOD-FP keeps the first cells of a section it shortens, so a long section that
+      starts at the grid's edge can end before it reaches the river and reads 0 for the whole
+      run (3.20.4: Lake Delhi 2010, three of four gauges). The section is shortened here
+      instead, to what LISFLOOD-FP allows, and stays centred on the gauge."""
     if direction in ("E", "W"):
+        cap = max(nx - 1 - min(max(int(math.floor(gx / dx)), 0), nx - 1), 0) * dx
+        half = 0.5 * min(width_m, cap)
         top = min(gy + half, (ny - 0.5) * dx)               # start inside the top row
         r0 = ny - 1 - int(math.floor(top / dx))             # LISFLOOD-FP's start row
-        length = min(top - (gy - half), (ny - 1 - r0) * dx)
+        length = min(top - (gy - half), cap, (ny - 1 - r0) * dx)
         return gx, top, direction, max(length, 0.0)
+    cap = min(max(int(math.floor(gy / dx)), 0), ny - 1) * dx
+    half = 0.5 * min(width_m, cap)
     left = max(gx - half, 0.5 * dx)
     c0 = int(math.floor(left / dx))
-    length = min((gx + half) - left, (nx - 1 - c0) * dx)
+    length = min((gx + half) - left, cap, (nx - 1 - c0) * dx)
     return left, gy, direction, max(length, 0.0)
+
+
+def gauge_reach_m(gx, gy, direction, nx, ny, dx):
+    """The longest section LISFLOOD-FP measures for a gauge here, in metres (see _gauge_line):
+    it shrinks towards the east edge for E/W gauges and towards the south edge for N/S ones."""
+    if direction in ("E", "W"):
+        return max(nx - 1 - min(max(int(math.floor(gx / dx)), 0), nx - 1), 0) * dx
+    return min(max(int(math.floor(gy / dx)), 0), ny - 1) * dx
 
 
 
@@ -804,8 +831,18 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     t0 = time.time()
     last_dt_log = -1e9
     with open(log_path, "w", encoding="utf-8") as logf:
-        proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
-                                stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
+        try:
+            proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
+                                    stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
+        except OSError as e:
+            if not _not_a_program(e):
+                raise
+            # 3.20.5: Windows says "[WinError 193] %1 is not a valid Win32 application" for a
+            # file that is no program (a build for another system, a script, a download that
+            # is a web page). Say which file and what is wrong with it.
+            raise ModelError("LISFLOOD-FP could not be started: {} is not executable on this "
+                             "computer (it is not a program this system can run: {})".format(
+                                 exe, e))
         while proc.poll() is None:
             time.sleep(1.0)
             if cancel and cancel():

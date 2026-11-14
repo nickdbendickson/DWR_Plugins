@@ -290,8 +290,10 @@ def write_copy(src, dst, layer, items, fields, fine_label, info_value=None, toda
         for it in its:
             if it["field"] == "geometry":
                 g = f.GetGeometryRef()
-                pts = [(g.GetX(0), g.GetY(0)), (g.GetX(g.GetPointCount() - 1),
-                                                 g.GetY(g.GetPointCount() - 1))]
+                n_old = g.GetPointCount()
+                pts = [(g.GetX(0), g.GetY(0)), (g.GetX(n_old - 1), g.GetY(n_old - 1))]
+                g = None        # the feature owns it: SetGeometry below frees it, and reading
+                                # it after that ended the process on Windows (os-tests.yml)
                 ng = ogr.Geometry(ogr.wkbLineString)
                 for x, y in pts:
                     ng.AddPoint_2D(x, y)
@@ -301,7 +303,7 @@ def write_copy(src, dst, layer, items, fields, fine_label, info_value=None, toda
                 if "line_len_src" in names:
                     f.SetField(names["line_len_src"],
                                "straight chord of the placed line ends; {} interior vertices "
-                               "dropped (culvert prep)".format(g.GetPointCount() - 2))
+                               "dropped (culvert prep)".format(n_old - 2))
             else:
                 f.SetField(names.get(it["field"].lower(), it["field"]), float(it["proposed_ft"]))
         if notes_f:

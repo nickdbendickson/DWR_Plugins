@@ -111,9 +111,11 @@ def fine_lowest_ground_searches_a_disc_and_ignores_no_data():
         assert low((25.0, 24.5), 5.0) == 10.0
         assert low((25.0, 24.5), 7.0) == 2.0
         assert low((500.0, 500.0), 5.0) is None        # off the grid
-        z2 = np.full((10, 10), np.nan, np.float32)
-        np.save(p, z2)
-        assert AM.fine_lowest_ground(p, 0.0, 10.0, 1.0)((5.0, 5.0), 5.0) is None
+        del low                     # the reader keeps the file mapped: Windows cannot delete
+        z2 = np.full((10, 10), np.nan, np.float32)      # or rewrite a mapped file
+        p2 = os.path.join(tmp, "g.npy")
+        np.save(p2, z2)
+        assert AM.fine_lowest_ground(p2, 0.0, 10.0, 1.0)((5.0, 5.0), 5.0) is None
 
 
 @test

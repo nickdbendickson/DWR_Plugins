@@ -28,8 +28,14 @@ from qgis.PyQt.QtWidgets import QWizard  # noqa: E402
 
 for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):   # settings in _CFG only
     QSettings.setPath(_fmt, QSettings.Scope.UserScope, _CFG)
+# Windows keeps native settings in the registry (setPath does not move them), and with no
+# organisation name, which only QGIS itself sets, it keeps nothing at all: a saved setting read
+# back empty. INI files in _CFG on every system.
+QSettings.setDefaultFormat(QSettings.Format.IniFormat)
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
+if not _app.organizationName():
+    _app.setOrganizationName("DamSafetyTests")
 
 from DamSafety_Setup import plugin as P  # noqa: E402
 from DamSafety_Setup.damsuite import suite_config as SC  # noqa: E402

@@ -970,6 +970,59 @@ def gauge_section_is_clipped_to_the_grid():
     assert _gauge_line(1000.0, 800.0, "N", 400.0, nx, ny, dx) == (800.0, 800.0, "N", 400.0)
 
 
+def _lisflood_gauge_rows_cols(x, y, direction, length, nx, ny, dx):
+    """What LISFLOOD-FP 8.3 measures for one .gauge line (input.cpp, LoadGauges): the cell
+    range of the section after its own limit. Returns (first, last) in metres along the
+    section's axis: y for E/W sections (running south), x for N/S ones (running east)."""
+    import math as _m
+    gx = min(max(int(_m.floor(x / dx)), 0), nx - 1)
+    gy = min(max(ny - 1 - int(_m.floor(y / dx)), 0), ny - 1)
+    cells = int(_m.ceil(length / dx))
+    if direction in ("N", "S") and gy + cells > ny - 1:
+        cells = ny - 1 - gy
+    elif direction in ("E", "W") and gx + cells > nx - 1:
+        cells = nx - 1 - gx
+    if direction in ("E", "W"):
+        top = (ny - gy) * dx                     # the top edge of the first row
+        return top - cells * dx, top
+    return gx * dx, (gx + cells) * dx
+
+
+@test
+def gauge_section_stays_on_the_gauge_when_lisflood_shortens_it():
+    """3.20.4. LISFLOOD-FP limits an E/W section to (columns - 1 - the gauge's column) cells
+    and keeps the first of them. A whole-grid section written from the grid's top therefore
+    ended above the river: the Lake Delhi 2010 run (662 x 772 cells of 30 m) read 0 at three
+    of four bridges for 48 hours. The section is now as long as LISFLOOD-FP allows and centred
+    on the gauge, so what LISFLOOD-FP measures holds the gauge."""
+    from nd_breach_runner.core.lisflood import _gauge_line, gauge_reach_m
+    nx, ny, dx = 662, 772, 30.0
+    w = 23160.0                                           # the longer side of the model
+    for gx, gy, direction in ((15354.9, 7969.7, "E"), (16459.3, 6216.9, "E"),
+                              (17686.0, 6444.2, "W"), (9930.0, 12890.7, "S"),
+                              (4000.0, 3000.0, "N")):
+        x, y, d, length = _gauge_line(gx, gy, direction, w, nx, ny, dx)
+        lo, hi = _lisflood_gauge_rows_cols(x, y, d, length, nx, ny, dx)
+        along = gy if direction in ("E", "W") else gx
+        assert lo + dx < along < hi - dx, (direction, gx, gy, x, y, length, lo, hi)
+        # LISFLOOD-FP has nothing left to cut: the section written is the one measured
+        assert abs((hi - lo) - _math_ceil_cells(length, dx) * dx) < 1e-6, (direction, length, lo, hi)
+        assert length <= gauge_reach_m(gx, gy, direction, nx, ny, dx) + 1e-6
+        assert length > 2000.0, (direction, length)
+    # the old line for the first gauge (from the grid's top, 15,930 m) is cut by LISFLOOD-FP
+    # to 150 cells, which end 3.4 km above the gauge
+    lo, hi = _lisflood_gauge_rows_cols(15354.873, 15934.721, "E", 15930.0, nx, ny, dx)
+    assert lo > 7969.7 + 3000.0, (lo, hi)
+    # a gauge in the last column has no section at all; one near it has a short one
+    assert _gauge_line((nx - 0.5) * dx, 9000.0, "E", w, nx, ny, dx)[3] == 0.0
+    assert gauge_reach_m((nx - 10.5) * dx, 9000.0, "E", nx, ny, dx) == 10 * dx
+
+
+def _math_ceil_cells(length, dx):
+    import math as _m
+    return int(_m.ceil(length / dx))
+
+
 @model_test
 def gauge_records_the_flood_wave():
     from nd_breach_runner.core import workflow

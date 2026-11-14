@@ -322,7 +322,8 @@ def main():
         csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
         check("crown: a Windows DEM path in a copied run folder found under the dam folder",
               csrc is not None, cn)
-        os.remove(os.path.join(mv, "dem", "dem_1m.tif"))
+        csrc = None                 # the crown source holds the DEM open: Windows cannot delete
+        os.remove(os.path.join(mv, "dem", "dem_1m.tif"))   # an open file
         csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
         check("crown: recorded DEM nowhere here -> no crown source, noted",
               csrc is None and "no 1 m DEM" in cn, cn)

@@ -98,7 +98,10 @@ def test_save_and_reopen(d):
     assert st["report_check"] is False                                     # classify options
     assert st["output_folder_edit"].startswith(dam)
     lyr = p.mapLayer(st["boundary_combo"])                     # the combo's data = layer id
-    assert lyr is not None and lyr.source().startswith(bnd), st["boundary_combo"]
+    # QGIS writes a source with '/' on every system; the test's path has '\\' on Windows
+    assert lyr is not None and os.path.normcase(os.path.normpath(
+        lyr.source().split("|")[0])) == os.path.normcase(os.path.normpath(bnd)), (
+            st["boundary_combo"], lyr.source() if lyr is not None else None)
     assert sum(1 for x in p.mapLayers().values() if x.name().startswith("HEC-RAS 2D - ")) == 3
     rec = json.load(open(r["json"], encoding="utf-8"))
     assert rec["format"] == DS.STATE_FORMAT and rec["state"]["depth_edit"] == dep

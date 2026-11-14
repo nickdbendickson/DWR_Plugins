@@ -653,7 +653,10 @@ KEY_AN = "Configuration\\NDBREACH_ANUGA_PYTHON"
 
 
 def bash_available():
-    return shutil.which("bash") is not None
+    """install_macos.sh is a macOS and Linux script. On Windows `bash` names WSL's launcher
+    (C:\\Windows\\System32\\bash.exe, found before Git's bash), which runs nothing when no
+    Linux distribution is installed: the installer tests do not apply there."""
+    return os.name == "posix" and shutil.which("bash") is not None
 
 
 def sh(args, env=None, path_prepend=None, cwd=None):
