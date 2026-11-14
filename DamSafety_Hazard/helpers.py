@@ -383,10 +383,24 @@ def on_main_thread():
         return True
 
 
+def qgis_app_running():
+    """True when QGIS (or qgis_process, or a test's QgsApplication) is running in this Python.
+    The open project may only be asked for then: without a GUI application QgsProject.instance()
+    makes QGIS build its application objects, and on Qt 5.15.3 (the QGIS 3.34 LTR on Ubuntu
+    22.04) that ends the process ("QFontDatabase: Must construct a QGuiApplication")."""
+    try:
+        from qgis.PyQt.QtCore import QCoreApplication
+        from qgis.PyQt.QtGui import QGuiApplication
+        return isinstance(QCoreApplication.instance(), QGuiApplication)
+    except Exception:
+        return False
+
+
 def remove_project_layers_for_path(path):
     """Remove project layers that read from `path` (typically a previous
-    run's output) so the file can be overwritten and is not listed twice."""
-    if not path or not on_main_thread():
+    run's output) so the file can be overwritten and is not listed twice.
+    2.25.3: outside a running QGIS there is no project to look in (qgis_app_running)."""
+    if not path or not qgis_app_running() or not on_main_thread():
         return 0
     project = QgsProject.instance()
     ids = []
