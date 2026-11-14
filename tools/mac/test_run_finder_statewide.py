@@ -710,6 +710,15 @@ class Crowd(unittest.TestCase):
             want.append(bool(in_tile and holed.Contains(p)))
         self.assertEqual(g.on(px, py).tolist(), want)
         self.assertTrue(0 < sum(want) < len(want))
+        # an outline that crosses itself (a bow tie over the west half of tile W) is mended, not dropped
+        bow = ogr.CreateGeometryFromWkt("POLYGON (({a} {c},{b} {d},{b} {c},{a} {d},{a} {c}))".format(
+            a=x0, b=x0 + 4000.0, c=y0, d=y1))
+        self.assertFalse(bow.IsValid())
+        gb = rfs.Ground([self.W], bow)
+        self.assertEqual(gb.state_at([x0 + 1.0], [ym]).tolist(), [1])
+        # 500 m inside its west triangle (the tile's west edge is the only thing the circle meets)
+        self.assertAlmostEqual(float(gb.share([x0 + 500.0], [ym])[0]), _segment_share(500.0), delta=0.0005)
+        self.assertEqual(gb.on([x0 + 500.0, x0 + 3500.0, x0 + 2000.0], [ym, ym, y0 + 1000.0]).tolist(), [True, True, False])
         # what a cut can hand back beside polygons (a line where two boxes only touch) is not ground
         touch = rfs.box_geom((0.0, 0.0, 10.0, 10.0)).Intersection(rfs.box_geom((10.0, 0.0, 20.0, 10.0)))
         self.assertIsNone(rfs.polygons_only(touch))

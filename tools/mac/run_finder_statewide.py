@@ -1751,6 +1751,9 @@ class Ground:
                                max([j for _i, j in idx] or [0]) - self.j0 + 2), "i1")   # 0 none, 1 part, 2 whole
         self.piece, self.local, blocks = {}, {}, {}
         side = CROWD_BLOCK * self.size
+        if outline is not None and not outline.IsValid():   # an outline that crosses itself cannot be cut
+            mend = getattr(outline, "MakeValid", None)      # (GDAL 3.0 on; it keeps what in_state calls inside)
+            outline = mend() if mend is not None else outline.Buffer(0)
         for (i, j), b in zip(idx, boxes):
             st, g = 2, None
             if outline is not None:
