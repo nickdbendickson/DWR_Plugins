@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **User guide: pictures of the windows (docs only, 2026-11-13).** `docs/USER_GUIDE.md` opens with a new section, *The windows*: Dam suite home with the sample dam, Screening, the Runner and Hazard. *Try the sample dam* shows the Runner with the quick first try's four values. The five pictures are in `docs/img/guide/` and are made by `tools/guide_shots.py` from the real windows on a virtual 1080p display (`--dams` names a Dams folder with the sample dam). `tools/test_guide_shots.py` (in `fast-checks`) fails when the guide shows a picture that is not there, or the folder holds one the guide does not show. No plugin code changes.
+
 - **DamSafety Hazard 2.25.3: the hazard creep watch on a schedule, with a one-page list of changed dams (NO number changes).** The watch that re-checks old classifications against new houses and roads only ran when someone started it.
   - **New tool: *Schedule the hazard creep watch*** (`ndhazard:creepschedule`). It puts the watch of one folder of dams on the computer's own scheduler: a launchd agent on macOS, a systemd timer on Linux, a task in the Windows Task Scheduler. Once a year (default 15 January, 06:00), every 3 months or every month. Run it again to change the schedule; *Remove the schedule* takes it off; *Only write the script and show the command* registers nothing.
   - The scheduled run is `qgis_process run ndhazard:creepwatch`, in the QGIS profile the tool was run from (a small configuration folder links to it when it is not `default`). The script and the log of every run are in `<folder>/_creep_watch/`, which the watch does not take for a dam folder.
