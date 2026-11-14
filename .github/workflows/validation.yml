@@ -38,7 +38,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       CELL: ${{ github.event.inputs.cell || '30' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:

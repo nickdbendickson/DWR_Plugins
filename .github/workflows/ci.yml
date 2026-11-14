@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -84,7 +84,7 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS (newest conda-forge, Qt6) + scipy
         id: provision
         uses: mamba-org/setup-micromamba@v3
@@ -220,7 +220,7 @@ jobs:
       # never inside a step or a test. See tools/blas_selfcheck.py and docs/CI.md.
       OPENBLAS_CORETYPE: Haswell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision the test tools (pip + apt, no conda)
         id: provision
         run: |
@@ -301,7 +301,7 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:
