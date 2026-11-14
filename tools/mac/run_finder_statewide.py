@@ -700,10 +700,28 @@ def points_in_rings(xs, ys, rings):
     return inside_
 
 
-def polygons_of(path, where=None):
+def mend_polygon(g):
+    """(g, False) for a valid polygon; for one whose outline crosses itself (a bow tie, a ring
+    drawn over another), (its valid polygons, True): MakeValid keeps every part of it (GDAL 3.0
+    on; older, Buffer(0), which can lose a part). GDAL's own warning lines are kept off the
+    screen: the caller says it in words."""
+    gdal, _o, _s = gdal_mods()
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        if g.IsValid():
+            return g, False
+        mend = getattr(g, "MakeValid", None)
+        h = polygons_only(mend()) if mend is not None else None
+        return (h if h is not None else g.Buffer(0)), True
+    finally:
+        gdal.PopErrorHandler()
+
+
+def polygons_of(path, where=None, mended=None):
     """The union of the polygons of a vector file (optionally those a filter function keeps), in
-    EPSG:5070; None when it has none."""
-    _g, ogr, _s = gdal_mods()
+    EPSG:5070; None when it has none. A polygon that crosses itself is mended first
+    (mend_polygon), quietly; mended (a list), when given, gets the number of such polygons."""
+    gdal, ogr, _s = gdal_mods()
     ds = ogr.Open(path, 0)
     if ds is None:
         raise UserError("cannot open {}".format(path))
@@ -717,6 +735,7 @@ def polygons_of(path, where=None):
         src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     ct = transformer(src, srs_of(WORK_EPSG))
     multi = ogr.Geometry(ogr.wkbMultiPolygon)
+    n_mended = 0
     for f in lyr:
         if where is not None and not where(f):
             continue
@@ -729,16 +748,32 @@ def polygons_of(path, where=None):
             continue
         g.Segmentize(0.02 if src.IsGeographic() else 2000.0)
         g.Transform(ct)
-        if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPolygon:
-            multi.AddGeometry(g)
-        else:
-            for i in range(g.GetGeometryCount()):
-                multi.AddGeometry(g.GetGeometryRef(i).Clone())
+        # each polygon on its own: the parts of a multipolygon may overlap (a shape drawn over
+        # another), which is a fault of the multipolygon, not ground to leave out
+        parts = [g] if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPolygon else \
+            [g.GetGeometryRef(i).Clone() for i in range(g.GetGeometryCount())]
+        for h in parts:
+            h, bad = mend_polygon(h)
+            n_mended += bad
+            if h is None:
+                continue
+            if ogr.GT_Flatten(h.GetGeometryType()) == ogr.wkbPolygon:
+                multi.AddGeometry(h)
+            else:
+                for i in range(h.GetGeometryCount()):
+                    multi.AddGeometry(h.GetGeometryRef(i).Clone())
     ds = None
+    if mended is not None:
+        mended.append(n_mended)
     if multi.GetGeometryCount() == 0:
         return None
-    u = multi.UnionCascaded()
-    return u if u is not None else multi.Buffer(0)
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        u = multi.UnionCascaded()
+        u = u if u is not None else multi.Buffer(0)
+    finally:
+        gdal.PopErrorHandler()
+    return u
 
 
 def builtin_outline():
@@ -763,12 +798,16 @@ def state_outline(a, pack):
     if choice.lower() == "none":
         return None, "none (fills outside North Dakota are kept; in_state is yes for all)"
     counties = os.path.join(pack, *COUNTIES.split("/")) if pack else ""
+    mended = []
     if choice:
         if not os.path.exists(os.path.expanduser(choice)):
             raise UserError("--state-outline {}: no such file".format(choice))
-        geom, what, buf = polygons_of(real(choice)), "the polygon file {}".format(real(choice)), 0.0
+        geom, what, buf = polygons_of(real(choice), mended=mended), "the polygon file {}".format(real(choice)), 0.0
         if geom is None:
             raise UserError("--state-outline {} holds no polygons".format(choice))
+        if sum(mended):
+            what += (" ({} polygon(s) in it cross themselves: mended before use, every part kept)"
+                     .format(sum(mended)))
     elif counties and os.path.isfile(counties) and polygons_of(counties) is not None:
         geom, what, buf = polygons_of(counties), "the pack's county boundaries ({})".format(COUNTIES), 0.0
     else:
@@ -1765,9 +1804,8 @@ class Ground:
                                max([j for _i, j in idx] or [0]) - self.j0 + 2), "i1")   # 0 none, 1 part, 2 whole
         self.piece, self.local, blocks = {}, {}, {}
         side = CROWD_BLOCK * self.size
-        if outline is not None and not outline.IsValid():   # an outline that crosses itself cannot be cut
-            mend = getattr(outline, "MakeValid", None)      # (GDAL 3.0 on; it keeps what in_state calls inside)
-            outline = mend() if mend is not None else outline.Buffer(0)
+        if outline is not None:                             # an outline that crosses itself cannot be cut
+            outline = mend_polygon(outline)[0]              # (state_outline mends one read from a file already)
         for (i, j), b in zip(idx, boxes):
             st, g = 2, None
             if outline is not None:

@@ -339,6 +339,50 @@ class Plain(unittest.TestCase):
         d = outer.Difference(hole)
         self.assertEqual(rfs.points_in_rings([1, 5, 11], [1, 5, 5], rfs.rings_of(d)).tolist(), [True, False, False])
 
+    def test_a_state_outline_that_crosses_itself_is_mended_quietly(self):
+        """A --state-outline file whose polygon crosses itself (a bow tie, with a square drawn over
+        one half): no raw GDAL error line on the screen, both halves of the bow tie are kept, and
+        the run's own words say it was mended."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "bow tie.gpkg")
+        ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+        lyr = ds.CreateLayer("state", rfs.srs_of(5070), ogr.wkbMultiPolygon)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt(
+            "MULTIPOLYGON (((-108000 2612000,-92000 2628000,-92000 2612000,-108000 2628000,-108000 2612000)),"
+            "((-107000 2618000,-103000 2618000,-103000 2622000,-107000 2622000,-107000 2618000)))"))
+        lyr.CreateFeature(f)
+        f = lyr = ds = None
+        a = rfs.parser().parse_args(["--state-outline", path, "--state-buffer-m", "0"])
+        err = os.path.join(d, "stderr.txt")
+        sys.stderr.flush()
+        keep = os.dup(2)
+        try:
+            with open(err, "w") as fh:
+                os.dup2(fh.fileno(), 2)
+                geom, what = rfs.state_outline(a, None)
+                g = rfs.Ground([(-110000.0, 2610000.0, -100000.0, 2620000.0)], geom)
+                g.share([-104000.0], [2619000.0])
+        finally:
+            os.dup2(keep, 2)
+            os.close(keep)
+        with open(err) as fh:
+            said = fh.read()
+        self.assertNotIn("ERROR", said)
+        self.assertNotIn("TopologyException", said)
+        self.assertNotIn("Self-intersection", said)
+        self.assertTrue(geom.IsValid())
+        self.assertAlmostEqual(geom.GetArea(), 2 * 16000.0 * 8000.0 / 2, delta=1.0)     # both triangles, 64 km2 each
+        self.assertIn("cross themselves: mended", what)
+        # a point in each half of the bow tie, one in the square, two outside it
+        self.assertEqual(rfs.points_in_rings([-106000.0, -94000.0, -105000.0, -100000.0, -100000.0],
+                                             [2620000.0, 2620000.0, 2619000.0, 2626000.0, 2614000.0],
+                                             rfs.rings_of(geom)).tolist(), [True, True, True, False, False])
+        # a valid outline is handed back as it is, and nothing is said
+        box = rfs.box_geom((0.0, 0.0, 10.0, 10.0))
+        self.assertEqual(rfs.mend_polygon(box), (box, False))
+
 
 @needs_gdal
 class Engine(unittest.TestCase):
