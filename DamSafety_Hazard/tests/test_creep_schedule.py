@@ -8,13 +8,16 @@
   3. the QGIS profile: 'default' needs nothing; another profile gets a configuration folder
      whose 'default' is a link to it
   4. apply() and remove() with a command runner that records instead of running, in a
-     temporary home folder: NOTHING is registered on this computer by this test
+     temporary home folder: NOTHING is registered on this computer by this test. The script
+     itself is run with a stand-in for qgis_process: the sh one on Linux and macOS, the
+     .cmd one on Windows
   5. bad input is a ScheduleError with a plain message
 
     python3 DamSafety_Hazard/tests/test_creep_schedule.py
 """
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -28,6 +31,10 @@ from DamSafety_Hazard import watch_schedule as S  # noqa: E402
 
 fails = []
 T = tempfile.mkdtemp(prefix="hz_sched_")
+# A schedule holds this computer's paths. On Windows those have a drive and backslashes, which
+# no Linux or macOS computer has, so the parts that write and run a Linux or macOS schedule
+# are for those systems; the Windows schedule is written on every system and run on Windows.
+POSIX = os.name != "nt"
 
 
 def check(cond, msg):
@@ -114,14 +121,21 @@ check(p["register"] == [["launchctl", "bootstrap", "gui/501", plist]], "register
 check(p["unregister"] == [["launchctl", "bootout", "gui/501/org.damsafety.creepwatch." + jid]], "and removed with launchctl bootout")
 check(not os.path.exists(wrapper) and not os.path.exists(plist), "plan() writes nothing")
 
-q = S.plan(parent, exe, system="linux", home=home, every="quarter", month=2, day=1, hour=22, have_systemd=True)
-check(q["when"] == "every 3 months on day 1 at 22:00, in February, May, August, November", "a quarter from February: " + q["when"])
-timer = [k for k in q["files"] if k.endswith(".timer")][0]
-service = [k for k in q["files"] if k.endswith(".service")][0]
-check(timer == os.path.join(home, ".config", "systemd", "user", "damsafety-creepwatch-{}.timer".format(jid)), "Linux: a systemd user timer")
-check("OnCalendar=*-02,05,08,11-01 22:00:00" in q["files"][timer] and "Persistent=true" in q["files"][timer], "that catches up a missed run")
-check('ExecStart=/bin/sh "{}"'.format(wrapper) in q["files"][service], "its service starts the script")
-check(q["register"][-1] == ["systemctl", "--user", "enable", "--now", "damsafety-creepwatch-{}.timer".format(jid)], "registered with systemctl --user enable --now")
+if POSIX:
+    q = S.plan(parent, exe, system="linux", home=home, every="quarter", month=2, day=1, hour=22, have_systemd=True)
+    check(q["when"] == "every 3 months on day 1 at 22:00, in February, May, August, November", "a quarter from February: " + q["when"])
+    timer = [k for k in q["files"] if k.endswith(".timer")][0]
+    service = [k for k in q["files"] if k.endswith(".service")][0]
+    check(timer == os.path.join(home, ".config", "systemd", "user", "damsafety-creepwatch-{}.timer".format(jid)), "Linux: a systemd user timer")
+    check("OnCalendar=*-02,05,08,11-01 22:00:00" in q["files"][timer] and "Persistent=true" in q["files"][timer], "that catches up a missed run")
+    check('ExecStart=/bin/sh "{}"'.format(wrapper) in q["files"][service], "its service starts the script")
+    check(q["register"][-1] == ["systemctl", "--user", "enable", "--now", "damsafety-creepwatch-{}.timer".format(jid)], "registered with systemctl --user enable --now")
+else:
+    try:
+        S.plan(parent, exe, system="linux", home=home, every="quarter", month=2, day=1, hour=22, have_systemd=True)
+        check(False, "a systemd unit is not written for a path with a backslash")
+    except S.ScheduleError as e:
+        check("cannot be written into a systemd unit" in str(e), "a systemd unit is not written for a path with a backslash (this computer's)")
 c = S.plan(parent, exe, system="linux", home=home, have_systemd=False)
 check(not c["register"] and "0 6 15 1 * /bin/sh '{}'".format(wrapper) in c["manual"], "no systemd: the crontab line is given and nothing is registered")
 check(sorted(c["files"]) == [wrapper], "and only the script is written")
@@ -140,56 +154,57 @@ check(S.months("year", 12) == [12] and S.months("month", 5) == list(range(1, 13)
 cfg = os.path.join(T, "QGIS3")
 os.makedirs(os.path.join(cfg, "profiles", "default"))
 os.makedirs(os.path.join(cfg, "profiles", "damsafety"))
-d = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "default") + os.sep)
-check("export QGIS_CUSTOM_CONFIG_PATH='{}'".format(cfg) in d["files"][wrapper] and d["link"] is None, "the 'default' profile: its configuration folder, no link")
-n = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "damsafety"),
-           env={"ND_HAZARD_PACK": "/data/pack"})
 own = os.path.join(parent, "_creep_watch", "qgis_config")
-check(n["link"] == (os.path.join(own, "profiles", "default"), os.path.join(cfg, "profiles", "damsafety")), "another profile: a 'default' that links to it")
-check("export QGIS_CUSTOM_CONFIG_PATH='{}'".format(own) in n["files"][wrapper] and "export ND_HAZARD_PACK='/data/pack'" in n["files"][wrapper], "the script points QGIS at it, and carries the pack choice")
-check(any("damsafety" in t for t in n["notes"]), "and the profile is named in the notes")
-with open(os.path.join(cfg, "profiles", "profiles.ini"), "w") as fh:
-    fh.write("[core]\ndefaultProfile=damsafety\n")
-d2 = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "default"))
-check(d2["link"] is not None, "'default' while profiles.ini names another: linked too, so a later QGIS cannot open the other one")
+if POSIX:
+    d = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "default") + os.sep)
+    check("export QGIS_CUSTOM_CONFIG_PATH='{}'".format(cfg) in d["files"][wrapper] and d["link"] is None, "the 'default' profile: its configuration folder, no link")
+    n = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "damsafety"),
+               env={"ND_HAZARD_PACK": "/data/pack"})
+    check(n["link"] == (os.path.join(own, "profiles", "default"), os.path.join(cfg, "profiles", "damsafety")), "another profile: a 'default' that links to it")
+    check("export QGIS_CUSTOM_CONFIG_PATH='{}'".format(own) in n["files"][wrapper] and "export ND_HAZARD_PACK='/data/pack'" in n["files"][wrapper], "the script points QGIS at it, and carries the pack choice")
+    check(any("damsafety" in t for t in n["notes"]), "and the profile is named in the notes")
+    with open(os.path.join(cfg, "profiles", "profiles.ini"), "w") as fh:
+        fh.write("[core]\ndefaultProfile=damsafety\n")
+    d2 = S.plan(parent, exe, system="linux", home=home, have_systemd=True, settings_dir=os.path.join(cfg, "profiles", "default"))
+    check(d2["link"] is not None, "'default' while profiles.ini names another: linked too, so a later QGIS cannot open the other one")
 
 # ---- 4. apply and remove, nothing registered for real -------------------------------
-rec = Recorder()
-lines = S.apply(n, register=True, run=rec)
-check(rec.calls == n["unregister"] + n["register"], "apply: the old schedule is removed, then the new one registered")
-check(os.access(wrapper, os.X_OK) and os.path.isfile(timer), "the script (executable) and the timer are written")
-check(os.path.realpath(os.path.join(own, "profiles", "default")) == os.path.realpath(os.path.join(cfg, "profiles", "damsafety")), "the profile link is made")
-check(any(ln.startswith("Scheduled: once a year") for ln in lines) and any("creep_watch_log.txt" in ln for ln in lines), "it says when, and where the log is")
-check(W.dam_folders(parent) == [], "_creep_watch is not taken for a dam folder")
-S.apply(n, register=True, run=Recorder())
-check(os.path.islink(os.path.join(own, "profiles", "default")), "scheduling again keeps the link")
-rec = Recorder()
-lines = S.apply(p, register=False, run=rec)
-check(rec.calls == [] and any("run: launchctl bootstrap gui/501" in ln for ln in lines) and any(ln.startswith("Not scheduled yet") for ln in lines), "'only write the script': nothing is run, the command is shown")
-held = os.path.join(parent, "_creep_watch", os.path.basename(plist))
-check(os.path.isfile(held) and not os.path.exists(plist), "and the agent file waits beside the script, not in LaunchAgents (macOS would load it at the next login)")
-check(any(ln.strip() == "copy {} to {}".format(held, plist) for ln in lines), "with where to copy it")
-os.remove(held)
-try:
-    S.apply(q, register=True, run=Recorder(code=1))
-    check(False, "a scheduler that says no is an error")
-except S.ScheduleError as e:
-    check("systemctl --user daemon-reload ended with code 1" in str(e) and "said no" in str(e), "a scheduler that says no is a ScheduleError with its answer")
-rec = Recorder()
-lines = S.remove(parent, system="linux", home=home, run=rec)
-check(["systemctl", "--user", "disable", "--now", "damsafety-creepwatch-{}.timer".format(jid)] in rec.calls, "remove: the timer is disabled")
-check(not os.path.exists(wrapper) and not os.path.exists(timer) and not os.path.exists(service), "and the script and the units are deleted")
-check(os.path.isfile(paths["changed_html"]) and "kept" in lines[-1], "the reports are kept")
-check(S.remove(parent, system="linux", home=home, run=Recorder()) == ["No schedule of this folder was found."], "removing twice says there is none")
-rec = Recorder()
-S.apply(p, register=True, run=rec)
-gone = os.path.join(T, "gone")
-check(S.remove(gone, system="macos", home=home, uid=501, run=Recorder()) == ["No schedule of this folder was found."], "a folder that never had a schedule")
-check(S.remove(parent, system="macos", home=home, uid=501, run=rec)[0].startswith("The schedule of") and not os.path.exists(plist), "macOS: the agent is removed")
+if POSIX:
+    rec = Recorder()
+    lines = S.apply(n, register=True, run=rec)
+    check(rec.calls == n["unregister"] + n["register"], "apply: the old schedule is removed, then the new one registered")
+    check(os.access(wrapper, os.X_OK) and os.path.isfile(timer), "the script (executable) and the timer are written")
+    check(os.path.realpath(os.path.join(own, "profiles", "default")) == os.path.realpath(os.path.join(cfg, "profiles", "damsafety")), "the profile link is made")
+    check(any(ln.startswith("Scheduled: once a year") for ln in lines) and any("creep_watch_log.txt" in ln for ln in lines), "it says when, and where the log is")
+    check(W.dam_folders(parent) == [], "_creep_watch is not taken for a dam folder")
+    S.apply(n, register=True, run=Recorder())
+    check(os.path.islink(os.path.join(own, "profiles", "default")), "scheduling again keeps the link")
+    rec = Recorder()
+    lines = S.apply(p, register=False, run=rec)
+    check(rec.calls == [] and any("run: launchctl bootstrap gui/501" in ln for ln in lines) and any(ln.startswith("Not scheduled yet") for ln in lines), "'only write the script': nothing is run, the command is shown")
+    held = os.path.join(parent, "_creep_watch", os.path.basename(plist))
+    check(os.path.isfile(held) and not os.path.exists(plist), "and the agent file waits beside the script, not in LaunchAgents (macOS would load it at the next login)")
+    check(any(ln.strip() == "copy {} to {}".format(held, plist) for ln in lines), "with where to copy it")
+    os.remove(held)
+    try:
+        S.apply(q, register=True, run=Recorder(code=1))
+        check(False, "a scheduler that says no is an error")
+    except S.ScheduleError as e:
+        check("systemctl --user daemon-reload ended with code 1" in str(e) and "said no" in str(e), "a scheduler that says no is a ScheduleError with its answer")
+    rec = Recorder()
+    lines = S.remove(parent, system="linux", home=home, run=rec)
+    check(["systemctl", "--user", "disable", "--now", "damsafety-creepwatch-{}.timer".format(jid)] in rec.calls, "remove: the timer is disabled")
+    check(not os.path.exists(wrapper) and not os.path.exists(timer) and not os.path.exists(service), "and the script and the units are deleted")
+    check(os.path.isfile(paths["changed_html"]) and "kept" in lines[-1], "the reports are kept")
+    check(S.remove(parent, system="linux", home=home, run=Recorder()) == ["No schedule of this folder was found."], "removing twice says there is none")
+    rec = Recorder()
+    S.apply(p, register=True, run=rec)
+    gone = os.path.join(T, "gone")
+    check(S.remove(gone, system="macos", home=home, uid=501, run=Recorder()) == ["No schedule of this folder was found."], "a folder that never had a schedule")
+    check(S.remove(parent, system="macos", home=home, uid=501, run=rec)[0].startswith("The schedule of") and not os.path.exists(plist), "macOS: the agent is removed")
 
 # ---- 4b. the script itself runs, with a stand-in for qgis_process ----------------------
 if os.name != "nt":
-    import subprocess  # noqa: E402
     odd = os.path.join(T, "it's a folder", "dams")           # a space and an apostrophe
     os.makedirs(odd)
     fake = os.path.join(T, "it's a folder", "qgis_process")
@@ -209,6 +224,45 @@ if os.name != "nt":
     lines = S.remove(odd, system="linux", home=home, run=Recorder())
     left = sorted(os.listdir(os.path.join(odd, "_creep_watch")))
     check(left == ["creep_watch_log.txt", "qgis_config"], "remove also takes the unit files 'only write' left beside the script; the log stays: {}".format(left))
+
+# ---- 4w. Windows: apply and remove with the recorder; on Windows the script runs ------
+wpar = os.path.join(T, "a folder", "dams")                 # a space
+os.makedirs(wpar)
+wfake = os.path.join(T, "a folder", "qgis_process.bat")
+wp = S.plan(wpar, wfake, system="windows", home=home, workers=2,
+            settings_dir=os.path.join(cfg, "profiles", "damsafety"))
+wcmd = os.path.join(wpar, "_creep_watch", "run_creep_watch.cmd")
+wown = os.path.join(wpar, "_creep_watch", "qgis_config")
+check(wp["link"] == (os.path.join(wown, "profiles", "default"), os.path.join(cfg, "profiles", "damsafety")), "Windows, another profile: a 'default' that links to it")
+check("set QGIS_CUSTOM_CONFIG_PATH={}\r\n".format(wown) in wp["files"][wcmd], "and the script points QGIS at it")
+rec = Recorder()
+lines = S.apply(wp, register=True, run=rec)
+check(rec.calls == wp["unregister"] + wp["register"] and rec.calls[0][:2] == ["schtasks", "/Delete"] and rec.calls[1][:2] == ["schtasks", "/Create"], "apply: the old task is deleted, then the new one created")
+check(os.path.isfile(wcmd) and any(ln.startswith("Scheduled: once a year") for ln in lines), "the .cmd script is written")
+with open(os.path.join(cfg, "profiles", "damsafety", "seen.txt"), "w") as fh:
+    fh.write("through the link")
+seen = os.path.join(wown, "profiles", "default", "seen.txt")
+check(os.path.isfile(seen) and open(seen).read() == "through the link", "the profile link is made (a junction on Windows): a file of the profile is seen through it")
+S.apply(wp, register=True, run=Recorder())
+check(os.path.isfile(seen), "scheduling again keeps the link")
+if not POSIX:
+    with open(wfake, "w", newline="") as fh:
+        fh.write("@echo off\r\n:next\r\nif \"%~1\"==\"\" goto done\r\necho ARG[%~1]\r\nshift\r\ngoto next\r\n"
+                 ":done\r\necho CFG[%QGIS_CUSTOM_CONFIG_PATH%]\r\nexit /b 3\r\n")
+    r = subprocess.run(["cmd", "/c", wcmd], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    wlogp = os.path.join(wpar, "_creep_watch", "creep_watch_log.txt")
+    wlog = open(wlogp, encoding="utf-8", errors="replace").read() if os.path.isfile(wlogp) else ""
+    shown = " (exit {}, printed {!r}, log {!r})".format(r.returncode, r.stdout[-300:], wlog[-600:])
+    check(r.returncode == 0 and r.stdout.strip() == b"", "Windows: the script runs and prints nothing itself" + shown)
+    check("ARG[run]" in wlog and "ARG[ndhazard:creepwatch]" in wlog and "ARG[--PARENT={}]".format(wpar) in wlog and "ARG[--WORKERS=2]" in wlog,
+          "qgis_process gets the folder as one argument, space and all" + shown)
+    check("CFG[{}]".format(wown) in wlog, "and the profile's configuration folder" + shown)
+    check("hazard creep watch" in (wlog.splitlines() or [""])[0] and wlog.strip().endswith("==== ended with code 3"), "the log has the start and how the run ended" + shown)
+rec = Recorder()
+lines = S.remove(wpar, system="windows", home=home, run=rec)
+check(rec.calls == [["schtasks", "/Delete", "/F", "/TN", "DamSafety hazard creep watch " + S.job_id(wpar)]], "remove: the task is deleted")
+check(not os.path.exists(wcmd) and lines[0].startswith("The schedule of"), "and the script is deleted")
+check(S.remove(wpar, system="windows", home=home, run=Recorder()) == ["No schedule of this folder was found."], "removing twice says there is none")
 
 # ---- 5. bad input -------------------------------------------------------------------
 for kw, word in ((dict(day=31), "day must be 1 to 28"), (dict(hour=24), "hour must be 0 to 23"),
@@ -236,7 +290,6 @@ check(S.main([os.path.join(T, "nowhere"), "--print"]) == 1, "the command line re
 # its paths, or for the open project, with no application ended the process, and with it this
 # whole file. Section 1 above writes the reports with no QGIS running, so it is the check that
 # the reports themselves can be written there.
-import subprocess  # noqa: E402
 code = (
     "import sys\n"
     "sys.path.insert(0, {root!r})\n"
