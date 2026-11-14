@@ -12,6 +12,7 @@ graphical models and from the command line (qgis_process).
   ndhazard:batch       every dam folder of a folder (v2.9: WORKERS > 1 runs
                        that many dams at once as qgis_process children)
   ndhazard:creepwatch  hazard-creep watch over a folder of dams (watch.py)
+  ndhazard:creepschedule  put that watch on the computer's scheduler (watch_schedule.py)
   ndhazard:damsinseries, portfolio, reproduce, fillform (v2.8 / v2.9)
   v2.10 (the dam suite with ND Dam Breach Runner / ND Dam Breach Screening):
   ndhazard:ensemble        class probability over a model ensemble (ensemble.py)
@@ -1111,8 +1112,10 @@ class WatchAlgorithm(_Base):
                 "and writes Hazard_Creep_Watch.csv and Hazard_Creep_Watch_<date>.html in "
                 "the chosen folder - dams whose class changed, or with newly flooded "
                 "structures, roads or lifelines, first. It is a list of dams to look at, not "
-                "a classification. To run it on a schedule: qgis_process run "
-                "ndhazard:creepwatch --PARENT=<folder> (Windows Task Scheduler, cron). "
+                "a classification. Hazard_Creep_Changed_Dams_<date>.html is the one page to "
+                "read: only the dams that changed, then the dams that could not be checked. "
+                "To run it every year without having to remember, use 'Schedule the hazard "
+                "creep watch' (ndhazard:creepschedule). "
                 "WORKERS > 1 classifies that many dams at the same time, each in its own "
                 "qgis_process child process (QGIS stays usable; needs qgis_process - set "
                 "ND_QGIS_PROCESS to its full path if it is not found; falls back to one dam "
@@ -1144,6 +1147,7 @@ class WatchAlgorithm(_Base):
                                        optional=True))
         self.addOutput(QgsProcessingOutputFile("SUMMARY", "Watch list (CSV)"))
         self.addOutput(QgsProcessingOutputFile("HTML", "Watch list (HTML)"))
+        self.addOutput(QgsProcessingOutputFile("CHANGED", "Changed dams, one page (HTML)"))
         self.addOutput(QgsProcessingOutputString("ALERTS", "What the watch found"))
         self.addOutput(QgsProcessingOutputString("MODE", "How the watch ran (sequential / "
                                                  "parallel workers)"))
@@ -1170,8 +1174,9 @@ class WatchAlgorithm(_Base):
             raise QgsProcessingException(str(e)) from e
         for r in WT.sort_rows(rows):
             feedback.pushInfo("{}: {} {}".format(r["Alert"], r["Dam"], r["Message"]))
+        feedback.pushInfo("Changed dams (one page): {}".format(paths.get("changed_html", "")))
         return {"SUMMARY": paths["csv"], "HTML": paths["html"], "ALERTS": WT.alerts_text(rows),
-                "MODE": info.get("text", "")}
+                "CHANGED": paths.get("changed_html", ""), "MODE": info.get("text", "")}
 
 
 class RasPlanAlgorithm(_Base):
@@ -1582,7 +1587,7 @@ SUITE_KEY = "ndhazard"                    # the suite settings file key (damsuit
 SETTINGS_TABS = ("Classification", "Models", "Review & QA", "Dam suite", "Other")
 _TOOL_TAB = {"acerzones": "Classification", "classify": "Classification", "batch": "Classification",
              "fillform": "Classification", "dsswise": "Models", "adddamresults": "Models", "hecrasplan": "Models", "damsinseries": "Models",
-             "portfolio": "Models", "reproduce": "Models", "creepwatch": "Review & QA", "ensemble": "Review & QA",
+             "portfolio": "Models", "reproduce": "Models", "creepwatch": "Review & QA", "creepschedule": "Review & QA", "ensemble": "Review & QA",
              "modelgate": "Review & QA", "quickcreep": "Review & QA", "reviewpackage": "Review & QA",
              "reviewsummary": "Review & QA", "markreviewed": "Review & QA", "reviewhabitable": "Review & QA", "runnerculverts": "Dam suite",
              "suiteexport": "Dam suite", "chartsignoff": "Dam suite", "rulecompare": "Dam suite"}
@@ -1620,13 +1625,14 @@ class Provider(QgsProcessingProvider):
         from .rulecompare_alg import RuleCompareAlgorithm
         from .markreviewed_alg import MarkReviewedAlgorithm          # v2.12
         from .reviewhabitable_alg import ReviewHabitableAlgorithm      # 2.24.7
+        from .creepschedule_alg import CreepScheduleAlgorithm          # 2.25.3
         classes = [AcerZonesAlgorithm, ClassifyAlgorithm, BatchAlgorithm, DssWiseAlgorithm, RasPlanAlgorithm,
                    AddDamResultsAlgorithm, WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
                    SaveDamStateAlgorithm]
         classes += list(QA_ALGORITHMS)
         classes += [type(a) for a in review_algorithms()]
         classes += [RunnerCulvertsAlgorithm, SuiteExportAlgorithm, ChartSignOffAlgorithm, RuleCompareAlgorithm,
-                    MarkReviewedAlgorithm, ReviewHabitableAlgorithm]
+                    MarkReviewedAlgorithm, ReviewHabitableAlgorithm, CreepScheduleAlgorithm]
         return classes
 
     # 2.23.17 (usability plan change 3): the window-state hand-off the batch chain runs

@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.25.2
+ND Dam Hazard Classification Helper - Version 2.25.3
 ====================================================
 
 WHAT IT DOES
@@ -16,6 +16,12 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
+- The hazard creep watch on a schedule (2.25.3): 'Schedule the hazard creep
+  watch' (Processing toolbox, ndhazard:creepschedule) runs the watch of a
+  folder of dams by itself once a year, every 3 months or every month, on
+  this computer's own scheduler. Every watch now also writes
+  Hazard_Creep_Changed_Dams_<date>.html: one page with only the dams that
+  changed. The script and its log are in <folder>/_creep_watch/.
 - Packages are checked before they are unpacked (2.25.2): a submittal
   package (Reproduce) or a DSS-WISE package (Import) that holds a symbolic
   link, unpacks to more than 64 GB or more than the free disk space, or is
