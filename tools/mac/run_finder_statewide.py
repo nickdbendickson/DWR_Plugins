@@ -12,26 +12,35 @@ It never writes, moves or deletes anything in the suite data folder, the pack, t
 the plugins folder, and it downloads nothing. It needs only what the suite's QGIS Python has
 (GDAL / OGR, numpy, scipy) and the DamSafety Finder plugin (0.6.0 or later).
 
-HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does, Finder 0.6.0)
+HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does)
 
-  * run_embankments(bbox=...) cuts its box into 5 km squares starting at the box's south-west
-    corner. For each square it reads the DEM over the square plus a 3 km pad on every side (the pad
-    is 3 km whenever the DEM draws are on, drainage_ac > 0), finds the fills, and keeps a fill only
+  * run_embankments(bbox=...) works in 5 km squares. Finder 0.7.0 takes the squares of a fixed
+    lattice in EPSG:5070 (corners at whole multiples of 5 km; finder.lattice_squares) that its box
+    overlaps, every one whole; up to 0.6.x it cut the box into squares starting at the box's
+    south-west corner. For each square it reads the DEM over the square plus a 3 km pad on every
+    side (the pad is 3 km whenever the DEM draws are on, drainage_ac > 0; 0.7.0 grows that window
+    outward to whole multiples of 30 m, so by under 30 m), finds the fills, and keeps a fill only
     when its crest point lies in the square itself (west and south edges in, east and north edges
-    out). Then it applies two rules to everything it kept: one fill per pool (fills whose pools get
-    out at the same spill point) and no two fills within 60 m of each other.
+    out). Then it applies two rules to everything it kept: one fill per pool (fills whose pools
+    get out at the same spill point) and no two fills within 60 m of each other; 0.7.0 then
+    leaves out what lies outside the box.
   * So this script cuts the state into squares of --tile-km (10 km by default, always a multiple of
     5 km) on a fixed lattice in EPSG:5070 (the engine's working CRS): tile corners are whole
-    multiples of the tile size. Tiles touch and do not overlap. Every 5 km square the engine works
-    on is then the same square, with the same DEM window, that ONE run_embankments call over the
-    whole state would use, so a fill is found the same way whichever tile holds it, and because a
-    crest point lies in exactly one square, no tile drops a fill and no two tiles keep the same one.
-    The 3 km of terrain a tile needs beyond its edge comes from the VRT, not from a neighbour's run.
+    multiples of the tile size. Tiles touch and do not overlap. A 10 km tile is then exactly four
+    of the engine's 5 km squares, with either Finder: the box of a tile starts and ends on the
+    lattice, so 0.7.0 takes those four squares and no other, and 0.6.x, starting at the tile's
+    corner, lands on the same four. Every square is the same square, with the same DEM window,
+    that ONE run_embankments call over the whole state would use, so a fill is found the same way
+    whichever tile holds it, and because a crest point lies in exactly one square, no tile drops
+    a fill and no two tiles keep the same one. The 3 km of terrain a tile needs beyond its edge
+    comes from the VRT, not from a neighbour's run (the terrain window of a tile is the tile +
+    3 km + 600 m, which covers the 30 m). A tile the State outline only clips is run whole, as
+    any other: the engine knows no outline, and its fills beyond it get in_state = no.
   * What a single statewide call does after its squares - the two rules above, across squares - is
     done here in the merge, across tile seams, by calling the engine's own one_per_pool and dedupe
-    on the fills that lie close to a fill of another tile. Two cases can come out otherwise than
-    in one statewide call; neither was met in the test ground (no fill at all was removed across
-    a seam there):
+    on the fills that lie close to a fill of another tile (inside a tile the engine has done it
+    between its four squares). Two cases can come out otherwise than in one statewide call;
+    neither was met in the test ground (no fill at all was removed across a seam there):
       - the rules read the values the tiles wrote, which are rounded to 0.1 ft, so an exact tie
         can fall the other way (the fill is the same embankment);
       - a chain of three fills, each within 60 m of the next (or on one pool), that crosses a
@@ -40,45 +49,56 @@ HOW THE STATE IS TILED, AND WHY (from what finder.run_embankments does, Finder 0
         not come back when that neighbour is then dropped in favour of a fill across the seam;
         one statewide call, looking at all three at once, could have kept it. So at such a chain
         the merge can keep one fill fewer. It never keeps two fills within 60 m of each other.
-  * One difference from a single call is left: stream lines that lie wholly outside a tile are not
-    read for that tile. A line that does not enter the tile has no crest point in it, so the fills
-    are not affected; only the side layer of channel-side dikes ('ridges') can miss a dike within
-    200 m of a tile edge whose only nearby channel is a mapped stream outside the tile that the
-    DEM draws do not also trace.
+  * Stream lines. Finder 0.7.0 reads, for a box, every line that reaches the window of a square
+    the box touches; a tile's extract (below) holds all of those, so a tile reads the lines one
+    statewide call would. Up to 0.6.x the engine read only the lines that meet the box itself,
+    and one difference from a single call was left: a line that does not enter the tile has no
+    crest point in it, so the fills are not affected; only the side layer of channel-side dikes
+    ('ridges') could miss a dike within 200 m of a tile edge whose only nearby channel is a
+    mapped stream outside the tile that the DEM draws do not also trace.
   * To keep every tile small and quick, the tile's process reads its streams, roads, rails and
     known structures from small extracts cut from the pack into --out (features that reach within
     4 km of the tile, in the pack's own order, with their ids), and the terrain through a window VRT
     of the big VRT (the tile plus 3.6 km). Both hold exactly what the engine would have read.
 
-FINDER 0.7.0 AND LATER (the script works with both; it looks at what the Finder it finds offers)
+WHICH FINDER (0.6.0 or later; the script looks at what the Finder it finds offers)
 
-  * 0.7.0 lays its 5 km squares on a fixed lattice in EPSG:5070 (corners at whole multiples of
-    5 km) and its resampled DEM cells on a fixed 30 m lattice, whatever box a run is given. The
-    tiles of this script are on that same lattice already, so nothing changes in how the state is
-    cut; the terrain window of a tile (tile + 3 km + 600 m) covers the up to 30 m by which 0.7.0
-    grows a square's window.
-  * find_id: up to 0.6.x the crest point of a fill - and the id, a hash of it - moved by a few
-    metres with the corner of the run's box, so the ids of two runs over different boxes did not
-    match. From 0.7.0 on a fill has the same id in every run. Marks made on a run of an older
-    Finder are matched to the fills of a new run by location (lat / lon), not by id. The summary
-    says which Finder version the run used and which of the two holds.
+  * find_id: up to 0.6.x the crest point of a fill - and the id, a code made from it - moved by a
+    few metres with the corner of the run's box, so the ids of two runs over different boxes did
+    not match. With 0.7.0 the squares and the DEM cells lie on a fixed lattice, and a fill has
+    the same id in every run of that Finder version over the same terrain and settings, whatever
+    the box. An id does not carry over from one Finder version to another: marks made on a run
+    of another version are matched to the fills of a new run by location (lat / lon), not by
+    id. The summary says which Finder version the run used and which of the two holds.
   * One merged result holds the fills of ONE Finder version: the version is part of the settings
     a tile is known by (done.json), tiles made by another version are kept but neither run again
     nor merged (--redo runs them again), and the merge refuses a mix.
-  * edge_ft (below): when the Finder's rows already carry it (planned for 0.7.0) its figure is
-    used; otherwise this script measures it.
+  * The edge of the terrain data: 0.7.0 handles it itself and this script follows it; for 0.6.x
+    the script has its own, cruder test. See the next part.
 
-THINGS THE ENGINE DOES NOT DO (YET), HANDLED HERE
+THINGS DONE HERE BECAUSE A FINDER RUN ON ONE BOX CANNOT
 
   * Fills outside North Dakota (the terrain covers a rim of the neighbouring states): every fill
     gets in_state = yes / no, and tiles wholly outside the state are not run. The outline is, in
     this order: --state-outline FILE (any polygon file), the pack's county boundaries
     (boundaries/ND_counties.gpkg) when the pack has them, else a simple built-in outline (see
     BUILTIN_SOUTH and BUILTIN_EAST below). "--state-outline none" switches the test off.
-  * A fill within about 150 m of missing terrain is a false dam (NoData acts as a wall): every fill
-    gets edge_ft (the distance to the nearest missing terrain within 200 m, read from the DEM at
-    full resolution; holes smaller than 100 m2 are ignored) and at_data_edge = yes when that is
-    within --edge-m (150 m). Such fills stay in the raw layer and are left out of the ranked list.
+  * Fills at the edge of the terrain data. Where the terrain stops, the missing cells act as a
+    wall and a spur beside them reads as a dam. at_data_edge = yes marks such a fill; it stays
+    in the raw layer and is in none of the ranked lists.
+      - Finder 0.7.0 decides it itself (core/embankments.py step 13): a fill within 150 m of
+        missing terrain WHOSE POOL REACHES the missing terrain gets the kind "at the edge of the
+        terrain data" and no score. Distance alone is not the test: a pond that near the edge
+        whose water stays clear of it is read correctly and keeps its kind (the engine's
+        builder tried distance alone first; on an Iowa tile it set aside 6 real dams of 10
+        fills). Here at_data_edge is yes exactly for the fills of that kind, such a fill is
+        given no score in the merge either, and edge_ft is the Finder's own figure (crest to
+        the nearest missing terrain, looked for to 1,000 m on the run's 3 m cells, holes under
+        100 m2 not counted; blank = none that near). --edge-m is not used.
+      - Finder 0.6.x has no such test, so for its tiles this script measures edge_ft itself
+        (to the nearest missing terrain within 200 m, read from the DEM at full resolution;
+        holes smaller than 100 m2 are ignored) and at_data_edge = yes when that is within
+        --edge-m (150 m): distance alone, so it also sets aside real ponds beside the edge.
   * Ground where a fill is not a dam whatever its shape (of 90 pond-line candidates marked by
     hand on 2026-11-13, 8 were coal-mine spoil and 8 were in the Sheyenne sand hills): the script
     holds no map of such ground. The hook for one is --exclude-polygons FILE (any polygon file):
@@ -147,15 +167,21 @@ KNOWN = (("dwr/DWR_dams.gpkg", "DWR dams"), ("dwr/DWR_dam_lines.gpkg", "DWR dam 
          ("hydro/NID_dams.gpkg", "NID dams"), ("barriers/SARP_dams.gpkg", "SARP dams"))
 COUNTIES = "boundaries/ND_counties.gpkg"
 PACK_NAMES = ("ND_Dam_Suite_Pack",)
+# The script's own edge test, for the tiles of a Finder that has none (0.6.x). Finder 0.7.0 decides
+# it itself (the kind em.K_EDGE) and writes its own edge_ft; these two are then not used.
 EDGE_SEARCH_M = 200.0                   # missing terrain is looked for this far from a fill
 EDGE_SPECK_M2 = 100.0                   # a hole in the terrain smaller than this is not an edge
+EDGE_M_DEFAULT = 150.0                  # --edge-m
+# What the Finder writes as score_note for a fill of its edge kind, which it does not score
+# (finder.run_embankments and finder.run_score, 0.7.0); the merge writes the same words.
+EDGE_NOT_SCORED = "not scored: at the edge of the terrain data"
 FT = 0.3048
 OUT_GPKG = "ND_finder_fills.gpkg"
 OUT_CSV = "ND_finder_candidates_ranked.csv"
 OUT_TOP = "ND_finder_candidates_top.csv"
 OUT_SUMMARY = "ND_finder_summary.txt"
 # The fields this script adds to the engine's. One the engine already writes is not added twice
-# (edge_ft from Finder 0.7.0 on).
+# (edge_ft: Finder 0.7.0 has it among its own fields, in feet, and its place there is kept).
 EXTRA_FIELDS = [("tile", "str"), ("edge_ft", "float"), ("at_data_edge", "str"), ("in_state", "str"),
                 ("excluded", "str"), ("id_clash", "str")]
 TOP_DEFAULT = 2000                      # rows of the short list (--top)
@@ -1193,8 +1219,11 @@ def extract(finder, src, dst, box5070):
 
 def edge_distances(rows, dem):
     """([[find_id, metres to the nearest missing terrain or None]], where the figures come from).
-    A Finder that measures it itself (0.7.0 on: every row carries edge_ft) is taken at its word;
-    for an older one (0.6.x: no such field) it is measured here on the DEM, within EDGE_SEARCH_M."""
+    A Finder that measures it itself (0.7.0: every row carries edge_ft, whole feet, None when there
+    is no missing terrain within its search of 1,000 m) is taken at its word; for an older one
+    (0.6.x: no such field) it is measured here on the DEM, within EDGE_SEARCH_M (200 m). The list
+    goes into the tile's done.json; the merge checks it against the tile's rows and, for a tile
+    whose rows carry edge_ft, reads the rows."""
     if rows and all("edge_ft" in r for r in rows):
         return ([[r["find_id"], None if r["edge_ft"] is None else round(float(r["edge_ft"]) * FT, 1)] for r in rows],
                 "edge_ft as the Finder measured it")
@@ -1202,10 +1231,31 @@ def edge_distances(rows, dem):
             "measured by this script on the DEM, within {:.0f} m".format(EDGE_SEARCH_M))
 
 
+def edge_kind(finder):
+    """The kind this Finder gives a fill at the edge of the terrain data (em.K_EDGE, 0.7.0), or
+    None for a Finder that has no such kind (0.6.x)."""
+    return getattr(getattr(finder, "em", None), "K_EDGE", None)
+
+
+def edge_rule(finder):
+    """(the Finder's edge kind or None, the distance in metres within which it applies, how far in
+    metres it looks for missing terrain) - the last two from the Finder's own defaults, which the
+    tiles are run with."""
+    kind = edge_kind(finder)
+    if kind is None:
+        return None, None, None
+    try:
+        p = finder.em.FinderParams()
+        return kind, float(p.edge_m_max), float(p.edge_search_m)
+    except Exception:                                                   # noqa - words for a log line only
+        return kind, None, None
+
+
 def run_tile(job):
     """One tile, in its own process: the extracts, the terrain window, finder.run_embankments with
-    the proven call, the distance of every fill to missing terrain, then the tile folder is put in
-    place in one step (a rename). Nothing is left half-finished in tiles/."""
+    the proven call, the distance of every fill to missing terrain (the Finder's own figure from
+    0.7.0 on, else measured here), then the tile folder is put in place in one step (a rename).
+    Nothing is left half-finished in tiles/."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)            # Ctrl-C is the parent's to handle
     parent = os.getppid()
     gdal, _o, _s = gdal_mods()
@@ -1258,8 +1308,14 @@ def _run_tile(job, finder, work, parent, t0):
         return 3
     rows = res["rows"]
     edge, edge_from = edge_distances(rows, dem)
-    say("{} fill(s), {} near missing terrain ({})".format(
-        len(rows), sum(1 for _i, d in edge if d is not None), edge_from))
+    k_edge, _lim, far = edge_rule(finder)
+    n_near = sum(1 for _i, d in edge if d is not None)
+    if k_edge is not None and rows and "edge_ft" in rows[0]:
+        say("{} fill(s); {} of them the Finder calls '{}' (kept, not candidates); {} have missing terrain "
+            "within {} ({})".format(len(rows), sum(1 for r in rows if r["kind"] == k_edge), k_edge, n_near,
+                                    "its search" if far is None else "{:,.0f} m".format(far), edge_from))
+    else:
+        say("{} fill(s), {} within {:.0f} m of missing terrain ({})".format(len(rows), n_near, EDGE_SEARCH_M, edge_from))
     shutil.rmtree(inp, ignore_errors=True)                  # the extracts and the window are not results
     done = {"id": tid, "box": list(box), "key": job["key"], "fills": len(rows),
             "terrain_share": job.get("terrain_share"), "edge_from": edge_from,
@@ -1544,10 +1600,12 @@ def map_link(lat, lon):
 
 
 def ids_are_stable(finder):
-    """True when this Finder gives a fill the same find_id in every run: 0.7.0 and later lay the
-    5 km squares and the cells of the resampled DEM on a fixed lattice. Up to 0.6.x both started
-    at the corner of the run's box, so the crest point - and the id made from it - moved by a few
-    metres with the box."""
+    """True when this Finder gives a fill the same find_id in every run, whatever the box: 0.7.0
+    lays the 5 km squares and the cells of the resampled DEM on a fixed lattice (it has
+    finder.lattice_squares). Up to 0.6.x both started at the corner of the run's box, so the crest
+    point - and the id made from it - moved by a few metres with the box. The test is what the
+    Finder has, with its version number as a second way to the same answer: a Finder that has
+    the lattice is stable whatever its number says."""
     try:
         ver = tuple(int(t) for t in str(finder.VERSION).split(".")[:2])
     except ValueError:
@@ -1741,6 +1799,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     ex_geom, ex_what = exclude if exclude else (None, "none")
     ex_rings = rings_of(ex_geom) if ex_geom is not None else None
     edge_lim = float(a.edge_m)
+    k_edge, k_edge_m, k_edge_far = edge_rule(finder)
+    edge_tiles = collections.Counter()                      # tiles by who decided at_data_edge
     engine_names = set(n_ for n_, _t in finder.EMB_FIELDS)
     fields = [f for f in finder.EMB_FIELDS] + [f for f in EXTRA_FIELDS if f[0] not in engine_names]
     kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
@@ -1789,9 +1849,15 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
         if len(edge) != len(rows) or any(e[0] != r["find_id"] for e, r in zip(edge, rows)):
             raise RuntimeError("tile {}: done.json does not match its GeoPackage; run it again "
                                "(delete {})".format(tid, tile_dir(out, tid)))
-        # the distance to missing terrain: the Finder's own edge_ft when this tile's rows carry it
-        # (0.7.0 on), else what this script measured for the tile (done.json)
+        # The edge of the terrain data. A tile whose rows carry the Finder's own edge_ft was made by
+        # a Finder that decides it itself (0.7.0): a fill is at the edge when the Finder gave it
+        # its edge kind - near missing terrain AND its pool reaches it; the distance alone does not
+        # make it one, and --edge-m is not used. Decided tile by tile, by what the tile holds, so
+        # that a tile of a Finder without the test (0.6.x: no edge_ft; this script measured the
+        # distance, done.json) is still merged its own way: within --edge-m of missing terrain.
         engine_edge = "edge_ft" in names
+        by_kind_ = engine_edge and k_edge is not None
+        edge_tiles["finder" if by_kind_ else "script"] += 1
         for r, e in zip(rows, edge):
             r["_edge"] = (None if r.get("edge_ft") is None else float(r["edge_ft"]) * FT) if engine_edge else e[1]
         rows = [r for r in rows if (k, r["_j"]) not in drop]
@@ -1809,10 +1875,16 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 r["tile"] = tid
                 if not engine_edge:
                     r["edge_ft"] = None if r["_edge"] is None else round(r["_edge"] / FT, 0)
-                r["at_data_edge"] = "yes" if r["_edge"] is not None and r["_edge"] <= edge_lim else "no"
+                if by_kind_:
+                    r["at_data_edge"] = "yes" if r["kind"] == k_edge else "no"
+                else:
+                    r["at_data_edge"] = "yes" if r["_edge"] is not None and r["_edge"] <= edge_lim else "no"
                 r["in_state"] = "yes" if ins[i] else "no"
                 r["excluded"] = "yes" if exs[i] else "no"
-                if det is not None:
+                if det is not None and k_edge is not None and r["kind"] == k_edge:
+                    # as the Finder itself does: no score for a fill whose readings lean on a wall
+                    r["score"], r["score_note"] = None, EDGE_NOT_SCORED
+                elif det is not None:
                     r["score"] = round(float(det[i][0]), 3)
                     r["score_note"] = det[i][1]
                 else:
@@ -1879,7 +1951,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 lyr.SetFeature(f)
         ds.CommitTransaction()
     # the ranked candidates: unlisted, dam or dry embankment, in the state, not at the data edge,
-    # not in an --exclude-polygons area
+    # not in an --exclude-polygons area. (A fill of the Finder's edge kind is out twice over: by
+    # its kind and by at_data_edge. A score can be missing only with --no-score, when the order is
+    # by height.)
     kd = finder.em
     order = "score DESC, height_ft DESC, find_id, tile" if model is not None else "height_ft DESC, find_id, tile"
     sql = ("SELECT fid FROM embankments WHERE status <> 'listed' AND kind IN ('{}', '{}') AND in_state = 'yes' "
@@ -1938,7 +2012,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["made"] = now()
     info["script"] = "run_finder_statewide.py {}".format(SCRIPT_VERSION)
     info["finder_version"] = finder.VERSION
-    info["find_ids"] = ("stable: this Finder gives a fill the same id in every run" if ids_are_stable(finder) else
+    info["find_ids"] = ("stable: this Finder gives a fill the same id in every run over the same terrain and "
+                        "settings, whatever the area of the run; ids do not carry over between Finder versions"
+                        if ids_are_stable(finder) else
                         "NOT stable between runs with this Finder (stable from Finder 0.7.0 on): match marks made "
                         "on another run to these fills by location, not by id")
     info["gdal"] = gdal.__version__
@@ -1951,8 +2027,21 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["call"] = "finder.run_embankments(" + ", ".join("{}={}".format(k_, v) for k_, v in sorted(CALL.items())) \
         + ", bbox=<tile>, the six known layers; everything else the Finder's defaults)"
     info["state_outline"] = outline_what
-    info["edge_m"] = "{:.0f} (at_data_edge = yes within this of missing terrain; searched to {:.0f} m, holes " \
-                     "under {:.0f} m2 ignored)".format(edge_lim, EDGE_SEARCH_M, EDGE_SPECK_M2)
+    by_finder = ("the Finder's own rule: at_data_edge = yes for a fill of its kind '{}' ({} missing terrain that "
+                 "its pool reaches; edge_ft is the Finder's figure{}); --edge-m is not used".format(
+                     k_edge, "near" if k_edge_m is None else "within {:.0f} m of".format(k_edge_m),
+                     "" if k_edge_far is None else ", looked for to {:,.0f} m".format(k_edge_far)))
+    by_script = ("this script's own test, for a Finder that has none: at_data_edge = yes within --edge-m = {:.0f} m "
+                 "of missing terrain (looked for to {:.0f} m, holes under {:.0f} m2 ignored)".format(
+                     edge_lim, EDGE_SEARCH_M, EDGE_SPECK_M2))
+    if edge_tiles["finder"] and edge_tiles["script"]:
+        info["data_edge"] = "{} tile(s): {}; {} tile(s) made without the Finder's edge test: {}".format(
+            edge_tiles["finder"], by_finder, edge_tiles["script"], by_script)
+    else:
+        info["data_edge"] = by_finder if edge_tiles["finder"] else by_script
+    if edge_tiles["script"]:                                # as script 1.0 and 1.1 recorded it
+        info["edge_m"] = "{:.0f} (at_data_edge = yes within this of missing terrain; searched to {:.0f} m, holes " \
+                         "under {:.0f} m2 ignored)".format(edge_lim, EDGE_SEARCH_M, EDGE_SPECK_M2)
     info["score_model"] = "none (--no-score)" if model is None else model_path
     info["tiles_merged"] = len(tiles)
     for k_, v in plan_note.items():
@@ -2006,8 +2095,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("Finder version {} (every merged tile was made by it; one result never mixes Finder versions)".format(
         finder.VERSION))
     L.append("find_id: {}".format(
-        "a fill has the same id in every run with this Finder (it works on the fixed lattice, as every Finder "
-        "from 0.7.0 on)." if ids_are_stable(finder) else
+        "a fill has the same id in every run with this Finder, whatever area the run covers (it works on the "
+        "fixed lattice, as every Finder from 0.7.0 on). Marks made with another Finder version are matched by "
+        "location (lat / lon), not by id." if ids_are_stable(finder) else
         "with this Finder the id of a fill changes with the box of a run. Match marks made on another run "
         "to these fills by location (lat / lon), not by id. From Finder 0.7.0 on the ids are the same in "
         "every run."))
@@ -2018,7 +2108,18 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
         L.append("")
     L.append("Fills found (all tiles merged, duplicates across tile seams removed): {:,}".format(stat["all"]))
     L.append("  outside North Dakota (in_state = no):            {:,}".format(stat["out_of_state"]))
-    L.append("  within {:.0f} m of missing terrain (at_data_edge):   {:,}".format(edge_lim, stat["at_edge"]))
+    if edge_tiles["finder"] and not edge_tiles["script"]:
+        L.append("  at the edge of the terrain data (at_data_edge):  {:,}".format(stat["at_edge"]))
+        L.append("    (the Finder's own kind: {} missing terrain that the fill's pool reaches. Kept, not scored,"
+                 .format("near" if k_edge_m is None else "within {:.0f} m of".format(k_edge_m)))
+        L.append("    not ranked. A fill that near whose pool stays clear of the missing terrain keeps its kind.)")
+    elif edge_tiles["finder"]:
+        L.append("  at the edge of the terrain data (at_data_edge):  {:,}".format(stat["at_edge"]))
+        L.append("    ({} tile(s) by the Finder's own kind, {} tile(s) made without that test by distance alone,"
+                 .format(edge_tiles["finder"], edge_tiles["script"]))
+        L.append("    within {:.0f} m of missing terrain)".format(edge_lim))
+    else:
+        L.append("  within {:.0f} m of missing terrain (at_data_edge):   {:,}".format(edge_lim, stat["at_edge"]))
     if ex_geom is not None:
         L.append("  inside an --exclude-polygons area (excluded):    {:,}".format(stat["excluded"]))
         L.append("  in the state, not at the data edge, not excluded: {:,}".format(sum(by_status.values())))
@@ -2070,7 +2171,7 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("")
     L.append("Versions and settings")
     for k_ in ("script", "finder_version", "gdal", "numpy", "scipy", "python", "terrain", "tile_km", "call",
-               "state_outline", "exclude_polygons", "edge_m", "score_model", "selection"):
+               "state_outline", "exclude_polygons", "data_edge", "score_model", "selection"):
         if k_ in info:
             L.append("  {}: {}".format(k_, info[k_]))
     if sums:
@@ -2133,9 +2234,10 @@ def parser():
     ap.add_argument("--state-buffer-m", type=float, default=None,
                     help="allowance round the state outline [0 for a file, {:.0f} for the built-in one]".format(
                         BUILTIN_BUFFER_M))
-    ap.add_argument("--edge-m", type=float, default=150.0,
-                    help="a fill this close to missing terrain is at_data_edge [150; at most {:.0f}]".format(
-                        EDGE_SEARCH_M))
+    ap.add_argument("--edge-m", type=float, default=EDGE_M_DEFAULT,
+                    help="only for tiles made by Finder 0.6.x: a fill this close to missing terrain is at_data_edge "
+                         "[{:.0f}; at most {:.0f}]. Finder 0.7.0 decides it itself (its kind 'at the edge of the "
+                         "terrain data') and this option is then not used".format(EDGE_M_DEFAULT, EDGE_SEARCH_M))
     ap.add_argument("--plugins", default="", help="the folder that holds {} [the damsafety QGIS profile]".format(ENGINE))
     ap.add_argument("--repo", default="", help="a DWR_Plugins checkout to take {} from".format(ENGINE))
     ap.add_argument("--tile-timeout-min", type=float, default=240.0,
@@ -2295,6 +2397,13 @@ def run_locked(a, log, quiet, out, data, pack, plugins, plugins_from, dem, dem_p
     gdal, _o, _s = gdal_mods()
     log("run_finder_statewide {} - {}".format(SCRIPT_VERSION, now()))
     log("  Finder   {} from {} ({})".format(finder.VERSION, os.path.join(plugins, ENGINE), plugins_from))
+    k_edge = edge_kind(finder)
+    if k_edge is not None:
+        log("  edge     this Finder sets a fill at the edge of the terrain data aside itself (kind '{}'){}".format(
+            k_edge, "; --edge-m {:g} is not used".format(a.edge_m) if a.edge_m != EDGE_M_DEFAULT else ""))
+    else:
+        log("  edge     this Finder has no test for the edge of the terrain data: this script measures the distance "
+            "and sets a fill within {:.0f} m of missing terrain aside (--edge-m)".format(a.edge_m))
     if dem is None:
         return merge_without_terrain(a, log, out, pack, dem_path, inputs, finder, model_path, key, dem_why, exclude)
     log("  terrain  {}  ({:,} x {:,} cells of {:g} m, EPSG:{}, {} source file(s) listed, {} overview level(s))".format(

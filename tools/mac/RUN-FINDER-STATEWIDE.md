@@ -13,10 +13,12 @@ writes into one folder, `~/ND_Finder_Statewide`, and nowhere else. It downloads 
 
 ## Before you start
 
-* The suite is installed (`install_dwr_suite_mac.sh`) and **DamSafety Finder is 0.6.0 or later**.
-  Do the whole state with **one** Finder version: tiles made by another version are kept but
-  are neither run again nor merged (see "If something goes wrong"). If 0.7.0 is out, update
-  first and then start; its ids stay the same from run to run (see "The ids" below).
+* The suite is installed (`install_dwr_suite_mac.sh`) and **DamSafety Finder is 0.7.0**: update
+  the plugin first, then start. (0.6.0 still runs, but 0.7.0 is the one to use: its ids stay
+  the same from run to run, and it sets the false dams at the edge of the terrain aside
+  itself; see "The ids" and `at_data_edge` below.) The first lines the script prints say which
+  Finder it found. Do the whole state with **one** Finder version: tiles made by another
+  version are kept but are neither run again nor merged (see "If something goes wrong").
 * The SSD is plugged in: `/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt`.
 * The data pack is in your suite data folder (`~/ND_Suite_Data/ND_Dam_Suite_Pack`).
 * The Mac is on power. The script keeps it awake while it runs.
@@ -111,9 +113,17 @@ ranked lists:
 
 * `in_state` = `no`: the fill is outside North Dakota (the terrain covers a strip of the
   neighbouring states).
-* `at_data_edge` = `yes`: the fill is within 150 m of missing terrain. Where the terrain stops,
-  the edge acts like a wall and the Finder sees a dam that is not there. `edge_ft` is the
-  distance. This also happens round the hole in the terrain over Fort Berthold.
+* `at_data_edge` = `yes`: the fill is at the edge of the terrain data. Where the terrain stops
+  (the state line, the hole in the terrain over Fort Berthold), the missing ground acts like a
+  wall, and a spur beside it can read as a dam that is not there. Finder 0.7.0 tests for this
+  itself: a fill within 150 m of missing terrain **whose pool reaches the missing terrain**
+  gets the kind `at the edge of the terrain data` and no score. Those are the fills marked
+  here. A pond just as close to the edge whose water stays clear of it is read correctly: it
+  keeps its kind and its place in the lists. `edge_ft` is the distance from the fill to the
+  nearest missing terrain, whether or not the fill is set aside (blank: none within 1,000 m).
+  (Finder 0.6.x had no such test. For its tiles the script measures the distance itself, to
+  200 m, and marks every fill within 150 m of missing terrain, real ponds among them;
+  `--edge-m` changes that distance and does nothing with 0.7.0.)
 * `excluded` = `yes`: the fill is inside an area you gave with `--exclude-polygons` (below).
   Without that option it is `no` for every fill.
 * `id_clash` = `yes`: two different fills got the same `find_id` (expect about 20 pairs in the
@@ -126,12 +136,15 @@ short list is there). The summary says how many candidates score 0.5 or more. In
 
 **The ids.** `find_id` is made from the crest point of a fill.
 
-* With **Finder 0.7.0 or later** a fill has the same `find_id` in every run, whatever area the
-  run covered, so a mark made on one run finds its fill in the next by id.
+* With **Finder 0.7.0** a fill has the same `find_id` in every run over the same terrain,
+  whatever area the run covered, so a mark made on one 0.7.0 run finds its fill in the next
+  by id.
 * With **Finder 0.6.x** the crest point moves by a few metres with the area a run covers, and
-  the id with it. Marks made on a 0.6 run (a county run from the toolbox, the cloud test tiles,
-  or a statewide run made with 0.6) are matched to a newer run **by location** (`lat` / `lon`),
-  not by id.
+  the id with it.
+* An id does not carry over from one Finder version to another. Marks made on a 0.6 run (a
+  county run from the toolbox, the cloud test tiles, or a statewide run made with 0.6) are
+  matched to a 0.7.0 run **by location** (`lat` / `lon`), not by id; the same holds if a later
+  version moves a fill's crest point.
 
 The summary's second and third lines say which Finder the run used and which of the two holds.
 

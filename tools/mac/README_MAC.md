@@ -214,19 +214,20 @@ bash run_finder_statewide.sh               # the whole state; the same command g
 * **Reads only:** the terrain VRT (`--dem`, default `/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt`),
   the ND data pack in the suite data folder (`--data`, default `$NDSUITE_DATA`, else
   `~/ND_Suite_Data`) and the installed plugin (the damsafety profile; `--plugins FOLDER` or
-  `--repo CHECKOUT` for another copy; Finder 0.6.0 or later). **Writes only** into `--out`
+  `--repo CHECKOUT` for another copy; Finder 0.7.0, or 0.6.0 at the least). **Writes only** into `--out`
   (default `~/ND_Finder_Statewide`); it refuses an `--out` inside the data folder, the pack, the
   terrain folder or the plugins folder, also when the path is spelled in another case (a Mac's
   disk treats `~/nd_suite_data` and `~/ND_Suite_Data` as one folder). It downloads nothing.
 * **Tiles:** 10 km squares on a fixed lattice in EPSG:5070 that touch and do not overlap, about
-  1,950 for the state. `finder.run_embankments` works in 5 km squares from the corner of the
-  box it is given, reads 3 km of terrain beyond each square and keeps a fill only when its
-  crest point is in the square, so on this lattice every square is the one a single statewide
-  call would use: no fill is dropped at a seam and none is found twice. The engine's two
-  cross-square rules (one fill per pool; no two fills within 60 m) are applied across tile
-  seams in the merge, with the engine's own functions. The header of
-  `run_finder_statewide.py` has the full reasoning and the two edge cases. Finder 0.7.0 lays
-  its own squares and DEM cells on the same fixed lattice; the script works with both.
+  1,950 for the state. `finder.run_embankments` works in 5 km squares (Finder 0.7.0: the
+  squares of a fixed lattice in EPSG:5070, each searched whole; 0.6.x: from the corner of the
+  box it is given), reads 3 km of terrain beyond each square and keeps a fill only when its
+  crest point is in the square. A 10 km tile is exactly four of those squares with either
+  Finder, so every square is the one a single statewide call would use: no fill is dropped at
+  a seam and none is found twice. The engine's two cross-square rules (one fill per pool; no
+  two fills within 60 m) are applied across tile seams in the merge, with the engine's own
+  functions. The header of `run_finder_statewide.py` has the full reasoning and the two edge
+  cases.
 * **Time and memory (measured on the 4-core cloud test box, NOT on a Mac):** a tile full of
   terrain takes about 4.5 minutes of processor time on one core (780 CPU-seconds for 9 tiles
   over 300 km2 of terrain; one full tile alone: 175 s) and 1.2 GB of memory at its peak. For the
@@ -246,9 +247,13 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   `--merge-only` reads the finished tiles only, so it works with the SSD unplugged.
 * **Three flags the script adds:** `in_state` (a fill outside North Dakota: the outline is
   `--state-outline FILE`, else the pack's county layer when it has one, else a simple built-in
-  outline with a 600 m allowance), `at_data_edge` (a fill within 150 m of missing terrain:
-  NoData acts as a wall and makes a false dam; the distance `edge_ft` is the Finder's own when
-  it writes one, as 0.7.0 is to, else measured on the DEM) and `excluded` (a fill inside a
+  outline with a 600 m allowance), `at_data_edge` (a fill at the edge of the terrain data,
+  where NoData acts as a wall and makes a false dam. Finder 0.7.0 decides it itself: a fill
+  within 150 m of missing terrain whose pool reaches the missing terrain has the kind `at the
+  edge of the terrain data` and no score, and `at_data_edge` is `yes` for exactly those;
+  `edge_ft` is the Finder's own distance. For tiles made by 0.6.x, which has no such test, the
+  script measures the distance on the DEM and marks every fill within `--edge-m`, 150 m) and
+  `excluded` (a fill inside a
   polygon of `--exclude-polygons FILE`: the hook for ground such as mine spoil or sand hills;
   the script holds no such map itself). All three kinds stay in the `embankments` layer and are
   left out of the ranked lists.
@@ -261,10 +266,11 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   how many candidates score 0.5 or more, and which Finder version made the run).
 * **Finder versions and ids:** one result holds the fills of one Finder version; tiles made by
   another version are kept, not run again and not merged (`--redo` runs them again). `find_id`
-  is a hash of the crest point. On **Finder 0.7.0 or later** the ids are the same in every
-  run. On 0.6.x the crest point moves by a few metres with the box of a run, so marks made on a
-  0.6 run (a county run from the toolbox, the cloud test tiles) are matched to newer fills **by
-  location**, not by id.
+  is a code made from the crest point. With **Finder 0.7.0** the ids are the same in every run
+  over the same terrain, whatever the box. On 0.6.x the crest point moves by a few metres with
+  the box of a run, and no id carries over from one Finder version to another, so marks made
+  on a 0.6 run (a county run from the toolbox, the cloud test tiles) are matched to newer fills
+  **by location**, not by id.
 
 ## Good to know
 

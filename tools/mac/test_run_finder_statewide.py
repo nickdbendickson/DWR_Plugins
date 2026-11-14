@@ -44,6 +44,20 @@ def _plugins():
     return None
 
 
+def _old_finder(finder):
+    """A stand-in for a Finder from before 0.7.0, made from the one that is installed: it has no
+    edge_ft among its fields, no kind for the edge of the terrain data, no fixed lattice, and it
+    says it is 0.6.0. Everything else is the installed Finder's own."""
+    f = types.SimpleNamespace(**{k: getattr(finder, k) for k in dir(finder) if not k.startswith("__")})
+    f.em = types.SimpleNamespace(**{k: getattr(finder.em, k) for k in dir(finder.em)
+                                    if not k.startswith("__") and k != "K_EDGE"})
+    f.EMB_FIELDS = [q for q in finder.EMB_FIELDS if q[0] != "edge_ft"]
+    f.VERSION = "0.6.0"
+    if hasattr(f, "lattice_squares"):
+        del f.lattice_squares
+    return f
+
+
 def _tif(path, a, x0, y1, epsg=26914, nodata=-999999.0, overviews=False):
     ds = gdal.GetDriverByName("GTiff").Create(path, a.shape[1], a.shape[0], 1, gdal.GDT_Float32,
                                               options=["TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256"])
@@ -306,6 +320,76 @@ class Plain(unittest.TestCase):
 
 
 @needs_gdal
+class Engine(unittest.TestCase):
+    """What this script takes for granted about the Finder beside it, asked of the Finder itself."""
+
+    def setUp(self):
+        if _plugins() is None:
+            self.skipTest("DamSafety_Finder not found")
+        self.finder = rfs.load_engine(_plugins())
+        if not hasattr(self.finder, "lattice_squares"):
+            self.skipTest("this Finder is older than 0.7.0")
+
+    def test_a_tile_is_whole_squares_of_the_engines_lattice(self):
+        """A tile of this script handed to run_embankments as its box: the engine works on exactly
+        the 5 km squares that make up the tile - none beyond it, none twice, none left out."""
+        f = self.finder
+        size = rfs.ENGINE_TILE_M
+        for km, box in ((10, (-381234.5, 2611111.0, -349000.0, 2640000.0)), (5, (-12000.0, -7000.0, 9000.0, 6000.0)),
+                        (15, (-400000.0, 2590000.0, -350000.0, 2640000.0)), (10, (1000.0, 2000.0, 31000.0, 22000.0))):
+            tiles = rfs.lattice(box, km * 1000.0)
+            self.assertTrue(tiles)
+            seen = set()
+            for t in tiles:
+                sq = f.lattice_squares(t.box, size)
+                self.assertEqual(len(sq), (km // 5) ** 2, t.id)
+                self.assertEqual(len(set(sq)), len(sq))
+                for q in sq:
+                    self.assertEqual((q[2] - q[0], q[3] - q[1]), (size, size))
+                    self.assertTrue(all(v % size == 0 for v in q))
+                    self.assertTrue(t.box[0] <= q[0] and q[2] <= t.box[2] and t.box[1] <= q[1] and q[3] <= t.box[3])
+                    self.assertNotIn(q, seen)                 # no square belongs to two tiles
+                    seen.add(q)
+            # together the tiles' squares are every square of the lattice over the tiles, once
+            x0, y0 = min(t.box[0] for t in tiles), min(t.box[1] for t in tiles)
+            x1, y1 = max(t.box[2] for t in tiles), max(t.box[3] for t in tiles)
+            self.assertEqual(len(seen), int(round((x1 - x0) / size)) * int(round((y1 - y0) / size)))
+
+    def test_what_a_tile_reads_covers_what_the_engine_reads(self):
+        """The engine reads a square's terrain over the square + 3 km grown to its grid (30 m for
+        3 m and 10 m cells) and every stream line that reaches that window: the tile's terrain
+        window and its extracts must reach at least as far."""
+        f = self.finder
+        snap = f.grid_lattice(rfs.CALL["cell"], 10.0)
+        self.assertEqual(snap, 30.0)
+        for t in rfs.lattice((-381234.5, 2611111.0, -349000.0, 2640000.0), 10000.0):
+            have = rfs.grow(t.box, rfs.ENGINE_PAD_M + rfs.WINDOW_MARGIN_M)
+            lines = rfs.grow(t.box, rfs.EXTRACT_M)
+            for q in f.lattice_squares(t.box, rfs.ENGINE_TILE_M):
+                w = f.snap_out(rfs.grow(q, rfs.ENGINE_PAD_M), snap)
+                self.assertTrue(w[0] - q[0] > -rfs.ENGINE_PAD_M - snap and w[2] - q[2] < rfs.ENGINE_PAD_M + snap)
+                for box in (have, lines):
+                    self.assertTrue(box[0] <= w[0] and box[1] <= w[1] and w[2] <= box[2] and w[3] <= box[3])
+
+    def test_this_finder_is_known_by_what_it_has_not_by_its_number(self):
+        """Its ids are stable because it has the fixed lattice, whatever its version number says,
+        and its edge rule is read from the Finder itself."""
+        f = self.finder
+        self.assertTrue(rfs.ids_are_stable(f))
+        self.assertTrue(rfs.ids_are_stable(types.SimpleNamespace(VERSION="0.6.0", lattice_squares=f.lattice_squares)))
+        self.assertEqual(rfs.edge_rule(f), (f.em.K_EDGE, 150.0, 1000.0))
+        self.assertIn("edge_ft", [n for n, _t in f.EMB_FIELDS])
+        self.assertIn(f.em.K_EDGE, f.em.KINDS)
+        old = _old_finder(f)
+        self.assertFalse(rfs.ids_are_stable(old))
+        self.assertEqual(rfs.edge_rule(old), (None, None, None))
+        self.assertIsNone(rfs.edge_kind(types.SimpleNamespace(VERSION="0.6.0")))
+        # the words the merge writes for a fill it does not score are the Finder's own
+        import inspect
+        self.assertIn('"{}"'.format(rfs.EDGE_NOT_SCORED), inspect.getsource(f.run_embankments))
+
+
+@needs_gdal
 class Terrain(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="rfs test ")           # a space in the path, as on the SSD
@@ -478,6 +562,11 @@ class Terrain(unittest.TestCase):
         cut = [ln for ln in finder.read_lines(dst, None) if finder._meets(ln, pad)]
         self.assertEqual(whole, cut)
         self.assertTrue(len(cut) > 0)
+        # Finder 0.7.0 reads the lines over the windows of the tile's squares (3 km + up to 30 m)
+        win = rfs.grow(box, rfs.ENGINE_PAD_M + 30.0)
+        got = finder.read_lines(dst, win)
+        self.assertEqual(finder.read_lines(src, win), got)
+        self.assertGreater(len(got), len(finder.read_lines(dst, box)))
         a, b = ogr.Open(src), ogr.Open(dst)
         la, lb = a.GetLayer(0), b.GetLayer(0)
         self.assertEqual(la.GetName(), lb.GetName())
@@ -502,32 +591,38 @@ class Seams(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.d)
 
-    def _tile(self, tid, fills, key=None, finder_version=None, edge_ft=None, edge_m=None, out=None):
+    def _tile(self, tid, fills, key=None, finder_version=None, edge_ft=None, edge_m=None, out=None, kinds=None,
+              finder=None):
         """fills: [(x, y, height_ft, spill (x, y) or None, spill_ft, outlet_dist_ft, line_source)].
-        edge_ft: a list, one per fill - the tile is then written as a Finder that measures edge_ft
-        itself would (0.7.0 on); edge_m: what this script measured (done.json), one per fill."""
-        f = self.finder
+        The tile is written with the fields of `finder` (the installed one unless given). With a
+        Finder that measures edge_ft itself (0.7.0) every row carries edge_ft: the list edge_ft,
+        one per fill, or None for all; with one that does not (_old_finder) the tile has no such
+        field and edge_m is what this script measured (done.json), one per fill. kinds: one per
+        fill (all 'dam' unless given)."""
+        f = finder or self.finder
         out = out or self.d
+        engine_edge = "edge_ft" in [q[0] for q in f.EMB_FIELDS]
         os.makedirs(os.path.join(out, "tiles", tid))
         rows, spills = [], []
         ll = rfs.transformer(rfs.srs_of(5070), rfs.srs_of(4326))
         for i, (x, y, h, sp, sft, od, src) in enumerate(fills):
             fid = f.find_id("FIND", x, y)
             lon, lat = ll.TransformPoint(x, y)[:2]
-            rows.append({"x": x, "y": y, "find_id": fid, "kind": "dam", "status": "new", "height_ft": h,
+            rows.append({"x": x, "y": y, "find_id": fid, "kind": kinds[i] if kinds else f.em.K_DAM,
+                         "status": "new", "height_ft": h,
                          "spill_ft": sft, "outlet_dist_ft": od, "spill_dist_ft": od, "line_source": src,
                          "storage_af": 1.5, "same_pool": 0, "notes": "a note", "lat": round(lat, 6),
                          "lon": round(lon, 6)})
-            if edge_ft is not None:
-                rows[-1]["edge_ft"] = edge_ft[i]
+            if engine_edge:
+                rows[-1]["edge_ft"] = edge_ft[i] if edge_ft is not None else None
             if sp:
                 spills.append({"x": sp[0], "y": sp[1], "find_id": fid, "kind": "overtop"})
         g = os.path.join(out, "tiles", tid, tid + ".gpkg")
-        f.write_points(g, "embankments", f.EMB_FIELDS + ([("edge_ft", "float")] if edge_ft is not None else []), rows)
+        f.write_points(g, "embankments", f.EMB_FIELDS, rows)
         f.write_points(g, "spillways", f.SPILL_FIELDS, spills)
         f.write_points(g, "ridges", f.RIDGE_FIELDS, [])
         edge = [[r["find_id"], None if edge_m is None else edge_m[i]] for i, r in enumerate(rows)]
-        if edge_ft is not None:
+        if engine_edge:
             edge = rfs.edge_distances(rows, None)[0]
         rfs.write_json(os.path.join(out, "tiles", tid, "done.json"),
                        {"id": tid, "key": key or {"k": 1}, "fills": len(rows), "seconds": 1.0, "peak_rss_mb": 1.0,
@@ -721,33 +816,129 @@ class Seams(unittest.TestCase):
             rfs.merge(a, self.finder, self.d, now_key, "/no/such/dem.vrt", None, "none", {}, {}, "", out.append)
         self.assertIn("Finder 0.5.9: 1 tile(s)", str(e.exception))
 
-    def test_edge_ft_of_the_engine_is_used_when_the_rows_carry_it(self):
-        """Finder 0.7.0 is to write edge_ft itself. A Finder whose fields hold edge_ft: the merged
-        layer has ONE edge_ft, with the engine's figures, and at_data_edge follows them. A Finder
-        without it (0.6.0): the figures this script measured for the tile (done.json)."""
+    def _three(self):
         S = self.finder.LINE_STREAM
-        fills = [(-365000.0, 2623000.0, 7.0, None, 1700.0, None, S), (-364000.0, 2624000.0, 9.0, None, 1700.0, None, S),
-                 (-363000.0, 2625000.0, 5.0, None, 1700.0, None, S)]
-        a = rfs.parser().parse_args(["--no-score", "--no-checksums"])
-        # as 0.6.0: this script's own distances (m): 30 m is at the edge, 190 m is not (the limit is 150 m)
-        ids = self._tile("T10_W0370_N2620", fills, edge_m=[30.0, 190.0, None])
-        rfs.merge(a, self.finder, self.d, {"k": 1}, "/no/such/dem.vrt", None, "none", {}, {}, "", lambda m: None)
-        got = {r["find_id"]: (r["edge_ft"], r["at_data_edge"]) for r in self._merged()}
-        self.assertEqual([got[i] for i in ids], [(98.0, "yes"), (623.0, "no"), (None, "no")])
-        # as 0.7.0: the engine's rows carry edge_ft (ft); what done.json holds is the same figures
-        d2 = os.path.join(self.d, "new finder")
-        f7 = types.SimpleNamespace(**{k: getattr(self.finder, k) for k in dir(self.finder) if not k.startswith("__")})
-        f7.EMB_FIELDS = list(self.finder.EMB_FIELDS) + [("edge_ft", "float")]
-        ids = self._tile("T10_W0370_N2620", fills, edge_ft=[120.0, 600.0, None], out=d2)
-        rfs.merge(a, f7, d2, {"k": 1}, "/no/such/dem.vrt", None, "none", {}, {}, "", lambda m: None)
-        ds = ogr.Open(os.path.join(d2, rfs.OUT_GPKG))
-        names = rfs.field_names(ds.GetLayerByName("embankments"))
-        self.assertEqual(names.count("edge_ft"), 1)           # not added a second time
-        self.assertEqual(len(names), len(set(names)))
+        return [(-365000.0, 2623000.0, 7.0, None, 1700.0, None, S), (-364000.0, 2624000.0, 9.0, None, 1700.0, None, S),
+                (-363000.0, 2625000.0, 5.0, None, 1700.0, None, S)]
+
+    def _run_info(self, out=None):
+        return dict((r["key"], r["value"]) for r in self._merged("run_info", out=out))
+
+    def test_a_finder_without_an_edge_test_gets_this_scripts_distance(self):
+        """Finder 0.6.x: its tiles carry no edge_ft and it has no kind for the edge of the terrain
+        data. The merged layer gets the distance this script measured for the tile (done.json)
+        and at_data_edge = yes within --edge-m of missing terrain - distance alone."""
+        old = _old_finder(self.finder)
+        self.assertNotIn("edge_ft", [q[0] for q in old.EMB_FIELDS])
+        key = {"finder": "0.6.0"}
+        ids = self._tile("T10_W0370_N2620", self._three(), edge_m=[30.0, 120.0, None], finder=old, key=key,
+                         finder_version="0.6.0")
+        ds = ogr.Open(os.path.join(self.d, "tiles", "T10_W0370_N2620", "T10_W0370_N2620.gpkg"))
+        self.assertNotIn("edge_ft", rfs.field_names(ds.GetLayerByName("embankments")))   # as 0.6.0 wrote its tiles
         ds = None
-        got = {r["find_id"]: (r["edge_ft"], r["at_data_edge"]) for r in self._merged(out=d2)}
-        self.assertEqual([got[i] for i in ids], [(120.0, "yes"), (600.0, "no"), (None, "no")])
-        self.assertEqual(len(self._merged("candidates", out=d2)), 2)           # the one at the edge is not ranked
+        out = []
+        a = rfs.parser().parse_args(["--no-checksums"])
+        rfs.merge(a, old, self.d, key, "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+        got = {r["find_id"]: (r["edge_ft"], r["at_data_edge"]) for r in self._merged()}
+        self.assertEqual([got[i] for i in ids], [(98.0, "yes"), (394.0, "yes"), (None, "no")])   # 150 m is the limit
+        ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
+        self.assertEqual(rfs.field_names(ds.GetLayerByName("embankments")).count("edge_ft"), 1)
+        ds = None
+        self.assertEqual(len(self._merged("candidates")), 1)
+        self.assertTrue(all(r["score"] is not None for r in self._merged()))   # 0.6.x scored every fill
+        self.assertIn("  within 150 m of missing terrain (at_data_edge):   2", out)
+        info = self._run_info()
+        self.assertTrue(info["edge_m"].startswith("150 "))
+        self.assertIn("this script's own test", info["data_edge"])
+        self.assertIn("NOT stable", info["find_ids"])
+        # --edge-m is this test's limit
+        a = rfs.parser().parse_args(["--no-checksums", "--edge-m", "100"])
+        rfs.merge(a, old, self.d, key, "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+        got = {r["find_id"]: r["at_data_edge"] for r in self._merged()}
+        self.assertEqual([got[i] for i in ids], ["yes", "no", "no"])
+
+    def test_the_finders_own_edge_kind_decides_not_the_distance(self):
+        """Finder 0.7.0 sets a fill aside itself: within 150 m of missing terrain AND its pool
+        reaches it -> the kind K_EDGE. at_data_edge follows that kind and nothing else: a fill
+        just as near whose pool stays clear keeps its kind and its place in the ranked lists.
+        A fill of the edge kind stays in 'embankments', has no score, and is in none of the lists."""
+        f = self.finder
+        if rfs.edge_kind(f) is None:
+            self.skipTest("this Finder has no edge kind")
+        S = f.LINE_STREAM
+        fills = self._three() + [(-362000.0, 2626000.0, 17.0, None, 1700.0, None, S),     # 3: the false dam: the tallest
+                                 (-361000.0, 2627000.0, 6.0, None, 1700.0, None, S)]
+        kinds = [f.em.K_DAM, f.em.K_DRY, f.em.K_DAM, f.em.K_EDGE, f.em.K_DAM]
+        # 0: 120 ft from missing terrain, pool clear of it: an ordinary dam. 3: 128 ft, pool reaches it.
+        edge_ft = [120.0, 600.0, None, 128.0, 3100.0]
+        ids = self._tile("T10_W0370_N2620", fills, edge_ft=edge_ft, kinds=kinds)
+        self.assertEqual(rfs.read_json(os.path.join(self.d, "tiles", "T10_W0370_N2620", "done.json"))["edge_m"],
+                         [[ids[0], 36.6], [ids[1], 182.9], [ids[2], None], [ids[3], 39.0], [ids[4], 944.9]])
+        for args in (["--no-checksums"], ["--no-checksums", "--edge-m", "10"], ["--no-checksums", "--no-score"]):
+            out = []
+            a = rfs.parser().parse_args(args)
+            rfs.merge(a, f, self.d, {"k": 1}, "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+            ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
+            names = rfs.field_names(ds.GetLayerByName("embankments"))
+            self.assertEqual(names.count("edge_ft"), 1)       # the Finder's field, not added a second time
+            self.assertEqual(len(names), len(set(names)))
+            self.assertEqual([n for n in names if n in [q[0] for q in f.EMB_FIELDS]], [q[0] for q in f.EMB_FIELDS])
+            ds = None
+            rows = {r["find_id"]: r for r in self._merged()}
+            self.assertEqual(len(rows), 5)                    # every fill is still in the full layer
+            self.assertEqual([(rows[i]["edge_ft"], rows[i]["at_data_edge"]) for i in ids],
+                             [(120.0, "no"), (600.0, "no"), (None, "no"), (128.0, "yes"), (3100.0, "no")], args)
+            keep = sorted(ids[i] for i in (0, 1, 2, 4))
+            self.assertEqual(sorted(r["find_id"] for r in self._merged("candidates")), keep)
+            self.assertEqual(sorted(r["find_id"] for r in self._csv(rfs.OUT_CSV)), keep)
+            self.assertEqual(sorted(r["find_id"] for r in self._csv(rfs.OUT_TOP)), keep)
+            self.assertEqual(self._csv(rfs.OUT_CSV)[0]["rank"], "1")
+            if "--no-score" in args:                          # ranked by height: the 17 ft false dam is not first
+                self.assertEqual([r["height_ft"] for r in self._csv(rfs.OUT_CSV)], ["9.0", "7.0", "6.0", "5.0"])
+                self.assertTrue(all(r["score"] is None for r in rows.values()))
+            else:
+                self.assertIsNone(rows[ids[3]]["score"])      # as the Finder itself: not scored
+                self.assertEqual(rows[ids[3]]["score_note"], rfs.EDGE_NOT_SCORED)
+                self.assertTrue(all(rows[ids[i]]["score"] is not None for i in (0, 1, 2, 4)))
+                scores = [float(r["score"]) for r in self._csv(rfs.OUT_CSV)]
+                self.assertEqual(scores, sorted(scores, reverse=True))
+            self.assertIn("  at the edge of the terrain data (at_data_edge):  1", out)
+            self.assertFalse(any("of missing terrain (at_data_edge)" in ln for ln in out))
+            self.assertTrue(any(ln.startswith("  {:<42}".format(f.em.K_DAM)) for ln in out))
+            self.assertFalse(any(ln.startswith("  {:<42}".format(f.em.K_EDGE)) for ln in out))   # no row of the kind table
+            info = self._run_info()
+            self.assertEqual(info["fills_at_data_edge"], "1")
+            self.assertEqual(info["candidates_ranked"], "4")
+            self.assertIn(f.em.K_EDGE, info["data_edge"])
+            self.assertIn("--edge-m is not used", info["data_edge"])
+            self.assertNotIn("edge_m", info)
+            self.assertIn("stable", info["find_ids"])
+            self.assertNotIn("NOT stable", info["find_ids"])
+
+    def test_tiles_made_with_and_without_the_edge_test_are_each_merged_their_own_way(self):
+        """A tile is merged by what it holds: with the Finder's edge_ft -> the Finder's kind; without
+        (a tile an older Finder made) -> this script's distance. (Until the version number of the
+        Finder is raised, both kinds of tile can carry the same number.)"""
+        f = self.finder
+        if rfs.edge_kind(f) is None:
+            self.skipTest("this Finder has no edge kind")
+        S = f.LINE_STREAM
+        new = self._tile("T10_W0370_N2620", self._three(), edge_ft=[30.0, 128.0, None],
+                         kinds=[f.em.K_DAM, f.em.K_EDGE, f.em.K_DAM])
+        old = self._tile("T10_W0360_N2620", [(-355000.0, 2623000.0, 7.0, None, 1700.0, None, S),
+                                             (-354000.0, 2624000.0, 9.0, None, 1700.0, None, S)],
+                         edge_m=[30.0, 190.0], finder=_old_finder(f), finder_version=f.VERSION)
+        out = []
+        a = rfs.parser().parse_args(["--no-checksums"])
+        rfs.merge(a, f, self.d, {"k": 1}, "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+        got = {r["find_id"]: (r["edge_ft"], r["at_data_edge"]) for r in self._merged()}
+        self.assertEqual([got[i] for i in new], [(30.0, "no"), (128.0, "yes"), (None, "no")])
+        self.assertEqual([got[i] for i in old], [(98.0, "yes"), (623.0, "no")])
+        self.assertIn("  at the edge of the terrain data (at_data_edge):  2", out)
+        self.assertTrue(any("1 tile(s) by the Finder's own kind, 1 tile(s) made without that test" in ln for ln in out))
+        info = self._run_info()
+        self.assertIn("1 tile(s) made without the Finder's edge test", info["data_edge"])
+        self.assertTrue(info["edge_m"].startswith("150 "))
 
     def test_merge_only_without_the_terrain_file(self):
         """--merge-only with the terrain drive unplugged: the settings come from the finished
