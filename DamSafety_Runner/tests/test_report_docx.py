@@ -134,6 +134,7 @@ def docx_builder_writes_a_complete_valid_package():
     assert 'TOC \\o "1-3"' in xml
     assert "<w:titlePg/>" in xml
     assert 'updateFields' in z.read("word/settings.xml").decode()
+    z.close()               # Windows cannot remove a file that is still open
     info = R.inspect_docx(path)
     assert [h[0] for h in info["headings"]] == [1, 2, 3, 1], info["headings"]
     assert info["headings"][1][1] == "1.1 Second" and info["headings"][3][1] == "2 Another"

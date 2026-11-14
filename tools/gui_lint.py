@@ -94,7 +94,25 @@ def rule_fits(label, win):
              "screen".format(h, MAX_MIN_HEIGHT))
     if w > MAX_MIN_WIDTH:
         fail(label, "cannot shrink below {} px wide (limit {}): wider than an 800 x 600 "
-             "screen".format(w, MAX_MIN_WIDTH))
+             "screen (minimum width set {} px, its contents need {} px)".format(
+                 w, MAX_MIN_WIDTH, win.minimumWidth(), hint.width() if hint.isValid() else 0))
+
+
+def measured_with():
+    """One line on what the sizes were measured with. A window's smallest size follows the
+    style and the font, and both differ between systems (the Windows and macOS runs)."""
+    try:
+        from qgis.PyQt.QtGui import QFontInfo, QFontMetrics
+        font, scr = _app.font(), _app.primaryScreen()
+        info, geo = QFontInfo(font), scr.geometry()
+        return ("gui_lint measured with: {}, style {}, font {} {:g} pt ({} px), 20 capital M = "
+                "{} px, screen {} x {} at {:g} dpi, scale {:g}".format(
+                    sys.platform, _app.style().objectName() or "?", info.family(),
+                    info.pointSizeF(), info.pixelSize(),
+                    QFontMetrics(font).horizontalAdvance("M" * 20), geo.width(), geo.height(),
+                    scr.logicalDotsPerInch(), scr.devicePixelRatio()))
+    except Exception as e:                                       # noqa: BLE001 - a note only
+        return "gui_lint measured with: not known ({})".format(e)
 
 
 def rule_colours(label, win):
@@ -290,6 +308,7 @@ def opened(label, make):
 
 
 def main():
+    print(measured_with())
     rule_icons()
     rule_no_message_box_checks()
     import ci_checks                       # Core 1.0.0: the window files are shims onto the Core

@@ -345,6 +345,19 @@ def no_models():
         os.environ.update(saved)
 
 
+def _one_spelling(v):
+    """Every path of a lookups() answer in one spelling. Windows finds lisflood.EXE for
+    lisflood.exe (the extension comes from PATHEXT, in capitals) and may write the temp folder
+    with or without its short name (RUNNER~1): the same file either way."""
+    if isinstance(v, dict):
+        return dict((k, _one_spelling(x)) for k, x in v.items())
+    if isinstance(v, (tuple, list)):
+        return tuple(_one_spelling(x) for x in v)
+    if isinstance(v, str) and os.path.isabs(v):
+        return os.path.normcase(os.path.realpath(v))
+    return v
+
+
 @test
 def no_models_clears_and_restores_the_model_environment():
     # Every input set: the variables, the suite store's computer setting, the Processing
@@ -410,10 +423,10 @@ def no_models_clears_and_restores_the_model_environment():
             assert shutil.which is real_which and suite_config.get is real_get
             assert pc.getSetting is real_setting
             assert all(getattr(nd_data, n) is f for n, f in keep_funcs.items())
-            assert lookups() == found, lookups()
+            assert _one_spelling(lookups()) == _one_spelling(found), lookups()
 
         os.environ.update(values)
-        assert lookups() == found, lookups()        # each input is visible before
+        assert _one_spelling(lookups()) == _one_spelling(found), lookups()        # each input is visible before
         with no_models():
             assert [k for k in variables if k in os.environ] == []
             assert lookups() == {"which": dict((n, None) for n in on_path),

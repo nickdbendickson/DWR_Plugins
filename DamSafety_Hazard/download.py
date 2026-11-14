@@ -14,6 +14,7 @@ outputs/_downloads with the retrieval date so a report can be reproduced.
 import os
 import re
 import json
+import shutil
 import math
 import time
 import queue
@@ -837,7 +838,16 @@ def _write_fc(path, features):
                 "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
                 "features": features,
             }, fh)
-        os.replace(tmp, path)
+        try:
+            os.replace(tmp, path)
+        except PermissionError:
+            # 2.25.4: Windows does not replace a file that is open, and the day file is open
+            # whenever its layer is still in the project (a second run the same day after a
+            # cut-short download, or a refresh). The open file can still be written, so the
+            # new content goes into it. Not a move, but the run goes on with today's data.
+            if not os.path.exists(path):
+                raise
+            shutil.copyfile(tmp, path)
     finally:
         if os.path.exists(tmp):
             try:
@@ -856,12 +866,14 @@ def _todays_file(path, name):
     try:
         return _load(path, name)
     except DownloadError as e:
-        log_message("{}: today's download cannot be read ({}) - deleted, fetched again".format(
-            name, e), MSG_WARNING)
         try:
             os.remove(path)
+            done = "deleted, fetched again"
         except OSError:
-            pass
+            # 2.25.4: open in QGIS or another program (Windows). The fetch writes over it.
+            done = "it is open and could not be deleted, fetched again and written over"
+        log_message("{}: today's download cannot be read ({}) - {}".format(name, e, done),
+                    MSG_WARNING)
         return None
 
 

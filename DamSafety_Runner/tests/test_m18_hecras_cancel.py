@@ -38,7 +38,7 @@ def _need_posix():
 
 
 def _group_alive(pgid):
-    """pids (not zombies) still in process group `pgid` (Linux /proc; else killpg(0))."""
+    """pids (not zombies) still in process group `pgid` (Linux /proc; else ps; else killpg(0))."""
     if os.path.isdir("/proc/self"):
         left = []
         for d in os.listdir("/proc"):
@@ -52,6 +52,20 @@ def _group_alive(pgid):
             rest = st.rsplit(")", 1)[1].split()
             if rest[0] != "Z" and int(rest[2]) == pgid:
                 left.append(int(d))
+        return left
+    try:                                    # macOS and the BSDs: no /proc, so ask ps
+        out = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True,
+                             timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    left, read = [], False
+    for line in out.splitlines():
+        a = line.split()
+        if len(a) >= 3 and a[0].isdigit() and a[1].isdigit():
+            read = True
+            if int(a[1]) == pgid and not a[2].startswith("Z"):
+                left.append(int(a[0]))
+    if read:
         return left
     try:
         os.killpg(pgid, 0)

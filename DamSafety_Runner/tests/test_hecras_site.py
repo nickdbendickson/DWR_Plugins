@@ -207,6 +207,7 @@ def hecras_site_breach_bottom_raised_to_the_toe_and_cut_into_the_terrain():
         r2 = hm.build_model(d, out_folder=os.path.join(d, "m2"), options={"breach_cut": False})
         assert r2["info"]["site"]["breach_cut"] is None
     finally:
+        t = None            # Windows cannot remove a file this test still has open
         shutil.rmtree(d)
 
 

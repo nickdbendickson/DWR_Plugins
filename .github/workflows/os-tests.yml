@@ -1,0 +1,144 @@
+name: Windows and macOS
+
+# The plugin suites on Windows and on macOS. ci.yml (the merge gate) runs everything on Ubuntu,
+# so a path with a backslash or a drive letter, a file still open when it is deleted, a text
+# file written in the Windows code page, or a program started without its .exe was only ever
+# found by a user. This workflow runs the same suites as ci.yml's plugin-suites job, with the
+# newest conda-forge QGIS (Qt6, numpy 2), on a Windows runner and on an Apple Silicon one.
+#
+# When it runs
+#   - before every release: release.yml calls it and its release job waits for it;
+#   - every Monday (so a break is found within a week, not on release day);
+#   - by hand (Actions > Windows and macOS > Run workflow);
+#   - on a pull request that changes this file.
+# It is not a merge gate: two more 30 to 40 minute jobs on every push would slow every pull
+# request. See docs/CI.md, "Windows and macOS".
+#
+# Not here: the Runner's --models suite (a real LISFLOOD-FP and ANUGA run; ci.yml's model-tests
+# job, Linux only), the 1080p GUI lint (it needs xvfb) and the LTR / Qt5 leg.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "23 9 * * 1"        # Mondays 09:23 UTC
+  pull_request:
+    paths:
+      - ".github/workflows/os-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  suites:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false           # a Windows failure must not hide the macOS result
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest      # Apple Silicon (arm64). Not a numbered label: GitHub stopped
+            name: macOS           # offering macos-14 (13 Nov 2026: "not supported", job cancelled)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -el {0}       # Git Bash on Windows; micromamba's environment is active in it
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "0"             # on purpose: a Windows user's Python reads files in the code page
+      PYTHONIOENCODING: utf-8     # only the test output; a non-ASCII test name must not end a step
+      PYTHONUNBUFFERED: "1"       # a suite that dies part-way still shows its last test
+    steps:
+      - name: Keep the line ends of the repository (Windows)
+        # Git for Windows rewrites text files with CR LF on checkout; DamSafety Core's file list
+        # (damsuite/FILES.json) holds the hashes of the files as they are in the zip, with LF
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Provision QGIS (newest conda-forge, Qt6) + scipy
+        id: provision
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy scipy gdal pytest
+      # On Windows this writes a path file into the environment's site-packages. PYTHONPATH
+      # cannot do it: QGIS's activation script, run again by every step's shell, puts its own
+      # ":"-joined folders in front, and Windows Python splits on ";".
+      - name: Make QGIS importable (conda-forge on Windows keeps it outside Python's folders)
+        run: |
+          python tools/ci_qgis_env.py >> "$GITHUB_ENV"
+          python -c "import qgis.core; print('qgis from', qgis.__file__)"
+      # Qt's offscreen platform has no fonts of its own on Windows (it reads a "fonts" folder
+      # that Qt stopped shipping), so every character was measured as a box of one width and
+      # every window came out about a quarter wider than it is: eight windows over the GUI
+      # lint's limit, the Classify page and the two docks over theirs (13 Nov 2026; the lint's
+      # "measured with" line showed a font with no name and no size). It is given Segoe UI, the
+      # font of Windows itself. Linux and macOS find the system's fonts by themselves.
+      - name: Give Qt's offscreen platform the Windows font
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/qtfonts"
+          for f in segoeui.ttf segoeuib.ttf segoeuii.ttf segoeuiz.ttf; do
+            cp "/c/Windows/Fonts/$f" "$RUNNER_TEMP/qtfonts/"
+          done
+          ls -l "$RUNNER_TEMP/qtfonts"
+          echo "QT_QPA_FONTDIR=$(cygpath -w "$RUNNER_TEMP/qtfonts")" >> "$GITHUB_ENV"
+      - name: Versions in this environment
+        run: |
+          python -c "import sys, platform, numpy, scipy; print(sys.version); print(platform.platform()); print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
+          python -c "from qgis.core import Qgis; from qgis.PyQt.QtCore import QT_VERSION_STR; print('QGIS', Qgis.QGIS_VERSION, 'Qt', QT_VERSION_STR)"
+          python -c "from osgeo import gdal; print('GDAL', gdal.__version__)"
+          python -c "import locale, sys; print('text files open as', locale.getpreferredencoding(False), '; file names as', sys.getfilesystemencoding())"
+      # Every suite step runs even when an earlier one failed, so one red suite does not hide
+      # the others (they are skipped only if QGIS could not be provisioned).
+      - name: Fast checks (drift, pin, versions, compile, golden baseline)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python tools/ci_checks.py
+      - name: LISFLOOD-FP start check self-test (stand-in programs, started the way this system starts one)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python tools/test_lisflood_smoke.py
+      - name: Screening suite (mock-QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python DamSafety_Screening/tests/run_all.py
+      - name: Runner fast suite
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python -m nd_breach_runner.tests.run_tests
+      - name: Hazard suite (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python DamSafety_Hazard/tests/run_all.py
+      - name: Hazard Lite (GDAL + numpy)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python DamSafety_HazardLite/tests/test_core.py
+      - name: Finder (synthetic terrain, GDAL runs, the three tools in real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
+      - name: GUI lint offscreen (800x600, every rule but the sideways scroll)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python tools/gui_lint.py
+      - name: Runner dam wizard (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python DamSafety_Runner/tests/realqt_wizard.py
+      - name: Runner batch chain (real QGIS, stages mocked)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: python DamSafety_Runner/tests/realqt_chain.py
+      - name: Suite dam data and Setup (real QGIS, pytest)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: |
+          # os._exit after pytest: QGIS can crash while Python tears it down at exit, after
+          # every test has passed (ci.yml ends the same way)
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests', 'DamSafety_Data/tests/test_pack_build.py', 'DamSafety_Data/tests/test_packengine_shared.py', 'DamSafety_Data/tests/test_updater_shared.py', 'DamSafety_Data/tests/test_pack_refresh.py', 'DamSafety_Data/tests/test_sources_m21_m23_p1.py', 'DamSafety_Data/tests/test_pack_build_v1_nlcd.py', 'DamSafety_Data/tests/test_imagery.py']); sys.stdout.flush(); os._exit(int(rc))"
+      - name: PMP light tests + StreamStats (offline, real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        run: |
+          # saved StreamStats responses only: no request goes to USGS from CI
+          python DamSafety_PMP/tests/run_tests.py
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py', 'DamSafety_PMP/tests/test_qgis_transport.py']); sys.stdout.flush(); os._exit(int(rc))"

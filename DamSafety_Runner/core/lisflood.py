@@ -282,6 +282,15 @@ class ModelError(RuntimeError):
     pass
 
 
+def _not_a_program(err):
+    """True when the system refused to start a file because it is no program for it: Windows
+    errors 193 ("not a valid Win32 application") and 216 ("not compatible with the version of
+    Windows you're running": what a file named .exe that is no program gets, and a build for
+    another kind of processor), 'Exec format error' elsewhere."""
+    import errno
+    return getattr(err, "winerror", None) in (193, 216) or err.errno == errno.ENOEXEC
+
+
 class Cancelled(RuntimeError):
     pass
 
@@ -822,8 +831,18 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     t0 = time.time()
     last_dt_log = -1e9
     with open(log_path, "w", encoding="utf-8") as logf:
-        proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
-                                stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
+        try:
+            proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
+                                    stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
+        except OSError as e:
+            if not _not_a_program(e):
+                raise
+            # 3.20.5: Windows says "[WinError 193] %1 is not a valid Win32 application" for a
+            # file that is no program (a build for another system, a script, a download that
+            # is a web page). Say which file and what is wrong with it.
+            raise ModelError("LISFLOOD-FP could not be started: {} is not executable on this "
+                             "computer (it is not a program this system can run: {})".format(
+                                 exe, e))
         while proc.poll() is None:
             time.sleep(1.0)
             if cancel and cancel():

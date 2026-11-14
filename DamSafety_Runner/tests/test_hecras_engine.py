@@ -52,7 +52,8 @@ def hecras_engine_detect_finds_a_complete_install():
         assert d["ras_exe"].endswith("Ras.exe") and d["rasunsteady"].endswith("RasUnsteady")
         assert all(d["drivers"].values())
         assert he.to_wine_path(os.path.join(ras, "Ras.exe"), pre) == "C:\\HEC\\RAS66\\Ras.exe"
-        assert he.to_wine_path("/tmp/a b/x.tif", pre) == "Z:\\tmp\\a b\\x.tif"
+        if os.name == "posix":          # Wine's Z: is the root of a POSIX file system
+            assert he.to_wine_path("/tmp/a b/x.tif", pre) == "Z:\\tmp\\a b\\x.tif"
         e = he.wine_env(d, {"PROJ_LIB": "/x", "GDAL_DATA": "/y", "PATH": "/bin"})
         assert "PROJ_LIB" not in e and e["GDAL_DATA"].startswith("C:\\HEC\\RAS66")
         assert e["WINEPREFIX"] == pre and e["PATH"] == "/bin"

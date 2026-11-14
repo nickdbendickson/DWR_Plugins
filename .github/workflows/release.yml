@@ -12,10 +12,13 @@ name: Release
 #   lisflood-linux    LISFLOOD-FP 8.3 (Zenodo) + the Runner's patch, static libstdc++/libgomp
 #   lisflood-macos    the same on an Apple Silicon runner (macos-14), libomp bundled with an rpath
 #   lisflood-windows  the same cross-compiled with MinGW-w64 on ubuntu, fully static
+#   lisflood-windows-check  starts that Windows build once on a Windows runner (tools/lisflood_smoke.py)
+#   os-tests          the plugin suites on Windows and macOS (os-tests.yml)
 #   release           plugin zips (tools/build_release.py, the Runner zip carrying the three
 #                     binaries under DamSafety_Runner/bin/<platform>/), SHA256SUMS, the GitHub
 #                     Release, then plugins.xml onto gh-pages
-# A LISFLOOD-FP build that fails stops the release: the Runner zip must not ship without the
+# A Windows build that does not start, or a suite that fails on Windows or macOS, stops the
+# release. A LISFLOOD-FP build that fails stops the release: the Runner zip must not ship without the
 # binaries the README promises. Nothing in bin/ is ever committed (.gitignore).
 
 on:
@@ -126,8 +129,34 @@ jobs:
           path: bin/windows-x64/lisflood.exe
           if-no-files-found: error
 
+  lisflood-windows-check:
+    # The Windows build above is cross-compiled on Linux, where it cannot be started. Here it
+    # is started once on a real Windows: one second on a 5 by 5 grid, the same check the Runner
+    # makes before every dam. A build that does not start stops the release.
+    needs: lisflood-windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: lisflood-windows-x64
+          path: lisflood-win
+      - name: Start lisflood.exe on Windows (1 s, 5 by 5 grid)
+        shell: bash
+        run: python tools/lisflood_smoke.py lisflood-win/lisflood.exe
+
+  os-tests:
+    # The plugin suites on Windows and macOS (os-tests.yml). ci.yml runs them on Ubuntu only.
+    uses: ./.github/workflows/os-tests.yml
+    permissions:
+      contents: read
+
   release:
-    needs: [lisflood-linux, lisflood-macos, lisflood-windows]
+    needs: [lisflood-linux, lisflood-macos, lisflood-windows, lisflood-windows-check, os-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

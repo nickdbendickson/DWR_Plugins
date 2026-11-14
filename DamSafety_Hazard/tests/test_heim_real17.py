@@ -32,6 +32,7 @@ def test_dl1_atomic_write_and_truncated_recovery():
     assert os.path.isfile(p) and not [f for f in os.listdir(d) if f.endswith(".part")]
     lyr = DL._todays_file(p, "x")
     assert lyr is not None and lyr.featureCount() == 50
+    del lyr                                                # closed: Windows deletes no open file
     with open(p, "rb") as fh:
         data = fh.read()
     with open(p, "wb") as fh:
@@ -39,6 +40,44 @@ def test_dl1_atomic_write_and_truncated_recovery():
     assert DL._todays_file(p, "x") is None
     assert not os.path.exists(p)                           # deleted -> fetched again
     assert DL._todays_file(p, "x") is None                 # missing: fetch
+
+
+def test_dl1_day_file_that_is_open_is_written_over():
+    """2.25.4: Windows does not replace or delete a file that is open, and a day file is open
+    while its layer is in the project. The write then goes into the file, and a file that
+    cannot be read and cannot be deleted is said to be so (it was reported as deleted)."""
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "OSM_places_20261015_cafe0001.geojson")
+    DL._write_fc(p, [FEAT] * 50)
+    real_replace, real_remove, real_log = os.replace, os.remove, DL.log_message
+    said = []
+
+    def held(*a, **k):
+        raise PermissionError(13, "Access is denied", p)
+    try:
+        os.replace = held
+        DL._write_fc(p, [FEAT] * 3)                        # the file is open: written over
+        with open(p, encoding="utf-8") as fh:
+            assert len(json.load(fh)["features"]) == 3
+        assert not [f for f in os.listdir(d) if f.endswith(".part")], os.listdir(d)
+        new = os.path.join(d, "OSM_places_20261015_cafe0002.geojson")
+        try:                                               # nothing there to write over: the
+            DL._write_fc(new, [FEAT])                      # refusal is not hidden
+            raise AssertionError("expected PermissionError")
+        except PermissionError:
+            pass
+        assert not os.path.exists(new) and not [f for f in os.listdir(d) if f.endswith(".part")]
+        os.replace = real_replace
+        with open(p, "wb") as fh:
+            fh.write(b'{"type": "FeatureCollection", "features": [')    # cut short
+        os.remove = held
+        DL.log_message = lambda m, *a, **k: said.append(m)
+        assert DL._todays_file(p, "x") is None             # not read, not deleted: fetch
+        assert os.path.exists(p)
+        assert any("could not be deleted" in m for m in said), said
+        assert not any("- deleted, fetched again" in m for m in said), said
+    finally:
+        os.replace, os.remove, DL.log_message = real_replace, real_remove, real_log
 
 
 def test_dl1_osm_paths_use_today_helper():

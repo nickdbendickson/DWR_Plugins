@@ -2,7 +2,9 @@
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`. The repository
 is public, so GitHub-hosted runner minutes are free. (`anuga-omp-scaling.yml` is a separate,
-manually started workflow; `release.yml` runs on a `v*` tag, see "Release" below.)
+manually started workflow; `os-tests.yml` runs the suites on Windows and macOS before a release
+and every Monday, see "Windows and macOS" below; `release.yml` runs on a `v*` tag, see "Release"
+below.)
 
 | Job | What it runs | Time |
 |---|---|---|
@@ -171,6 +173,50 @@ plugin's archived section); an entry that is in neither still fails. To trim aga
 oldest entries out of `changelog=` and paste them, unchanged and newest first, at the top of the
 plugin's archived section's code block (`tools/test_ci_checks.py` has the cases).
 
+## Windows and macOS
+
+`ci.yml` runs every job on Ubuntu. `.github/workflows/os-tests.yml` runs the suites of the
+`plugin-suites` job on `windows-latest` and on `macos-latest` (Apple Silicon), with the newest
+conda-forge QGIS (Qt6, numpy 2): the fast checks, Screening, the Runner fast suite, Hazard,
+Hazard Lite, Finder, the GUI lint offscreen, the Runner wizard and batch chain, the Suite dam
+data / Setup / Data pytest files and PMP. What it is for: a path with a backslash or a drive
+letter, a file still open when it is deleted, a text file read in the Windows code page (the job
+does not turn on Python's UTF-8 mode, as a user's QGIS does not), a program started without
+its `.exe`.
+
+| It runs | Why |
+|---|---|
+| before every release (`release.yml` calls it; the `release` job waits for it) | a release that fails on Windows or macOS is not published |
+| every Monday, 09:23 UTC | a break is found within a week, not on release day |
+| by hand: *Actions → Windows and macOS → Run workflow* | before tagging, or after a fix |
+| on a pull request that changes `os-tests.yml` | the workflow itself is tested |
+
+It is not a merge gate and should not be made a required check: it adds two jobs of 30 to 40
+minutes, and a pull request that does not touch the workflow never starts it (a required check
+that never starts blocks the merge). When the Monday run fails, GitHub mails the repository
+owner; fix it on a branch and start the workflow by hand on that branch to see it pass.
+
+Not covered on Windows and macOS: the Runner's `--models` suite (real LISFLOOD-FP and ANUGA
+runs; Linux only, `model-tests`), the 1080p GUI lint (it needs xvfb) and the QGIS 3.34 LTR / Qt5
+leg. The Windows LISFLOOD-FP build is started once in `release.yml` (`lisflood-windows-check`).
+
+What the first runs found (13 November 2026), and what was done:
+
+| Found | What it was | Done |
+|---|---|---|
+| The macOS job was cancelled at once: "The configuration 'macos-14-arm64-us-default' is not supported" | GitHub no longer offers the `macos-14` label | `os-tests.yml` uses `macos-latest`. **`release.yml`'s `lisflood-macos` job still names `macos-14` and would stop a release the same way.** It is left as it is on purpose: a newer runner bundles a newer Homebrew `libomp`, which raises the oldest macOS the bundled engine starts on. Decide the runner (and the oldest macOS to support) before the next tag. |
+| Windows: `No module named 'qgis'` in every suite that uses the real QGIS | conda-forge's Windows package keeps QGIS's Python under `Library/python`, which Python does not search (its own start script sets the path, for `cmd`, not for the job's bash) | step "Make QGIS importable": `tools/ci_qgis_env.py`, first by writing `PYTHONPATH` (see the next row) and `QGIS_PREFIX_PATH` for the later steps |
+| Windows, second run: still `No module named 'qgis'` | every step's shell activates the environment again, and QGIS's activation script puts its own folders in front of `PYTHONPATH` joined with `:`. Windows Python splits on `;`, so the first folder of the value set by the workflow was glued to that text | `tools/ci_qgis_env.py` writes a path file (`ci_qgis.pth`) into the environment's site-packages instead, and the step imports `qgis.core` to prove it |
+| Windows: `damsuite/FILES.json is stale` | Git for Windows checked the `.py` files out with CR LF; the list holds the hashes of the files as zipped (LF) | `core.autocrlf false` before the checkout. A release zip is built on Linux and is not affected |
+| Windows: the Runner's installer and Linux-build tests failed with "Windows Subsystem for Linux has no installed distributions" | they run `install_macos.sh` and `build_lisflood_linux.sh`; on Windows `bash` is WSL's launcher | those tests do not apply on Windows and say so (`bash_available()`); they run on Linux and macOS as before |
+| Windows: two tests could not delete or rewrite a file | the test still held it open (a memory-mapped `.npy`, an open DEM); Linux allows that, Windows does not. The product code does not keep either open | the tests let go of the file first |
+| Windows: the Runner suite ended part-way with exit status 127 and no message | **a real fault in the Runner.** Culvert prep (`core/culvert_prep.py`), when it straightens a culvert line the engineer accepted, read the old line's vertex count after it had replaced the line; the old line's memory is freed by then. Linux and macOS happened to read the right number, Windows ended the process. The first run's output was buffered and hid the test (`PYTHONUNBUFFERED=1` now) | the count is read before the line is replaced; `culvert_prep_limit_auto_applies_and_geometry_is_only_proposed` checks the note it goes into. No other place in the suite has this pattern |
+| macOS: every suite ran; 5 of the Runner's 1,264 tests failed | none is a fault in the Runner. Two HEC-RAS stop tests counted a process group through `/proc` (macOS has none). One wrote `dwr_dams.gpkg` beside `DWR_dams.gpkg` (the same file where case is ignored). One lowered the stack limit to 8 MB first, which macOS refuses for this Python. One fixture had its cell boundaries exactly on the sampled stations, and which cell such a tie goes to differs on Apple Silicon | the tests count the group with `ps` where there is no `/proc`, use a separate folder, start from the limit as it is, and move the fixture 0.02 ft off the tie. Not checked on a Mac: HEC-RAS itself (there is no HEC-RAS for macOS) |
+| macOS, third and fourth run: one Runner test left (`test_hecras_stack_limit.py`) | macOS refuses to lower a stack limit, to put it back, and (fourth run) leaves a child's limit where it was when the child asks for the hard limit before `exec`: 8176 KB seen, 65520 KB asked. The Runner raises it for the Linux RasUnsteady, which does not run on macOS | the test asks the system with its own code whether a child can raise its limit, and says so when it cannot. On Linux it can, and the test runs in full. |
+| Windows, third run (QGIS imports, every suite runs): 17 of 1,298 Runner tests, 6 of 84 Hazard scripts, 1 Setup test | **Four are faults a Windows user would meet** (changelog, Runner 3.20.5 / Hazard 2.25.4 / Core 1.5.1): a second download over a day file whose layer is still in the project stopped with `[WinError 5] Access is denied`; refreshing the sample dam with its terrain loaded said only `Access is denied`; a LISFLOOD-FP path that is no program said `[WinError 193] %1 is not a valid Win32 application` (or 216 for a file named `.exe`); the kill stage of a stop asked twice instead of killing. **The rest are tests that assumed Linux:** a path split on `/`, a file the test still had open when it removed its folder, `signal.SIGKILL`, a shell script as the stand-in LISFLOOD-FP, `lisflood.EXE` for `lisflood.exe` (the extension comes from `PATHEXT`), `//` (a network name on Windows), a layer source written with `/`, and settings saved with no organisation name (a native `QSettings` on Windows is the registry and keeps nothing then; the tests now keep an INI file in a temp folder) | fixed in the product and in the tests. Nothing is skipped except a Wine path check and the `//` check, which mean something else on Windows. |
+| Windows, third and fourth run: windows measure wider (GUI lint: 8 windows "cannot shrink below" 852 to 1040 px, limit 800; the Classify page 1034 px in a 984 px view; the two docks 472 and 508 px against 420) | **the test environment, not the windows.** Qt's offscreen platform has no fonts of its own on Windows (it reads a `fonts` folder Qt stopped shipping). The lint's new "measured with" line showed a font with no name and no size: every character was a box of one width, so text measured about a quarter wider than it is. Linux and macOS find the system's fonts | the Windows job copies Segoe UI (the font of Windows itself) to a folder and names it in `QT_QPA_FONTDIR`. `tools/gui_lint.py` keeps the "measured with" line (system, style, font, the width of 20 capital M, screen, scale), and a width failure says whether the width is a set minimum or what the contents need. |
+| Windows, fifth run: the font is found ("measured with: win32, style fusion, font Segoe UI 9 pt (12 px), 20 capital M = 220 px"), and the GUI lint, the dock widths, the Runner's 1,313 tests and every other suite pass. One Hazard script failed, `test_creep_schedule.py` (new on main since the fourth run) | a test that assumed Linux paths. It wrote a Linux systemd schedule for a folder in this computer's temporary folder; on Windows that path has backslashes, and `watch_schedule` refuses to write one into a systemd unit, rightly. Nothing had ever run the Windows schedule's own script | the parts that write and run a Linux or macOS schedule are for those systems, and Windows checks the refusal instead. New for every system: the Windows schedule is applied and removed with the recording runner, with a profile link. New on Windows: the `.cmd` script is run with a stand-in `qgis_process.bat`, from a folder with a space, and the log, the arguments, the profile folder and the exit code are read back |
+
 ## Release: GitHub Release + QGIS plugin repository
 
 `.github/workflows/release.yml` runs when a tag `v*` is pushed (`git tag v2026.11.07 && git push
@@ -180,15 +226,18 @@ after the commit and publishes nothing to QGIS).
 | Job | What it does |
 |---|---|
 | `lisflood-linux` | `ubuntu-22.04`: downloads LISFLOOD-FP 8.3 from Zenodo (md5 and sha256 checked, the same file CI's `model-tests` builds), runs `DamSafety_Runner/scripts/build_lisflood_linux.sh` with `LISFLOOD_STATIC=1` (static libstdc++ / libgcc / libgomp; glibc 2.35 or newer at run time). |
-| `lisflood-macos` | `macos-14` (Apple Silicon): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
+| `lisflood-macos` | `macos-14` (Apple Silicon; **the label is no longer offered, see "Windows and macOS" above**): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
 | `lisflood-windows` | `ubuntu-latest`: `DamSafety_Runner/scripts/build_lisflood_windows_cross.sh` cross-compiles with `g++-mingw-w64-x86-64-posix`, `-static` (libgomp, winpthread, libstdc++ and libgcc inside the .exe; `objdump -p` confirms no such DLL is imported). The MinGW edits (`_aligned_malloc` / `_aligned_free`) are part of `scripts/patch_lisflood.py`, so the Linux and macOS builds get them too, guarded by `_WIN32`. |
-| `release` | `tools/build_release.py --runner-bin bin` zips the committed files of the tagged commit (no `tests/`, `__pycache__`, dotfiles), puts the three builds into the Runner zip under `DamSafety_Runner/bin/<platform>/` with a `README.txt`; attaches the zips, `SHA256SUMS`, each binary on its own (`lisflood-linux-x64`, `lisflood-windows-x64.exe`, `lisflood-macos-arm64.tar.gz`), the patched 8.3 source (`lisflood-8.3-ndbreach-source.zip`, the GPL-2.0 corresponding source) and `plugins.xml` to the GitHub Release (`softprops/action-gh-release`); writes `plugins.xml` with `tools/make_plugins_xml.py` and pushes it, with the plugin icons, to the root of the `gh-pages` branch (`peaceiris/actions-gh-pages`, `keep_files: true`, merged with the index already there). |
+| `lisflood-windows-check` | `windows-latest`: starts the cross-compiled `lisflood.exe` once on a real Windows (`tools/lisflood_smoke.py`: one second on a 5 by 5 grid, the check the Runner makes before every dam). The build job runs on Linux and cannot start it. |
+| `os-tests` | Calls `os-tests.yml`: the plugin suites on Windows and macOS (see "Windows and macOS" below). |
+| `release` | Waits for every job above. `tools/build_release.py --runner-bin bin` zips the committed files of the tagged commit (no `tests/`, `__pycache__`, dotfiles), puts the three builds into the Runner zip under `DamSafety_Runner/bin/<platform>/` with a `README.txt`; attaches the zips, `SHA256SUMS`, each binary on its own (`lisflood-linux-x64`, `lisflood-windows-x64.exe`, `lisflood-macos-arm64.tar.gz`), the patched 8.3 source (`lisflood-8.3-ndbreach-source.zip`, the GPL-2.0 corresponding source) and `plugins.xml` to the GitHub Release (`softprops/action-gh-release`); writes `plugins.xml` with `tools/make_plugins_xml.py` and pushes it, with the plugin icons, to the root of the `gh-pages` branch (`peaceiris/actions-gh-pages`, `keep_files: true`, merged with the index already there). |
 
 The Runner finds a bundled build on its own (`core/lisflood.bundled_exe`:
 `bin/linux-x64/lisflood`, `bin/windows-x64/lisflood.exe`, `bin/macos-arm64/lisflood`,
 `bin/macos-x64/lisflood` if one is ever built) after every installed LISFLOOD-FP and after the
 suite / provider settings, never instead of them. `bin/` is git-ignored: the binaries exist only
-in the release assets. A failed LISFLOOD-FP job stops the release.
+in the release assets. A failed LISFLOOD-FP job stops the release. So does a Windows build that
+does not start, and a suite that fails on Windows or macOS.
 
 **The QGIS plugin repository.** The index is served by GitHub Pages at
 `https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, and its `download_url`s point at
