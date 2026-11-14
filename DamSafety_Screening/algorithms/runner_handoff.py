@@ -3,7 +3,7 @@ and bring its class back next to the screening class. The field mapping is core/
 import os
 
 from qgis import processing
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterEnum, QgsProcessingParameterRasterLayer,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterField,

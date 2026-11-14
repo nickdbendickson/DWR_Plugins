@@ -1,6 +1,6 @@
 """Merge ND DWR dams (primary) with the NID (secondary) into one metric layer."""
 import os
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterField, QgsProcessingParameterNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterString,
                        QgsProcessingParameterFeatureSink,

@@ -18,7 +18,7 @@ import zlib
 
 import numpy as np
 from osgeo import gdal, ogr, osr
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterField, QgsProcessingParameterFile,
                        QgsProcessingParameterEnum, QgsProcessingParameterNumber,
                        QgsProcessingParameterString, QgsProcessingParameterBoolean,

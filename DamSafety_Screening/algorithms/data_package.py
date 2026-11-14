@@ -1,7 +1,7 @@
 """Build one offline GeoPackage of standardized statewide layers."""
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterField, QgsProcessingParameterString,
                        QgsProcessingParameterFileDestination, QgsProcessingParameterFile,
                        QgsFields, QgsField,

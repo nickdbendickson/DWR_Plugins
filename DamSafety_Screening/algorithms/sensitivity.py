@@ -2,7 +2,7 @@
 import os
 
 from qgis import processing
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterString, QgsProcessingParameterField, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterString, QgsProcessingParameterField, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterEnum,
                        QgsProcessingParameterNumber, QgsProcessingParameterFolderDestination,
                        QgsProcessingParameterFeatureSink,

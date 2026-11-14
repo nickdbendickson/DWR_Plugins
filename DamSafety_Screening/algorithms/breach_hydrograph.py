@@ -3,7 +3,7 @@ import csv
 import os
 
 import numpy as np
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterEnum,
                        QgsProcessingParameterBoolean, QgsProcessingParameterNumber,
                        QgsProcessingParameterField,
