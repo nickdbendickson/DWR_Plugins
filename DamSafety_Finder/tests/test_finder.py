@@ -1692,6 +1692,29 @@ class Cards(unittest.TestCase):
         self.assertTrue(all(r["img_years"] == 5 for r in again["rows"]))
         self.assertTrue(all(not r["evid_note"].startswith("1 of 5") for r in again["rows"]))
 
+    def test_a_tile_cut_short_is_asked_for_again(self):
+        # a tile whose header opens and whose pixels do not (a download cut short): the card says
+        # the year could not be read, and the next run asks for that tile again
+        from unittest import mock
+        state = {"cut": True, "asked": []}
+
+        def svc(url, timeout=None):
+            state["asked"].append(url)
+            data = service_tiff(url, 2)
+            if state["cut"] and "/svc2012/" in url:
+                data = data[:len(data) // 2]
+            return Resp(data)
+        with mock.patch("urllib.request.urlopen", svc):
+            first = self.batch(images=self.hub_lines())
+            self.assertEqual(len(state["asked"]), 50)
+            self.assertTrue(all(r["img_years"] == 4 for r in first["rows"]))
+            self.assertTrue(all(r["evid_note"].startswith("1 of 5 image years could not be read")
+                                for r in first["rows"]))
+            state["cut"] = False
+            again = self.batch(images=self.hub_lines())
+        self.assertEqual(len(state["asked"]), 50 + 10)                      # only the broken tiles again
+        self.assertTrue(all(r["img_years"] == 5 for r in again["rows"]))
+
     def test_a_long_run_asks_a_silent_host_again_after_a_while(self):
         # the evidence tool's rule (retry_s): the host is down for the first two fills, then back
         from unittest import mock

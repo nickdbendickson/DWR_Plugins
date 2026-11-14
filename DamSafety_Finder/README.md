@@ -460,7 +460,8 @@ tried again after 10 minutes:
 A service can answer with an image that holds no data. (On 2026-11-13, while the ND GIS Hub was
 slow, 13 of 670 images gave no reading from tiles that were on disk, and read normally when
 downloaded again; the tiles themselves were not inspected.) Such an image is not kept: that
-year is "not read" for the fill, and the next run asks for it again.
+year is "not read" for the fill, and the next run asks for it again. The same goes for a tile on
+disk that cannot be read (a download cut short): it is removed, and the next run asks for it.
 
 ### Sort by what is downstream, as a second sort (`review_order`)
 

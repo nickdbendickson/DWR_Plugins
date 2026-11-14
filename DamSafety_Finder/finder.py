@@ -2501,6 +2501,37 @@ def _forget_tiles(vrt):
         pass
 
 
+def _forget_broken_tiles(vrt):
+    """Remove the downloaded image tiles of a VRT that cannot be read whole (a file cut short:
+    the header opens, the pixels do not). Kept, such a tile would make that year 'not read' on
+    every later run, since a tile on disk is not asked for again. Returns how many were removed."""
+    n = 0
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        ds = gdal.Open(str(vrt))
+        files = (ds.GetFileList() or [])[1:] if ds is not None else []
+        ds = None
+        for path in files:
+            try:
+                t = gdal.Open(str(path))
+                ok = t is not None and all(t.GetRasterBand(b + 1).ReadRaster() is not None
+                                           for b in range(t.RasterCount))
+            except RuntimeError:
+                ok = False
+            t = None
+            if not ok:
+                try:
+                    os.remove(path)
+                    n += 1
+                except OSError:
+                    pass
+    except RuntimeError:
+        pass
+    finally:
+        gdal.PopErrorHandler()
+    return n
+
+
 class _PolyLayer:
     """A polygon layer asked one small box at a time through its own spatial index (a statewide
     NWI layer is not read whole for 90 review cards). near(box) gives what _polys_with gives for
@@ -2621,6 +2652,10 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                     except Exception as e:                  # a gap in the service, a dead tile
                         log("{} {}: no image ({})".format(r.get("find_id"), yr, e))
                         seen.setdefault(yr, None)
+                        if is_service(im["src"]) and k in got and not isinstance(got[k], Exception) \
+                                and _forget_broken_tiles(got[k]):   # a tile cut short: asked for again
+                            log("{} {}: an image tile on disk could not be read (asked for again on the "
+                                "next run)".format(r.get("find_id"), yr))
                         continue
                     m = ev.disk(b[im["nir"]].shape, gt, cx, cy, rad)
                     w, _sh = ev.wet(ev.ndwi(b[im["green"]], b[im["nir"]]), m, ndwi_threshold)
