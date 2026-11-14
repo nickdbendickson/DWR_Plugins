@@ -274,5 +274,94 @@ class Scoring(unittest.TestCase):
             self.assertEqual(S.main([os.path.join(d, "nothing")]), 2)
 
 
+class Lines(unittest.TestCase):
+    """--lines / --anuga: the road and rail centrelines from Census TIGERweb, with a stand-in
+    for the service (no internet)."""
+
+    @staticmethod
+    def _feature(xy, mtfcc="S1400", name="Road"):
+        return {"attributes": {"OBJECTID": 1, "MTFCC": mtfcc, "NAME": name},
+                "geometry": {"paths": [[list(p) for p in xy]]}}
+
+    def test_pages_are_followed_and_a_bad_answer_is_asked_again(self):
+        answers = [OSError("504"), {"error": {"code": 500}},
+                   {"features": [self._feature([(0, 0), (1, 1)]), self._feature([(2, 2), (3, 3)])],
+                    "exceededTransferLimit": True},
+                   {"features": [self._feature([(4, 4), (5, 5), (6, 6)])]}]
+        urls = []
+
+        def fake(url):
+            urls.append(url)
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        old = B.TIGER_PAGE
+        B.TIGER_PAGE = 2
+        try:
+            got = B.tiger_lines(8, (0, 0, 10, 10), fake, wait_s=0.0)
+        finally:
+            B.TIGER_PAGE = old
+        self.assertEqual([len(p) for _pr, p in got], [2, 2, 3])
+        self.assertEqual(got[0][0], {"MTFCC": "S1400", "NAME": "Road"})
+        self.assertIn("/8/query?", urls[0])
+        self.assertIn("resultOffset=0", urls[0])
+        self.assertIn("resultOffset=2", urls[-1])
+        self.assertIn("outSR=5070", urls[0])
+        self.assertIn("inSR=5070", urls[0])
+
+    def test_a_service_that_never_answers_stops_the_build_with_why(self):
+        def fake(url):
+            raise OSError("connection refused")
+        with self.assertRaises(SystemExit) as e:
+            B.tiger_lines(9, (0, 0, 10, 10), fake, wait_s=0.0)
+        self.assertIn("TIGERweb (layer 9)", str(e.exception))
+
+    def test_roads_are_written_without_drives_or_doubles_and_no_rail_file_when_none(self):
+        road = [(380000.0, 2160000.0), (381000.0, 2160000.0)]
+        by_layer = {2: [], 6: [self._feature(road, "S1200", "County Road D47")],
+                    8: [self._feature(road, "S1200", "County Road D47"),     # on two layers
+                        self._feature([(380000.0, 2161000.0), (380000.0, 2161500.0)]),
+                        self._feature([(382000.0, 2161000.0), (382100.0, 2161000.0)], "S1740")],
+                    9: []}
+
+        def fake(url):
+            layer = int(url.split("/query?")[0].rsplit("/", 1)[1])
+            return {"features": by_layer[layer]}
+        with tempfile.TemporaryDirectory() as d:
+            said = []
+            got = B.get_lines(B.observed(), d, fake, said.append)
+            self.assertEqual(got, {"roads": os.path.join("inputs", "roads.geojson")})
+            self.assertFalse(os.path.exists(os.path.join(d, "inputs", "rail.geojson")))
+            with open(os.path.join(d, got["roads"]), encoding="utf-8") as f:
+                fc = json.load(f)
+            self.assertEqual(len(fc["features"]), 2)
+            self.assertEqual(sorted(ft["properties"]["MTFCC"] for ft in fc["features"]),
+                             ["S1200", "S1400"])
+            self.assertIn("5070", fc["crs"]["properties"]["name"])
+            self.assertEqual(said, ["roads: 2 lines, 2 km (Census TIGER)",
+                                    "rail: none in the box (Census TIGER)"])
+
+    def test_the_anuga_runs_name_the_tier_and_the_lines_and_the_runner_reads_them(self):
+        ob = B.observed()
+        lines = {"roads": os.path.join("inputs", "roads.geojson")}
+        runs = B.configs(ob, "x", DAM_XY, inflow_xy=OUT_XY, lines=lines, tier="lisflood+anuga")
+        plain = B.configs(ob, "x", DAM_XY, inflow_xy=OUT_XY)
+        for name in runs:
+            self.assertEqual(runs[name]["model"]["tier"], "lisflood+anuga")
+            self.assertEqual(runs[name]["layers"]["receptor_roads"], lines["roads"])
+            self.assertNotIn("receptor_rail", runs[name]["layers"])
+            self.assertNotIn("tier", plain[name]["model"])          # LISFLOOD-FP only, as before
+            self.assertNotIn("receptor_roads", plain[name]["layers"])
+        C = _cli()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "as_observed.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(runs["as_observed"], f)
+            cfg = C.load_config(p)
+            self.assertEqual(cfg.get("model", "tier"), "lisflood+anuga")
+            self.assertEqual(cfg.get_path("layers", "receptor_roads"), os.path.join(d, lines["roads"]))
+
+
 if __name__ == "__main__":
     unittest.main()

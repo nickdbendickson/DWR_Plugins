@@ -35,6 +35,27 @@ at 30 m this valley takes it about 9 hours, at 40 m about 25 minutes a run, and 
 flow at the bridges swings between nothing and several times the flood (see Results).
 `build_case.py --manning-n` sets one Manning's n for the valley (default: the suite's 0.06).
 
+**ANUGA on the gmsh mesh, with road breaklines and the crest burn.** `build_case.py --anuga`
+makes the two runs the Runner's `lisflood+anuga` tier and fetches the road and rail centrelines
+of the terrain box from Census TIGERweb (`inputs/roads.geojson`; private drives left out; there is
+no railroad in the box). With `NDBREACH_ANUGA_MESHER=gmsh` the Runner meshes ANUGA's domain with
+gmsh and keeps as breaklines the pieces of those roads that stand on a fill near the flood. The
+same lines drive the crest burn: each 30 m cell a road crosses is raised to the road's highest
+1 m elevation (USGS 3DEP 1 m, downloaded along the roads into the suite data folder, so set
+`NDSUITE_DATA`). `--lines` alone gives the crest burn to the LISFLOOD-FP runs. The
+workflow's second job does this for the observed breach (by hand with `engine` set to `anuga`
+or `both`, or on a pull request whose title holds `[anuga]`). It needs gmsh's Python module in
+the ANUGA environment (`python-gmsh` from conda-forge). It takes far longer than GitHub's
+6-hour job: on the first try (2026-11-14, 2 ANUGA threads) LISFLOOD-FP took 55 min, then ANUGA
+reached 16.1 h of the 48 h flood in 4 h 24 min, before the breach (24.5 h). So the workflow runs
+it in up to eight legs (`.github/workflows/lake-delhi-anuga-leg.yml`, 4 threads, a checkpoint
+every 15 min): each stops the Runner before the job limit and keeps the case folder as an
+artifact, and the next runs the same configuration with `--resume`, which reuses the finished
+LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint. ANUGA's
+checkpoint-signing key goes along (`NDBREACH_CKPT_KEY_FILE`): without it a fresh runner
+refuses the checkpoints as not its own. With 4 threads the first leg reached 26.9 h, past
+the breach.
+
 | Run | The breach |
 |---|---|
 | `blind` | The Runner works it out from the dam's height and storage (Froehlich 2008, overtopping), as it would for a dam that has not failed. |

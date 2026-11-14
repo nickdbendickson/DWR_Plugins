@@ -7,16 +7,29 @@ name: Validation (real dam failures)
 #
 # Runs by hand (Actions > Validation > Run workflow) and on a pull request that changes the
 # case or this file. It downloads 21 MB of USGS 3DEP terrain.
+#
+# The second job, "Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)", runs the observed breach
+# through the Runner's lisflood+anuga tier: ANUGA on the gmsh mesh, with the Census TIGER road
+# centrelines as embankment breaklines and their 1 m crests burned into the terrain (USGS 3DEP
+# 1 m, downloaded along the roads). It takes more than GitHub's 6-hour job limit, so it runs in
+# legs that resume from ANUGA's checkpoints (lake-delhi-anuga-leg.yml), and only by hand with
+# engine set to "anuga" or "both", or on a pull request whose title contains "[anuga]".
 on:
   workflow_dispatch:
     inputs:
       cell:
         description: Model cell, m
         default: "30"
+      engine:
+        description: "lisflood: the three LISFLOOD-FP runs; anuga: the observed breach with ANUGA on the gmsh mesh; both"
+        type: choice
+        options: [lisflood, anuga, both]
+        default: lisflood
   pull_request:
     paths:
       - "tools/validation/**"
       - ".github/workflows/validation.yml"
+      - ".github/workflows/lake-delhi-anuga-leg.yml"
 
 permissions:
   contents: read
@@ -28,6 +41,7 @@ concurrency:
 jobs:
   lake-delhi-2010:
     name: Lake Delhi Dam 2010 (LISFLOOD-FP)
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.engine != 'anuga'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     defaults:
@@ -132,3 +146,79 @@ jobs:
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/gauge_*.csv
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/breach_hydrograph.csv
             ${{ runner.temp }}/delhi/runs/*/*/WSE (Max).tif
+
+  # LISFLOOD-FP + ANUGA on the gmsh mesh needs more than GitHub's 6-hour job: up to eight legs
+  # run one after another (lake-delhi-anuga-leg.yml), each going on from the last one's
+  # checkpoint; the legs after the one that finishes are skipped
+  anuga-leg1:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'lisflood') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[anuga]'))
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 1
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg2:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg1
+    if: needs.anuga-leg1.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 2
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg3:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg2
+    if: needs.anuga-leg2.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 3
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg4:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg3
+    if: needs.anuga-leg3.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 4
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg5:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg4
+    if: needs.anuga-leg4.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 5
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg6:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg5
+    if: needs.anuga-leg5.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 6
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg7:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg6
+    if: needs.anuga-leg6.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 7
+      cell: ${{ github.event.inputs.cell || '30' }}
+
+  anuga-leg8:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    needs: anuga-leg7
+    if: needs.anuga-leg7.outputs.done == 'false'
+    uses: ./.github/workflows/lake-delhi-anuga-leg.yml
+    with:
+      leg: 8
+      cell: ${{ github.event.inputs.cell || '30' }}
