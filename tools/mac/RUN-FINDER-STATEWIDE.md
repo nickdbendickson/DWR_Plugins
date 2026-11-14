@@ -180,7 +180,12 @@ such crowds. So every fill has three more columns, the last three of every list:
   on it), so such a fill does not read as standing more alone than it does. The figure is cut
   to one decimal, not rounded.
 * `crowded` = `yes`: the fill is itself a pond-line dam or dry embankment **and** `near_km2` is
-  8 or more (26 or more others in a whole circle). Otherwise `no`.
+  8 or more (26 or more others in a whole circle; 25 are 7.96 per km2, written 7.9, and are
+  not crowded). Otherwise `no`. The test is made on the unrounded density, and the written
+  figure never contradicts it: a pond-line dam or dry embankment whose `near_km2` reads 8.0 is
+  always `crowded` = `yes`. For a fill beyond the State outline (`in_state` = `no`) `crowded`
+  is left blank: such a fill is in none of the lists, and most of its circle is ground the run
+  did not search, so neither `yes` nor `no` would mean anything.
 
 **It is a note, nothing more.** It leaves no row out, changes no score and does not change the
 order of any list: with the three columns taken off, the lists are the same files as before.

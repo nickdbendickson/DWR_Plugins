@@ -116,9 +116,14 @@ CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
                 line (line_source "DEM pool outlet") and of kind dam or dry embankment;
       near_km2  that count per km2 of the part of the 1 km circle the run searched (cut to one
                 decimal, not rounded: 7.96 is written 7.9, so a figure of 8.0 is 8 or more);
-      crowded   yes when the fill is itself a pond-line dam or dry embankment and near_km2 is
-                --crowd-km2 (8) or more; else no. --crowd-km2 0 switches the note off (the two
-                numbers are still written). 8 per km2 is 26 or more others in a whole circle.
+      crowded   yes when the fill is itself a pond-line dam or dry embankment and its density
+                is --crowd-km2 (8) or more; else no; blank for a fill beyond the State outline
+                (in_state = no: it is in no list, and most of its circle was not searched).
+                The test is on the density itself, not on the written near_km2, and the two
+                never disagree: a near_km2 written 8.0 or more is always crowded = yes for a
+                pond-line dam / dry embankment in the state. --crowd-km2 0 switches the note off
+                (the two numbers are still written). 8 per km2 is 25.13 others in a whole
+                circle, so 26 or more: 25 read 7.9 and are not crowded.
     It is a note for the person who looks at the list. It changes no score, leaves no row out
     and does not change the order of the ranked lists. The summary counts the crowded candidates.
   * Why here and not in the Finder: the count needs a fill's neighbours, and a Finder run on one
@@ -1886,6 +1891,26 @@ def near_counts(xs, ys, member, radius=CROWD_RADIUS_M):
     return n - member                                       # a member found itself
 
 
+def crowd_figures(dens, eligible, cut_km2):
+    """(near_km2 as written, crowded) from the density of every fill. The test is made on the
+    density itself, never on the written figure: crowded = eligible and dens >= cut_km2 (none when
+    cut_km2 is 0). The written figure is the density CUT to one decimal, not rounded: 25 others in
+    a whole circle are 7.958 per km2, under 8, written 7.9. So, for a limit of one decimal, a
+    figure written at the limit or over it is always a density at the limit or over it, and the
+    other way round (a written 8.0 never stands beside crowded = no for a fill the test applies
+    to). The tiny allowance that keeps 0.3 from being written 0.2 by binary fractions is taken
+    back for any density under the limit."""
+    import numpy as np
+    dens = np.asarray(dens, float)
+    eligible = np.asarray(eligible, bool)
+    crowded = (eligible & (dens >= cut_km2)) if cut_km2 > 0 else np.zeros(len(dens), bool)
+    km2 = np.floor(dens * 10.0 + 1e-9) / 10.0
+    if cut_km2 > 0:
+        below = (math.ceil(cut_km2 * 10.0 - 1e-9) - 1) / 10.0          # the last written figure under the limit
+        km2 = np.where((dens < cut_km2) & (km2 >= cut_km2), below, km2)
+    return km2, crowded
+
+
 def crowd_notes(pts, drop, boxes, outline, cut_km2, log):
     """The crowded-ground note (see the module text) for every fill the tiles hold.
     pts: what cross_tile_rules kept of each fill, in tile order (ti = tile number, x, y, pool =
@@ -1910,10 +1935,7 @@ def crowd_notes(pts, drop, boxes, outline, cut_km2, log):
     near = near_counts(x, y, member, CROWD_RADIUS_M)
     share = ground.share(x, y, CROWD_RADIUS_M)
     dens = near / (math.pi * (CROWD_RADIUS_M / 1000.0) ** 2 * np.maximum(share, CROWD_MIN_SHARE))
-    crowded = (pond & (dens >= cut_km2)) if cut_km2 > 0 else np.zeros(len(x), bool)
-    # written cut to one decimal, not rounded: 25 others in a whole circle are 7.96 per km2, which
-    # is under 8 and is written 7.9 - a figure written 8.0 is always 8 or more
-    km2 = np.floor(dens * 10.0 + 1e-9) / 10.0
+    km2, crowded = crowd_figures(dens, pond & on, cut_km2)
     part = int(np.count_nonzero(alive & on & (share < 1.0)))
     log("  crowded ground: {:,} of the {:,} fill(s) on the searched ground are pond-line dams / dry embankments "
         "(the ones counted); for {:,} fill(s) on it part of the 1 km circle was not searched (a tile not "
@@ -2171,7 +2193,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 r["excluded"] = "yes" if exs[i] else "no"
                 gi = int(crowd["start"][k]) + r["_j"]       # the note is worked out before this pass
                 r["near_n"], r["near_km2"] = int(crowd["near_n"][gi]), float(crowd["near_km2"][gi])
-                r["crowded"] = "yes" if crowd["crowded"][gi] else "no"
+                # beyond the State outline the note is not given (blank, as a score that is not
+                # given): such a fill is in no list, and its circle is mostly ground nobody searched
+                r["crowded"] = None if not ins[i] else "yes" if crowd["crowded"][gi] else "no"
                 if det is not None and k_edge is not None and r["kind"] == k_edge:
                     # as the Finder itself does: no score for a fill whose readings lean on a wall
                     r["score"], r["score_note"] = None, EDGE_NOT_SCORED
@@ -2355,7 +2379,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["crowd_km2"] = ("{:g} (a note only: crowded = yes for a pond-line dam or dry embankment with this many or "
                          "more OTHER pond-line dam / dry fills per km2 of searched ground within {:,.0f} m; no row is "
                          "left out and the order is not changed)".format(crowd_cut, CROWD_RADIUS_M) if crowd_cut > 0
-                         else "0 (off: crowded is no for every fill; near_n and near_km2 are still written)")
+                         else "0 (off: crowded is no for every fill in the state; near_n and near_km2 are still "
+                              "written)")
     info["candidates_crowded"] = n_crowd
     info["short_list_crowded"] = n_crowd_top
     info["crowd_fills_counted"] = crowd["counted"]
