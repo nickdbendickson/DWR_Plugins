@@ -2768,6 +2768,8 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                 r.pop(SKIP_FIELD[0], None)                  # a note from an earlier run is not this run's
             if cards:
                 r.update({k: v for k, v in new.items() if k in card_names})
+                if not r.get("img_years"):                  # no image year seen, here or in the evidence
+                    r["wet_years"] = r["wet_share"] = None  # layer the fills came from: not 0 years
                 if r.get("img_years"):
                     r["water_years"] = "{} of {}".format(int(r.get("wet_years") or 0), int(r["img_years"]))
                 r["evid_note"] = "; ".join(notes)
@@ -2963,8 +2965,9 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
                      image_timeout=30.0, cache=None, progress=None, cancelled=None):
     """A review batch (core/review.py) from scored fills: a fixed random control, the top-ranked
     unreviewed cards and cards near the cut, each with the chance it had of being picked, a share
-    flagged for a blind second reviewer, in shuffled order. Only unlisted fills of `kinds`.
-    reviewed: find_ids already marked (a list, or a CSV / text file of them). Writes layer
+    flagged for a blind second reviewer, in shuffled order. Only unlisted fills of `kinds` (every
+    kind when it is empty), and never a fill at the edge of the terrain data (em.K_EDGE: not a
+    candidate, whatever `kinds` says). reviewed: find_ids already marked (a list, or a CSV / text file of them). Writes layer
     'review_batch' and a CSV.
 
     evidence (on by default): after the batch is picked AND written, the water evidence of the
@@ -2985,7 +2988,8 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
     how many image requests were sent), 'cancelled'}."""
     from .core import review as rv
     cancelled = cancelled or _noop
-    rows = [r for r in read_rows(fills) if r.get("status") != "listed" and (not kinds or r.get("kind") in kinds)]
+    rows = [r for r in read_rows(fills) if r.get("status") != "listed" and r.get("kind") != em.K_EDGE
+            and (not kinds or r.get("kind") in kinds)]
     if not rows:
         raise RuntimeError("no unlisted fills of kind {} in {}".format(", ".join(kinds), fills))
     if not any(r.get("score") is not None for r in rows):

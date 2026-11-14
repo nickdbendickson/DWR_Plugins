@@ -1580,6 +1580,57 @@ class Cards(unittest.TestCase):
         self.assertEqual(len(feats), 10)
         self.assertNotIn("water_years", names)
 
+    def test_the_pick_fields_are_pinned_and_each_is_checked(self):
+        from unittest import mock
+        self.assertEqual(self.f.PICK_FIELDS, ("n", "find_id", "stratum", "rank", "incl_prob", "second", "score",
+                                              "list_n", "pool_n"))
+        for k, v in (("incl_prob", 0.5), ("second", "flip"), ("stratum", "other"), ("n", 99)):
+            def meddle(rows, k=k, v=v, **_k):
+                rows[-1][k] = v                                          # this field alone
+                return {}
+            with mock.patch.object(self.f, "_fill_evidence", meddle):
+                with self.assertRaises(RuntimeError, msg=k):
+                    self.batch(images=self.two_years())
+
+    def test_the_cards_read_the_image_on_the_pool_window_itself(self):
+        # the image tiles of a card are laid out from its pool window's own corner, so they are
+        # read on that window (read_bands snap=False), not moved to the cell lattice and resampled
+        from unittest import mock
+        seen = []
+        real = self.f.read_bands
+
+        def spy(image, ext, cell, bands, snap=True):
+            seen.append(snap)
+            return real(image, ext, cell, bands, snap=snap)
+        with mock.patch.object(self.f, "read_bands", spy):
+            with mock.patch("urllib.request.urlopen", lambda url, timeout=None: Resp(service_tiff(url, 2))):
+                self.batch(images=self.hub_lines(years=(2014,)) + "\n2018 | {} | red=1 green=2 blue=3 nir=4".format(
+                    self.image("y2018.tif", 3)))
+        self.assertEqual(len(seen), 2 * 10)
+        self.assertEqual(set(seen), {False})
+
+    def test_no_image_seen_is_blank_on_a_card_from_an_evidence_layer(self):
+        # fills from an 'evidence' layer made when no image could be read (img_years 0,
+        # wet_years 0): with no imagery given now, the card's wet_years is blank, not 0
+        loaded = [dict(r, wet_years=0, img_years=0, wet_share=None) for r in self.rows]
+        self.fills = self.layer("ev0.gpkg", loaded, self.fields + [("wet_years", "int"), ("img_years", "int"),
+                                                                  ("wet_share", "float")])
+        res = self.batch()
+        self.assertTrue(all(r.get("wet_years") is None and r.get("water_years") is None for r in res["rows"]))
+        names, feats = self.on_disk()
+        self.assertTrue(all(f["wet_years"] is None and f["water_years"] is None for f in feats))
+        self.assertTrue(all("no imagery given" in f["evid_note"] for f in feats))
+
+    def test_a_fill_at_the_edge_of_the_terrain_data_is_never_picked(self):
+        from ..core import embankments as em
+        rows = [dict(r, kind=em.K_EDGE, score=0.99) if i % 3 == 0 else r for i, r in enumerate(self.rows)]
+        self.fills = self.layer("edge.gpkg", rows, self.fields)
+        for kinds in ((), (em.K_DAM, em.K_EDGE), (em.K_DAM, em.K_DRY)):
+            res = self.f.run_review_batch(self.fills, self.out, n=15, per_tile_cap=30, kinds=kinds, evidence=False,
+                                          log=QUIET)
+            self.assertEqual(len(res["rows"]), 15)
+            self.assertFalse(any(r["kind"] == em.K_EDGE for r in res["rows"]), kinds)
+
     # ------------------------------------------------------------------- offline / failures --
     def hub_lines(self, hosts=("hub.test",), years=(2009, 2010, 2012, 2014, 2015)):
         return "\n".join("{} | https://{}/svc{}/ImageServer | red=1 green=2 blue=3 nir=4".format(y, h, y)
