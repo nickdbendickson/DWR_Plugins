@@ -102,7 +102,7 @@ All in `~/ND_Finder_Statewide`:
 | file | what it is |
 |---|---|
 | `ND_finder_summary.txt` | the Finder version, counts by status and kind, how many candidates score 0.5 or more, tiles run / skipped / failed, the settings used, checksums of the inputs |
-| `ND_finder_candidates_top.csv` | **open this one first.** The top 2,000 candidates by score: rank, score, kind, status, height, storage, `lat`, `lon`, tile, `find_id` and `link`. The link opens Google Maps on the satellite picture at that point (nothing is sent anywhere until you click one). It opens at once in Excel or Numbers. `--top 5000` makes it longer |
+| `ND_finder_candidates_top.csv` | **open this one first.** The top 2,000 candidates by score: rank, score, kind, status, height, storage, `lat`, `lon`, tile, `find_id`, `link`, and the three columns of the crowded-ground note (below). The link opens Google Maps on the satellite picture at that point (nothing is sent anywhere until you click one). It opens at once in Excel or Numbers. `--top 5000` makes it longer |
 | `ND_finder_candidates_ranked.csv` | every candidate: fills that are **not on a list** (new or unsure), of kind **dam** or **dry embankment**, inside North Dakota, not at the edge of the terrain - highest score first, every column. About 300,000 rows for the state |
 | `ND_finder_fills.gpkg` | for QGIS. Layer `embankments` = every fill (scored); `candidates` = the ranked list as points; `spillways`; `ridges` (channel-side dikes); `run_info` |
 | `tiles/` | one folder per tile (what lets it go on after a stop). Leave it there until you are done |
@@ -128,6 +128,8 @@ ranked lists:
   Without that option it is `no` for every fill.
 * `id_clash` = `yes`: two different fills got the same `find_id` (expect about 20 pairs in the
   whole state). Tell them apart by `tile` and `lat` / `lon`.
+* `near_n`, `near_km2`, `crowded`: the crowded-ground note, the last three columns of every
+  list. See "Crowded ground" below. They leave nothing out of the lists.
 
 Expect roughly 450,000 fills in all, most of them low-scoring, and about 300,000 rows in the
 full ranked list (a CSV of about 160 MB: it opens slowly in Excel or Numbers, which is why the
@@ -157,11 +159,57 @@ is not. If you have a state boundary file, add `--state-outline "/path/to/ND_bou
 needs only `--merge-only` to apply, not a new run.
 
 **Ground to leave out.** Some ground makes fills that are not dams whatever their shape. Of 90
-candidates marked by hand, 8 were coal-mine spoil and 8 were in the Sheyenne sand hills. The
-script has no map of such ground. If you have one (any polygon file: mine permit areas, a
+candidates marked by hand, 8 were coal-mine spoil and 13 lay in one tile of the Sheyenne sand
+hills, none of those a dam. The script has no map of such ground. If you have one (any polygon file: mine permit areas, a
 sand-hills outline you draw in QGIS), give it with `--exclude-polygons "/path/to/file.gpkg"`.
 A fill inside any polygon stays in the `embankments` layer with `excluded` = `yes` and is left
 out of the ranked lists. It too needs only `--merge-only`, not a new run.
+
+## Crowded ground
+
+Sand-hill ground is full of dune hollows. The Finder reads a hollow as a small pond with a low
+fill at its outlet, and it finds many of them close together. Real stock dams do not come in
+such crowds. So every fill has three more columns, the last three of every list:
+
+* `near_n`: how many **other** fills within 1 km are found on a pond line (`line_source` =
+  `DEM pool outlet`: a line out of a pool the terrain shows) and are of kind dam or dry
+  embankment. The fill itself is not counted.
+* `near_km2`: that count for each square kilometre of searched ground inside the 1 km circle.
+  For most fills that is the whole circle, 3.14 km2. Beside a tile that has not run yet, or at
+  the State line, only the part of the circle that was searched is counted (and only the fills
+  on it), so such a fill does not read as standing more alone than it does. The figure is cut
+  to one decimal, not rounded.
+* `crowded` = `yes`: the fill is itself a pond-line dam or dry embankment **and** `near_km2` is
+  8 or more (26 or more others in a whole circle). Otherwise `no`.
+
+**It is a note, nothing more.** It leaves no row out, changes no score and does not change the
+order of any list: with the three columns taken off, the lists are the same files as before.
+Sort or filter on `crowded` yourself. The summary says how many candidates are in crowded
+ground and how many of the short list. Read `crowded = yes` as "look at the ground before you
+count this one", not as "not a dam".
+
+What it rests on is small. Of the 90 cards marked on 13 November, the 13 false finds in the
+sand-hill tile were dune hollows; the note marks 10 of them. It marks none of the 24 cards
+that were real dams (the most crowded of those has 6.6 per km2), none of the fills at 523
+listed Intact dams in the 66 test tiles, and 7 of the fills at 929 pond dams of the Iowa
+census. But three quarters of everything it marks in the 66 North Dakota test tiles is in
+that **one** sand-hill tile (693 of the 929 fills marked there). Outside it, it marked 7 of 52 false finds (pothole ground, old
+river bends) and no real dam: too few to say whether it means anything there.
+
+**It does not catch mine spoil** (1 of the 8 mine cards). For mined land, give the outline of
+the mine with `--exclude-polygons` (above) if you have a permit-area layer.
+
+Three things to know:
+
+* The columns are made in the merge, from the tiles as they are. Tiles that are already
+  finished, also by an earlier version of this script, do **not** run again:
+  `bash run_finder_statewide.sh --merge-only` adds the columns.
+* `--crowd-km2 10` sets another limit; `--crowd-km2 0` switches the mark off (the two numbers
+  are still written). Both need only `--merge-only`.
+* While the run is not finished, the numbers of a fill near a tile still to run can change
+  when that tile finishes. And where a finished tile has no terrain in part of it (round the
+  hole in the terrain over Fort Berthold) the script cannot know which part: it takes the
+  whole tile as searched, the density there reads low, and a note can be missed there.
 
 ## Useful variations
 
@@ -171,6 +219,7 @@ bash run_finder_statewide.sh --bbox=-101.0,46.4,-100.5,46.8  # only the tiles th
 bash run_finder_statewide.sh --merge-only                    # merge what is finished so far (after a stop; the SSD is not needed)
 bash run_finder_statewide.sh --merge-only --top 5000         # a longer short list (0 = none)
 bash run_finder_statewide.sh --merge-only --exclude-polygons "/path/to/mine_areas.gpkg"   # leave that ground out of the lists
+bash run_finder_statewide.sh --merge-only --crowd-km2 10     # another limit for the crowded-ground note (0 = off)
 bash run_finder_statewide.sh --merge-only --no-score         # no score; the list is ranked by height
 bash run_finder_statewide.sh --merge-only --review-batch 90  # also draw a 90-card review batch from the candidates
 bash run_finder_statewide.sh --workers 6                     # 6 tiles at a time

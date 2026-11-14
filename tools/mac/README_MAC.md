@@ -257,6 +257,15 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   polygon of `--exclude-polygons FILE`: the hook for ground such as mine spoil or sand hills;
   the script holds no such map itself). All three kinds stay in the `embankments` layer and are
   left out of the ranked lists.
+* **Crowded ground, a note (script 1.2):** every fill also gets `near_n` (the other pond-line
+  dam / dry-embankment fills within 1 km), `near_km2` (that count per km2 of the searched part
+  of the circle: the finished tiles cut to the State outline, so a fill beside a tile not yet
+  run or at the State line is not read as standing alone) and `crowded` (`yes` for a pond-line
+  dam or dry embankment at 8 per km2 or more, `--crowd-km2 N`, 0 = off). They are the last
+  three columns of the layers and both CSVs. It is a note for the reader: no row is left out,
+  no score and no order changes. It was seen to work in one tile of the Sheyenne sand hills
+  (dune hollows) and does not catch mine spoil. It is made in the merge, so `--merge-only` is
+  enough for tiles that are already finished.
 * **Results:** `ND_finder_fills.gpkg` (`embankments`, `candidates`, `spillways`, `ridges`,
   `run_info`), `ND_finder_candidates_ranked.csv` (every candidate: not listed, dam or dry
   embankment, in the state, not at the data edge, not excluded; highest score first, scored

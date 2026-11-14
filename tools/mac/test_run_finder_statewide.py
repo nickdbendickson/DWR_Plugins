@@ -12,6 +12,7 @@ import csv
 import importlib.util
 import io
 import json
+import math
 import os
 import random
 import shutil
@@ -263,6 +264,15 @@ class NoGdal(unittest.TestCase):
         self.assertEqual({k for k in k6 if k6[k] != k7[k]}, {"finder"})
         self.assertEqual(k6, json.loads(json.dumps(k6)))      # as it comes back from done.json
         self.assertIsNone(rfs.settings_key("0.6.0", a, None)["dem"])
+        # a tile made by script 1.0 or 1.1 is a tile of script 1.2: the key holds the first number only
+        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.2", "1"))
+
+    def test_tile_box_from_done_json_or_from_the_id(self):
+        self.assertEqual(rfs.tile_box("T10_W0370_N2620"), (-370000.0, 2620000.0, -360000.0, 2630000.0))
+        self.assertEqual(rfs.tile_box("T05_E0015_S0005", {}), (15000.0, -5000.0, 20000.0, 0.0))
+        self.assertEqual(rfs.tile_box("x", {"box": [1, 2, 3, 4]}), (1.0, 2.0, 3.0, 4.0))
+        for t in rfs.lattice((-381234.5, -12000.0, 9000.0, 26000.0), 10000.0) + rfs.lattice((-7000.0, -7000.0, 7000.0, 7000.0), 5000.0):
+            self.assertEqual(rfs.tile_box(t.id), t.box)
 
 
 @needs_gdal
@@ -576,6 +586,250 @@ class Terrain(unittest.TestCase):
             fa, fb = la.GetFeature(fid), lb.GetFeature(fid)
             self.assertEqual(fa.items(), fb.items())
             self.assertEqual(fa.GetGeometryRef().ExportToWkb(), fb.GetGeometryRef().ExportToWkb())
+
+
+def _segment_share(d, r=1000.0):
+    """The share of a circle of radius r on the near side of a straight line d from its centre
+    (the centre on the near side): 1 - the far segment / the circle."""
+    return 1.0 - (r * r * math.acos(d / r) - d * math.sqrt(r * r - d * d)) / (math.pi * r * r)
+
+
+def _cut1(v):
+    """A density as it is written: cut to one decimal, not rounded."""
+    return math.floor(v * 10.0 + 1e-9) / 10.0
+
+
+@needs_gdal
+class Crowd(unittest.TestCase):
+    """The crowded-ground note: the count, the searched ground, the density - on made-up points."""
+
+    W = (-370000.0, 2620000.0, -360000.0, 2630000.0)        # tile T10_W0370_N2620
+    E = (-360000.0, 2620000.0, -350000.0, 2630000.0)        # its east neighbour
+
+    def setUp(self):
+        try:
+            import scipy.spatial                                        # noqa - near_counts needs it
+        except ImportError:
+            self.skipTest("scipy is not installed here")
+
+    def test_other_fills_within_1000_m_counted_by_hand(self):
+        # A, B, C, D: a 600 x 800 m rectangle (its diagonals are 1,000 m: at the radius counts);
+        # E: alone; F, G: beside A, not of the set
+        x = [0.0, 600.0, 0.0, 600.0, 5000.0, 100.0, 200.0]
+        y = [0.0, 0.0, 800.0, 800.0, 5000.0, 100.0, 200.0]
+        member = [True, True, True, True, True, False, False]
+        self.assertEqual(rfs.near_counts(x, y, member).tolist(), [3, 3, 3, 3, 0, 4, 4])   # itself is never counted
+        self.assertEqual(rfs.near_counts(x, y, member, 999.0).tolist(), [2, 2, 2, 2, 0, 4, 4])
+        self.assertEqual(rfs.near_counts(x, y, [False] * 7).tolist(), [0] * 7)
+        self.assertEqual(rfs.near_counts([], [], []).tolist(), [])
+        # against a plain double loop, on scattered points
+        rnd = random.Random(5)
+        px = [rnd.uniform(0, 6000) for _ in range(400)]
+        py = [rnd.uniform(0, 6000) for _ in range(400)]
+        mem = [rnd.random() < 0.4 for _ in range(400)]
+        want = [sum(1 for j in range(400) if j != i and mem[j] and math.hypot(px[i] - px[j], py[i] - py[j]) <= 1000.0)
+                for i in range(400)]
+        self.assertEqual(rfs.near_counts(px, py, mem).tolist(), want)
+
+    def test_share_of_the_circle_on_the_searched_ground(self):
+        x0, y0, x1, y1 = self.W
+        ym = 0.5 * (y0 + y1)
+        g = rfs.Ground([self.W])                             # one finished tile, no outline
+        pts = [(x0 + 5000.0, ym),                            # the middle: all of the circle
+               (x0 + 1000.0, ym),                            # exactly 1 km in: still all of it
+               (x0, ym),                                     # on the west edge: half the circle was not searched
+               (x0, y0),                                     # the corner: a quarter
+               (x0 + 500.0, ym),                             # 500 m in
+               (x0 + 100.0, y0 + 300.0),                     # near the corner, two edges cut the circle
+               (x0 - 1000.0, ym),                            # outside, the circle only touches
+               (x0 - 20000.0, ym)]                           # far outside
+        sh = g.share([p[0] for p in pts], [p[1] for p in pts]).tolist()
+        self.assertEqual(sh[0], 1.0)
+        self.assertEqual(sh[1], 1.0)
+        self.assertAlmostEqual(sh[2], 0.5, places=6)
+        self.assertAlmostEqual(sh[3], 0.25, places=6)
+        self.assertAlmostEqual(sh[4], _segment_share(500.0), delta=0.0005)      # 0.8045; the 64-sided ring: within 0.05 %
+        self.assertTrue(0.25 < sh[5] < 0.5)
+        self.assertAlmostEqual(sh[6], 0.0, delta=1e-5)       # the ring's corners reach 0.4 m beyond the circle
+        self.assertEqual(sh[7], 0.0)
+        self.assertEqual(g.share([], []).tolist(), [])
+        # checked against a fine grid of points (5 m) for the corner case
+        n = 400
+        cnt = sum(1 for i in range(n) for j in range(n)
+                  if (-1000.0 + (i + 0.5) * 5.0) ** 2 + (-1000.0 + (j + 0.5) * 5.0) ** 2 <= 1e6
+                  and pts[5][0] - 1000.0 + (i + 0.5) * 5.0 >= x0 and pts[5][1] - 1000.0 + (j + 0.5) * 5.0 >= y0)
+        self.assertAlmostEqual(sh[5], cnt * 25.0 / (math.pi * 1e6), delta=0.002)
+        # two finished tiles side by side: a fill on their seam has all of its circle
+        g2 = rfs.Ground([self.W, self.E])
+        self.assertEqual(g2.share([x1, x1 - 1.0, x1 + 999.0], [ym, ym, ym]).tolist(), [1.0, 1.0, 1.0])
+        self.assertAlmostEqual(float(g2.share([x1 + 5000.0], [y1])[0]), 0.5, places=6)   # the north edge of both
+        self.assertEqual(g2.state_at([x0 + 1.0, x1 + 1.0, x0 - 1.0], [ym, ym, ym]).tolist(), [2, 2, 0])
+        with self.assertRaises(ValueError):
+            g.share([x0], [y0], 20000.0)
+        # the ring the circle is cut as has the circle's own area
+        p = ogr.Geometry(ogr.wkbPoint)
+        p.AddPoint_2D(0.0, 0.0)
+        ring = 1000.0 * math.sqrt(math.pi / (32.0 * math.sin(math.pi / 32.0)))
+        self.assertAlmostEqual(p.Buffer(ring, 16).GetArea() / (math.pi * 1e6), 1.0, places=9)
+        self.assertLess(ring - 1000.0, 1.0)
+
+    def test_the_state_outline_cuts_the_ground(self):
+        x0, y0, x1, y1 = self.W
+        ym = 0.5 * (y0 + y1)
+        # the State is everything west of x = x0 + 4000: it cuts tile W, and tile E lies outside it
+        state = rfs.box_geom((x0 - 50000.0, y0 - 50000.0, x0 + 4000.0, y1 + 50000.0))
+        g = rfs.Ground([self.W, self.E], state)
+        self.assertEqual(g.state_at([x0 + 1.0, x1 + 1.0], [ym, ym]).tolist(), [1, 0])
+        sh = g.share([x0 + 4000.0, x0 + 3500.0, x0 + 2000.0, x0 + 4900.0, x1 + 3000.0], [ym] * 5).tolist()
+        self.assertAlmostEqual(sh[0], 0.5, places=6)                           # on the State line
+        self.assertAlmostEqual(sh[1], _segment_share(500.0), delta=0.0005)     # 500 m inside it
+        self.assertAlmostEqual(sh[2], 1.0, places=9)                           # well inside, in the cut tile
+        self.assertAlmostEqual(sh[3], 1.0 - _segment_share(900.0), delta=0.0005)   # 900 m beyond the line: a sliver
+        self.assertEqual(sh[4], 0.0)
+        # a State that holds both tiles whole, and one that holds neither
+        self.assertEqual(rfs.Ground([self.W, self.E], rfs.box_geom((x0 - 1.0, y0 - 1.0, x1 + 10001.0, y1 + 1.0)))
+                         .state_at([x0 + 1.0, x1 + 1.0], [ym, ym]).tolist(), [2, 2])
+        self.assertEqual(rfs.Ground([self.W], rfs.box_geom((0.0, 0.0, 10.0, 10.0))).state_at([x0 + 1.0], [ym]).tolist(), [0])
+        # tiles far apart (several blocks of the outline) and a State with a hole
+        far = (x0 + 250000.0, y0, x0 + 260000.0, y1)
+        holed = rfs.box_geom((x0 - 1.0, y0 - 1.0, far[2] + 1.0, y1 + 1.0)).Difference(
+            rfs.box_geom((x0 + 3000.0, y0 + 3000.0, x0 + 7000.0, y0 + 7000.0)))
+        g = rfs.Ground([self.W, far], holed)
+        self.assertEqual(g.state_at([x0 + 1.0, far[0] + 1.0], [ym, ym]).tolist(), [1, 2])
+        self.assertAlmostEqual(float(g.share([x0 + 3000.0], [ym])[0]), 0.5, places=6)    # on the rim of the hole
+        self.assertAlmostEqual(float(g.share([far[0] + 5000.0], [ym])[0]), 1.0, places=9)
+        # on the ground or not: as OGR says of the outline itself, for points all over both tiles and beyond
+        rnd = random.Random(9)
+        px = [rnd.uniform(x0 - 2000.0, x1 + 2000.0) for _ in range(600)] + [rnd.uniform(far[0], far[2]) for _ in range(50)]
+        py = [rnd.uniform(y0 - 2000.0, y1 + 2000.0) for _ in range(600)] + [rnd.uniform(y0, y1) for _ in range(50)]
+        want = []
+        for qx, qy in zip(px, py):
+            p = ogr.Geometry(ogr.wkbPoint)
+            p.AddPoint_2D(qx, qy)
+            in_tile = any(b[0] <= qx < b[2] and b[1] <= qy < b[3] for b in (self.W, far))
+            want.append(bool(in_tile and holed.Contains(p)))
+        self.assertEqual(g.on(px, py).tolist(), want)
+        self.assertTrue(0 < sum(want) < len(want))
+        # what a cut can hand back beside polygons (a line where two boxes only touch) is not ground
+        touch = rfs.box_geom((0.0, 0.0, 10.0, 10.0)).Intersection(rfs.box_geom((10.0, 0.0, 20.0, 10.0)))
+        self.assertIsNone(rfs.polygons_only(touch))
+        both = ogr.Geometry(ogr.wkbGeometryCollection)
+        both.AddGeometry(touch)
+        both.AddGeometry(rfs.box_geom((0.0, 0.0, 10.0, 10.0)))
+        self.assertEqual(rfs.polygons_only(both).GetArea(), 100.0)
+
+    def _field(self, x_east, y_south, nx, ny, step=200.0):
+        """A field of pond fills on a square grid, its east column at x_east."""
+        return [(x_east - i * step, y_south + j * step) for i in range(nx) for j in range(ny)]
+
+    def _notes(self, pts, boxes, outline=None, cut=8.0, pool=None, dd=None, drop=()):
+        """crowd_notes on points given as [(x, y)], in tile order (the tile of a point is found
+        from the boxes)."""
+        n = len(pts)
+        ti = [[k for k, b in enumerate(boxes) if b[0] <= x < b[2] and b[1] <= y < b[3]][0] for x, y in pts]
+        order = sorted(range(n), key=lambda i: ti[i])
+        p = {"ti": np.array([ti[i] for i in order]), "x": np.array([pts[i][0] for i in order], float),
+             "y": np.array([pts[i][1] for i in order], float),
+             "pool": np.array([True if pool is None else pool[i] for i in order]),
+             "dd": np.array([True if dd is None else dd[i] for i in order])}
+        got = rfs.crowd_notes(p, set(drop), boxes, outline, cut, lambda m: None)
+        back = {i: q for q, i in enumerate(order)}
+        return {k: [got[k][back[i]].item() for i in range(n)] for k in ("near_n", "near_km2", "crowded", "share")}
+
+    def test_a_dense_cluster_and_fills_alone(self):
+        x0, y0, x1, y1 = self.W
+        # a cluster: 6 x 6 pond fills 200 m apart (25 per km2) in the middle of the tile; three alone
+        cl = self._field(x0 + 5500.0, y0 + 4500.0, 6, 6)
+        alone = [(x0 + 1500.0, y0 + 1500.0), (x0 + 8500.0, y0 + 1500.0), (x0 + 1500.0, y0 + 8500.0)]
+        # in the cluster, 141 m from its fills: a fill on a stream line, a road fill on a pond line
+        other = [(cl[14][0] + 100.0, cl[14][1] + 100.0), (cl[21][0] + 100.0, cl[21][1] + 100.0)]
+        pts = cl + alone + other
+        pool = [True] * 39 + [False, True]
+        dd = [True] * 39 + [True, False]
+        r = self._notes(pts, [self.W], pool=pool, dd=dd)
+        # by hand: a corner fill of the cluster has 25 others within 1,000 m (grid steps (i, j) with
+        # i2 + j2 <= 25, i and j from 0 to 5: 6 + 5 + 5 + 5 + 4 + 1 = 26, less itself); a fill of the
+        # middle four has all 35 others (the farthest is 3 steps by 3: 849 m)
+        self.assertEqual([r["near_n"][i] for i in (0, 5, 30, 35)], [25, 25, 25, 25])
+        self.assertEqual([r["near_n"][i] for i in (14, 15, 20, 21)], [35, 35, 35, 35])
+        want = [sum(1 for q in cl if q != p and math.hypot(p[0] - q[0], p[1] - q[1]) <= 1000.0) for p in cl]
+        self.assertEqual(r["near_n"][:36], want)             # the two other fills among them are not counted
+        self.assertEqual(r["share"][:36], [1.0] * 36)
+        # 25 others in a whole circle: 25 / 3.1416 km2 = 7.96 per km2. That is under 8: not crowded,
+        # and written 7.9 (cut, not rounded), so that no row reads "8.0, not crowded"
+        self.assertEqual((r["near_km2"][0], r["crowded"][0]), (7.9, False))
+        self.assertEqual((r["near_km2"][14], r["crowded"][14]), (11.1, True))             # 35 / 3.1416 = 11.14
+        self.assertEqual(r["crowded"][:36], [v >= 26 for v in want])                       # 8 per km2 is 26 or more
+        self.assertEqual(r["near_km2"][:36], [_cut1(v / math.pi) for v in want])
+        self.assertEqual(sum(r["crowded"]), 32)              # all but the four corner fills
+        self.assertEqual((r["near_n"][36:39], r["near_km2"][36:39], r["crowded"][36:39]), ([0] * 3, [0.0] * 3, [False] * 3))
+        # the two that are not pond-line dams / dry embankments: they see the cluster, and are never crowded
+        self.assertEqual(r["near_n"][39:], [36, 36])
+        self.assertEqual(r["near_km2"][39:], [11.4, 11.4])     # 36 / 3.1416 = 11.46
+        self.assertEqual(r["crowded"][39:], [False, False])
+        # a higher limit, and the note switched off: the numbers stay, the mark goes
+        r9 = self._notes(pts, [self.W], pool=pool, dd=dd, cut=9.0)
+        self.assertEqual(sum(r9["crowded"]), sum(1 for v in r["near_n"][:36] if v / math.pi >= 9.0))
+        self.assertTrue(0 < sum(r9["crowded"]) < 36)
+        r0 = self._notes(pts, [self.W], pool=pool, dd=dd, cut=0.0)
+        self.assertEqual((r0["near_n"], r0["near_km2"]), (r["near_n"], r["near_km2"]))
+        self.assertEqual(r0["crowded"], [False] * 41)
+        # a fill removed across a seam is not counted by the others
+        rd = self._notes(pts, [self.W], pool=pool, dd=dd, drop=[(0, 14)])
+        self.assertEqual(rd["near_n"][15], 34)
+        self.assertEqual(self._notes([], [self.W])["near_n"], [])
+
+    def test_the_edge_of_the_searched_ground_does_not_thin_a_cluster(self):
+        """The same field of pond fills (200 m apart, 25 per km2), once in the middle of the
+        searched ground and once against a tile that is not finished: a fill reads the same density
+        in both, within 5 % - not about half, as the bare count would have it."""
+        x0, y0, x1, y1 = self.W
+        ym = y0 + 3000.0
+        mid = self._field(x1 - 3000.0, ym, 20, 20)           # its east column 3 km from the seam
+        edge = self._field(x1 - 100.0, ym, 20, 20)           # its east column 100 m from the seam
+        both, alone = [self.W, self.E], [self.W]
+        a = self._notes(mid, both)
+        b = self._notes(edge, alone)                         # tile E is not finished: nothing east of the seam
+        c = self._notes(edge, both, outline=rfs.box_geom((x0 - 9e4, y0 - 9e4, x1, y1 + 9e4)))   # or: E is beyond the State line
+        i_mid, i_edge = 5 * 20 + 10, 0 * 20 + 10             # column 5 / the east column, row 10
+        # by hand, the middle: the grid steps within 5 of a point are 81, less itself
+        self.assertEqual((a["near_n"][i_mid], a["share"][i_mid], a["near_km2"][i_mid]), (80, 1.0, 25.4))   # 80 / 3.1416
+        # the edge: only the 45 on its own side are there (35 west of its column, 10 in it)
+        self.assertEqual(b["near_n"][i_edge], 45)
+        self.assertAlmostEqual(b["share"][i_edge], _segment_share(100.0), delta=0.0005)   # 0.5636 of the circle
+        self.assertEqual(b["near_km2"][i_edge], 25.4)        # 45 / (3.1416 x 0.5636) = 25.42
+        self.assertLess(abs(b["near_km2"][i_edge] - a["near_km2"][i_mid]) / a["near_km2"][i_mid], 0.05)
+        self.assertAlmostEqual(45 / math.pi, 14.3, delta=0.05)                            # what no correction would say
+        self.assertEqual((c["near_n"][i_edge], c["near_km2"][i_edge]), (b["near_n"][i_edge], b["near_km2"][i_edge]))
+        # every fill of the field at least 1 km from the field's own west, north and south ends:
+        # the same density within 5 %, however near the seam
+        for col in range(0, 15):
+            i = col * 20 + 10
+            self.assertLess(abs(b["near_km2"][i] - 25.46) / 25.46, 0.05, col)
+        # with tile E finished and empty the ground east of the seam WAS searched and held nothing:
+        # then the edge fill really has fewer neighbours per km2
+        self.assertEqual(self._notes(edge, both)["near_km2"][i_edge], 14.3)
+
+    def test_a_circle_half_unsearched_and_a_sliver(self):
+        x0, y0, x1, y1 = self.W
+        ym = 0.5 * (y0 + y1)
+        # a fill on the west edge of the only finished tile, 3 pond fills east of it
+        pts = [(x0, ym), (x0 + 300.0, ym), (x0 + 600.0, ym), (x0 + 900.0, ym)]
+        r = self._notes(pts, [self.W])
+        self.assertEqual(r["near_n"][0], 3)
+        self.assertAlmostEqual(r["share"][0], 0.5, places=6)
+        self.assertEqual(r["near_km2"][0], 1.9)              # 3 / (3.1416 / 2) = 1.91, not 3 / 3.1416 = 0.95
+        # beyond the State line: a fill 900 m outside it is not on the searched ground - it is not
+        # counted by the others, and its own density is worked out over a quarter circle, not over
+        # the 1.9 % sliver of its circle that was searched (2 / 0.059 km2 would read 34 per km2)
+        state = rfs.box_geom((x0 - 9e4, y0 - 9e4, x0 + 5000.0, y1 + 9e4))
+        pts = [(x0 + 5900.0, ym), (x0 + 4950.0, ym + 100.0), (x0 + 4950.0, ym - 100.0)]
+        r = self._notes(pts, [self.W], outline=state)
+        self.assertEqual(r["near_n"], [2, 1, 1])
+        self.assertAlmostEqual(r["share"][0], 1.0 - _segment_share(900.0), delta=0.0005)
+        self.assertEqual(r["near_km2"][0], round(2 / (math.pi * rfs.CROWD_MIN_SHARE), 1))
+        self.assertEqual(r["near_km2"][0], 2.5)
+        self.assertEqual(r["near_km2"][1], _cut1(1 / (math.pi * _segment_share(50.0))))   # 0.5: on the ground, 50 m in
 
 
 @needs_gdal
@@ -940,6 +1194,162 @@ class Seams(unittest.TestCase):
         self.assertIn("1 tile(s) made without the Finder's edge test", info["data_edge"])
         self.assertTrue(info["edge_m"].startswith("150 "))
 
+    def _crowd_tiles(self):
+        """Two tiles. West: a cluster of 16 pond-line dams 200 m apart, with a stream-line dam and a
+        pond-line fill of another kind in it, and one pond-line dam alone. East: one pond-line dam
+        alone, and a dry embankment 500 m from the seam."""
+        f = self.finder
+        S, P = f.LINE_STREAM, f.LINE_POOL
+        x0, y0 = -370000.0, 2620000.0
+        cl = [(x0 + 4000.0 + 200.0 * i, y0 + 4000.0 + 200.0 * j) for i in range(4) for j in range(4)]
+        west = [(x, y, 5.0 + 0.5 * n, None, 1700.0, None, P) for n, (x, y) in enumerate(cl)]
+        west += [(cl[5][0] + 100.0, cl[5][1] + 100.0, 14.0, None, 1700.0, None, S),       # 16: on a stream line
+                 (cl[10][0] + 100.0, cl[10][1] + 100.0, 15.0, None, 1700.0, None, P),     # 17: a road fill on a pond line
+                 (x0 + 1500.0, y0 + 8500.0, 16.0, None, 1700.0, None, P)]                 # 18: alone
+        kinds = [f.em.K_DAM, f.em.K_DRY] * 8 + [f.em.K_DAM, f.em.K_ROAD, f.em.K_DAM]
+        w = self._tile("T10_W0370_N2620", west, kinds=kinds)
+        e = self._tile("T10_W0360_N2620", [(-355000.0, 2625000.0, 17.0, None, 1700.0, None, P),
+                                           (-359500.0, 2621000.0, 18.0, None, 1700.0, None, P)],
+                       kinds=[f.em.K_DAM, f.em.K_DRY])
+        return w, e
+
+    def _merge(self, args, out=None):
+        log = []
+        a = rfs.parser().parse_args(["--no-checksums"] + args)
+        rfs.merge(a, self.finder, out or self.d, {"k": 1}, "/no/such/dem.vrt", None, "none", {}, {}, self._model(),
+                  log.append)
+        return log
+
+    def _bytes(self, name):
+        with open(os.path.join(self.d, name), "rb") as fh:
+            return fh.read()
+
+    def test_crowded_ground_is_noted_in_every_list(self):
+        w, e = self._crowd_tiles()
+        log = self._merge(["--top", "5"])
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual(len(rows), 21)
+        # the cluster: every fill has the 15 others (the farthest 849 m), 15 / 3.1416 = 4.77 per km2
+        self.assertEqual([(rows[i]["near_n"], rows[i]["near_km2"], rows[i]["crowded"]) for i in w[:16]],
+                         [(15, 4.7, "no")] * 16)
+        self.assertEqual((rows[w[16]]["near_n"], rows[w[16]]["crowded"]), (16, "no"))    # sees the cluster, is not of it
+        self.assertEqual((rows[w[17]]["near_n"], rows[w[17]]["crowded"]), (16, "no"))
+        for i in (w[18], e[0], e[1]):
+            self.assertEqual((rows[i]["near_n"], rows[i]["near_km2"], rows[i]["crowded"]), (0, 0.0, "no"))
+        self.assertTrue(any(ln.startswith("  in crowded ground (crowded = yes): 0 of them, 0 of the first 5") for ln in log))
+        # a lower limit marks the cluster: 16 of the candidates
+        log = self._merge(["--top", "5", "--crowd-km2", "4.5"])
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual([i for i in w + e if rows[i]["crowded"] == "yes"], w[:16])
+        ranked, top = self._csv(rfs.OUT_CSV), self._csv(rfs.OUT_TOP)
+        self.assertEqual(len(ranked), 20)                    # the road fill is not a candidate; everything else is
+        for name, got in ((rfs.OUT_CSV, ranked), (rfs.OUT_TOP, top)):
+            self.assertEqual(list(got[0].keys())[-3:], ["near_n", "near_km2", "crowded"], name)   # after the others
+            for r in got:
+                m = rows[r["find_id"]]
+                self.assertEqual((r["near_n"], r["near_km2"], r["crowded"]), (str(m["near_n"]), str(m["near_km2"]), m["crowded"]))
+        self.assertEqual(list(top[0].keys())[:11], ["rank", "score", "kind", "status", "height_ft", "storage_af", "lat",
+                                                    "lon", "tile", "find_id", "link"])
+        cand = self._merged("candidates")
+        self.assertEqual([r["find_id"] for r in cand], [r["find_id"] for r in ranked])
+        self.assertEqual(sum(1 for r in cand if r["crowded"] == "yes"), 16)
+        in_top = sum(1 for r in top if r["crowded"] == "yes")
+        self.assertIn("  in crowded ground (crowded = yes): 16 of them, {} of the first 5".format(in_top), log)
+        self.assertTrue(any("dune hollows, not dams" in ln for ln in log))
+        info = self._run_info()
+        self.assertEqual((info["candidates_crowded"], info["short_list_crowded"]), ("16", str(in_top)))
+        self.assertTrue(info["crowd_km2"].startswith("4.5 "))
+        self.assertEqual(info["crowd_fills_counted"], "19")  # the 16, the one alone and the two of the east tile
+        self.assertEqual(info["script"], "run_finder_statewide.py 1.2")
+        ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
+        for layer, lead in (("embankments", []), ("candidates", ["rank"])):
+            names = rfs.field_names(ds.GetLayerByName(layer))
+            self.assertEqual(names[-3:], ["near_n", "near_km2", "crowded"])
+            self.assertEqual(names[:len(lead) + len(self.finder.EMB_FIELDS)], lead + [q[0] for q in self.finder.EMB_FIELDS])
+        ds = None
+
+    def test_the_note_changes_no_row_no_order_and_no_other_column(self):
+        """The ranked CSV and the short list with the three new columns taken off are, byte for
+        byte, the files a merge without the note writes - whatever --crowd-km2 is."""
+        self._crowd_tiles()
+
+        def without_last_three(data):
+            rows = list(csv.reader(io.StringIO(data.decode("utf-8"), newline="")))
+            buf = io.StringIO(newline="")
+            wr = csv.writer(buf)
+            for r in rows:
+                wr.writerow(r[:-3])
+            return buf.getvalue().encode("utf-8")
+
+        # as script 1.1 wrote them: the same merge with the three fields not there
+        keep = (rfs.EXTRA_FIELDS, rfs.TOP_COLUMNS)
+        rfs.EXTRA_FIELDS = [q for q in keep[0] if q not in rfs.CROWD_FIELDS]
+        rfs.TOP_COLUMNS = [c for c in keep[1] if c not in [q[0] for q in rfs.CROWD_FIELDS]]
+        try:
+            self._merge(["--top", "7"])
+        finally:
+            rfs.EXTRA_FIELDS, rfs.TOP_COLUMNS = keep
+        old = (self._bytes(rfs.OUT_CSV), self._bytes(rfs.OUT_TOP))
+        self.assertNotIn(b"crowded", old[0] + old[1])
+        self.assertEqual(old[0].count(b"\n"), 21)             # the heading and 20 candidates
+        seen = set()
+        for cut in ("8", "4.5", "1", "0"):
+            self._merge(["--top", "7", "--crowd-km2", cut])
+            new = (self._bytes(rfs.OUT_CSV), self._bytes(rfs.OUT_TOP))
+            self.assertEqual(without_last_three(new[0]), old[0], cut)
+            self.assertEqual(without_last_three(new[1]), old[1], cut)
+            seen.add(sum(1 for r in self._csv(rfs.OUT_CSV) if r["crowded"] == "yes"))
+        self.assertEqual(seen, {0, 16})                      # the mark did change between those runs; nothing else did
+        self.assertEqual(without_last_three(b"a,b,c,d\r\n1,2,3,4\r\n"), b"a\r\n1\r\n")
+
+    def test_crowd_km2_0_switches_the_note_off(self):
+        w, _e = self._crowd_tiles()
+        log = self._merge(["--crowd-km2", "0"])
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual(set(r["crowded"] for r in rows.values()), {"no"})
+        self.assertEqual((rows[w[0]]["near_n"], rows[w[0]]["near_km2"]), (15, 4.7))   # the numbers are still written
+        self.assertIn("  crowded ground: not marked (--crowd-km2 0)", log)
+        self.assertTrue(self._run_info()["crowd_km2"].startswith("0 (off"))
+        self.assertEqual(rfs.parser().parse_args([]).crowd_km2, 8.0)
+
+    def test_a_run_with_no_fill_at_all(self):
+        self._tile("T10_W0370_N2620", [])
+        self._tile("T10_W0360_N2620", [])
+        log = self._merge([])
+        self.assertEqual(self._merged(), [])
+        self.assertEqual(self._csv(rfs.OUT_CSV), [])
+        with open(os.path.join(self.d, rfs.OUT_CSV), newline="", encoding="utf-8") as fh:
+            head = next(csv.reader(fh))
+        self.assertEqual(head[-3:], ["near_n", "near_km2", "crowded"])
+        self.assertIn("  in crowded ground (crowded = yes): 0 of them, 0 of the first 0", log)
+        info = self._run_info()
+        self.assertEqual((info["fills"], info["candidates_crowded"], info["crowd_fills_counted"]), ("0", "0", "0"))
+
+    def test_a_fill_beside_a_tile_not_yet_run_and_beyond_the_state_line(self):
+        """The merge hands the note the finished tiles and the State outline: the same four pond
+        fills read 0.9 per km2 with all their ground searched, and more where part of it was not."""
+        f = self.finder
+        P = f.LINE_POOL
+        x1, ym = -360000.0, 2625000.0                         # the seam of the two tiles
+        fills = [(x1 - 50.0 - 250.0 * i, ym, 6.0 + i, None, 1700.0, None, P) for i in range(4)]
+        ids = self._tile("T10_W0370_N2620", fills)
+        self._merge([])                                      # the east tile is not finished
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual(rows[ids[0]]["near_n"], 3)
+        self.assertEqual(rows[ids[0]]["near_km2"], _cut1(3 / (math.pi * _segment_share(50.0))))   # 1.79, not 0.95
+        self.assertEqual(rows[ids[0]]["near_km2"], 1.7)
+        self.assertEqual(rows[ids[3]]["near_km2"], _cut1(3 / (math.pi * _segment_share(800.0))))
+        self._tile("T10_W0360_N2620", [])                    # now it is, and it holds nothing
+        self._merge([])
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual((rows[ids[0]]["near_n"], rows[ids[0]]["near_km2"]), (3, 0.9))
+        # the State ends 50 m east of the first fill: the same answer as with the tile not run
+        a = rfs.parser().parse_args(["--no-checksums"])
+        state = rfs.box_geom((-470000.0, 2520000.0, x1, 2730000.0))
+        rfs.merge(a, f, self.d, {"k": 1}, "/no/such/dem.vrt", state, "a made-up State", {}, {}, self._model(), lambda m: None)
+        rows = {r["find_id"]: r for r in self._merged()}
+        self.assertEqual((rows[ids[0]]["in_state"], rows[ids[0]]["near_n"], rows[ids[0]]["near_km2"]), ("yes", 3, 1.7))
+
     def test_merge_only_without_the_terrain_file(self):
         """--merge-only with the terrain drive unplugged: the settings come from the finished
         tiles, as long as they are of this Finder and of one terrain raster."""
@@ -1046,6 +1456,9 @@ class WholeRun(unittest.TestCase):
             self.assertIn("0 so far", so)
         self.assertFalse(os.path.exists(self.out))
         self.assertEqual(sorted(os.listdir(self.d)), before)
+        rc, _so, se = self._main(["--dem", vrt, "--out", self.out, "--dry-run", "--crowd-km2", "-1"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--crowd-km2", se)
         # a wrong --exclude-polygons is said at once, also in a dry run
         rc, _so, se = self._main(["--dem", vrt, "--out", self.out, "--dry-run", "--exclude-polygons", "/no/such.gpkg"])
         self.assertEqual(rc, 2)
