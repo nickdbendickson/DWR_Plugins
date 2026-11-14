@@ -9,7 +9,9 @@ name: Lake Delhi 2010 ANUGA leg
 # folder (with ANUGA's checkpoints, written every 15 minutes) as the artifact
 # "lake-delhi-2010-anuga-work". The next leg takes that folder and runs the same configuration
 # with --resume: the finished LISFLOOD-FP run and the gmsh mesh are reused and ANUGA goes on
-# from its newest checkpoint. The leg that finishes scores the run.
+# from its newest checkpoint. The leg that finishes scores the run. ANUGA's checkpoint-signing
+# key travels with the folder (NDBREACH_CKPT_KEY_FILE), or the next runner would refuse the
+# checkpoints as not its own (run 43574802029, leg 2).
 on:
   workflow_call:
     inputs:
@@ -54,8 +56,14 @@ jobs:
       # stop ANUGA, pack the folder and upload it inside the 360
       STOP_AT_MIN: "335"
     steps:
-      - name: Start time
-        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Start time, and where the checkpoint key lives
+        run: |
+          echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+          # ANUGA signs each checkpoint with a key from the user's settings folder and loads
+          # only checkpoints that key signed (core/ckpt_sign.py), so a leg on a fresh runner
+          # refused leg 1's checkpoints. The key goes with the case folder instead: made by the
+          # first leg's ANUGA, then carried leg to leg with the checkpoints it signed.
+          echo "NDBREACH_CKPT_KEY_FILE=$RUNNER_TEMP/ckpt_key/anuga_checkpoint.key" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
@@ -110,6 +118,7 @@ jobs:
           tar -I zstd -xf "$RUNNER_TEMP/work_in/work.tar.zst" -C "$RUNNER_TEMP"
           rm -rf "$RUNNER_TEMP/work_in"
           du -sh "$RUNNER_TEMP/delhi_anuga" "$RUNNER_TEMP/suite_data"
+          ls -la "$RUNNER_TEMP/ckpt_key" || echo "no checkpoint key: ANUGA starts over"
           ls "$RUNNER_TEMP/delhi_anuga/runs/as_observed/IA01297/_breach_model/anuga/anuga_checkpoints"/* | tail -n 5 || true
       - name: Run the observed breach (LISFLOOD-FP, then ANUGA on the gmsh mesh)
         id: run
@@ -169,7 +178,9 @@ jobs:
       - name: Pack the case folder for the next leg
         if: steps.run.outputs.done == 'false'
         run: |
-          tar -I "zstd -3 -T0" -cf "$RUNNER_TEMP/work.tar.zst" -C "$RUNNER_TEMP" delhi_anuga suite_data
+          cd "$RUNNER_TEMP"
+          extra=""; [ -d ckpt_key ] && extra="ckpt_key"
+          tar -I "zstd -3 -T0" -cf "$RUNNER_TEMP/work.tar.zst" delhi_anuga suite_data $extra
           ls -la "$RUNNER_TEMP/work.tar.zst"
       - name: Keep it
         if: steps.run.outputs.done == 'false'

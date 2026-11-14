@@ -51,7 +51,10 @@ reached 16.1 h of the 48 h flood in 4 h 24 min, before the breach (24.5 h). So t
 it in up to eight legs (`.github/workflows/lake-delhi-anuga-leg.yml`, 4 threads, a checkpoint
 every 15 min): each stops the Runner before the job limit and keeps the case folder as an
 artifact, and the next runs the same configuration with `--resume`, which reuses the finished
-LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint.
+LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint. ANUGA's
+checkpoint-signing key goes along (`NDBREACH_CKPT_KEY_FILE`): without it a fresh runner
+refuses the checkpoints as not its own. With 4 threads the first leg reached 26.9 h, past
+the breach.
 
 | Run | The breach |
 |---|---|
