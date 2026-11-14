@@ -1612,42 +1612,117 @@ class Cards(unittest.TestCase):
         self.assertEqual(self.pick(res["rows"]), self.pick(self.batch(evidence=False)["rows"]))
 
     def test_an_error_page_is_no_image_and_one_dead_service_leaves_the_other(self):
+        # page.test answers every request with an error page (an answer: no image for that fill,
+        # asked again for the next); dead.test gives no answer at all (left alone)
         from unittest import mock
+        import urllib.error
+        asked = []
 
         def half(url, timeout=None):
-            if "dead.test" in url:
+            asked.append(url)
+            if "page.test" in url:
                 return Resp(b"<html>Error 500</html>")
+            if "dead.test" in url:
+                raise urllib.error.URLError("refused")
             return Resp(service_tiff(url, 2))
         with mock.patch("urllib.request.urlopen", half):
-            res = self.batch(images=self.hub_lines(hosts=("dead.test", "live.test"), years=(2014, 2015, 2016)))
+            res = self.batch(images=self.hub_lines(hosts=("page.test", "dead.test", "live.test"),
+                                                   years=(2014, 2015, 2016)))
         for r in res["rows"]:
             i = int(r["find_id"][-8:], 16)
             self.assertEqual(r["water_years"], "{} of 3".format(3 if i % 2 == 0 else 0))
         self.assertEqual(res["evidence"]["dead_services"], ["dead.test"])
+        self.assertEqual(sum(1 for u in asked if "page.test" in u), 3 * 10)       # every card, as before
+        self.assertEqual(sum(1 for u in asked if "dead.test" in u), 3 * 2)        # first card, asked twice
 
     def test_a_broken_year_is_left_alone_and_never_stops_the_other_years(self):
         from unittest import mock
         asked, said = [], []
         down = ("/svc2012/", "/svc2014/", "/svc2015/")                      # three years in a row are down
 
+        import urllib.error
+
         def svc(url, timeout=None):
             asked.append(url)
-            if any(d in url for d in down):
-                raise OSError("HTTP Error 500")
+            if any(d in url for d in down):                                 # 'service unavailable'
+                raise urllib.error.HTTPError(url, 503, "Service Unavailable", None, None)
             return Resp(service_tiff(url, 2))
         with mock.patch("urllib.request.urlopen", svc):
             res = self.batch(images=self.hub_lines(), log=said.append)
+        notes = []
         for r in res["rows"]:                                               # the host goes on answering
             i = int(r["find_id"][-8:], 16)
             self.assertEqual(r["water_years"], "{} of 2".format(2 if i % 2 == 0 else 0))
-            self.assertEqual(r["evid_note"], "3 of 5 image years could not be read; no NWI layer given; "
-                                             "no LiDAR count raster given")
+            notes.append(r["evid_note"])
+        # the 3 cards that asked say the years could not be read; the 7 after them also say why
+        # they were not asked
+        plain = "3 of 5 image years could not be read; no NWI layer given; no LiDAR count raster given"
+        self.assertEqual(notes[:3], [plain] * 3)
+        self.assertEqual(notes[3:], ["3 of 5 image years could not be read; image year 2012, 2014, 2015 not "
+                                     "asked (its service gave no answer earlier in this run); no NWI layer "
+                                     "given; no LiDAR count raster given"] * 7)
         # each broken year is asked for 3 cards, then left alone: one line each, not one a card
         self.assertEqual(sum(1 for u in asked if any(d in u for d in down)), 3 * 3)
         self.assertEqual(len(asked), 2 * 10 + 3 * 3)
         self.assertEqual(sum(1 for m in said if "not asked again this run" in m), 3)
         self.assertEqual(res["evidence"]["dead_services"],
                          ["https://hub.test/svc{}/ImageServer".format(y) for y in (2012, 2014, 2015)])
+
+    def test_a_gap_in_one_year_never_takes_the_year_from_the_fills_beyond_it(self):
+        # a year whose service answers HTTP 500 over a stretch of the cards (a gap in that year's
+        # imagery, 4 neighbouring cards): only those cards lack the year; every card beyond the
+        # gap is still asked and read (as Finder 0.6.0 did), and no card says 'not asked'
+        from unittest import mock
+        import urllib.error
+        asked = []
+
+        def svc(url, timeout=None):
+            asked.append(url)
+            import urllib.parse
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            x0, _y0, x1, _y1 = (float(v) for v in q["bbox"][0].split(","))
+            i = int(round(((x0 + x1) / 2.0 - X0) / 100.0))
+            if "/svc2012/" in url and 5 <= i <= 12:
+                raise urllib.error.HTTPError(url, 500, "Internal Server Error", None, None)
+            return Resp(service_tiff(url, 2))
+        rows = [dict(r) for r in self.rows[:20]]
+        with mock.patch("urllib.request.urlopen", svc):
+            c = self.f._fill_evidence(rows, images=self.hub_lines(), cache=os.path.join(self.tmp, "gap"), log=QUIET)
+        got = [(int(r["find_id"][-8:], 16), r["img_years"]) for r in rows]
+        self.assertEqual(got, [(i, 4 if 5 <= i <= 12 else 5) for i in range(20)])
+        self.assertEqual(c["dead_services"], [])
+        self.assertEqual(len(asked), 5 * 20)
+        self.assertFalse(any("img_skipped" in r for r in rows))
+
+    def test_the_evidence_tool_says_which_year_was_not_asked(self):
+        # a year whose service gives no answer: left alone after 3 fills, and each fill after them
+        # carries img_skipped (the years); a run where nothing was left alone has no such field
+        from unittest import mock
+        import urllib.error
+
+        def svc(url, timeout=None):
+            if "/svc2012/" in url:
+                raise urllib.error.URLError("timed out")
+            return Resp(service_tiff(url, 2))
+        fills = self.layer("ev_in.gpkg", self.rows[:6], self.fields)
+        out = os.path.join(self.tmp, "ev.gpkg")
+        with mock.patch("urllib.request.urlopen", svc):
+            res = self.f.run_evidence(fills, out, images=self.hub_lines(), log=QUIET)
+        self.assertEqual([r.get("img_skipped") for r in res["rows"]], [None] * 3 + ["2012"] * 3)
+        self.assertEqual([r["img_years"] for r in res["rows"]], [4] * 6)
+        ds = ogr.Open(out)
+        d = ds.GetLayerByName("evidence").GetLayerDefn()
+        names = [d.GetFieldDefn(j).GetName() for j in range(d.GetFieldCount())]
+        ds = None
+        self.assertEqual(names[-2:], ["img_skipped", "review_order"])
+        with mock.patch("urllib.request.urlopen", lambda url, timeout=None: Resp(service_tiff(url, 2))):
+            res = self.f.run_evidence(out + "|layername=evidence", os.path.join(self.tmp, "ev2.gpkg"),
+                                      images=self.hub_lines(), log=QUIET)
+        self.assertFalse(any(r.get("img_skipped") for r in res["rows"]))   # an old note is not carried
+        ds = ogr.Open(os.path.join(self.tmp, "ev2.gpkg"))
+        d = ds.GetLayerByName("evidence").GetLayerDefn()
+        self.assertLess(d.GetFieldIndex("img_skipped"), 0)
+        ds = None
 
     def test_a_blank_answer_is_not_kept_as_a_tile(self):
         # a service under load can answer with an image that holds no data: the card says a year

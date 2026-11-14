@@ -449,13 +449,22 @@ For each fill of an `embankments` layer, every source optional:
   when the storage is over 12.5 acre-feet (an ND water permit), for every fill with a storage.
 
 The image years of one fill are asked for together (6 at a time). Two things are left alone
-once they fail 3 times in a row, with one line in the log instead of one per fill and year, and
-tried again after 10 minutes:
+once they give **no answer** 3 times in a row (they cannot be reached, the wait runs out, or they
+say they are unavailable: HTTP 502, 503 or 504), with one line in the log instead of one per fill
+and year, and tried again after 10 minutes:
 
-* an **image host**, when every request sent to it for a fill failed, they were all asked once
-  more and failed again (no network, the server down);
-* **one image year**, when it failed for 3 fills in a row while the host's other years answered.
-  A year that is down does not cost its time-out on every fill, and never stops the other years.
+* an **image host**, when no request sent to it for a fill was answered, they were all asked once
+  more and again none was answered (no network, the server down);
+* **one image year**, when it gave no answer for 3 fills in a row while the host's other years
+  answered. A year that is down does not cost its time-out on every fill, and never stops the
+  other years.
+
+An answer that is an error about the place asked for (an HTTP 500 over a gap in one year's
+imagery, a page that is not an image) is "no image" for that fill only and is never a reason to
+leave the year alone: a gap a few fills wide does not take the year from the fills beyond it,
+which read as they did in 0.6.0. A fill whose year was not asked because its service had been
+left alone says so: the evidence layer then has a field `img_skipped` (the years, e.g. `2013`;
+the field is there only when this happened), and a review card says it in `evid_note`.
 
 A service can answer with an image that holds no data. (On 2026-11-13, while the ND GIS Hub was
 slow, 13 of 670 images gave no reading from tiles that were on disk, and read normally when
@@ -526,18 +535,21 @@ and writes the layer and the CSV again with these fields right after the batch's
   years with a near-infrared band. The NWI code and the LiDAR drop-out appear when you give those
   layers. A card whose fill already carries a water history (the fills are an `evidence` layer)
   keeps it, and nothing is downloaded for it.
-* **Time**: about 2 seconds a card the first time with the default ten image years (one small
+* **Time**: a few seconds a card the first time with the default ten image years (one small
   image per card and year, six asked for at a time). Measured on 68 marked McLean County cards
-  with the NWI and LiDAR layers too, 2026-11-13: 119 and 134 seconds (670 requests), and 310
-  seconds in a run while the service was slow; 23 to 26 seconds for a second run, which asks for
+  with the NWI and LiDAR layers too: 119 and 134 seconds (670 requests, 2026-11-13), 310 seconds
+  in a run while the service was slow, and 236 seconds (3.5 seconds a card) on 2026-11-14; 23 to 26 seconds for a second run, which asks for
   nothing it has (the image tiles are kept in `<output>_imagery` beside the GeoPackage, 134 MB
   for those cards).
-* **Offline, or the image service is down**: the batch is on disk before the first request. Each
-  request waits 30 seconds at most. When nothing comes back from a host for a card, its years
-  are asked once more, and then the host is not asked again in that run (one warning). The cards
-  then have `water_years` **blank**, not `0 of 10`, and `evid_note` says no image year could be
-  read. One image year that fails for 3 cards in a row is left alone the same way while the
-  other years go on. A source that cannot be read, or any error in the evidence step, is a
+* **Offline, or the image service is down**: the batch is on disk before the first request. A
+  request is given up when the service does not connect, or sends nothing more, for 30 seconds
+  (the time-out bounds each wait, not the whole request: a service that keeps sending, however
+  slowly, is not cut off). When no request to a host is answered for a card, its years are asked
+  once more, and then the host is not asked again in that run (one warning). The cards then have
+  `water_years` **blank**, not `0 of 10`, and `evid_note` says no image year could be read. One
+  image year that gives no answer for 3 cards in a row is left alone the same way while the
+  other years go on, and the cards after say which year was not asked. An error answer over a
+  gap in one year's imagery is a missing year for those cards only. A source that cannot be read, or any error in the evidence step, is a
   warning; the batch stays as picked.
 * **A slow service**: a card reads `4 of 8` when two of ten years could not be read, and
   `evid_note` says so. Run the tool again with the same settings: the same cards are picked and

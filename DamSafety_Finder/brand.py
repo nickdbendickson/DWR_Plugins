@@ -44,7 +44,7 @@ EVIDENCE_IMAGES_HELP = ("The default list is every statewide ND GIS Hub image ye
                         "band (2009-2020): one small download per fill per year.")
 # 'Pick a review batch': what the water line on a card means with this brand's default imagery
 CARD_IMAGES_HELP = ("With the default list a card reads, for example, '6 of 10': open water in the pool "
-                    "in 6 of the 10 ND GIS Hub image years (2009-2020). About 2 seconds a card the first "
+                    "in 6 of the 10 ND GIS Hub image years (2009-2020). A few seconds a card the first "
                     "time; a second run reads the image tiles it kept beside the output.")
 # 'Add evidence to fills', what is below a fill: the data sets of the suite's offline data pack
 # to start from when a pack is set up (DamSafety Core's data folder), first found wins. Buildings:

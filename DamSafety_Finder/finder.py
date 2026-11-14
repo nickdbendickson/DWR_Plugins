@@ -1483,15 +1483,27 @@ def is_service(src):
     return s.startswith("http://") or s.startswith("https://")
 
 
+class NoAnswer(RuntimeError):
+    """The service gave no answer: it could not be reached, the connection dropped, the wait for
+    it ran out, or it said it is unavailable (HTTP 502, 503, 504). Only this counts towards
+    leaving an image host or year alone (_fetch_years); an answer about the place asked for (an
+    HTTP error such as 500 over a gap in the imagery, a page that is not an image) does not."""
+
+
 def _http_get(req, timeout=300.0):
-    """The bytes a web address answers with; RuntimeError when it refuses, or does not answer
-    within `timeout` seconds. urllib honours the proxy environment."""
+    """The bytes a web address answers with; RuntimeError when it refuses, NoAnswer when it
+    does not answer (`timeout`: how long to wait to connect, and then for each further part of
+    the answer). urllib honours the proxy environment."""
+    import urllib.error
     import urllib.request
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
-    except Exception as e:                               # HTTPError, URLError, timeout
-        raise RuntimeError("the image service refused {}: {}".format(req, e)) from None
+    except urllib.error.HTTPError as e:                  # the service answered, with an error
+        kind = NoAnswer if e.code in (502, 503, 504) else RuntimeError
+        raise kind("the image service refused {}: {}".format(req, e)) from None
+    except Exception as e:                               # URLError, time-out, connection dropped
+        raise NoAnswer("the image service refused {}: {}".format(req, e)) from None
 
 
 def _tile_is(path, x, y, w, h, cell):
@@ -2405,15 +2417,19 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
     colour-infrared and the 4-band, must not read each other's tiles), and tiles already there
     are not asked for again.
 
-    Two things are left alone once they fail `give_up` times in a row, with one log line each
-    instead of one per fill and year, for the rest of the run - or for retry_s seconds when that
-    is given (a long run gets its imagery back after an outage):
-      * a host, when every request sent to it for this fill failed, they were all asked once
-        more, and failed again (no network, the server down);
-      * one service address (one image year), when it failed for `give_up` fills in a row while
-        the host's other years answered (a year that is down does not cost its time-out on
-        every fill, and never stops the other years).
-    What is left alone is left out of the result. state: a dict kept for one run."""
+    Two things are left alone once they give no answer (NoAnswer: not reached, timed out, HTTP
+    502 / 503 / 504) `give_up` times in a row, with one log line each instead of one per fill
+    and year, for the rest of the run - or for retry_s seconds when that is given (a long run
+    gets its imagery back after an outage):
+      * a host, when no request sent to it for this fill was answered, they were all asked once
+        more, and again none was answered (no network, the server down);
+      * one service address (one image year), when it gave no answer for `give_up` fills in a
+        row while the host's other years answered (a year that is down does not cost its
+        time-out on every fill, and never stops the other years).
+    An answer that is an error about the place asked for (HTTP 500 over a gap in a year's
+    imagery, a page that is not an image) is no image for that fill only, and counts as an
+    answer: a regional gap never takes a year away from the fills beyond it. What is left alone
+    is left out of the result. state: a dict kept for one run."""
     strikes = state.setdefault("strikes", {})
     dead = state.setdefault("dead", {})                 # host or service address -> when given up on
     asked = state.setdefault("asked", [])               # one entry per request sent
@@ -2459,13 +2475,13 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
     for j, im in enumerate(jobs):
         by_host.setdefault(_host(im["src"]), []).append(j)
     for h, js in by_host.items():
-        if not all(isinstance(res[j], Exception) for j in js):
+        if not all(isinstance(res[j], NoAnswer) for j in js):
             answered(h)
             continue
         again = ask([jobs[j] for j in js])              # nothing came back from this host: once more
         for j, v in zip(js, again):
             res[j] = v
-        bad = [res[j] for j in js if isinstance(res[j], Exception)]
+        bad = [res[j] for j in js if isinstance(res[j], NoAnswer)]
         if len(bad) < len(js):
             answered(h)
             continue
@@ -2476,7 +2492,7 @@ def _fetch_years(imgs, box, cell, cache, state, pool=None, timeout=300.0, give_u
         src = str(im["src"])
         if _host(src) in dead:                          # said for the host: not again year by year
             continue
-        if not isinstance(v, Exception):
+        if not isinstance(v, NoAnswer):                 # an image, or an answer about this place
             answered(src)
             continue
         strikes[src] = strikes.get(src, 0) + 1
@@ -2579,6 +2595,8 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
         years read) and evid_note (in words, why something is blank);
       * a card with no image year read has wet_years blank, not 0: nothing was seen, which is
         not 'no water in any year';
+      * a card whose image year was not asked (its service had given no answer for 3 fills in
+        a row) says so in evid_note;
       * a card that already carries a water history or LiDAR drop-out (the fills came from an
         'evidence' layer) keeps it, and nothing is asked for;
       * the NWI layer is asked one small box a card, and an NWI layer that cannot be read is a
@@ -2635,15 +2653,16 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
             has_water = cards and bool(r.get("img_years") or 0)
             if imgs and not has_water:
                 got = _fetch_years(imgs, box, image_cell, cache, web, pool, timeout, give_up, retry_s, log)
-                seen = {}
+                seen, skipped = {}, set()
                 for k, im in enumerate(imgs):
                     bands = [im[q] for q in _IMG_KEYS if q in im]
                     yr = im["year"]
                     try:
                         src = im["src"]
                         if is_service(src):
-                            if k not in got:                # its host was given up on: said once
+                            if k not in got:                # left alone after giving no answer: said once
                                 seen.setdefault(yr, None)
+                                skipped.add(yr)
                                 continue
                             src = got[k]
                             if isinstance(src, Exception):
@@ -2682,6 +2701,12 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                     notes.append("no image year could be read")
                 elif h["years"] < listed:
                     notes.append("{} of {} image years could not be read".format(listed - h["years"], listed))
+                skipped = sorted(y for y in skipped if seen.get(y) is None)
+                if skipped:                                 # not asked: its service had stopped answering
+                    notes.append("image year {} not asked (its service gave no answer earlier in this run)".format(
+                        ", ".join(str(y) for y in skipped)))
+                    if not cards:
+                        new[SKIP_FIELD[0]] = ",".join(str(y) for y in skipped)
             elif not imgs and not has_water:
                 notes.append("no imagery given")
             if nwi and not nwi_err:
@@ -2739,6 +2764,8 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                 new["permit_check"] = "yes" if st > ev.PERMIT_AF else "no"
             except (TypeError, ValueError):
                 pass
+            if imgs and not cards:
+                r.pop(SKIP_FIELD[0], None)                  # a note from an earlier run is not this run's
             if cards:
                 r.update({k: v for k, v in new.items() if k in card_names})
                 if r.get("img_years"):
@@ -2761,6 +2788,9 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
 
 IMAGE_RETRY_S = 600.0       # 'Add evidence to fills' asks a host it gave up on again after this long
 ORDER_FIELD = ("review_order", "int")
+# written by the evidence tool only when an image year was not asked for some fill because its
+# service had stopped answering earlier in the run (the years, e.g. '2013'); absent otherwise
+SKIP_FIELD = ("img_skipped", "str")
 
 
 def _lines_in(src, box):
@@ -2808,8 +2838,11 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
     (and a CSV). When the fills carry a score, each also gets review_order (1 = look at this
     first; core/evidence.py review_order: score in bands 0.1 wide, then what is below, then the
     score) and the CSV is written in that order; the layer keeps the fills' own order.
-    An image host or image year that stops answering is left alone for 10 minutes, with one
-    log line.
+    An image host or image year that gives no answer (not reached, timed out, HTTP 502 / 503 /
+    504) 3 times in a row is left alone for 10 minutes, with one log line, and each fill whose
+    year was not asked meanwhile carries img_skipped (the years; the field is written only when
+    that happened). An error answer over a gap in one year's imagery is a missing year for that
+    fill only.
     Returns {'rows', 'gpkg', 'csv', 'counts'}."""
     progress = progress or _noop
     cancelled = cancelled or _noop
@@ -2823,7 +2856,9 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
                    log=log, progress=progress, cancelled=cancelled)
     if dem and (buildings or roads) and not cancelled():
         _consequences(rows, dem, z_feet, buildings, roads, reach_m, flow_cell, log, cancelled)
-    fields = _fields_of(rows, skip={"x", "y", ORDER_FIELD[0]} | set(dict(EVID_FIELDS))) + EVID_FIELDS
+    fields = _fields_of(rows, skip={"x", "y", ORDER_FIELD[0], SKIP_FIELD[0]} | set(dict(EVID_FIELDS))) + EVID_FIELDS
+    if any(r.get(SKIP_FIELD[0]) for r in rows):
+        fields = fields + [SKIP_FIELD]
     in_order = rows
     for r in rows:
         r.pop(ORDER_FIELD[0], None)                     # an order from an earlier run is not this run's
