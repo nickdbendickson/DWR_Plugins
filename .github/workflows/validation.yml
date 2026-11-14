@@ -7,12 +7,23 @@ name: Validation (real dam failures)
 #
 # Runs by hand (Actions > Validation > Run workflow) and on a pull request that changes the
 # case or this file. It downloads 21 MB of USGS 3DEP terrain.
+#
+# The second job, "Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)", runs the observed breach
+# through the Runner's lisflood+anuga tier: ANUGA on the gmsh mesh, with the Census TIGER road
+# centrelines as embankment breaklines and their 1 m crests burned into the terrain (USGS 3DEP
+# 1 m, downloaded along the roads). It takes hours, so it runs only by hand with engine set to
+# "anuga" or "both", or on a pull request whose title contains "[anuga]".
 on:
   workflow_dispatch:
     inputs:
       cell:
         description: Model cell, m
         default: "30"
+      engine:
+        description: "lisflood: the three LISFLOOD-FP runs; anuga: the observed breach with ANUGA on the gmsh mesh; both"
+        type: choice
+        options: [lisflood, anuga, both]
+        default: lisflood
   pull_request:
     paths:
       - "tools/validation/**"
@@ -28,6 +39,7 @@ concurrency:
 jobs:
   lake-delhi-2010:
     name: Lake Delhi Dam 2010 (LISFLOOD-FP)
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.engine != 'anuga'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     defaults:
@@ -132,3 +144,119 @@ jobs:
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/gauge_*.csv
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/breach_hydrograph.csv
             ${{ runner.temp }}/delhi/runs/*/*/WSE (Max).tif
+
+  lake-delhi-2010-anuga:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP + ANUGA, gmsh)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'lisflood') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[anuga]'))
+    runs-on: ubuntu-latest
+    # GitHub stops a job at 6 hours; the run step has its own limit below it, so the steps that
+    # report what was reached still run when ANUGA is not finished
+    timeout-minutes: 355
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      CELL: ${{ github.event.inputs.cell || '30' }}
+      NDBREACH_ANUGA_MESHER: gmsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      # ANUGA in its own environment, as on a user's machine (ci.yml model-tests does the same),
+      # with gmsh's Python module for the mesh
+      - name: ANUGA + gmsh environment (conda-forge)
+        run: |
+          micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy python-gmsh
+          py="$(micromamba run -n anuga python -c 'import sys; print(sys.executable)')"
+          "$py" -c "import anuga, gmsh; print('anuga', anuga.__version__, 'gmsh', gmsh.__version__)"
+          echo "ANUGA_PY=$py" >> "$GITHUB_ENV"
+          # the crest burn caches USGS 3DEP 1 m tiles in the suite data folder
+          mkdir -p "$RUNNER_TEMP/suite_data"
+          echo "NDSUITE_DATA=$RUNNER_TEMP/suite_data" >> "$GITHUB_ENV"
+          nproc
+      - name: The case's own tests
+        run: python -W error tools/validation/lake_delhi_2010/test_case.py
+      - name: Build the case (terrain, inflow, gate rating, road lines)
+        run: |
+          python tools/validation/lake_delhi_2010/build_case.py \
+            --out "$RUNNER_TEMP/delhi_anuga" --cell "$CELL" --anuga
+      - name: Run the observed breach (LISFLOOD-FP, then ANUGA on the gmsh mesh)
+        timeout-minutes: 320
+        run: |
+          cd "$RUNNER_TEMP/delhi_anuga"
+          date -u
+          rc=0
+          python "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py" run as_observed.json \
+            --lisflood "$HOME/lisflood-nd/lisflood" --anuga-python "$ANUGA_PY" \
+            > as_observed.log 2>&1 || rc="$?"
+          date -u
+          grep -v "^\[ *[0-9]*%\]" as_observed.log | tail -n 120
+          [ "$rc" = "0" ]
+      - name: What the run reached (also when it did not finish)
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/delhi_anuga"
+          m="runs/as_observed/IA01297/_breach_model"
+          echo "::group::progress lines (every 20th)"
+          grep "^\[ *[0-9]*%\]" as_observed.log | awk 'NR % 20 == 1' || true
+          echo "::endgroup::"
+          tail -n 40 as_observed.log || true
+          ls -la "$m" "$m/anuga" 2>/dev/null | head -n 80 || true
+          for f in "$m/anuga/anuga.log" "$m/anuga/anuga_run.log"; do
+            [ -f "$f" ] && { echo "::group::$f"; tail -n 80 "$f"; echo "::endgroup::"; }
+          done
+          python - "$m/run_report.json" <<'PY' || true
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          for k in ("anuga_mesh", "anuga_runs", "anuga_threads", "anuga_elevation_source",
+                    "crest_burn", "comparison", "runtime_min", "anuga_runtime_min", "warnings"):
+              if k in r:
+                  print(k, json.dumps(r[k], indent=1, default=str)[:4000])
+          s = r.get("summary") or {}
+          print("summary", json.dumps({k: v for k, v in s.items()
+                                       if "anuga" in k or "crest" in k or "mesh" in k}, indent=1))
+          PY
+      - name: Score against the surveyed high-water marks
+        if: always()
+        run: |
+          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi_anuga" || true
+          { printf '# LISFLOOD-FP + ANUGA (gmsh mesh, road breaklines, crest burn)\n\n'
+            cat "$RUNNER_TEMP/delhi_anuga/Lake_Delhi_2010_Score.md" 2>/dev/null || echo "(no score)"; } \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the score, the report and the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-delhi-2010-anuga
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/delhi_anuga/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/delhi_anuga/*.json
+            ${{ runner.temp }}/delhi_anuga/*.log
+            ${{ runner.temp }}/delhi_anuga/inputs/roads.geojson
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/_breach_model/run_report.*
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/_breach_model/gauge_*.csv
+            ${{ runner.temp }}/delhi_anuga/runs/*/*/WSE (Max).tif

@@ -9,11 +9,14 @@ Writes into FOLDER (default ~/DamSafety/Validation/Lake_Delhi_2010):
     inputs/inflow.csv                 hours, cfs: the Manchester gauge record, scaled to the dam
     inputs/spillway_rating.csv        pool (ft), cfs: the three gates as they stood in the flood
     inputs/gauges.geojson             the four surveyed bridges: the run records the flow past each
+    inputs/roads.geojson, rail.geojson  (--lines) Census TIGER road and rail centrelines: the
+                                      crest burn and, with ANUGA's gmsh mesh, the breaklines
     blind.json                        run 1: the Runner works the breach out itself
     as_observed.json                  run 2: the breach width and time are the observed ones
     case.json                         what was written, with every assumption
 
-and prints the two run commands. score.py then compares the finished runs with the surveyed
+and prints the two run commands. --anuga makes them LISFLOOD-FP + ANUGA runs (the Runner's
+"lisflood+anuga" tier; set NDBREACH_ANUGA_MESHER=gmsh for the gmsh mesh) and implies --lines. score.py then compares the finished runs with the surveyed
 high-water marks. Every published number comes from observed.json beside this file. One number
 is fitted, and to the lake, not to the flood below the dam: INFLOW_FACTOR (see there). Needs GDAL for the terrain (QGIS's Python has it) and the
 internet for the download; --no-terrain writes everything else.
@@ -52,6 +55,16 @@ END_CDT = "2010-07-25 12:00"       # the last one: 23 hours after the breach
 # flood model). So the heavy rain fell mostly above the gauge, and 1.10 is used.
 INFLOW_FACTOR = 1.10
 RUNS = ("blind", "as_observed")
+# Census TIGERweb (public, no key): road and rail centrelines for the crest burn and the gmsh
+# breaklines. Layer 2 = primary roads, 6 = secondary roads at their finest scale, 8 = local
+# roads, 9 = railroads. The Runner itself keeps only the pieces that stand on a fill and lie
+# near the flood (anuga_model.find_embankments) and burns only the cells a line crosses.
+TIGER = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer"
+LINE_LAYERS = (("roads", (2, 6, 8)), ("rail", (9,)))
+# private drives and farm lanes (S1740) and lines for the Census's own use (S1750) are not
+# road embankments: left out
+SKIP_MTFCC = ("S1740", "S1750")
+TIGER_PAGE = 1000
 FMT = "%Y-%m-%d %H:%M"
 
 
@@ -171,8 +184,11 @@ def breach_hours(ob, start=START_CDT):
             hours_between(b["breach_speeds_up_cdt"], b["width_200ft_cdt"]))
 
 
-def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None, manning_n=None):
-    """{run name: configuration} for ndbreach_cli.py."""
+def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None, manning_n=None,
+            lines=None, tier=None):
+    """{run name: configuration} for ndbreach_cli.py. lines: {"roads": path, "rail": path}
+    relative to the case folder (the crest burn and the gmsh breaklines); tier: the Runner's
+    model tier (None = LISFLOOD-FP only, its default)."""
     dam = ob["dam"]
     t_breach, t_form = breach_hours(ob)
     sim_hr = sim_hr if sim_hr else hours_between(START_CDT, END_CDT)
@@ -199,6 +215,11 @@ def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None
     }
     if manning_n:                    # left out: the suite's shared default (0.06) is used
         base["manning"] = {"n": float(manning_n)}
+    for kind, key in (("roads", "receptor_roads"), ("rail", "receptor_rail")):
+        if (lines or {}).get(kind):
+            base["layers"][key] = lines[kind]
+    if tier:
+        base["model"]["tier"] = tier
     runs = {}
     for name in RUNS:
         cfg = json.loads(json.dumps(base))
@@ -293,6 +314,82 @@ def get_terrain(ob, folder, say=print, fetch=fetch):
     return dem
 
 
+# ---------------------------------------------------------------------------- road and rail
+def fetch_json(url, timeout=120):
+    return json.loads(fetch(url, timeout).decode("utf-8"))
+
+
+def tiger_query(layer, box, offset):
+    q = {"geometry": "{},{},{},{}".format(*box), "geometryType": "esriGeometryEnvelope",
+         "inSR": 5070, "outSR": 5070, "spatialRel": "esriSpatialRelIntersects",
+         "outFields": "MTFCC,NAME", "returnGeometry": "true", "orderByFields": "OBJECTID",
+         "resultOffset": offset, "resultRecordCount": TIGER_PAGE, "f": "json"}
+    return "{}/{}/query?{}".format(TIGER, layer, urllib.parse.urlencode(q))
+
+
+def tiger_lines(layer, box, fetch_json=fetch_json, say=print, tries=4, wait_s=5.0):
+    """The polylines of one TIGERweb layer that touch the box (EPSG:5070), page by page:
+    [(properties, [[x, y], ...]), ...]. The service now and then sends an empty or an error
+    answer; each page is asked again up to `tries` times."""
+    out, offset = [], 0
+    while True:
+        for attempt in range(1, tries + 1):
+            try:
+                d = fetch_json(tiger_query(layer, box, offset))
+                if "features" not in d:
+                    raise OSError("no features in the answer: {}".format(str(d)[:200]))
+                break
+            except (OSError, ValueError) as e:
+                if attempt == tries:
+                    raise SystemExit("build_case: the road and rail lines could not be fetched "
+                                     "from Census TIGERweb (layer {}): {}".format(layer, e))
+                time.sleep(wait_s * attempt)
+        for f in d["features"]:
+            props = {k: v for k, v in (f.get("attributes") or {}).items() if k in ("MTFCC", "NAME")}
+            for path in (f.get("geometry") or {}).get("paths") or []:
+                if len(path) >= 2:
+                    out.append((props, [[round(float(x), 1), round(float(y), 1)] for x, y in path]))
+        if not d.get("exceededTransferLimit") and len(d["features"]) < TIGER_PAGE:
+            return out
+        offset += len(d["features"])
+        if not d["features"]:
+            return out
+
+
+def get_lines(ob, out, fetch_json=fetch_json, say=print):
+    """inputs/roads.geojson and inputs/rail.geojson (EPSG:5070, the terrain's CRS) over the
+    terrain box. Returns {kind: path relative to `out`} for the kinds that have lines."""
+    box = ob["terrain"]["box"]
+    os.makedirs(os.path.join(out, "inputs"), exist_ok=True)
+    written = {}
+    for kind, layers in LINE_LAYERS:
+        feats, seen = [], set()
+        for layer in layers:
+            for props, path in tiger_lines(layer, box, fetch_json, say):
+                key = json.dumps(path)
+                if props.get("MTFCC") in SKIP_MTFCC or key in seen:   # a road on two layers
+                    continue
+                seen.add(key)
+                feats.append({"type": "Feature", "properties": dict(props, layer=layer),
+                              "geometry": {"type": "LineString", "coordinates": path}})
+        rel = os.path.join("inputs", kind + ".geojson")
+        if not feats:
+            say("{}: none in the box (Census TIGER)".format(kind))
+            if os.path.isfile(os.path.join(out, rel)):
+                os.remove(os.path.join(out, rel))
+            continue
+        with open(os.path.join(out, rel), "w", encoding="utf-8") as f:
+            json.dump({"type": "FeatureCollection", "name": "lake_delhi_2010_" + kind,
+                       "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::5070"}},
+                       "features": feats}, f)
+        km = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                 for ft in feats for a, b in zip(ft["geometry"]["coordinates"],
+                                                 ft["geometry"]["coordinates"][1:])) / 1000.0
+        say("{}: {} lines, {:.0f} km (Census TIGER)".format(kind, len(feats), km))
+        written[kind] = rel
+    return written
+
+
 # ---------------------------------------------------------------------------- main
 def write_inputs(ob, out, factor=None, lag_hr=0.0):
     os.makedirs(os.path.join(out, "inputs"), exist_ok=True)
@@ -334,6 +431,12 @@ def main(argv=None):
                     help="one Manning's n for the whole valley (default: the suite's shared "
                          "default, 0.06)")
     ap.add_argument("--no-terrain", action="store_true", help="do not download the terrain")
+    ap.add_argument("--lines", action="store_true",
+                    help="fetch the road and rail centrelines (Census TIGER) for the crest burn "
+                         "and the gmsh breaklines")
+    ap.add_argument("--anuga", action="store_true",
+                    help="LISFLOOD-FP + ANUGA runs (the Runner's lisflood+anuga tier); implies "
+                         "--lines. Set NDBREACH_ANUGA_MESHER=gmsh for the gmsh mesh")
     args = ap.parse_args(argv)
     ob = observed()
     out = os.path.abspath(os.path.expanduser(args.out))
@@ -341,9 +444,11 @@ def main(argv=None):
     rows, rate = write_inputs(ob, out, args.inflow_factor, args.inflow_lag_hr)
     if not args.no_terrain:
         get_terrain(ob, os.path.join(out, "terrain"))
+    lines = get_lines(ob, out) if (args.lines or args.anuga) else None
+    tier = "lisflood+anuga" if args.anuga else None
     xy = to_5070(ob["dam"]["lon"], ob["dam"]["lat"])
     runs = configs(ob, out, xy, args.cell, args.threads, args.hours,
-                   to_5070(*ob["dam"]["outflow_point"]), args.manning_n)
+                   to_5070(*ob["dam"]["outflow_point"]), args.manning_n, lines, tier)
     for name, cfg in runs.items():
         with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=1)
@@ -354,7 +459,8 @@ def main(argv=None):
             "gates_at_top_of_dam_cfs": round(gates_cfs(ob, ob["dam"]["top_of_dam_ft_ngvd29"])),
             "breach_starts_hr": round(t_breach, 3), "breach_formation_hr_as_observed": round(t_form, 3),
             "surface_area_top_ac": round(surface_area_top_ac(ob), 1), "cell_m": args.cell,
-            "ngvd29_to_navd88_ft": ob["datum"]["ngvd29_to_navd88_ft"], "runs": list(runs)}
+            "ngvd29_to_navd88_ft": ob["datum"]["ngvd29_to_navd88_ft"], "runs": list(runs),
+            "tier": tier or "lisflood", "lines": lines or {}}
     with open(os.path.join(out, "case.json"), "w", encoding="utf-8") as f:
         json.dump(case, f, indent=1)
     cli = os.path.join(REPO, "DamSafety_Runner", "scripts", "ndbreach_cli.py")
