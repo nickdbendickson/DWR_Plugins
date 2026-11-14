@@ -21,8 +21,8 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 | `ndfind:water_mosaic` Build a class-9 water mosaic from LiDAR tiles | a classified LiDAR tile or a folder of them (.las/.laz, ASPRS class 9); the water classes, their EPSG (only if the files carry none) and the cell size | `water_count.vrt` (class-9 points per cell) and `water_elev.vrt` (their mean elevation, the pond water surface), in North Dakota's UTM 14N (EPSG:26914): build once, then give the count VRT to the open-water tool as its **prebuilt class-9 water-count raster** |
 | `ndfind:osm` Extract dams, dikes and culverts from OpenStreetMap | an OpenStreetMap file (.osm.pbf, the Geofabrik extract) | `waterway=dam / weir`, `man_made=dyke / embankment`, `tunnel=culvert`, `ford=yes` as points: one more known-structure layer |
 | `ndfind:score` Score fills by how much they look like the listed dams | the `embankments` layers of one or more runs | A model learned from the fills already on a dam list (four kinds; reviewers' marks as trusted labels), and every fill scored 0-1 with it (look at the high-scoring new ones first) |
-| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check |
-| `ndfind:review_batch` Pick a review batch | scored fills; cards already reviewed (optional) | A batch for review: random control, top-ranked, near the cut, each card with its chance of being picked; a share flagged for a blind second look |
+| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check; for scored fills `review_order` (score first, what is below second) |
+| `ndfind:review_batch` Pick a review batch | scored fills; cards already reviewed (optional); imagery years, NWI, the LiDAR return-count mosaic (optional) | A batch for review: random control, top-ranked, near the cut, each card with its chance of being picked; a share flagged for a blind second look; on each card the water evidence (`water_years`, NWI code, LiDAR drop-out) |
 
 The first three take **Known structures** (any number of point, line or polygon layers: DWR dams, DWR
 dugouts, Unknown Structures, NID dams, NBI bridges, NDDOT bridges / centre-line pipes, USGS stream
@@ -446,6 +446,47 @@ For each fill of an `embankments` layer, every source optional:
   path within 1, 3 and 5 miles, and `conseq`, a second sort for the review. `permit_check` = yes
   when the storage is over 12.5 acre-feet (an ND water permit), for every fill with a storage.
 
+The image years of one fill are asked for together (6 at a time). Two things are left alone
+once they fail 3 times in a row, with one line in the log instead of one per fill and year, and
+tried again after 10 minutes:
+
+* an **image host**, when every request sent to it for a fill failed, they were all asked once
+  more and failed again (no network, the server down);
+* **one image year**, when it failed for 3 fills in a row while the host's other years answered.
+  A year that is down does not cost its time-out on every fill, and never stops the other years.
+
+A service can answer with an image that holds no data. (On 2026-11-13, while the ND GIS Hub was
+slow, 13 of 670 images gave no reading from tiles that were on disk, and read normally when
+downloaded again; the tiles themselves were not inspected.) Such an image is not kept: that
+year is "not read" for the fill, and the next run asks for it again.
+
+### Sort by what is downstream, as a second sort (`review_order`)
+
+When the fills carry a score, the evidence tool writes `review_order` (1 = look at this first):
+
+1. by **score band** first: bands 0.1 wide, the highest first (0.9 to 1.0, then 0.8 to 0.9 ...);
+2. inside a band by **`conseq`**, the highest first, when it was computed (a DEM with buildings
+   and / or roads). `conseq` counts 3 for each building in the first mile down the flow path, 2
+   for each in miles 1 to 3, 1 for each in miles 3 to 5, and 1 for each road crossing in the
+   first mile;
+3. then by the score itself, then in the order the fills came.
+
+So what is downstream only reorders fills the score cannot tell apart: a fill never passes one
+in a higher band, however much is below it. A fill with nothing computed below it counts as 0
+there, and a fill with no score comes last. The **CSV is written in this order; the layer keeps
+the fills' own order** (sort it on `review_order` in the attribute table). Without a DEM the
+order is by score alone. The rule is `core/evidence.py` `review_order`.
+
+`BUILDINGS` and `ROADS` start from the suite's offline data pack when one is set up in DamSafety
+Core: the structure inventory the Hazard tool counts (`NSI_structures`; else `USA_Structures`,
+else `NDGISHUB_address_points`) and the NG9-1-1 roads (`ND_roads_NG911`; else `ND_county_roads`).
+They are used only with a DEM, can be changed or cleared, and stay empty when no pack is set up.
+Both layers are read through their spatial index, a 10 km tile at a time.
+
+`review_order` is a work list, not a ranking of dams and not a hazard class: `conseq` counts
+buildings near the flow path below a fill, not what a breach would reach. **The review batch does
+not use it** (next section).
+
 ## Review batches and honest numbers (`ndfind:review_batch`, `core/review.py`, `core/evaluate.py`)
 
 **Marking a batch:** [REVIEW.md](REVIEW.md) is the step-by-step page for a reviewer: how to set
@@ -463,6 +504,55 @@ unreviewed pool (`pool_n` cards; the tile cap counted), so `evaluate.ht_share` t
 marks into the share of real dams among the unreviewed cards with an honest interval (a control
 with no dams still gives an upper bound, not 0 +/- 0). For the whole list, add the cards marked in
 earlier rounds at `incl_prob` 1: they are a census of what has been looked at.
+
+### The water evidence on each card (`EVIDENCE`, on by default)
+
+After the batch is picked and written, the tool reads the water evidence of the picked cards only
+and writes the layer and the CSV again with these fields right after the batch's own:
+
+| field | meaning |
+|---|---|
+| `water_years` | the card line, for example `6 of 10`: open water in the pool in 6 of the 10 image years read |
+| `wet_years`, `img_years`, `wet_share`, `wet_list` | the same as numbers, and the years with water |
+| `nwi_code`, `nwi_h`, `nwi_x` | the NWI wetland code at the pool; h = impounded, x = excavated (needs `NWI`) |
+| `lidar_pool_empty`, `lidar_contrast` | the share of the pool with no LiDAR returns, and that share less the ring's round it (needs `LIDAR_POINTS`) |
+| `evid_note` | in words, why something is blank or short: `no image year could be read`, `2 of 10 image years could not be read`, `no NWI layer given`, `no LiDAR count raster given` ... |
+| `bld_1mi`, `roads_1mi`, `conseq` | what is below the fill, **only when the fills came with it** (an `evidence` layer made with a DEM); the batch never computes it |
+
+* **Only the water years need no input in North Dakota**: `IMAGES` starts as the ND GIS Hub
+  years with a near-infrared band. The NWI code and the LiDAR drop-out appear when you give those
+  layers. A card whose fill already carries a water history (the fills are an `evidence` layer)
+  keeps it, and nothing is downloaded for it.
+* **Time**: about 2 seconds a card the first time with the default ten image years (one small
+  image per card and year, six asked for at a time). Measured on 68 marked McLean County cards
+  with the NWI and LiDAR layers too, 2026-11-13: 119 and 134 seconds (670 requests), and 310
+  seconds in a run while the service was slow; 23 to 26 seconds for a second run, which asks for
+  nothing it has (the image tiles are kept in `<output>_imagery` beside the GeoPackage, 134 MB
+  for those cards).
+* **Offline, or the image service is down**: the batch is on disk before the first request. Each
+  request waits 30 seconds at most. When nothing comes back from a host for a card, its years
+  are asked once more, and then the host is not asked again in that run (one warning). The cards
+  then have `water_years` **blank**, not `0 of 10`, and `evid_note` says no image year could be
+  read. One image year that fails for 3 cards in a row is left alone the same way while the
+  other years go on. A source that cannot be read, or any error in the evidence step, is a
+  warning; the batch stays as picked.
+* **A slow service**: a card reads `4 of 8` when two of ten years could not be read, and
+  `evid_note` says so. Run the tool again with the same settings: the same cards are picked and
+  only the missing images are asked for.
+* **The evidence never picks.** The pick reads the card's id, place and score only, and is made
+  first. The cards, their order, `rank`, `incl_prob` and `second` are the same with `EVIDENCE` on
+  or off; the tool checks that after the evidence step and stops if anything moved. Water years,
+  NWI, LiDAR drop-out and `conseq` are not in the score either. What is below a fill is a second
+  sort for a work list (`review_order` from the evidence tool), never a reason to put a card in a
+  batch: a batch picked by consequence would no longer say how many dams the list holds.
+* **Warning: marks made with the evidence on the card are not an independent test of that
+  evidence.** A reviewer who sees `6 of 10` leans on it, so the agreement between `wet_share`
+  and the marks of such a batch cannot be read as a measurement of how well water years tell a
+  dam. The `run_info` table of the output records `evidence = True` for such a batch, so those
+  marks can be told apart. For a blind check of the evidence, turn `EVIDENCE` off; whether the
+  blind second look should also be made without it is the review lead's call.
+* A cancelled run keeps the whole batch as picked, with the evidence on the cards done so far.
+
 A review sheet (an aerial and a hillshade chip per card; yes / no / unsure / offset, where offset is
 a real dam just off the point) gives the marks the score tool's `MARKS` takes, and
 `core/dataset.py` files every reviewed card with its chips (a training set for an image model once

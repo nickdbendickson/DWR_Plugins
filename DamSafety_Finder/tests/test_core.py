@@ -1900,6 +1900,48 @@ class EvidenceSources(unittest.TestCase):
         self.assertTrue(c["permit_check"])
         self.assertFalse(evd.consequence([], [], 3.0)["permit_check"])
 
+    # ------------------------------------------------- review_order: what is below, a second sort --
+    def test_review_order_is_score_band_first_then_what_is_below(self):
+        #         0     1     2     3     4     5
+        score = [0.95, 0.91, 0.84, 0.31, 0.39, 0.30]
+        below = [0.0,  6.0,  40.0, 2.0,  0.0,  9.0]
+        # band 0.9-1.0: the fill with buildings below first; a lower band never passes it, however
+        # much is below (fill 2); band 0.3-0.4 by what is below
+        self.assertEqual(evd.review_order(score, below), [2, 1, 3, 5, 6, 4])
+        # no consequence computed: by score
+        self.assertEqual(evd.review_order(score), [1, 2, 3, 5, 4, 6])
+        self.assertEqual(evd.review_order(score, [None] * 6), [1, 2, 3, 5, 4, 6])
+        self.assertEqual(evd.review_order([]), [])
+        with self.assertRaises(ValueError):
+            evd.review_order([0.5, 0.6], [1.0])
+
+    def test_review_order_ties_and_band_edges(self):
+        # same band, same consequence: the higher score first; all the same: as they came (stable)
+        self.assertEqual(evd.review_order([0.52, 0.58, 0.55], [3.0, 3.0, 3.0]), [3, 1, 2])
+        self.assertEqual(evd.review_order([0.5, 0.5, 0.5], [1.0, 1.0, 1.0]), [1, 2, 3])
+        self.assertEqual(evd.review_order([0.5, 0.5, 0.5]), [1, 2, 3])
+        # a band edge is in the band above it, whatever the float says (0.3 / 0.1 is 2.999...), and
+        # a score of exactly 1 is in the top band, not one of its own
+        self.assertEqual(evd.review_order([0.3, 0.39, 0.2999], [0.0, 5.0, 50.0]), [2, 1, 3])
+        self.assertEqual(evd.review_order([0.7, 0.79, 0.6999], [0.0, 5.0, 50.0]), [2, 1, 3])
+        self.assertEqual(evd.review_order([1.0, 0.92], [0.0, 4.0]), [2, 1])
+        # the band width is the caller's: with bands 0.5 wide these three are tied on score
+        self.assertEqual(evd.review_order([0.95, 0.91, 0.55], [0.0, 1.0, 7.0], band=0.5), [3, 2, 1])
+        # every fill gets a different number, 1 to n
+        rng = np.random.default_rng(5)
+        got = evd.review_order(rng.random(200).round(2), rng.integers(0, 4, 200).astype(float))
+        self.assertEqual(sorted(got), list(range(1, 201)))
+
+    def test_review_order_missing_consequence_and_missing_score(self):
+        # a fill whose consequence was not computed counts as nothing found below: the score
+        # decides between it and a fill with 0 below, and a fill with something below is first
+        self.assertEqual(evd.review_order([0.41, 0.45, 0.43], [None, 0.0, 1.0]), [3, 2, 1])
+        self.assertEqual(evd.review_order([0.41, 0.45], [float("nan"), 0.0]), [2, 1])
+        # a fill with no score comes after every scored fill, whatever is below it; two of them
+        # by what is below, then as they came
+        self.assertEqual(evd.review_order([None, 0.05, float("nan"), 0.6, None], [99.0, 0.0, 120.0, 0.0, 99.0]),
+                         [4, 2, 3, 1, 5])
+
     def test_bare_ground_and_class_share(self):
         m = evd.disk((100, 100), self.GT1, 50.0, 50.0, 30.0)
         red = np.where(m, 200.0, 60.0)
