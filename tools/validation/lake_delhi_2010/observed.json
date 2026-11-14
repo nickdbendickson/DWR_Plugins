@@ -1,0 +1,108 @@
+{
+ "case": "Lake Delhi Dam, Maquoketa River, Iowa: failure of 24 July 2010",
+ "what_this_is": "The published facts of the failure and the surveyed flood levels below the dam. build_case.py makes the Runner's inputs from the 'dam', 'spillway', 'breach' and 'inflow' parts; score.py compares a finished run with the 'observed' parts. Nothing in this file was fitted to a model run.",
+ "sources": {
+  "eash2012": "Eash, D.A., 2012, Floods of July 23-26, 2010, in the Little Maquoketa River and Maquoketa River Basins, northeast Iowa: U.S. Geological Survey Open-File Report 2011-1301, 45 p. https://pubs.usgs.gov/of/2011/1301/ (table 8: the high-water marks; page 14: the breach)",
+  "mcdaniel": "McDaniel, L., Garton, J., Fiedler, W., King, W., and Schwanz, N., Lake Delhi Dam Breach - Two Perspectives (the Iowa Department of Natural Resources and the Independent Panel of Engineers). https://damfailures.org/sites/default/files/wp-pdf/McDaniel_LakeDelhi.pdf (the dam, the storage, the gates, table 1: the timeline, the breach width and the peak outflow)",
+  "nwis": "U.S. Geological Survey National Water Information System, streamgage 05416900 Maquoketa River at Manchester, IA (the inflow record, manchester_05416900_iv.csv beside this file)",
+  "tiger_3dhp": "The bridge points: where the named road of the U.S. Census Bureau's TIGER roads (TIGERweb Transportation, 2026) crosses the Maquoketa River line of the USGS 3D Hydrography Program. Distances along that line below the dam (9.46, 18.66, 20.16 and 21.06 mi) agree with the river miles of table 8 (9.41, 18.58, 20.08 and 20.97 mi) to within 0.1 mi."
+ },
+ "datum": {
+  "published": "NGVD 29 (both reports)",
+  "terrain": "NAVD 88 (USGS 3DEP)",
+  "ngvd29_to_navd88_ft": 0.0,
+  "uncertainty_ft": 0.2,
+  "note": "NAVD 88 = NGVD 29 + ngvd29_to_navd88_ft. The shift in this part of Iowa is small (within about 0.2 ft), and it was not read from NOAA's VERTCON here: the value above is a stated assumption. Put the VERTCON value for 42.34 N, 91.26 W here to remove it. The differences this case measures are in feet, not tenths."
+ },
+ "dam": {
+  "name": "Lake Delhi Dam",
+  "nid": "IA01297",
+  "lon": -91.34543,
+  "lat": 42.40815,
+  "top_of_dam_ft_ngvd29": 904.8,
+  "normal_pool_ft_ngvd29": 896.0,
+  "storage_at_normal_pool_acft": 3790.0,
+  "storage_at_top_acft": 9920.0,
+  "area_at_normal_pool_ac": 440.0,
+  "embankment_height_ft": 43.0,
+  "embankment_length_ft": 495.0,
+  "crest_width_ft": 25.0,
+  "upstream_slope_h": 3.0,
+  "downstream_slope_h": 2.0,
+  "outflow_point": [-91.34378, 42.40864],
+  "outflow_point_note": "Where the outflow enters the flood model: on the river line, 150 m below the dam.",
+  "source": "mcdaniel"
+ },
+ "spillway": {
+  "crest_ft_ngvd29": 879.8,
+  "gates": 3,
+  "gate_width_ft": 25.0,
+  "gate_height_ft": 17.0,
+  "capacity_all_open_at_top_cfs": 32000.0,
+  "gate3_opening_ft": 4.25,
+  "largest_opening_of_gate1_ft": 18.0,
+  "powerhouse_cfs": 500.0,
+  "source": "mcdaniel",
+  "assumed": "Gate 2 is taken as fully open, like Gate 1 (the paper gives no opening for it). The powerhouse flow is left out (the paper calls it small and does not say it ran). The gates are taken as worked to hold the normal pool until the flood exceeded what they could pass."
+ },
+ "inflow": {
+  "gauge": "05416900",
+  "gauge_drainage_mi2": 275.0,
+  "dam_drainage_mi2": 347.0,
+  "note": "The gauge is 11.7 river miles above the dam. The drainage area at the dam is that of the discontinued streamgage 05417500 Maquoketa River near Delhi, at the dam (eash2012, table 2)."
+ },
+ "breach": {
+  "water_over_the_road_cdt": "2010-07-24 09:40",
+  "overtopping_cdt_usgs": "2010-07-24 10:30",
+  "breach_speeds_up_cdt": "2010-07-24 12:30",
+  "through_the_embankment_cdt": "2010-07-24 13:00",
+  "width_60ft_cdt": "2010-07-24 13:02",
+  "width_200ft_cdt": "2010-07-24 14:40",
+  "lake_drop_at_200ft_ft": 25.0,
+  "largest_width_ft": 235.0,
+  "peak_outflow_cfs": 69000.0,
+  "peak_outflow_note": "An estimate of the Independent Panel of Engineers, not a measurement.",
+  "cause": "Internal erosion above the concrete core wall, then flow over the embankment and failure of the core wall.",
+  "source": "mcdaniel (table 1 and text); the 10:30 a.m. time is eash2012, page 14"
+ },
+ "observed": {
+  "peak_pool_ft_ngvd29": 905.55,
+  "peak_pool_note": "High-water mark on the upstream side of the dam (eash2012, table 8, river mile 101.58).",
+  "gauge_peak_cfs": 26600.0,
+  "gauge_peak_cdt": "2010-07-24 12:30",
+  "high_water_marks": [
+   {"id": "below_dam", "river_mile": 101.58, "miles_below_dam": 0.0,
+    "location": "County Road X31/230th Avenue crossing Lake Delhi Dam, downstream side",
+    "downstream_ft_ngvd29": 889.17, "upstream_ft_ngvd29": null,
+    "points": {"downstream": [-91.34247, 42.40953]},
+    "note": "The mark is at the dam. The model is read 300 m down the river: 150 m below the place the outflow enters it."},
+   {"id": "hopkinton_d47", "river_mile": 92.17, "miles_below_dam": 9.41,
+    "location": "County Road D47/Marion Street, southwest of Hopkinton",
+    "downstream_ft_ngvd29": 846.36, "upstream_ft_ngvd29": 846.51,
+    "bridge": [-91.25796, 42.33777],
+    "points": {"upstream": [-91.25869, 42.33848], "downstream": [-91.2568, 42.33767]}},
+   {"id": "monticello_hwy38", "river_mile": 83.0, "miles_below_dam": 18.58,
+    "location": "State Highway 38, Monticello",
+    "downstream_ft_ngvd29": 811.66, "upstream_ft_ngvd29": 813.07,
+    "bridge": [-91.19261, 42.25988],
+    "points": {"upstream": [-91.19334, 42.26059], "downstream": [-91.19145, 42.25959]}},
+   {"id": "monticello_main", "river_mile": 81.5, "miles_below_dam": 20.08,
+    "location": "Main Street, Monticello",
+    "downstream_ft_ngvd29": 807.62, "upstream_ft_ngvd29": 808.79,
+    "bridge": [-91.17968, 42.24389],
+    "points": {"upstream": [-91.18031, 42.24461], "downstream": [-91.17889, 42.24324]}},
+   {"id": "monticello_us151", "river_mile": 80.61, "miles_below_dam": 20.97,
+    "location": "U.S. Highway 151, east of Monticello",
+    "downstream_ft_ngvd29": 805.97, "upstream_ft_ngvd29": 806.46,
+    "bridge": [-91.16476, 42.2457],
+    "points": {"upstream": [-91.16569, 42.24595], "downstream": [-91.16333, 42.24554]}}
+  ],
+  "marks_source": "eash2012, table 8. The upstream and downstream points are 100 m up and down the river line from the bridge."
+ },
+ "terrain": {
+  "crs": "EPSG:5070",
+  "cell_m": 10.0,
+  "box": [378020.0, 2144580.0, 400380.0, 2168610.0],
+  "note": "The river from the dam to 1.5 miles past U.S. Highway 151 with 2.5 km to spare on every side: 2236 x 2403 cells, about 21 MB."
+ }
+}

@@ -60,6 +60,8 @@ WATCH_FIELDS = ["Alert", "Dam", "Status", "ND_Before", "ND_Now", "TM11_Before", 
                 "Newly_Flooded", "No_Longer_Flooded", "Category_Changes", "Roads_Newly_Overtopped",
                 "Lifelines_Newly_Inundated", "Compared_With", "Message", "Folder"]
 CSV_LATEST = "Hazard_Creep_Watch.csv"
+CHANGED_HTML = "Hazard_Creep_Changed_Dams_{}.html"     # 2.25.3: the one page (by date)
+CHANGED_CSV = "Hazard_Creep_Changed_Dams.csv"           # 2.25.3: its rows (latest run)
 _ND_RANK = {"Low": 1, "Medium": 2, "High": 3}
 _DRY = ("", None, "Not inundated")
 
@@ -83,6 +85,7 @@ _sleep = time.sleep                 # module level so tests can replace them
 _clock = time.monotonic
 _ALERT_ORDER = [ALERT_FAILED, ALERT_CLASS_UP, ALERT_CLASS_CHANGE, ALERT_CREEP, ALERT_REVIEW,
                 ALERT_NEW, ALERT_NONE]
+CHANGED_ALERTS = (ALERT_CLASS_UP, ALERT_CLASS_CHANGE, ALERT_CREEP, ALERT_REVIEW)
 
 # what the change rows (history.diff) are called
 _NEW, _GONE = "Newly flooded / cut off", "No longer flooded / cut off"
@@ -268,7 +271,89 @@ def write_reports(parent, rows, when=None, mode=None):
     with open(hpath, "w", encoding="utf-8", newline="") as fh:
         fh.write(_html(rows, day, mode))
     paths["html"] = hpath
+    # 2.25.3: the one page to read - only the dams that changed (or could not be checked)
+    cpath = prepare_output_path(os.path.join(parent, CHANGED_HTML.format(day)))
+    with open(cpath, "w", encoding="utf-8", newline="") as fh:
+        fh.write(changed_html(rows, day, mode))
+    paths["changed_html"] = cpath
+    path = prepare_output_path(os.path.join(parent, CHANGED_CSV))
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.DictWriter(fh, fieldnames=WATCH_FIELDS)
+        w.writeheader()
+        w.writerows(changed_rows(rows) + failed_rows(rows))
+    paths["changed_csv"] = path
     return paths
+
+
+def changed_rows(rows):
+    """The dams to look at: a class change, creep, or a change to review. Alerts first."""
+    return [r for r in sort_rows(rows) if r["Alert"] in CHANGED_ALERTS]
+
+
+def failed_rows(rows):
+    """The dams the watch could not check (their run failed or was not compared)."""
+    return [r for r in sort_rows(rows) if r["Alert"] == ALERT_FAILED]
+
+
+def _arrow(before, now):
+    before, now = str(before or ""), str(now or "")
+    if before == now:
+        return now
+    return "{} \u2192 {}".format(before or "?", now or "?")
+
+
+def changed_html(rows, day, mode=None):
+    """2.25.3: the changed-dams list, made to be printed on one page: only the dams whose
+    class changed, that have newly flooded structures, roads or lifelines, or that need a
+    look, then the dams that could not be checked. The full table is Hazard_Creep_Watch_<date>
+    .html. A list of dams to look at, not a classification decision."""
+    changed, failed = changed_rows(rows), failed_rows(rows)
+    c = counts(rows)
+    esc = html.escape
+    out = ["<!DOCTYPE html><html><head><meta charset='utf-8'><title>Changed dams {}</title>"
+           "<style>@page{{size:letter;margin:0.6in}}body{{font-family:sans-serif;margin:16px;"
+           "font-size:12px}}h2{{margin:0 0 4px 0;font-size:18px}}h3{{margin:14px 0 4px 0;"
+           "font-size:13px}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid "
+           "#bbb;padding:2px 6px;font-size:11px;text-align:left;vertical-align:top}}th{{"
+           "background:#eee}}p{{margin:4px 0}}.n{{color:#555}}</style></head><body>".format(
+               esc(day)),
+           "<h2>Hazard creep watch: changed dams, {}</h2>".format(esc(day)),
+           "<p><b>{} of {} dam(s) changed.</b> {} class change(s) ({} to a higher class), {} "
+           "with new flooding (creep), {} to review. {} unchanged, {} with no earlier run to "
+           "compare with, {} not checked.</p>".format(
+               len(changed), len(rows), c[ALERT_CLASS_UP] + c[ALERT_CLASS_CHANGE],
+               c[ALERT_CLASS_UP], c[ALERT_CREEP], c[ALERT_REVIEW], c[ALERT_NONE], c[ALERT_NEW],
+               c[ALERT_FAILED]),
+           "<p class='n'>Each dam was re-classified with its own flood rasters and fresh data "
+           "and compared with its previous run. This is a list of dams to look at, not a "
+           "classification decision. {} v{}.{}</p>".format(
+               esc(PLUGIN_NAME), esc(PLUGIN_VERSION),
+               " Run mode: {}.".format(esc(mode)) if mode else "")]
+    if changed:
+        out.append("<table><tr><th>What</th><th>Dam</th><th>ND class</th><th>TM 11 class</th>"
+                   "<th>Newly flooded</th><th>Roads</th><th>Lifelines</th><th>Why</th>"
+                   "<th>Compared with</th></tr>")
+        for r in changed:
+            out.append("<tr><td style='background:{}'>{}</td>".format(
+                _COLOR.get(r["Alert"], "#fff"), esc(str(r["Alert"]))) + "".join(
+                "<td>{}</td>".format(esc(str(v))) for v in (
+                    r["Dam"], _arrow(r["ND_Before"], r["ND_Now"]),
+                    _arrow(r["TM11_Before"], r["TM11_Now"]), r["Newly_Flooded"],
+                    r["Roads_Newly_Overtopped"], r["Lifelines_Newly_Inundated"], r["Message"],
+                    r["Compared_With"])) + "</tr>")
+        out.append("</table>")
+    else:
+        out.append("<p><b>No dam changed class, and no dam has newly flooded structures, "
+                   "roads or lifelines.</b></p>")
+    if failed:
+        out.append("<h3>Not checked ({})</h3><table><tr><th>Dam</th><th>Why</th></tr>".format(
+            len(failed)))
+        out += ["<tr><td>{}</td><td>{}</td></tr>".format(esc(str(r["Dam"])),
+                                                         esc(str(r["Message"]))) for r in failed]
+        out.append("</table>")
+    out.append("<p class='n'>Every dam, changed or not: Hazard_Creep_Watch_{}.html and "
+               "{} in the same folder.</p></body></html>".format(esc(day), esc(CSV_LATEST)))
+    return "\n".join(out)
 
 
 _COLOR = {ALERT_FAILED: "#b71c1c", ALERT_CLASS_UP: "#b71c1c", ALERT_CLASS_CHANGE: "#e65100",
@@ -339,6 +424,19 @@ def _real_qgis():
         return False
 
 
+def _qgis_app_running():
+    """True when QGIS (or qgis_process, or a test's QgsApplication) is running in this Python.
+    QgsApplication's own paths may only be asked then: without a GUI application, asking
+    makes QGIS build its application objects, and on Qt 5.15.3 (the QGIS 3.34 LTR on Ubuntu
+    22.04) that ends the process ("QFontDatabase: Must construct a QGuiApplication")."""
+    try:
+        from qgis.PyQt.QtCore import QCoreApplication
+        from qgis.PyQt.QtGui import QGuiApplication
+        return isinstance(QCoreApplication.instance(), QGuiApplication)
+    except Exception:
+        return False
+
+
 def _qgis_process_names():
     if os.name == "nt":
         return ["qgis_process-qgis-ltr.bat", "qgis_process-qgis.bat", "qgis_process.bat",
@@ -355,7 +453,8 @@ def find_qgis_process():
     (None, why not). Looked for, in this order: the environment variable
     ND_QGIS_PROCESS (a full path); the QGIS install directory (QgsApplication.
     prefixPath() / pkgDataPath(): <prefix>/bin, <prefix>, and on Windows the
-    OSGeo4W wrapper qgis_process-qgis[-ltr].bat two levels above apps/qgis);
+    OSGeo4W wrapper qgis_process-qgis[-ltr].bat two levels above apps/qgis;
+    outside a running QGIS, QGIS_PREFIX_PATH and this Python's own prefix);
     the folder of the running QGIS program; PATH. Never raises."""
     if not _real_qgis():
         return None, "this is not a real QGIS session"
@@ -365,18 +464,24 @@ def find_qgis_process():
         if _is_exe(env):
             return env, ""
         note = "{} points to {} which is not an executable file; ".format(ENV_QGIS_PROCESS, env)
-    dirs = []
-    try:
-        from qgis.core import QgsApplication
-        for base in (QgsApplication.prefixPath(), os.path.join(
-                QgsApplication.pkgDataPath(), os.pardir, os.pardir)):
-            if not base:
-                continue
-            base = os.path.normpath(str(base))
-            dirs += [os.path.join(base, "bin"), base,
-                     os.path.join(base, os.pardir, os.pardir, "bin")]
-    except Exception:
-        pass
+    dirs, bases = [], []
+    if _qgis_app_running():
+        try:
+            from qgis.core import QgsApplication
+            bases = [QgsApplication.prefixPath(), os.path.join(
+                QgsApplication.pkgDataPath(), os.pardir, os.pardir)]
+        except Exception:
+            bases = []
+    else:
+        # a command line (watch_schedule.py) or a plain Python: QGIS's paths cannot be asked
+        # (see _qgis_app_running), so the places it is installed in are tried instead
+        bases = [os.environ.get("QGIS_PREFIX_PATH", ""), sys.prefix]
+    for base in bases:
+        if not base:
+            continue
+        base = os.path.normpath(str(base))
+        dirs += [os.path.join(base, "bin"), base,
+                 os.path.join(base, os.pardir, os.pardir, "bin")]
     exe_dir = os.path.dirname(sys.executable or "")
     if exe_dir and "qgis" in os.path.basename(sys.executable or "").lower():
         dirs.append(exe_dir)
