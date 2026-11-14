@@ -132,7 +132,7 @@ fills. With 0.7.0's fixed grid, on the four Iowa tiles of the study (768 census 
 the two changes together find 21 more dams and lose none (583 against 562; crests under 40 m:
 111 against 99 of 203) for 15 more fills not on a census dam. On six ND tiles they add 31 fills
 and drop 13 of 2,545 (a fill counts as the same when one is within 30 m in the other run; matched
-by `find_id` it is 40 added and 22 dropped, the same 18 more: nine fills moved 10 to 30 m), and
+by `find_id`, or within 10 m where the id differs, it is 40 added and 22 dropped, the same 18 more: nine fills moved 10 to 30 m), and
 the same 61 of 76 Intact listed dams have a fill within 300 ft.
 
 `pool_toe_reach_m` (a script setting, off = 0) takes the toe of a pool-line fill as at least the

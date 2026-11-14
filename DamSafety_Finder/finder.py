@@ -3020,7 +3020,8 @@ def run_review_batch(fills, out_gpkg, n=90, random_frac=0.18, top_frac=0.37, sec
     rows = [r for r in read_rows(fills) if r.get("status") != "listed" and r.get("kind") != em.K_EDGE
             and (not kinds or r.get("kind") in kinds)]
     if not rows:
-        raise RuntimeError("no unlisted fills of kind {} in {}".format(", ".join(kinds), fills))
+        raise RuntimeError("no unlisted fills{} in {} (a fill at the edge of the terrain data is never "
+                           "picked)".format(" of kind " + ", ".join(kinds) if kinds else "", fills))
     if not any(r.get("score") is not None for r in rows):
         log("the fills have no score: the top and near-the-cut slices are by height")
         for r in rows:
