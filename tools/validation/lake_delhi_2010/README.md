@@ -140,6 +140,19 @@ Three things the runs showed about the Runner, apart from the numbers:
 
 - **LISFLOOD-FP flow sections near the east or south edge of the model read zero** (three of
   the four bridges here). Fixed in Runner 3.20.4, with a test; water levels were not affected.
+  With the fix all four read, and the levels above did not move by 0.01 ft:
+
+  | Flow past, as observed | Peak, cfs (n 0.06) | Hours after noon on 23 July | Peak, cfs (n 0.04) |
+  |---|---|---|---|
+  | The dam (breach and gates) | 140,855 | | 140,855 |
+  | Hopkinton, 9.4 mi | 53,989 | 28.3 | 65,806 |
+  | Highway 38, 18.6 mi | 41,580 | 32.3 | 50,173 |
+  | Main Street, 20.1 mi | 39,366 | 33.8 | 47,442 |
+  | U.S. 151, 21.0 mi | 39,182 | 34.4 | 47,158 |
+
+  (The breach was seen to speed up at 12:30 p.m. on 24 July, hour 24.5.)
+  The peak falls to under 40 percent of the breach's within nine miles: the valley stores
+  it. That is why the breach's peak matters so little at the bridges.
 - **The built-in engine (the stand-in for when LISFLOOD-FP is not installed) is not steady on
   this valley.** At 60 m, and at 40 m with flow sections, its flow at the bridges swung between
   zero and over 100,000 cfs and the levels came out up to 48 ft high, with no warning and a
