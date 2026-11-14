@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-22.04      # the oldest glibc GitHub offers (2.35): the binary runs there and newer
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download and verify the LISFLOOD-FP 8.3 source
         run: |
           cd "$RUNNER_TEMP"
@@ -67,7 +67,7 @@ jobs:
     runs-on: macos-14          # Apple Silicon (arm64)
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download and verify the LISFLOOD-FP 8.3 source
         run: |
           cd "$RUNNER_TEMP"
@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download and verify the LISFLOOD-FP 8.3 source
         run: |
           cd "$RUNNER_TEMP"
@@ -137,7 +137,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -160,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0     # tools/build_release.py reads the tag's commit with git archive
       - uses: actions/setup-python@v7
