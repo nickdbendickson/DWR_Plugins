@@ -187,7 +187,8 @@ last three of every list:
   8 or more (26 or more others in a whole circle; 25 are 7.96 per km2, written 7.9, and are
   not crowded). Otherwise `no`. The test is made on the unrounded density, and the written
   figure never contradicts it: a pond-line dam or dry embankment whose `near_km2` reads 8.0 is
-  always `crowded` = `yes`. For a fill beyond the State outline (`in_state` = `no`) `crowded`
+  always `crowded` = `yes` (with the limit of 8, or any limit with one decimal; a limit such as
+  8.05 can show 8.0 on both sides of it). For a fill beyond the State outline (`in_state` = `no`) `crowded`
   is left blank: such a fill is in none of the lists, and most of its circle is ground the run
   did not search, so neither `yes` nor `no` would mean anything.
 
@@ -225,7 +226,9 @@ are the best the rule can look, not a test of it:
   means anything there. On other ground expect it to mark some real dams.
 * A recount on the fills of a near-final Finder 0.7.0 (six North Dakota and four Iowa tiles)
   kept the picture but moved single cards across the limit both ways: 10 of the 13 sand-hill
-  cards again, but not the same ten; no listed Intact dam's own fill marked; Iowa census dams
+  card places again stand in ground at 8 or more, but not the same ten, and at 3 of the 13 places
+  0.7.0 finds no fill at all, so the column itself reads `yes` on 8 of the 13 cards; no listed
+  Intact dam's own fill marked; Iowa census dams
   marked in those four tiles 2 (6 with 0.6.0).
 
 **It does not catch mine spoil** (1 of the 8 mine cards). For mined land, give the outline of

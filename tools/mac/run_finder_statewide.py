@@ -159,7 +159,8 @@ CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
     pond-line dam / dry fills). Of all the fills it marks in the 66 ND tiles, 693 of 929 are in
     that ONE sand-hill tile: outside it the note is unproven (it marks 7 of the other 52 false
     cards - pothole ground, old river bends, one mine). The recount on near-final 0.7.0 fills of
-    six ND and four Iowa tiles kept the picture (10 of the 13 sand-hill cards, not the same ten).
+    six ND and four Iowa tiles kept the picture (10 of the 13 sand-hill card places at 8 or more, not
+    the same ten; 0.7.0 finds no fill at 3 of the 13, so the column reads yes on 8 of them).
     It does not catch mine spoil (1 of 8 cards): for mined ground use --exclude-polygons with an
     outline of the mine.
 
