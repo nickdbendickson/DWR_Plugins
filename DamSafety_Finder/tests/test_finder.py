@@ -320,8 +320,9 @@ class Runs(unittest.TestCase):
         self.assertTrue(all(r["edge_ft"] is None for r in res["rows"]))
 
     def test_known_ids_of_a_sarp_layer(self):
-        # a SARP barrier layer has SARPID on every row, NIDID on some and a Name on most: its own id
-        # is used (field names in any case), never the name; other layers are as before
+        # a SARP barrier layer has SARPID on every row, NIDID on some and a Name on most: a row with
+        # an NID id gets it (what people look a dam up by), every other row its SARPID (field names
+        # in any case), never the name; other layers are as before
         path = os.path.join(self.tmp, "known.gpkg")
         x, y = gx(100.0), gy(100.0)
         sarp = write_layer(path, "sarp", [
@@ -333,10 +334,16 @@ class Runs(unittest.TestCase):
         nid = write_layer(path, "nid", [("POINT ({} {})".format(x, y), {"NAME": "Big Dam", "NIDID": "ND00345"})],
                           fields=("NAME", "NIDID"))
         ids = lambda src, idf=None: [p[2] for p in self.f.read_known([(src, "layer", idf)]).pts]
-        self.assertEqual(ids(sarp), ["ND55127", "ND00012", "No id here"])
+        self.assertEqual(ids(sarp), ["ND55127", "ND00345", "No id here"])
         self.assertEqual(ids(lower), ["ND7"])
         self.assertEqual(ids(nid), ["ND00345"])
-        self.assertEqual(ids(sarp, "NIDID")[1], "ND00345")          # the field you name comes first
+        self.assertEqual(ids(sarp, "SARPID")[1], "ND00012")         # the field you name comes first
+        # two SARP-estimated dams with the same name and no NID id: two ids, not one
+        est = write_layer(path, "sarp_est", [
+            ("POINT ({} {})".format(x, y), {"Name": "Wetland 2", "SARPID": "ND90001"}),
+            ("POINT ({} {})".format(x + 50, y), {"Name": "Wetland 2", "SARPID": "ND90002"})],
+            fields=("Name", "SARPID", "NIDID"))
+        self.assertEqual(ids(est), ["ND90001", "ND90002"])
 
     def test_dem_drainage_alone_finds_the_fills(self):
         res = self.f.run_embankments(self.dem, None, self.out, roads=self.roads,

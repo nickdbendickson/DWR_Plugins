@@ -136,12 +136,13 @@ def read_lines(src, bbox=None):
 
 def _id_of(f, id_field):
     """A known structure's id: the field you name, else the first of the usual id fields that holds
-    a value (field names in any case), else its name, else its feature number. A SARP barrier
-    layer's own id (SARPID) comes before the NID id some of its rows also carry, so every row of
-    that layer is named the same way and none falls back to a dam name such as 'Wetland 2'."""
+    a value (field names in any case), else its name, else its feature number. An NID id comes
+    first when a row has one (what people look a dam up by), then a SARP barrier layer's own id
+    (SARPID): a SARP row with no NID id - among them the dams SARP estimated itself, on no list -
+    gets its SARPID, never a dam name such as 'Wetland 2' that many rows share."""
     names = [f.GetFieldDefnRef(i).GetName() for i in range(f.GetFieldCount())]
     want = [id_field] if id_field else []
-    want += ["structure_id", "structure_", "sarpid", "nidid", "nid_id", "dam_id", "federal_id",
+    want += ["structure_id", "structure_", "nidid", "nid_id", "sarpid", "dam_id", "federal_id",
              "STRUCTURE_NUMBER_008", "BRIDGE_ID", "id", "ID", "name"]
     low = {n.lower(): n for n in names}
     for w in want:
