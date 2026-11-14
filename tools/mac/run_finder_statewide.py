@@ -1265,14 +1265,23 @@ def extract(finder, src, dst, box5070):
     return len(feats)
 
 
-def edge_distances(rows, dem):
+def finder_measures_edge(finder):
+    """True when this Finder measures the distance to missing terrain itself: edge_ft is one of
+    its fields (0.7.0 on). Known from the Finder, not from its version number or its rows."""
+    return "edge_ft" in [q[0] for q in (getattr(finder, "EMB_FIELDS", None) or [])]
+
+
+def edge_distances(rows, dem, finder=None):
     """([[find_id, metres to the nearest missing terrain or None]], where the figures come from).
-    A Finder that measures it itself (0.7.0: every row carries edge_ft, whole feet, None when there
-    is no missing terrain within its search of 1,000 m) is taken at its word; for an older one
-    (0.6.x: no such field) it is measured here on the DEM, within EDGE_SEARCH_M (200 m). The list
-    goes into the tile's done.json; the merge checks it against the tile's rows and, for a tile
-    whose rows carry edge_ft, reads the rows."""
-    if rows and all("edge_ft" in r for r in rows):
+    A Finder that measures it itself (0.7.0: edge_ft among its fields, so every row carries it,
+    whole feet, None when there is no missing terrain within its search of 1,000 m) is taken at
+    its word; for an older one (0.6.x: no such field) it is measured here on the DEM, within
+    EDGE_SEARCH_M (200 m). Which of the two is decided by the Finder (finder_measures_edge), so
+    that a tile with no fill at all is recorded the way its Finder works; without a Finder, by
+    the rows. The list goes into the tile's done.json; the merge checks it against the tile's rows
+    and, for a tile whose rows carry edge_ft, reads the rows."""
+    own = finder_measures_edge(finder) if finder is not None else bool(rows)
+    if own and all("edge_ft" in r for r in rows):
         return ([[r["find_id"], None if r["edge_ft"] is None else round(float(r["edge_ft"]) * FT, 1)] for r in rows],
                 "edge_ft as the Finder measured it")
     return ([[r["find_id"], dem.edge_m(r["x"], r["y"])] for r in rows],
@@ -1355,10 +1364,10 @@ def _run_tile(job, finder, work, parent, t0):
         say("stopped: the run that started this tile is gone")
         return 3
     rows = res["rows"]
-    edge, edge_from = edge_distances(rows, dem)
+    edge, edge_from = edge_distances(rows, dem, finder)
     k_edge, _lim, far = edge_rule(finder)
     n_near = sum(1 for _i, d in edge if d is not None)
-    if k_edge is not None and rows and "edge_ft" in rows[0]:
+    if k_edge is not None and finder_measures_edge(finder) and all("edge_ft" in r for r in rows):
         say("{} fill(s); {} of them the Finder calls '{}' (kept, not candidates); {} have missing terrain "
             "within {} ({})".format(len(rows), sum(1 for r in rows if r["kind"] == k_edge), k_edge, n_near,
                                     "its search" if far is None else "{:,.0f} m".format(far), edge_from))

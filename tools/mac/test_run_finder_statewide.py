@@ -255,6 +255,17 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(dem.asked, 2)
         self.assertIn("Finder", how)
         self.assertEqual(rfs.edge_distances([], dem)[0], [])
+        # a tile with no fill at all is recorded as its Finder works, not as the rows would say
+        f7 = types.SimpleNamespace(EMB_FIELDS=[("find_id", "str"), ("edge_ft", "float")])
+        f6 = types.SimpleNamespace(EMB_FIELDS=[("find_id", "str")])
+        self.assertEqual(rfs.edge_distances([], dem, f7), ([], "edge_ft as the Finder measured it"))
+        self.assertIn("this script", rfs.edge_distances([], dem, f6)[1])
+        self.assertEqual(rfs.edge_distances(new, dem, f7)[1], "edge_ft as the Finder measured it")
+        self.assertIn("this script", rfs.edge_distances(old, dem, f6)[1])
+        self.assertEqual(dem.asked, 4)
+        self.assertTrue(rfs.finder_measures_edge(f7))
+        self.assertFalse(rfs.finder_measures_edge(f6))
+        self.assertFalse(rfs.finder_measures_edge(types.SimpleNamespace()))
 
     def test_settings_key_separates_finder_versions(self):
         a = types.SimpleNamespace(tile_km=10)
@@ -393,6 +404,9 @@ class Engine(unittest.TestCase):
         old = _old_finder(f)
         self.assertFalse(rfs.ids_are_stable(old))
         self.assertEqual(rfs.edge_rule(old), (None, None, None))
+        self.assertTrue(rfs.finder_measures_edge(f))       # a tile of it with no fill is recorded as the Finder's
+        self.assertFalse(rfs.finder_measures_edge(old))
+        self.assertEqual(rfs.edge_distances([], None, f)[1], "edge_ft as the Finder measured it")
         self.assertIsNone(rfs.edge_kind(types.SimpleNamespace(VERSION="0.6.0")))
         # the words the merge writes for a fill it does not score are the Finder's own
         import inspect
