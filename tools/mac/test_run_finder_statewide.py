@@ -255,6 +255,17 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(dem.asked, 2)
         self.assertIn("Finder", how)
         self.assertEqual(rfs.edge_distances([], dem)[0], [])
+        # a tile with no fill at all is recorded as its Finder works, not as the rows would say
+        f7 = types.SimpleNamespace(EMB_FIELDS=[("find_id", "str"), ("edge_ft", "float")])
+        f6 = types.SimpleNamespace(EMB_FIELDS=[("find_id", "str")])
+        self.assertEqual(rfs.edge_distances([], dem, f7), ([], "edge_ft as the Finder measured it"))
+        self.assertIn("this script", rfs.edge_distances([], dem, f6)[1])
+        self.assertEqual(rfs.edge_distances(new, dem, f7)[1], "edge_ft as the Finder measured it")
+        self.assertIn("this script", rfs.edge_distances(old, dem, f6)[1])
+        self.assertEqual(dem.asked, 4)
+        self.assertTrue(rfs.finder_measures_edge(f7))
+        self.assertFalse(rfs.finder_measures_edge(f6))
+        self.assertFalse(rfs.finder_measures_edge(types.SimpleNamespace()))
 
     def test_settings_key_separates_finder_versions(self):
         a = types.SimpleNamespace(tile_km=10)
@@ -328,6 +339,50 @@ class Plain(unittest.TestCase):
         d = outer.Difference(hole)
         self.assertEqual(rfs.points_in_rings([1, 5, 11], [1, 5, 5], rfs.rings_of(d)).tolist(), [True, False, False])
 
+    def test_a_state_outline_that_crosses_itself_is_mended_quietly(self):
+        """A --state-outline file whose polygon crosses itself (a bow tie, with a square drawn over
+        one half): no raw GDAL error line on the screen, both halves of the bow tie are kept, and
+        the run's own words say it was mended."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "bow tie.gpkg")
+        ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+        lyr = ds.CreateLayer("state", rfs.srs_of(5070), ogr.wkbMultiPolygon)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(ogr.CreateGeometryFromWkt(
+            "MULTIPOLYGON (((-108000 2612000,-92000 2628000,-92000 2612000,-108000 2628000,-108000 2612000)),"
+            "((-107000 2618000,-103000 2618000,-103000 2622000,-107000 2622000,-107000 2618000)))"))
+        lyr.CreateFeature(f)
+        f = lyr = ds = None
+        a = rfs.parser().parse_args(["--state-outline", path, "--state-buffer-m", "0"])
+        err = os.path.join(d, "stderr.txt")
+        sys.stderr.flush()
+        keep = os.dup(2)
+        try:
+            with open(err, "w") as fh:
+                os.dup2(fh.fileno(), 2)
+                geom, what = rfs.state_outline(a, None)
+                g = rfs.Ground([(-110000.0, 2610000.0, -100000.0, 2620000.0)], geom)
+                g.share([-104000.0], [2619000.0])
+        finally:
+            os.dup2(keep, 2)
+            os.close(keep)
+        with open(err) as fh:
+            said = fh.read()
+        self.assertNotIn("ERROR", said)
+        self.assertNotIn("TopologyException", said)
+        self.assertNotIn("Self-intersection", said)
+        self.assertTrue(geom.IsValid())
+        self.assertAlmostEqual(geom.GetArea(), 2 * 16000.0 * 8000.0 / 2, delta=1.0)     # both triangles, 64 km2 each
+        self.assertIn("cross themselves: mended", what)
+        # a point in each half of the bow tie, one in the square, two outside it
+        self.assertEqual(rfs.points_in_rings([-106000.0, -94000.0, -105000.0, -100000.0, -100000.0],
+                                             [2620000.0, 2620000.0, 2619000.0, 2626000.0, 2614000.0],
+                                             rfs.rings_of(geom)).tolist(), [True, True, True, False, False])
+        # a valid outline is handed back as it is, and nothing is said
+        box = rfs.box_geom((0.0, 0.0, 10.0, 10.0))
+        self.assertEqual(rfs.mend_polygon(box), (box, False))
+
 
 @needs_gdal
 class Engine(unittest.TestCase):
@@ -393,6 +448,9 @@ class Engine(unittest.TestCase):
         old = _old_finder(f)
         self.assertFalse(rfs.ids_are_stable(old))
         self.assertEqual(rfs.edge_rule(old), (None, None, None))
+        self.assertTrue(rfs.finder_measures_edge(f))       # a tile of it with no fill is recorded as the Finder's
+        self.assertFalse(rfs.finder_measures_edge(old))
+        self.assertEqual(rfs.edge_distances([], None, f)[1], "edge_ft as the Finder measured it")
         self.assertIsNone(rfs.edge_kind(types.SimpleNamespace(VERSION="0.6.0")))
         # the words the merge writes for a fill it does not score are the Finder's own
         import inspect
@@ -713,7 +771,9 @@ class Crowd(unittest.TestCase):
         # an outline that crosses itself (a bow tie over the west half of tile W) is mended, not dropped
         bow = ogr.CreateGeometryFromWkt("POLYGON (({a} {c},{b} {d},{b} {c},{a} {d},{a} {c}))".format(
             a=x0, b=x0 + 4000.0, c=y0, d=y1))
+        gdal.PushErrorHandler("CPLQuietErrorHandler")       # GDAL says why it is not valid
         self.assertFalse(bow.IsValid())
+        gdal.PopErrorHandler()
         gb = rfs.Ground([self.W], bow)
         self.assertEqual(gb.state_at([x0 + 1.0], [ym]).tolist(), [1])
         # 500 m inside its west triangle (the tile's west edge is the only thing the circle meets)
@@ -839,6 +899,70 @@ class Crowd(unittest.TestCase):
         self.assertEqual(r["near_km2"][0], round(2 / (math.pi * rfs.CROWD_MIN_SHARE), 1))
         self.assertEqual(r["near_km2"][0], 2.5)
         self.assertEqual(r["near_km2"][1], _cut1(1 / (math.pi * _segment_share(50.0))))   # 0.5: on the ground, 50 m in
+
+    def test_25_and_26_others_in_a_whole_circle(self):
+        """8 per km2 is 25.13 others in a whole circle: 25 are under the limit, 26 are not. The test
+        is on the density itself; the written figure is cut, so 25 read 7.9 and never 8.0."""
+        x0, y0, x1, y1 = self.W
+        cx, cy = x0 + 5000.0, y0 + 5000.0
+        for n, km2, yes in ((25, 7.9, False), (26, 8.2, True)):
+            ring = [(cx + 500.0 * math.cos(2 * math.pi * k / n), cy + 500.0 * math.sin(2 * math.pi * k / n))
+                    for k in range(n)]
+            r = self._notes([(cx, cy)] + ring, [self.W])
+            self.assertEqual((r["near_n"][0], r["share"][0]), (n, 1.0))
+            self.assertEqual((r["near_km2"][0], r["crowded"][0]), (km2, yes), n)
+        self.assertLess(25 / math.pi, 8.0)
+        self.assertGreaterEqual(26 / math.pi, 8.0)
+
+    def test_the_written_figure_and_the_mark_never_disagree(self):
+        """crowd_figures: the mark is the test on the density; the figure written is the density cut
+        to one decimal. For a limit of one decimal a written figure at the limit or over it goes
+        with crowded = yes and one under it with no, also a hair under the limit."""
+        cut = 8.0
+        dens = np.array([0.0, 7.9, 7.95, 25 / math.pi, 8.0 - 1e-12, 7.99999999995, 8.0, 8.0 + 1e-12, 8.04, 26 / math.pi,
+                         0.3, 11.14])
+        km2, yes = rfs.crowd_figures(dens, np.ones(len(dens), bool), cut)
+        self.assertEqual(km2.tolist(), [0.0, 7.9, 7.9, 7.9, 7.9, 7.9, 8.0, 8.0, 8.0, 8.2, 0.3, 11.1])
+        self.assertEqual(yes.tolist(), [False] * 6 + [True] * 4 + [False, True])
+        # a fill the test does not apply to (not a pond-line dam / dry embankment, or off the ground)
+        # keeps its figure and is never marked
+        km2n, yesn = rfs.crowd_figures(dens, np.zeros(len(dens), bool), cut)
+        self.assertEqual(km2n.tolist(), km2.tolist())
+        self.assertFalse(yesn.any())
+        # the note off: the figures stay, no mark
+        km20, yes0 = rfs.crowd_figures(dens, np.ones(len(dens), bool), 0.0)
+        self.assertFalse(yes0.any())
+        self.assertEqual(km20[[0, 9, 11]].tolist(), [0.0, 8.2, 11.1])
+        # many densities near several limits of one decimal: written >= limit exactly when marked
+        rnd = random.Random(3)
+        for cut in (8.0, 4.5, 10.0, 0.1):
+            d = np.array([cut + rnd.uniform(-0.2, 0.2) for _ in range(3000)] + [cut, cut - 1e-12, cut + 1e-12,
+                                                                                np.nextafter(cut, 0.0)])
+            k, y = rfs.crowd_figures(d, np.ones(len(d), bool), cut)
+            self.assertEqual((k >= cut).tolist(), y.tolist(), cut)
+            self.assertEqual(y.tolist(), (d >= cut).tolist(), cut)
+            self.assertTrue((k <= d + 1e-9).all())       # cut, never rounded up
+
+    def test_a_tiny_share_of_searched_ground_and_two_neighbours_is_not_crowded(self):
+        """A State that is only a strip 100 m wide through the tile: a fill on it has about 6 % of
+        its circle on the searched ground. Without the floor 2 neighbours would read 10 per km2
+        (crowded); over a quarter circle they read 2.5. It takes 7 neighbours in such a sliver to
+        reach 8 per km2 (7 / 0.785 km2 = 8.9), 6 do not (7.6)."""
+        x0, y0, x1, y1 = self.W
+        sx, ym = x0 + 5000.0, 0.5 * (y0 + y1)
+        strip = rfs.box_geom((sx - 50.0, y0 - 5000.0, sx + 50.0, y1 + 5000.0))
+        two = [(sx, ym), (sx, ym + 300.0), (sx, ym - 600.0)]
+        r = self._notes(two, [self.W], outline=strip)
+        self.assertAlmostEqual(r["share"][0], 0.0637, delta=0.001)      # 100 m x 2 km of 3.14 km2
+        self.assertLess(r["share"][0], rfs.CROWD_MIN_SHARE)
+        self.assertEqual(r["near_n"][0], 2)
+        self.assertGreater(2 / (math.pi * r["share"][0]), 8.0)            # what no floor would say
+        self.assertEqual((r["near_km2"][0], r["crowded"][0]), (2.5, False))
+        for n, yes in ((6, False), (7, True)):
+            pts = [(sx, ym)] + [(sx, ym + d) for d in (-990.0, -700.0, -400.0, 300.0, 600.0, 900.0, 950.0)[:n]]
+            r = self._notes(pts, [self.W], outline=strip)
+            self.assertEqual(r["near_n"][0], n)
+            self.assertEqual(r["crowded"][0], yes, n)
 
 
 @needs_gdal
@@ -1264,7 +1388,9 @@ class Seams(unittest.TestCase):
         self.assertEqual(sum(1 for r in cand if r["crowded"] == "yes"), 16)
         in_top = sum(1 for r in top if r["crowded"] == "yes")
         self.assertIn("  in crowded ground (crowded = yes): 16 of them, {} of the first 5".format(in_top), log)
-        self.assertTrue(any("dune hollows, not dams" in ln for ln in log))
+        self.assertTrue(any("hollows in dunes and on the river bottom, not dams" in ln for ln in log))
+        self.assertTrue(any("real dams stand in such ground too" in ln for ln in log))
+        self.assertFalse(any("0 of 55" in ln for ln in log))
         info = self._run_info()
         self.assertEqual((info["candidates_crowded"], info["short_list_crowded"]), ("16", str(in_top)))
         self.assertTrue(info["crowd_km2"].startswith("4.5 "))
@@ -1320,6 +1446,31 @@ class Seams(unittest.TestCase):
         self.assertIn("  crowded ground: not marked (--crowd-km2 0)", log)
         self.assertTrue(self._run_info()["crowd_km2"].startswith("0 (off"))
         self.assertEqual(rfs.parser().parse_args([]).crowd_km2, 8.0)
+
+    def test_no_mark_beyond_the_state_line(self):
+        """A State line through the cluster: the fills beyond it (in_state = no) are in no list and
+        get no mark - crowded is blank there, also when their density is over the limit - while
+        those inside it are marked as usual. near_n and near_km2 are written for every fill."""
+        w, e = self._crowd_tiles()
+        x0, y0 = -370000.0, 2620000.0
+        state = rfs.box_geom((x0 - 90000.0, y0 - 90000.0, x0 + 4300.0, y0 + 90000.0))   # between the 2nd and 3rd column
+        for cut, mark in (("3", "yes"), ("0", "no")):
+            a = rfs.parser().parse_args(["--no-checksums", "--crowd-km2", cut])
+            rfs.merge(a, self.finder, self.d, {"k": 1}, "/no/such/dem.vrt", state, "a made-up State", {}, {},
+                      self._model(), lambda m: None)
+            rows = {r["find_id"]: r for r in self._merged()}
+            inside = [rows[i] for i in w[:16] if rows[i]["in_state"] == "yes"]
+            beyond = [rows[i] for i in w[:16] if rows[i]["in_state"] == "no"]
+            self.assertEqual((len(inside), len(beyond)), (8, 8))
+            self.assertEqual(set(r["crowded"] for r in inside), {mark}, cut)
+            self.assertEqual(set(r["crowded"] for r in beyond), {None}, cut)
+            self.assertTrue(all(r["near_km2"] >= 3.0 and r["near_n"] == 8 for r in beyond))   # over the limit all the same
+            self.assertEqual(set(r["crowded"] for r in rows.values() if r["in_state"] == "no"), {None})
+            self.assertTrue(all(r["crowded"] in ("yes", "no") for r in rows.values() if r["in_state"] == "yes"))
+            # the lists hold only fills in the state, so no blank there
+            self.assertTrue(all(r["crowded"] in ("yes", "no") for r in self._csv(rfs.OUT_CSV)))
+            self.assertEqual(int(self._run_info()["candidates_crowded"]),
+                             sum(1 for r in self._csv(rfs.OUT_CSV) if r["crowded"] == "yes"))
 
     def test_a_run_with_no_fill_at_all(self):
         self._tile("T10_W0370_N2620", [])

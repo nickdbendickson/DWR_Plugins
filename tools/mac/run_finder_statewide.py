@@ -109,16 +109,22 @@ THINGS DONE HERE BECAUSE A FINDER RUN ON ONE BOX CANNOT
 CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
 
   * Of 90 pond-line candidates marked by hand on 2026-11-13, the 13 in one tile of the Sheyenne
-    sand hills (USGS tile x63y516, zone 14) were dune hollows, not dams. What set that ground
-    apart was not any one fill but how many there were: many small fills on pond lines close
-    together. So every fill gets
+    sand hills (USGS tile x63y516, zone 14) were hollows, not dams: in the dunes and on the
+    river bottom. What set that ground apart was not any one fill but how many there were: many
+    small fills on pond lines close together. So every fill gets
       near_n    how many OTHER fills within 1,000 m (crest point to crest point) are on a pond
                 line (line_source "DEM pool outlet") and of kind dam or dry embankment;
-      near_km2  that count per km2 of the part of the 1 km circle the run searched (cut to one
-                decimal, not rounded: 7.96 is written 7.9, so a figure of 8.0 is 8 or more);
-      crowded   yes when the fill is itself a pond-line dam or dry embankment and near_km2 is
-                --crowd-km2 (8) or more; else no. --crowd-km2 0 switches the note off (the two
-                numbers are still written). 8 per km2 is 26 or more others in a whole circle.
+      near_km2  that count per km2 of the part of the 1 km circle the run searched, but never
+                over less than a quarter of the circle (CROWD_MIN_SHARE), cut to one decimal,
+                not rounded (7.96 is written 7.9, so a figure of 8.0 is 8 or more);
+      crowded   yes when the fill is itself a pond-line dam or dry embankment and its density
+                is --crowd-km2 (8) or more; else no; blank for a fill beyond the State outline
+                (in_state = no: it is in no list, and most of its circle was not searched).
+                The test is on the density itself, not on the written near_km2, and the two
+                never disagree: a near_km2 written 8.0 or more is always crowded = yes for a
+                pond-line dam / dry embankment in the state. --crowd-km2 0 switches the note off
+                (the two numbers are still written). 8 per km2 is 25.13 others in a whole
+                circle, so 26 or more: 25 read 7.9 and are not crowded.
     It is a note for the person who looks at the list. It changes no score, leaves no row out
     and does not change the order of the ranked lists. The summary counts the crowded candidates.
   * Why here and not in the Finder: the count needs a fill's neighbours, and a Finder run on one
@@ -137,15 +143,26 @@ CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
   * The fields are made in the merge from what the tiles hold: a tile finished by script 1.0 or
     1.1 needs no new run, --merge-only is enough, and the numbers of a partial result change as
     more tiles finish (more of each circle has then been searched).
-  * Where it was seen to work, and where not (Finder 0.6.0 runs of 66 ND test tiles and 15 Iowa
-    tiles, each tile fed through crowd_notes as a run of its own, 2026-11-14): at 8 per km2 it
-    marks 10 of those 13 sand-hill cards and none of the 24 cards marked as real dams (the most
-    crowded of them has 6.6 per km2); none of the fills at 523 listed Intact dams (2 of them
-    have the density, on drainage lines, so they are not marked) and 7 of the fills at 929 Iowa
-    census dams (30 have the density). But of all the fills it marks in the 66 ND tiles, 693 of
-    929 are in that ONE sand-hill tile: outside it the note is unproven (it marks 7 of the other 52 false
-    cards - pothole ground, old river bends). It does not catch mine spoil (1 of 8 cards): for
-    mined ground use --exclude-polygons with an outline of the mine.
+  * Where it was seen to work, and where not. Every figure below was measured on FINDER 0.6.0
+    fills (66 ND test tiles and 15 Iowa tiles, each tile fed through crowd_notes as a run of its
+    own, 2026-11-14), and the limit of 8 was chosen on the same 90 cards it is reported on, so
+    the card figures are in-sample. At 8 per km2 the column reads yes on 10 of those 13
+    sand-hill cards (5 of the 10 are hollows in dune sand, 5 on the Sheyenne flood plain or open
+    water by the soil map; the 3 it misses are in dunes) and on none of the 24 cards marked as
+    real dams - but the margin is thin: the most crowded of them has 6.6 per km2, and one rose
+    to about 7.6 on a recount with a near-final 0.7.0. Of the fills at 523 listed Intact dams it
+    marks none: 2 of them have the density (Mirror Pool WMA Dams 1 and 4, about 14 per km2, in
+    the sand-hill tile) but those fills are on drainage lines; the other pond-line dams the
+    Finder finds within 2,000 ft of the Mirror Pool dams (24 fills) all read yes. Real dams
+    stand in such ground too: the note describes the ground, not the fill. Of the fills at 929
+    Iowa census dams 30 (about 3 %) have the density and 7 read yes (the others are not
+    pond-line dam / dry fills). Of all the fills it marks in the 66 ND tiles, 693 of 929 are in
+    that ONE sand-hill tile: outside it the note is unproven (it marks 7 of the other 52 false
+    cards - pothole ground, old river bends, one mine). The recount on near-final 0.7.0 fills of
+    six ND and four Iowa tiles kept the picture (10 of the 13 sand-hill card places at 8 or more, not
+    the same ten; 0.7.0 finds no fill at 3 of the 13, so the column reads yes on 8 of them).
+    It does not catch mine spoil (1 of 8 cards): for mined ground use --exclude-polygons with an
+    outline of the mine.
 
 WHAT IT WRITES (all in --out)
 
@@ -695,10 +712,28 @@ def points_in_rings(xs, ys, rings):
     return inside_
 
 
-def polygons_of(path, where=None):
+def mend_polygon(g):
+    """(g, False) for a valid polygon; for one whose outline crosses itself (a bow tie, a ring
+    drawn over another), (its valid polygons, True): MakeValid keeps every part of it (GDAL 3.0
+    on; older, Buffer(0), which can lose a part). GDAL's own warning lines are kept off the
+    screen: the caller says it in words."""
+    gdal, _o, _s = gdal_mods()
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        if g.IsValid():
+            return g, False
+        mend = getattr(g, "MakeValid", None)
+        h = polygons_only(mend()) if mend is not None else None
+        return (h if h is not None else g.Buffer(0)), True
+    finally:
+        gdal.PopErrorHandler()
+
+
+def polygons_of(path, where=None, mended=None):
     """The union of the polygons of a vector file (optionally those a filter function keeps), in
-    EPSG:5070; None when it has none."""
-    _g, ogr, _s = gdal_mods()
+    EPSG:5070; None when it has none. A polygon that crosses itself is mended first
+    (mend_polygon), quietly; mended (a list), when given, gets the number of such polygons."""
+    gdal, ogr, _s = gdal_mods()
     ds = ogr.Open(path, 0)
     if ds is None:
         raise UserError("cannot open {}".format(path))
@@ -712,6 +747,7 @@ def polygons_of(path, where=None):
         src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     ct = transformer(src, srs_of(WORK_EPSG))
     multi = ogr.Geometry(ogr.wkbMultiPolygon)
+    n_mended = 0
     for f in lyr:
         if where is not None and not where(f):
             continue
@@ -724,16 +760,32 @@ def polygons_of(path, where=None):
             continue
         g.Segmentize(0.02 if src.IsGeographic() else 2000.0)
         g.Transform(ct)
-        if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPolygon:
-            multi.AddGeometry(g)
-        else:
-            for i in range(g.GetGeometryCount()):
-                multi.AddGeometry(g.GetGeometryRef(i).Clone())
+        # each polygon on its own: the parts of a multipolygon may overlap (a shape drawn over
+        # another), which is a fault of the multipolygon, not ground to leave out
+        parts = [g] if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPolygon else \
+            [g.GetGeometryRef(i).Clone() for i in range(g.GetGeometryCount())]
+        for h in parts:
+            h, bad = mend_polygon(h)
+            n_mended += bad
+            if h is None:
+                continue
+            if ogr.GT_Flatten(h.GetGeometryType()) == ogr.wkbPolygon:
+                multi.AddGeometry(h)
+            else:
+                for i in range(h.GetGeometryCount()):
+                    multi.AddGeometry(h.GetGeometryRef(i).Clone())
     ds = None
+    if mended is not None:
+        mended.append(n_mended)
     if multi.GetGeometryCount() == 0:
         return None
-    u = multi.UnionCascaded()
-    return u if u is not None else multi.Buffer(0)
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        u = multi.UnionCascaded()
+        u = u if u is not None else multi.Buffer(0)
+    finally:
+        gdal.PopErrorHandler()
+    return u
 
 
 def builtin_outline():
@@ -758,12 +810,16 @@ def state_outline(a, pack):
     if choice.lower() == "none":
         return None, "none (fills outside North Dakota are kept; in_state is yes for all)"
     counties = os.path.join(pack, *COUNTIES.split("/")) if pack else ""
+    mended = []
     if choice:
         if not os.path.exists(os.path.expanduser(choice)):
             raise UserError("--state-outline {}: no such file".format(choice))
-        geom, what, buf = polygons_of(real(choice)), "the polygon file {}".format(real(choice)), 0.0
+        geom, what, buf = polygons_of(real(choice), mended=mended), "the polygon file {}".format(real(choice)), 0.0
         if geom is None:
             raise UserError("--state-outline {} holds no polygons".format(choice))
+        if sum(mended):
+            what += (" ({} polygon(s) in it cross themselves: mended before use, every part kept)"
+                     .format(sum(mended)))
     elif counties and os.path.isfile(counties) and polygons_of(counties) is not None:
         geom, what, buf = polygons_of(counties), "the pack's county boundaries ({})".format(COUNTIES), 0.0
     else:
@@ -1265,14 +1321,23 @@ def extract(finder, src, dst, box5070):
     return len(feats)
 
 
-def edge_distances(rows, dem):
+def finder_measures_edge(finder):
+    """True when this Finder measures the distance to missing terrain itself: edge_ft is one of
+    its fields (0.7.0 on). Known from the Finder, not from its version number or its rows."""
+    return "edge_ft" in [q[0] for q in (getattr(finder, "EMB_FIELDS", None) or [])]
+
+
+def edge_distances(rows, dem, finder=None):
     """([[find_id, metres to the nearest missing terrain or None]], where the figures come from).
-    A Finder that measures it itself (0.7.0: every row carries edge_ft, whole feet, None when there
-    is no missing terrain within its search of 1,000 m) is taken at its word; for an older one
-    (0.6.x: no such field) it is measured here on the DEM, within EDGE_SEARCH_M (200 m). The list
-    goes into the tile's done.json; the merge checks it against the tile's rows and, for a tile
-    whose rows carry edge_ft, reads the rows."""
-    if rows and all("edge_ft" in r for r in rows):
+    A Finder that measures it itself (0.7.0: edge_ft among its fields, so every row carries it,
+    whole feet, None when there is no missing terrain within its search of 1,000 m) is taken at
+    its word; for an older one (0.6.x: no such field) it is measured here on the DEM, within
+    EDGE_SEARCH_M (200 m). Which of the two is decided by the Finder (finder_measures_edge), so
+    that a tile with no fill at all is recorded the way its Finder works; without a Finder, by
+    the rows. The list goes into the tile's done.json; the merge checks it against the tile's rows
+    and, for a tile whose rows carry edge_ft, reads the rows."""
+    own = finder_measures_edge(finder) if finder is not None else bool(rows)
+    if own and all("edge_ft" in r for r in rows):
         return ([[r["find_id"], None if r["edge_ft"] is None else round(float(r["edge_ft"]) * FT, 1)] for r in rows],
                 "edge_ft as the Finder measured it")
     return ([[r["find_id"], dem.edge_m(r["x"], r["y"])] for r in rows],
@@ -1355,10 +1420,10 @@ def _run_tile(job, finder, work, parent, t0):
         say("stopped: the run that started this tile is gone")
         return 3
     rows = res["rows"]
-    edge, edge_from = edge_distances(rows, dem)
+    edge, edge_from = edge_distances(rows, dem, finder)
     k_edge, _lim, far = edge_rule(finder)
     n_near = sum(1 for _i, d in edge if d is not None)
-    if k_edge is not None and rows and "edge_ft" in rows[0]:
+    if k_edge is not None and finder_measures_edge(finder) and all("edge_ft" in r for r in rows):
         say("{} fill(s); {} of them the Finder calls '{}' (kept, not candidates); {} have missing terrain "
             "within {} ({})".format(len(rows), sum(1 for r in rows if r["kind"] == k_edge), k_edge, n_near,
                                     "its search" if far is None else "{:,.0f} m".format(far), edge_from))
@@ -1751,9 +1816,8 @@ class Ground:
                                max([j for _i, j in idx] or [0]) - self.j0 + 2), "i1")   # 0 none, 1 part, 2 whole
         self.piece, self.local, blocks = {}, {}, {}
         side = CROWD_BLOCK * self.size
-        if outline is not None and not outline.IsValid():   # an outline that crosses itself cannot be cut
-            mend = getattr(outline, "MakeValid", None)      # (GDAL 3.0 on; it keeps what in_state calls inside)
-            outline = mend() if mend is not None else outline.Buffer(0)
+        if outline is not None:                             # an outline that crosses itself cannot be cut
+            outline = mend_polygon(outline)[0]              # (state_outline mends one read from a file already)
         for (i, j), b in zip(idx, boxes):
             st, g = 2, None
             if outline is not None:
@@ -1877,6 +1941,26 @@ def near_counts(xs, ys, member, radius=CROWD_RADIUS_M):
     return n - member                                       # a member found itself
 
 
+def crowd_figures(dens, eligible, cut_km2):
+    """(near_km2 as written, crowded) from the density of every fill. The test is made on the
+    density itself, never on the written figure: crowded = eligible and dens >= cut_km2 (none when
+    cut_km2 is 0). The written figure is the density CUT to one decimal, not rounded: 25 others in
+    a whole circle are 7.958 per km2, under 8, written 7.9. So, for a limit of one decimal, a
+    figure written at the limit or over it is always a density at the limit or over it, and the
+    other way round (a written 8.0 never stands beside crowded = no for a fill the test applies
+    to). The tiny allowance that keeps 0.3 from being written 0.2 by binary fractions is taken
+    back for any density under the limit."""
+    import numpy as np
+    dens = np.asarray(dens, float)
+    eligible = np.asarray(eligible, bool)
+    crowded = (eligible & (dens >= cut_km2)) if cut_km2 > 0 else np.zeros(len(dens), bool)
+    km2 = np.floor(dens * 10.0 + 1e-9) / 10.0
+    if cut_km2 > 0:
+        below = (math.ceil(cut_km2 * 10.0 - 1e-9) - 1) / 10.0          # the last written figure under the limit
+        km2 = np.where((dens < cut_km2) & (km2 >= cut_km2), below, km2)
+    return km2, crowded
+
+
 def crowd_notes(pts, drop, boxes, outline, cut_km2, log):
     """The crowded-ground note (see the module text) for every fill the tiles hold.
     pts: what cross_tile_rules kept of each fill, in tile order (ti = tile number, x, y, pool =
@@ -1901,10 +1985,7 @@ def crowd_notes(pts, drop, boxes, outline, cut_km2, log):
     near = near_counts(x, y, member, CROWD_RADIUS_M)
     share = ground.share(x, y, CROWD_RADIUS_M)
     dens = near / (math.pi * (CROWD_RADIUS_M / 1000.0) ** 2 * np.maximum(share, CROWD_MIN_SHARE))
-    crowded = (pond & (dens >= cut_km2)) if cut_km2 > 0 else np.zeros(len(x), bool)
-    # written cut to one decimal, not rounded: 25 others in a whole circle are 7.96 per km2, which
-    # is under 8 and is written 7.9 - a figure written 8.0 is always 8 or more
-    km2 = np.floor(dens * 10.0 + 1e-9) / 10.0
+    km2, crowded = crowd_figures(dens, pond & on, cut_km2)
     part = int(np.count_nonzero(alive & on & (share < 1.0)))
     log("  crowded ground: {:,} of the {:,} fill(s) on the searched ground are pond-line dams / dry embankments "
         "(the ones counted); for {:,} fill(s) on it part of the 1 km circle was not searched (a tile not "
@@ -2162,7 +2243,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                 r["excluded"] = "yes" if exs[i] else "no"
                 gi = int(crowd["start"][k]) + r["_j"]       # the note is worked out before this pass
                 r["near_n"], r["near_km2"] = int(crowd["near_n"][gi]), float(crowd["near_km2"][gi])
-                r["crowded"] = "yes" if crowd["crowded"][gi] else "no"
+                # beyond the State outline the note is not given (blank, as a score that is not
+                # given): such a fill is in no list, and its circle is mostly ground nobody searched
+                r["crowded"] = None if not ins[i] else "yes" if crowd["crowded"][gi] else "no"
                 if det is not None and k_edge is not None and r["kind"] == k_edge:
                     # as the Finder itself does: no score for a fill whose readings lean on a wall
                     r["score"], r["score_note"] = None, EDGE_NOT_SCORED
@@ -2346,7 +2429,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["crowd_km2"] = ("{:g} (a note only: crowded = yes for a pond-line dam or dry embankment with this many or "
                          "more OTHER pond-line dam / dry fills per km2 of searched ground within {:,.0f} m; no row is "
                          "left out and the order is not changed)".format(crowd_cut, CROWD_RADIUS_M) if crowd_cut > 0
-                         else "0 (off: crowded is no for every fill; near_n and near_km2 are still written)")
+                         else "0 (off: crowded is no for every fill in the state; near_n and near_km2 are still "
+                              "written)")
     info["candidates_crowded"] = n_crowd
     info["short_list_crowded"] = n_crowd_top
     info["crowd_fills_counted"] = crowd["counted"]
@@ -2441,8 +2525,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
             n_crowd, ", {:,} of the first {:,}".format(n_crowd_top, n_short) if n_top else ""))
         L.append("    (many small pond fills close together: {:g} or more other pond-line fills per km2 within 1 km."
                  .format(crowd_cut))
-        L.append("    In the Sheyenne sand hills these were dune hollows, not dams: look at the ground before you")
-        L.append("    count them. A note only: no row is left out and the order is as it would be without it.)")
+        L.append("    In the Sheyenne sand hills such fills were hollows in dunes and on the river bottom, not dams,")
+        L.append("    but real dams stand in such ground too: look at the ground before you count them. A note")
+        L.append("    only: no row is left out and the order is as it would be without it.)")
     else:
         L.append("  crowded ground: not marked (--crowd-km2 0)")
     for v in top:
