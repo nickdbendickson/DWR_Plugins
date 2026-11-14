@@ -771,7 +771,9 @@ class Crowd(unittest.TestCase):
         # an outline that crosses itself (a bow tie over the west half of tile W) is mended, not dropped
         bow = ogr.CreateGeometryFromWkt("POLYGON (({a} {c},{b} {d},{b} {c},{a} {d},{a} {c}))".format(
             a=x0, b=x0 + 4000.0, c=y0, d=y1))
+        gdal.PushErrorHandler("CPLQuietErrorHandler")       # GDAL says why it is not valid
         self.assertFalse(bow.IsValid())
+        gdal.PopErrorHandler()
         gb = rfs.Ground([self.W], bow)
         self.assertEqual(gb.state_at([x0 + 1.0], [ym]).tolist(), [1])
         # 500 m inside its west triangle (the tile's west edge is the only thing the circle meets)
