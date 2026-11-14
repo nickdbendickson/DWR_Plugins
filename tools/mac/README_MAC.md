@@ -264,7 +264,10 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   dam or dry embankment at 8 per km2 or more, `--crowd-km2 N`, 0 = off). They are the last
   three columns of the layers and both CSVs. It is a note for the reader: no row is left out,
   no score and no order changes. It was seen to work in one tile of the Sheyenne sand hills
-  (dune hollows) and does not catch mine spoil. It is made in the merge, so `--merge-only` is
+  (hollows in dunes and on the river bottom), measured on Finder 0.6.0 fills with the limit
+  chosen on those same cards; real dams stand in such ground too, and it does not catch mine
+  spoil. Below a quarter of the circle searched, the density is worked out over a quarter;
+  `crowded` is blank beyond the State line. It is made in the merge, so `--merge-only` is
   enough for tiles that are already finished.
 * **Results:** `ND_finder_fills.gpkg` (`embankments`, `candidates`, `spillways`, `ridges`,
   `run_info`), `ND_finder_candidates_ranked.csv` (every candidate: not listed, dam or dry

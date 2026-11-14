@@ -167,9 +167,10 @@ out of the ranked lists. It too needs only `--merge-only`, not a new run.
 
 ## Crowded ground
 
-Sand-hill ground is full of dune hollows. The Finder reads a hollow as a small pond with a low
-fill at its outlet, and it finds many of them close together. Real stock dams do not come in
-such crowds. So every fill has three more columns, the last three of every list:
+In the Sheyenne sand hills the Finder found hollows by the hundred: in the dunes and on the
+river bottom it read each one as a small pond with a low fill at its outlet, many of them close
+together. Real stock dams seldom stand that close. So every fill has three more columns, the
+last three of every list:
 
 * `near_n`: how many **other** fills within 1 km are found on a pond line (`line_source` =
   `DEM pool outlet`: a line out of a pool the terrain shows) and are of kind dam or dry
@@ -177,8 +178,11 @@ such crowds. So every fill has three more columns, the last three of every list:
 * `near_km2`: that count for each square kilometre of searched ground inside the 1 km circle.
   For most fills that is the whole circle, 3.14 km2. Beside a tile that has not run yet, or at
   the State line, only the part of the circle that was searched is counted (and only the fills
-  on it), so such a fill does not read as standing more alone than it does. The figure is cut
-  to one decimal, not rounded.
+  on it), so such a fill does not read as standing more alone than it does. Where less than
+  a quarter of the circle was searched (a thin strip of the State, a corner between unfinished
+  tiles) the count is still divided by a quarter circle (0.785 km2), so a fill in a sliver
+  needs at least 7 others to read 8 per km2: one or two neighbours can never make a crowd. The
+  figure is cut to one decimal, not rounded.
 * `crowded` = `yes`: the fill is itself a pond-line dam or dry embankment **and** `near_km2` is
   8 or more (26 or more others in a whole circle; 25 are 7.96 per km2, written 7.9, and are
   not crowded). Otherwise `no`. The test is made on the unrounded density, and the written
@@ -193,13 +197,36 @@ Sort or filter on `crowded` yourself. The summary says how many candidates are i
 ground and how many of the short list. Read `crowded = yes` as "look at the ground before you
 count this one", not as "not a dam".
 
-What it rests on is small. Of the 90 cards marked on 13 November, the 13 false finds in the
-sand-hill tile were dune hollows; the note marks 10 of them. It marks none of the 24 cards
-that were real dams (the most crowded of those has 6.6 per km2), none of the fills at 523
-listed Intact dams in the 66 test tiles, and 7 of the fills at 929 pond dams of the Iowa
-census. But three quarters of everything it marks in the 66 North Dakota test tiles is in
-that **one** sand-hill tile (693 of the 929 fills marked there). Outside it, it marked 7 of 52 false finds (pothole ground, old
-river bends) and no real dam: too few to say whether it means anything there.
+**What it rests on is small.** Unless it says otherwise, every figure here was measured on
+**Finder 0.6.0** fills (the 66 North Dakota test tiles and 15 Iowa tiles, each tile on its
+own), not on the 0.7.0 fills your lists are made of, and the limit of 8 per km2
+was chosen on the **same 90 cards** it is reported on (marked by hand on 13 November), so these
+are the best the rule can look, not a test of it:
+
+* The 13 false finds in the sand-hill tile: the note marks 10. Those 10 are hollows in the
+  dune sand (5) **and** on the Sheyenne river bottom (5: flood plain or open water by the
+  soil map); the 3 it misses are in the dunes.
+* The 24 cards that were real dams: it marks none. The margin is small: the most crowded of
+  them reads 6.6 per km2, and on a recount with Finder 0.7.0 one of them rose to about 7.6.
+* Listed Intact dams: of the 523 the Finder found in the test tiles, 2 stand in ground at 8 or
+  more, both in the sand-hill tile at about 14 per km2 (Mirror Pool WMA Dams 1 and 4). The
+  fills at those two dams are on drainage lines, so the column reads `no` on them (with
+  Finder 0.6.0 and 0.7.0 alike). But the Finder finds many other fills within 2,000 ft of the
+  four Mirror Pool dams, and every one of them found as a pond-line dam or dry embankment
+  reads `yes` (24 of those 46 fills with 0.6.0, 26 of 49 with 0.7.0; some are `unsure`, and
+  so in the ranked list). **Real dams stand in such ground too**: the note describes the
+  ground, not the fill.
+* Iowa census pond dams: 30 of the 929 the Finder found (about 3 %) stand in ground at 8 or
+  more; the column reads `yes` on 7 of them (the other 23 were not found as pond-line dams
+  or dry embankments).
+* Three quarters of everything it marks in the 66 North Dakota test tiles is in that **one**
+  sand-hill tile (693 of 929 fills). Outside it, it marked 7 of 52 other false finds (pothole
+  ground, old river bends, one mine) and none of the real dam cards: too few to say whether it
+  means anything there. On other ground expect it to mark some real dams.
+* A recount on the fills of a near-final Finder 0.7.0 (six North Dakota and four Iowa tiles)
+  kept the picture but moved single cards across the limit both ways: 10 of the 13 sand-hill
+  cards again, but not the same ten; no listed Intact dam's own fill marked; Iowa census dams
+  marked in those four tiles 2 (6 with 0.6.0).
 
 **It does not catch mine spoil** (1 of the 8 mine cards). For mined land, give the outline of
 the mine with `--exclude-polygons` (above) if you have a permit-area layer.

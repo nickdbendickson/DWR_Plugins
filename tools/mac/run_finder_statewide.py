@@ -109,13 +109,14 @@ THINGS DONE HERE BECAUSE A FINDER RUN ON ONE BOX CANNOT
 CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
 
   * Of 90 pond-line candidates marked by hand on 2026-11-13, the 13 in one tile of the Sheyenne
-    sand hills (USGS tile x63y516, zone 14) were dune hollows, not dams. What set that ground
-    apart was not any one fill but how many there were: many small fills on pond lines close
-    together. So every fill gets
+    sand hills (USGS tile x63y516, zone 14) were hollows, not dams: in the dunes and on the
+    river bottom. What set that ground apart was not any one fill but how many there were: many
+    small fills on pond lines close together. So every fill gets
       near_n    how many OTHER fills within 1,000 m (crest point to crest point) are on a pond
                 line (line_source "DEM pool outlet") and of kind dam or dry embankment;
-      near_km2  that count per km2 of the part of the 1 km circle the run searched (cut to one
-                decimal, not rounded: 7.96 is written 7.9, so a figure of 8.0 is 8 or more);
+      near_km2  that count per km2 of the part of the 1 km circle the run searched, but never
+                over less than a quarter of the circle (CROWD_MIN_SHARE), cut to one decimal,
+                not rounded (7.96 is written 7.9, so a figure of 8.0 is 8 or more);
       crowded   yes when the fill is itself a pond-line dam or dry embankment and its density
                 is --crowd-km2 (8) or more; else no; blank for a fill beyond the State outline
                 (in_state = no: it is in no list, and most of its circle was not searched).
@@ -142,15 +143,25 @@ CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
   * The fields are made in the merge from what the tiles hold: a tile finished by script 1.0 or
     1.1 needs no new run, --merge-only is enough, and the numbers of a partial result change as
     more tiles finish (more of each circle has then been searched).
-  * Where it was seen to work, and where not (Finder 0.6.0 runs of 66 ND test tiles and 15 Iowa
-    tiles, each tile fed through crowd_notes as a run of its own, 2026-11-14): at 8 per km2 it
-    marks 10 of those 13 sand-hill cards and none of the 24 cards marked as real dams (the most
-    crowded of them has 6.6 per km2); none of the fills at 523 listed Intact dams (2 of them
-    have the density, on drainage lines, so they are not marked) and 7 of the fills at 929 Iowa
-    census dams (30 have the density). But of all the fills it marks in the 66 ND tiles, 693 of
-    929 are in that ONE sand-hill tile: outside it the note is unproven (it marks 7 of the other 52 false
-    cards - pothole ground, old river bends). It does not catch mine spoil (1 of 8 cards): for
-    mined ground use --exclude-polygons with an outline of the mine.
+  * Where it was seen to work, and where not. Every figure below was measured on FINDER 0.6.0
+    fills (66 ND test tiles and 15 Iowa tiles, each tile fed through crowd_notes as a run of its
+    own, 2026-11-14), and the limit of 8 was chosen on the same 90 cards it is reported on, so
+    the card figures are in-sample. At 8 per km2 the column reads yes on 10 of those 13
+    sand-hill cards (5 of the 10 are hollows in dune sand, 5 on the Sheyenne flood plain or open
+    water by the soil map; the 3 it misses are in dunes) and on none of the 24 cards marked as
+    real dams - but the margin is thin: the most crowded of them has 6.6 per km2, and one rose
+    to about 7.6 on a recount with a near-final 0.7.0. Of the fills at 523 listed Intact dams it
+    marks none: 2 of them have the density (Mirror Pool WMA Dams 1 and 4, about 14 per km2, in
+    the sand-hill tile) but those fills are on drainage lines; the other pond-line dams the
+    Finder finds within 2,000 ft of the Mirror Pool dams (24 fills) all read yes. Real dams
+    stand in such ground too: the note describes the ground, not the fill. Of the fills at 929
+    Iowa census dams 30 (about 3 %) have the density and 7 read yes (the others are not
+    pond-line dam / dry fills). Of all the fills it marks in the 66 ND tiles, 693 of 929 are in
+    that ONE sand-hill tile: outside it the note is unproven (it marks 7 of the other 52 false
+    cards - pothole ground, old river bends, one mine). The recount on near-final 0.7.0 fills of
+    six ND and four Iowa tiles kept the picture (10 of the 13 sand-hill cards, not the same ten).
+    It does not catch mine spoil (1 of 8 cards): for mined ground use --exclude-polygons with an
+    outline of the mine.
 
 WHAT IT WRITES (all in --out)
 
@@ -2513,8 +2524,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
             n_crowd, ", {:,} of the first {:,}".format(n_crowd_top, n_short) if n_top else ""))
         L.append("    (many small pond fills close together: {:g} or more other pond-line fills per km2 within 1 km."
                  .format(crowd_cut))
-        L.append("    In the Sheyenne sand hills these were dune hollows, not dams: look at the ground before you")
-        L.append("    count them. A note only: no row is left out and the order is as it would be without it.)")
+        L.append("    In the Sheyenne sand hills such fills were hollows in dunes and on the river bottom, not dams,")
+        L.append("    but real dams stand in such ground too: look at the ground before you count them. A note")
+        L.append("    only: no row is left out and the order is as it would be without it.)")
     else:
         L.append("  crowded ground: not marked (--crowd-km2 0)")
     for v in top:
