@@ -42,6 +42,36 @@ EVIDENCE_IMAGES = "\n".join(
     + ["2018 | {} | red=1 green=2 blue=3 nir=4".format(_HUB.format("AerialImage_ND_2018_30cm"))])
 EVIDENCE_IMAGES_HELP = ("The default list is every statewide ND GIS Hub image year with a near-infrared "
                         "band (2009-2020): one small download per fill per year.")
+# 'Pick a review batch': what the water line on a card means with this brand's default imagery
+CARD_IMAGES_HELP = ("With the default list a card reads, for example, '6 of 10': open water in the pool "
+                    "in 6 of the 10 ND GIS Hub image years (2009-2020). A few seconds a card the first "
+                    "time; a second run reads the image tiles it kept beside the output.")
+# 'Add evidence to fills', what is below a fill: the data sets of the suite's offline data pack
+# to start from when a pack is set up (DamSafety Core's data folder), first found wins. Buildings:
+# the structure inventory the Hazard tool counts (NSI points), else the FEMA building outlines,
+# else the 911 address points. Roads: the NG9-1-1 centre lines, else the county roads.
+PACK_BUILDINGS = ("NSI_structures", "USA_Structures", "NDGISHUB_address_points")
+PACK_ROADS = ("ND_roads_NG911", "ND_county_roads")
+BELOW_HELP = ("What is below: give a DEM; the buildings and roads start from the offline data pack "
+              "when one is set up (the NSI structure points and the NG9-1-1 roads), and can be "
+              "changed or cleared. With no DEM nothing below the fills is counted.")
+
+
+def pack_layer(names):
+    """The file of the first of these data sets the suite's offline data pack holds, or '' (no
+    pack set up, the pack has none of them, or DamSafety Core is not installed). Never raises:
+    it only fills in a default the user can change."""
+    try:
+        from DamSafety_Core.damsuite import suitedata
+        for name in names:
+            path = suitedata.pack_file(name)
+            if path:
+                return path
+    except Exception:                                    # noqa - a default only
+        pass
+    return ""
+
+
 WATER_HELP = ("Layers: the pack's 3DHP_waterbodies (or NHD / NWI) as the mapped water bodies. The "
               "'water' polygons with mapped = no are the ponds no layer has: give them to 'Find ponds "
               "and dugouts' as its water bodies to ask the LiDAR whether each is held above the ground.")
