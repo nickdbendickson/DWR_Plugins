@@ -15,7 +15,6 @@ sys.path.insert(0, PARENT)
 sys.path.insert(0, HERE)
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
                        QgsProcessingException, QgsVectorFileWriter, QgsMessageLog, make_layer)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from qgis import processing, utils as qutils  # noqa: E402
 from nd_dam_screening.algorithms.data_package import DataPackage  # noqa: E402
 from nd_dam_screening.algorithms.runner_handoff import RunnerHandoff  # noqa: E402

@@ -13,13 +13,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, HERE)
 
 import _gpkg  # noqa: E402
-from qgis.core import QgsProject, QgsVectorLayer  # noqa: E402
+from qgis.core import QgsVectorLayer  # noqa: E402
 from qgis.PyQt.QtWidgets import EVENTS, QFileDialog, QInputDialog, QMessageBox  # noqa: E402
 from qgis.PyQt import QtGui  # noqa: E402
 import nd_dam_screening as pkg  # noqa: E402
 from nd_dam_screening.core import workflow as wf, preflight as pf, review as rv, settings_groups as SG  # noqa: E402
 from nd_dam_screening.damsuite import settings as DS  # noqa: E402
-from nd_dam_screening.dialog import NDDamScreeningDialog, STATE_TEXT  # noqa: E402
+from nd_dam_screening.dialog import NDDamScreeningDialog  # noqa: E402
 from nd_dam_screening import suite_settings as SS  # noqa: E402
 
 ROOT = tempfile.mkdtemp(prefix="popup013_")

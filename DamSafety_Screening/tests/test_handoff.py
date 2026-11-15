@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, PARENT)
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
                        QgsProcessingException, make_layer)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from qgis import processing  # noqa: E402
 from nd_dam_screening.core import handoff as ho, nd_hazard as nh  # noqa: E402
 from nd_dam_screening.algorithms.runner_handoff import RunnerHandoff  # noqa: E402

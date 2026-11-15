@@ -1,5 +1,4 @@
 import os, sys, tempfile
-import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 import hazard as hz  # noqa: E402
 import nd_hazard as nh  # noqa: E402
