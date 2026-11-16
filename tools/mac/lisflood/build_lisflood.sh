@@ -131,6 +131,20 @@ if grep -q '^if (APPLE)' "$SRC/CMakeLists.txt"; then
   mv "$SRC/CMakeLists.txt.nd" "$SRC/CMakeLists.txt"
 fi
 if grep -q '^if (APPLE AND NDBREACH_ENABLE_METAL)' "$SRC/CMakeLists.txt"; then METAL_GATED=1; fi
+# The Metal solver includes rain/rain.tpp whatever NetCDF is, and with NetCDF off (as built
+# here) that file does not compile ("use of undeclared identifier 'total_rain_mass'": the
+# variable is declared inside "#if _NETCDF == 1" and used after its "#endif"). The CPU and CUDA
+# code include rain_stub.tpp in that case; make the Metal solver do the same.
+MM="$SRC/metal/fv1/metal_fv1_simulate.mm"
+if [ -f "$MM" ] && [ -f "$SRC/rain/rain_stub.tpp" ] && ! grep -q 'rain_stub.tpp' "$MM"; then
+  awk '{ l = $0; sub(/\r$/, "", l)
+         if (l == "#include \"../../rain/rain.tpp\"") {
+           print "#if _NETCDF == 1"; print l; print "#else"
+           print "#include \"../../rain/rain_stub.tpp\""; print "#endif"
+         } else print }' "$MM" > "$MM.nd"
+  mv "$MM.nd" "$MM"
+  if grep -q 'rain_stub.tpp' "$MM"; then say "Metal solver: rain_stub.tpp when NetCDF is off (as the CPU and CUDA code do)"; fi
+fi
 if [ "$OS" = Darwin ] && [ "$METAL" != off ]; then
   KERN="$SRC/metal/fv1/metal_fv1_kernels.metal"; PROBE="$WORK/metal-probe.air"
   LOGDIR="$OUT/src/lisflood-logs"; mkdir -p "$LOGDIR"
