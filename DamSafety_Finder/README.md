@@ -503,8 +503,9 @@ against 2 of the other 68. Water says pond, not dam: a dug pond holds water too.
 fills, 66 tiles), 55 of the 60 top-scored unlisted fills (0.73 and up) were dams, and the dams
 with no pool in the LiDAR, which are rare (about 9 % of such fills), scored 0.5 to 0.75. Work
 down the list to a score of about **0.5**; below that, real dams are few and far between. The **CSV is written in this order; the layer keeps
-the fills' own order** (sort it on `review_order` in the attribute table). Without a DEM the
-order is by score alone. The rule is `core/evidence.py` `review_order`.
+the fills' own order** (sort it on `review_order` in the attribute table). Without a DEM there is
+no downstream step: the order is by score band, then water (2 or more image years), then score.
+With neither a DEM nor image years it is by score alone. The rule is `core/evidence.py` `review_order`.
 
 `BUILDINGS` and `ROADS` start from the suite's offline data pack when one is set up in DamSafety
 Core: the structure inventory the Hazard tool counts (`NSI_structures`; else `USA_Structures`,
