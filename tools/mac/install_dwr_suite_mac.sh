@@ -390,8 +390,11 @@ fi
 # 5. write the QGIS settings (plugins on + Processing + the ndsuite/ suite keys)
 # ---------------------------------------------------------------------------
 say "Enabling the plugins and writing the DamSafety settings into the profile."
-mkdir -p "$PROFILE_DIR/QGIS"
-INI="$PROFILE_DIR/QGIS/QGIS3.ini"
+# QGIS on macOS keeps a profile's settings in qgis.org/QGIS3.ini (Qt uses the organisation domain
+# there); QGIS/QGIS3.ini, written here before 2026-11-16, is the Linux / Windows name and is never
+# read on a Mac, so the engine paths, the enabled plugins and the suite keys were ignored.
+mkdir -p "$PROFILE_DIR/qgis.org"
+INI="$PROFILE_DIR/qgis.org/QGIS3.ini"
 THREADS="${DS_THREADS:-$(pcores)}"
 RUN="$PREFIX/absaraka-run"
 DAMS_FOLDER="$RUN/Dams"
