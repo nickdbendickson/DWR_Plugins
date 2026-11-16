@@ -6,7 +6,7 @@ Absaraka = DWR-2801. Unless noted, these runs used the old trusted baseline sett
 #131 (merged as 732f597; Runner 3.10.53, Hazard 2.18.52) changed the Runner's default arrival depth (`ARRIVAL_FT`, `settings.arrival_depth_ft` in `run_report.json`) from 1 ft to 0.1 ft. See USER_GUIDE.md, "Arrival depth". Since then:
 - `Arrival Time.tif` starts the clock at 0.1 ft;
 - `flooded_acres_over_arrival_depth`, `receptors_flooded`, the receptor velocities and the in-run LISFLOOD-FP vs ANUGA `comparison` are counted at 0.1 ft;
-- with an automatic run length, LISFLOOD-FP is lengthened more often (the "still moving" test uses the latest arrival).
+- with an automatic run length, LISFLOOD-FP is lengthened more often (the "still moving" test uses the latest arrival). Since Runner 3.20.9 the test is area-based (late-flooded area at least 1% of the flooded area and 0.25 ac, or 25 ac; at most 4 extensions), so the clock is lengthened less often than in 3.20.0-3.20.8.
 
 **Before (1 ft): every result in this log, and every result in the open docs PRs.** Checked `settings.arrival_depth_ft` = 1.0 in the run reports of:
 - the 10-15 runs;

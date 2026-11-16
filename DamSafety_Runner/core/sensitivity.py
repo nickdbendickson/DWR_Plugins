@@ -412,6 +412,8 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
             if "leaves the base domain" in w:
                 row["domain_too_small"] = True
                 out.warnings.append("{}: {}".format(case.name, w))
+            elif "end of the fixed clock" in w:          # v3.20.9 (Runner review)
+                out.warnings.append("{}: {}".format(case.name, w))
         out.rows.append(row)
     if grid_run is not None:
         _grid_check_rows(out, base, grid_run, st)

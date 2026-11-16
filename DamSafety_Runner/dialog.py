@@ -254,8 +254,11 @@ class NDBreachRunnerDialog(QDialog):
         self.simmax = QDoubleSpinBox()
         self.simmax.setRange(1.0, 336.0)
         self.simmax.setDecimals(1)
-        self.simmax.setToolTip("The clock is lengthened, up to this many hours, while the flood "
-                               "is still moving. The starting value is 96.")
+        # v3.20.9: the area-based spread rule (workflow.spread_still_moving)
+        self.simmax.setToolTip("The clock is lengthened 1.5x, up to this many hours, while the "
+                               "flood is still spreading (enough of the wet area still first wet "
+                               "in the last 10% of the clock), at most 4 times per domain run. "
+                               "The starting value is 96.")
         self.force_anuga = QCheckBox("Force ANUGA (final results from ANUGA)")
         self.force_anuga.setToolTip("Run ANUGA after LISFLOOD-FP finds the extent, and take the "
                                     "final depth, velocity and arrival from ANUGA, even if Models "
