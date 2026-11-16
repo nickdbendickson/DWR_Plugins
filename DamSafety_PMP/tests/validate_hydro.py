@@ -6,7 +6,8 @@ if not all(_os.path.exists(p) for p in ['NOAA_Dist_C.xlsx', 'out_small_geo/hyeto
     _sys.exit(77)
 import json, openpyxl
 import numpy as np
-from core.hydro import *
+from core.hydro import (SCS_DUH_Q, SCS_DUH_T, HydroConfig, cn_amc3, compute, read_hyetograph,
+                        scs_cn_excess, scs_uh)
 R = {}
 # 1. CN hand calc: P=10 in, CN=80 -> S=2.5, Ia=0.5, Q=(9.5^2)/(9.5+2.5)=7.520833
 ex, info = scs_cn_excess(np.array([10.0]), 80)
