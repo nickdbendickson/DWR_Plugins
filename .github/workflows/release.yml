@@ -10,7 +10,7 @@ name: Release
 #
 # Jobs
 #   lisflood-linux    LISFLOOD-FP 8.3 (Zenodo) + the Runner's patch, static libstdc++/libgomp
-#   lisflood-macos    the same on an Apple Silicon runner (macos-14), libomp bundled with an rpath
+#   lisflood-macos    the same on an Apple Silicon runner (macos-latest), libomp bundled with an rpath
 #   lisflood-windows  the same cross-compiled with MinGW-w64 on ubuntu, fully static
 #   lisflood-windows-check  starts that Windows build once on a Windows runner (tools/lisflood_smoke.py)
 #   os-tests          the plugin suites on Windows and macOS (os-tests.yml)
@@ -64,7 +64,13 @@ jobs:
           if-no-files-found: error
 
   lisflood-macos:
-    runs-on: macos-14          # Apple Silicon (arm64)
+    # Apple Silicon (arm64). Not a numbered label: GitHub stopped offering macos-14 (13 Nov 2026:
+    # "The configuration 'macos-14-arm64-us-default' is not supported", the job is cancelled and
+    # the release with it). os-tests.yml runs on the same label. The cost: Homebrew's libomp on
+    # a newer runner is built for that runner's macOS, so the bundled build may not start on an
+    # older macOS; the step below prints the minimum each file records. A Mac with an older
+    # macOS builds its own (tools/mac/lisflood/build_lisflood.sh, what the installers do).
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +101,11 @@ jobs:
           codesign --force --sign - bin/macos-arm64/libomp.dylib
           codesign --force --sign - bin/macos-arm64/lisflood
           otool -L bin/macos-arm64/lisflood
+          # the oldest macOS each file says it starts on (LC_BUILD_VERSION minos), for the log
+          sw_vers || true
+          for f in bin/macos-arm64/lisflood bin/macos-arm64/libomp.dylib; do
+            echo "$f:"; otool -l "$f" | grep -A4 LC_BUILD_VERSION | grep -E 'minos|sdk' || true
+          done
           # runs with Homebrew's libomp moved away: @executable_path must resolve
           mv "$OMP" "$OMP.hidden"
           bin/macos-arm64/lisflood -version | head -3
