@@ -46,7 +46,7 @@ from .download import (
     fetch_nsi, fetch_arcgis_layer, fetch_nd_address_points, fetch_usa_structures, try_download,
     fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings, STALE_USED, PACK_USED,
     INCOMPLETE_USED, fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks,
-    pack_has,
+    pack_has, OVERPASS_MIRROR_USED, overpass_mirror_lines,
 )
 from .helpers import CancelledByUser
 from . import facilities as FAC
@@ -2530,6 +2530,7 @@ def _collect_inputs(run, clip):
     del STALE_USED[:]                  # v2.4.1: earlier-day copies used this run
     del PACK_USED[:]                   # v2.6.1: data sets read from the offline pack
     del INCOMPLETE_USED[:]             # H01: downloads cut short but used this run
+    del OVERPASS_MIRROR_USED[:]        # Overpass queries a backup server answered
     from .download import configure_tile_cache_from_cfg
     configure_tile_cache_from_cfg(cfg)     # v2.8: per-tile download cache (empties TILE_USED)
     _log_offline_mode(run)
@@ -2795,6 +2796,9 @@ def _collect_inputs(run, clip):
             places = _read_places(lyr, clip.crs, run.ctx)
             run.sources.append("OpenStreetMap cities / towns / villages (travel-time "
                                "table): {} ({})".format(n, os.path.basename(path)))
+        else:
+            run.log(">>> WARNING: OpenStreetMap places download failed - the EAP travel-time "
+                    "table has no towns")
     if "flow" in got:
         flowlines, n, path = result("flow")
         if flowlines is not None and n:
@@ -2815,6 +2819,9 @@ def _collect_inputs(run, clip):
         run.sources.append("{}: download INCOMPLETE this run - {} feature(s) kept ({}); the "
                            "inventory may be short of the study area, so treat the class as a "
                            "minimum.".format(name, kept, reason))
+    for line, source in overpass_mirror_lines():
+        run.log(line)
+        run.sources.append(source)
     used = _used_inputs(cfg, got, loc)
     for line in pack_report_lines():
         run.log(line)
@@ -3156,6 +3163,9 @@ def _collect_facilities(run, clip, ext4326, got):
             crossings += FAC.read_crossings(lyr, "OpenStreetMap", acrs, run.ctx, clip)
             run.sources.append("OpenStreetMap culverts, fords and railroad bridges "
                                "(Overpass API): {} ({})".format(n, os.path.basename(path)))
+        elif "xosm" in got:
+            run.log(">>> WARNING: OpenStreetMap crossings download failed - culverts / fords / "
+                    "rail bridges from OSM not screened")
         if not cross_on:
             run.log(">>> WARNING: bridge / culvert downloads failed - crossings not screened")
     run.crossings_evaluated = cross_on

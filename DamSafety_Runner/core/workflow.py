@@ -1768,11 +1768,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         qa_ctx["local"], qa_ctx["radius_m"] = local, rad
         if inflow_xy is None:
             ds_info = {}
+            toe_kw = _toe_kwargs(dam, st)
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
                                                 search_cell, warnings, log, out=ds_info,
                                                 max_from_dam_m=getattr(
                                                     st, "inflow_max_from_dam_m", None),
-                                                **_toe_kwargs(dam, st))
+                                                **toe_kw)
+            # out["toe"] is set only when the toe band did not place it
+            toe_pick = inflow_xy is not None and "toe" not in ds_info
             ds_dir = ds_info.get("direction")
             qa_ctx["downstream"] = ds_dir
             if inflow_xy is None:
@@ -1788,6 +1791,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                     "nearest ground at the top of dam within {:.0f} m.".format(
                                         search_rad))
             report["inflow_point"] = {"xy": list(inflow_xy), "how": why}
+            if not toe_pick:             # v3.20.8: a toe-band pick is the toe by design
+                _inflow_depth_check(local, inflow_xy, h_m, top_m, top_from_dem, warnings, log,
+                                    has_line=toe_kw["toe_line"] is not None and len(
+                                        toe_kw["toe_line"]) >= 2,
+                                    out=report["inflow_point"])
         else:
             report["inflow_point"] = {"xy": list(inflow_xy), "how": "given"}
     log("Breach inflow at {:.1f}, {:.1f} ({})".format(inflow_xy[0], inflow_xy[1],
@@ -3609,6 +3617,44 @@ def _toe_slope(dam, st):
     why = getattr(dam, "dwr_ds_slope_note", None)
     return {"toe_ds_slope_h": None, "toe_ds_slope_src": "no DS_SLOPE / F_DS; {}".format(
         why or "no DWR record downstream_slope")}
+
+
+def _inflow_depth_check(local, inflow_xy, h_m, top_m, top_from_dem, warnings, log,
+                        has_line=False, out=None):
+    """v3.20.8: a warning only (the pick is kept): the automatic breach inflow's ground, read
+    on the search grid (`local`), is more than terrain.INFLOW_DEEP_FACTOR times the dam height
+    below the top of dam. DWR-3034 (no dam line): 53.3 ft below the 30.7 ft dam's top, 1.74 H,
+    maybe a deeper coulee beside the dam. Not run on a toe-band pick (read on the fine DEM).
+    `has_line`: a dam line was given (the toe band did not place it), so the advice does not
+    ask for one. `out` (run_report.json inflow_point) gets depth_below_top_h and, with the
+    warning, depth_check. Skipped quietly when the height, top or ground is not known.
+    Returns the message, or None."""
+    try:
+        h, top = float(h_m), float(top_m)
+        r, c = local.rc(inflow_xy[0], inflow_xy[1])
+        if not local.inside(r, c) or not local.valid()[r, c]:
+            return None
+        z = float(local.data[r, c])
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return None
+    if not (math.isfinite(h) and math.isfinite(top) and math.isfinite(z)) or h <= 0:
+        return None
+    drop = top - z
+    if out is not None:
+        out["depth_below_top_h"] = round(drop / h, 2)
+    if drop <= terrain.INFLOW_DEEP_FACTOR * h:
+        return None
+    msg = ("{}: the breach inflow is {:.1f} ft below the top of dam, {:.1f} times the dam "
+           "height ({:.1f} ft): it may be in a deeper drainage beside the dam, or the top of "
+           "dam{} may be high. Check qa_inflow_map.png, or give the inflow point{}.".format(
+               terrain.INFLOW_DEEP, drop / FT, drop / h, h / FT,
+               " estimated from the DEM" if top_from_dem else "",
+               "" if has_line else " or a dam line"))
+    if out is not None:
+        out["depth_check"] = msg
+    warnings.insert(0, msg)              # first in "Things to check", as the other CHECK flags
+    log(msg)
+    return msg
 
 
 def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
