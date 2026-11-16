@@ -7,7 +7,8 @@
     osm          Dams / dikes / culverts of an OpenStreetMap file           finder.osm_structures
     score        Score fills by how much they look like the listed dams     finder.run_score
     evidence     Add evidence to fills (water years, NWI, LiDAR, below)     finder.run_evidence
-    review_batch Pick a review batch (random control, top, near the cut)    finder.run_review_batch
+    review_batch Pick a review batch (random control, top, near the cut),   finder.run_review_batch
+                 with the water evidence of the picked cards on each card
 
 The provider id and names come from brand.py (the file that differs between DamSafety Finder
 and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
@@ -82,6 +83,14 @@ def _src(alg, params, name, context, required=True):
     if getattr(lyr, "subsetString", lambda: "")():
         alg._feedback.pushWarning("{}: its filter is not applied (the whole file is read)".format(lyr.name()))
     return lyr.source()
+
+
+def _pack_default(names_attr):
+    """The offline data pack's file for a layer parameter to start from (brand.pack_layer with
+    the brand's list of data sets), or None: no pack, or a brand without one."""
+    find = getattr(brand, "pack_layer", None)
+    names = getattr(brand, names_attr, ())
+    return (find(names) or None) if find and names else None
 
 
 def _known(alg, params, context):
@@ -753,7 +762,10 @@ class AddEvidence(_Base):
         from .core import evidence
         return (evidence.__doc__.strip().replace("\n\n", "<br><br>") + "<br><br>Imagery, one per line: "
                 "<tt>YEAR | file or ImageServer address | green=G nir=N [red=R blue=B]</tt>. "
-                + brand.EVIDENCE_IMAGES_HELP)
+                + brand.EVIDENCE_IMAGES_HELP + "<br><br>" + getattr(brand, "BELOW_HELP", "")
+                + " When the fills carry a score, each gets <tt>review_order</tt> (1 = look at this "
+                "first): by score in bands 0.1 wide, then by what is below (<tt>conseq</tt>), then by "
+                "the score. The CSV is written in that order; the layer keeps the fills' own order.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterVectorLayer(
@@ -784,9 +796,11 @@ class AddEvidence(_Base):
             optional=True))
         self.addParameter(QgsProcessingParameterEnum("Z_UNIT", "DEM elevation unit", Z_UNITS, defaultValue=0))
         self.addParameter(QgsProcessingParameterVectorLayer(
-            "BUILDINGS", "Buildings (points or footprints; optional)", [SRC_ANY], optional=True))
+            "BUILDINGS", "Buildings (points or footprints; optional; used with a DEM)", [SRC_ANY],
+            defaultValue=_pack_default("PACK_BUILDINGS"), optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
-            "ROADS", "Roads / railroads (lines; optional)", [SRC_LINE], optional=True))
+            "ROADS", "Roads / railroads (lines; optional; used with a DEM)", [SRC_LINE],
+            defaultValue=_pack_default("PACK_ROADS"), optional=True))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -821,7 +835,16 @@ class ReviewBatch(_Base):
 
     def shortHelpString(self):
         from .core import review
-        return review.__doc__.strip().replace("\n\n", "<br><br>")
+        return (review.__doc__.strip().replace("\n\n", "<br><br>") + "<br><br>Evidence on the cards: "
+                "after the batch is picked and written, the water evidence of the picked cards is read "
+                "and put right after the batch's own fields: <tt>water_years</tt> (years with open water "
+                "of the image years read), the NWI code and the LiDAR drop-out when you give those "
+                "layers, and <tt>evid_note</tt> (in words, why something is blank or short; when it says "
+                "image years could not be read, run the tool again with the same settings: the same cards "
+                "are picked and only the missing images are asked for). The evidence never "
+                "picks a card or changes its chance. Once it is on the card, the reviewer's marks are no "
+                "longer an independent test of that evidence (the run_info table records evidence = "
+                "True). " + getattr(brand, "CARD_IMAGES_HELP", ""))
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterVectorLayer(
@@ -837,6 +860,16 @@ class ReviewBatch(_Base):
             extension="", optional=True))
         self.addParameter(QgsProcessingParameterNumber("SEED", "Random seed (keep it: the control stays put, and a later round takes the next cards)",
                                                        INTEGER, 0, minValue=0))
+        self.addParameter(QgsProcessingParameterBoolean(
+            "EVIDENCE", "Show the water evidence on each card (water by year, NWI code, LiDAR drop-out)", True))
+        self.addParameter(QgsProcessingParameterString(
+            "IMAGES", "Imagery with a near-infrared band, one per line (YEAR | source | green=G nir=N "
+            "[red=R blue=B]); empty = no water history", brand.EVIDENCE_IMAGES, multiLine=True, optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "NWI", "NWI wetlands (polygons with ATTRIBUTE codes; optional)", [SRC_POLYGON], optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "LIDAR_POINTS", "LiDAR return-count raster (point_count.vrt from 'Build a class-9 water mosaic'; "
+            "optional)", optional=True))
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -848,15 +881,26 @@ class ReviewBatch(_Base):
         top = self.parameterAsDouble(params, "TOP", context)
         if rnd + top > 1.0:
             raise QgsProcessingException("the random and top shares add up to more than the batch")
+        evidence = self.parameterAsBool(params, "EVIDENCE", context)
+        opt = lambda n: (_src(self, params, n, context, required=False) or None) if evidence else None  # noqa: E731
         try:
-            finder.run_review_batch(
+            res = finder.run_review_batch(
                 _src(self, params, "FILLS", context), out, n=self.parameterAsInt(params, "N", context),
                 random_frac=rnd, top_frac=top, second_frac=self.parameterAsDouble(params, "SECOND", context),
                 per_tile_cap=self.parameterAsInt(params, "CAP", context),
                 reviewed=self.parameterAsFile(params, "REVIEWED", context) or None,
-                seed=self.parameterAsInt(params, "SEED", context), log=self._log(feedback))
-        except RuntimeError as e:
+                seed=self.parameterAsInt(params, "SEED", context), log=self._log(feedback),
+                evidence=evidence,
+                images=(self.parameterAsString(params, "IMAGES", context) or None) if evidence else None,
+                nwi=opt("NWI"), lidar_points=opt("LIDAR_POINTS"),
+                progress=feedback.setProgress, cancelled=feedback.isCanceled)
+        except (RuntimeError, ValueError) as e:
             raise QgsProcessingException(str(e))
+        if res.get("cancelled"):                        # a cancelled run fails, but nothing is lost
+            raise QgsProcessingException(
+                "Cancelled: {} holds the whole batch as picked, with the evidence on the first {} card(s) "
+                "only - run again with the same settings for the rest (the same cards are picked, and the "
+                "image tiles already read are reused)".format(out, res["evidence"]["cards"]))
         self._load(context, out, "review_batch", "Review batch")
         return {"OUT": out}
 

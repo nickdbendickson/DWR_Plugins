@@ -249,10 +249,13 @@ def flat_pools(dem, cell, tol_m=0.15, min_m2=300.0, ring_tol_m=0.10, max_lower=0
     return out, keep
 
 
-def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=300.0, dep_min_m=0.15, dep_min_m2=100.0,
+def pool_seeds(dem, gt, dep=None, flat_tol_m=0.15, flat_min_m2=100.0, dep_min_m=0.15, dep_min_m2=100.0,
                ring_tol_m=None, max_lower=None, cells=False):
     """(seeds [(x, y, area m2, kind)], pool mask) of the pools of a DEM (grid gt): the most interior
-    cell of every flat water surface (flat_pools; kind 'flat') and the deepest cell of every closed
+    cell of every flat water surface of flat_min_m2 or more (flat_pools; kind 'flat'; 100 m2 since
+    0.7, 300 m2 before: the area is that of the cells whose 3 x 3 neighbourhood is flat, which
+    leaves out the water's own edge cells, so 100 m2 is a pond of about 250 m2 on 3 m cells) and
+    the deepest cell of every closed
     depression at least dep_min_m deep over at least dep_min_m2 (cells more than 2 cm below their
     spill level; kind 'depression'). dep: depth below the spill level (depth() of flow()), computed
     when None. ring_tol_m, max_lower: flat_pools' rim test (None = its defaults). cells: also return, for each seed, the
