@@ -35,6 +35,34 @@ plugin zip or CI job.
    Commands: `heim-start` (Ollama server, in its own tab), `heim-chat`, `heim-index`, `heim-query`,
    `heim-audit`, `damchain ...`.
 
+   **Run results (`heim runs`):** Heim can answer questions about finished breach runs with the
+   runs' own numbers. `heim runs add ~/DamSafety/Dams` (or one dam folder, or a run folder dragged
+   into `heim-chat`, or `heim add <run folder>`) reads every run below it into
+   `~/local-ai/runs.db`: the run report (peak breach flow, time to peak, breach width and formation
+   time, starting WSE, storage, flooded acres, max depth / velocity, latest arrival, and every other
+   number of the report), the breach hydrograph, the Runner's receptors, and Hazard's tables
+   (habitable structures, roads, rail, facilities: depth, velocity and first arrival at each).
+   Then `show` gives a dam's breach, flood and hazard numbers; `at` the depth, velocity and arrival
+   at a structure, road or address (part of the name or address, or its id), or at a point
+   (`lat,lon`, read from the result rasters with GDAL; the QGIS environment's Python is used when
+   Heim's has no GDAL); `hydrograph` the peak and time to peak. A plain `heim` question that names
+   a dam that has been read in, and asks for a result, goes to the tables too:
+   ```zsh
+   heim runs list
+   heim runs show DWR-2801
+   heim runs at 2801 "4512 Main St"
+   heim runs at 2801 46.975,-97.38
+   heim runs hydrograph 2801
+   heim runs ask "how deep is the water at County Road 26 for 2801?"
+   heim "what was the peak discharge for DWR-2801?"
+   ```
+   A question is not answered from passages: Heim writes one read-only SELECT, the code runs it and
+   prints the rows (those are the answer), Heim phrases a sentence from the rows, and the code
+   flags any number in that sentence that is not in the rows. `heim runs sql "SELECT ..."` runs your
+   own query; `heim runs schema` lists the tables. Nothing is written into the run folders. Read a
+   run again after re-running it or re-classifying (the newer read replaces the old one); `show`
+   says when Hazard's outputs are older than the run.
+
    **Repo audit:** `damchain audit --repo ~/path/to/DWR_Plugins` writes one report to
    `~/local-ai/reports/audit_<repo>_<time>.md` (and `.json`). It checks:
    1. release and packaging: runs the repo's own `tools/ci_checks.py`, every plugin's metadata
