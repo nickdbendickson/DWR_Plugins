@@ -317,6 +317,14 @@ def _classes():
     SUITE_DWR = "suite:dwr"            # the layer combo's entry for the suite data folder's dams
     COUNTY_FIELDS = ("county", "county_name", "cnty_name")
     SOURCE_ROWS = (("HEIGHT_FT", "height", "Height"), ("STORAGE_ACFT", "storage", "Storage"))
+    # 3.20.8: what a DWR record of the suite fills (Nick, 2026-11-16: the crest width, slopes
+    # and crest length stayed blank although the record has them). The DWR elevations are left
+    # out on purpose: NGVD 29 or a local datum (a 100 ft streambed), so the top of dam and
+    # the breach bottom come from the DEM.
+    RECORD_ROWS = (("DAM_ID", "id"), ("DAM_NAME", "name"), ("HEIGHT_FT", "height"),
+                   ("STORAGE_ACFT", "storage"), ("AREA_AC", "area"),
+                   ("CREST_WIDTH", "crest_width"), ("US_SLOPE", "us_slope"),
+                   ("DS_SLOPE", "ds_slope"), ("CREST_LENGTH", "crest_length"))
 
     class DamPage(Page):
         """The DamCard summary on top; then the source (a project layer, or the DWR dams of the
@@ -608,13 +616,11 @@ def _classes():
             if self.suite():
                 r = self.row()
                 if r:
-                    for param, key in (("DAM_ID", "id"), ("DAM_NAME", "name"),
-                                       ("HEIGHT_FT", "height"), ("STORAGE_ACFT", "storage"),
-                                       ("AREA_AC", "area")):
+                    filled = dict(RECORD_ROWS)
+                    for param, key in RECORD_ROWS:
                         self.put(param, r.get(key))
                     for _key, param, _l, _k, _r in wl.DAM_FIELDS:
-                        if param not in ("DAM_ID", "DAM_NAME", "HEIGHT_FT", "STORAGE_ACFT",
-                                         "AREA_AC"):
+                        if param not in filled:
                             self.put(param, None)
                     raw = (r.get("point") or "").split("[")[0].strip()
                     self.point_edit.setText(raw.replace(",", ", ") if raw else "")
