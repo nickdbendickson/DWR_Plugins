@@ -765,6 +765,61 @@ class _State:
         return self.data.get(k, default) if self.resumed else default
 
 
+# 3.20.6: the first ANUGA pass's result, kept while the second (wider) pass runs, so a resumed
+# run goes on with the second pass instead of computing the first again
+ANUGA_PASS1_RESULT = "anuga_result_pass1.npz"
+
+
+def anuga_passes(run_pass, state, workdir, ast, flooded, edge_tolerance_ft, log):
+    """ANUGA on the mesh around the LISFLOOD-FP flood, and once more on a mesh twice as wide
+    when that flood reaches the mesh edge deeper than edge_tolerance_ft.
+
+    run_pass(k, flooded, reuse) -> (envelope, outer, fine) runs pass k (0, 1) in `workdir`.
+    Returns (envelope, outer, fine, runs, warnings) of the last pass.
+
+    3.20.6: both passes share `workdir`, so once the second pass had started a resumed run
+    (st.resume, an ANUGA run stopped part way and continued later) found no checkpoint of the
+    first pass and computed it again from the start before the second pass went on from its
+    checkpoint (found by the Lake Delhi 2010 validation, run in six-hour legs: every leg spent
+    its time on the first pass again). The first pass's result is now kept as
+    ANUGA_PASS1_RESULT and recorded in the run's state; a resumed run uses it and goes straight
+    on with the second pass."""
+    runs, warns = [], []
+    done = bool(state.resumed and state.get("anuga_done"))
+    keep = os.path.join(workdir, ANUGA_PASS1_RESULT)
+    pass1 = None if done else state.get("anuga_pass1")
+    if pass1 and not os.path.isfile(keep):
+        pass1 = None
+    env = outer = fine = None
+    for k in range(2):
+        reuse = done and k == 0
+        if k == 0 and pass1:
+            import shutil
+            shutil.copyfile(keep, os.path.join(workdir, "anuga_result.npz"))
+            reuse = True
+            log("ANUGA: the first pass (t = 0 to the end, on the mesh around the LISFLOOD-FP "
+                "flood) finished in an earlier session; its result is used and the second "
+                "pass, on the wider mesh, goes on.")
+        env, outer, fine = run_pass(k, flooded, reuse)
+        runs.append({"buffer_m": ast.buffer_m, "stats": env.stats})
+        warns += [n for n in env.notes if n not in warns]
+        edge_ft = env.stats.get("max_edge_depth_ft", 0.0)
+        if edge_ft <= edge_tolerance_ft or k == 1:
+            if edge_ft > edge_tolerance_ft:
+                warns.append("ANUGA: the flood reaches the mesh boundary {:.1f} ft "
+                             "deep; its extent is limited by the LISFLOOD-FP domain."
+                             .format(edge_ft))
+            break
+        log("ANUGA flood reaches the mesh edge ({:.1f} ft); widening the mesh.".format(edge_ft))
+        if k == 0 and not reuse:
+            import shutil
+            shutil.copyfile(os.path.join(workdir, "anuga_result.npz"), keep)
+            state.save(anuga_pass1={"buffer_m": ast.buffer_m, "edge_ft": round(edge_ft, 2)})
+        flooded = np.isfinite(env.depth.data) & (env.depth.data > 0.05) | flooded
+        ast.buffer_m *= 2
+    return env, outer, fine, runs, warns
+
+
 def _detached_anuga_check(model_dir, key, log):
     """3.12.2 (DWR-2801): an ANUGA worker an earlier QGIS session started goes on after that
     session ends (core/anuga_detach.py). Before any model runs: one still running for other
@@ -2543,30 +2598,21 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                       elevation_label=terrain_label(terrain_src))
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
-        a_runs = []
-        an_env = None
+        # a finished ANUGA of a resumed run is reused (the baseline below too)
         reuse = bool(state.resumed and state.get("anuga_done"))
-        for k in range(2):
+
+        def run_pass(k, flooded_k, reuse_k):
             def aprog(p, m, k=k):
                 progress(60 + 10 * k + 10 * p / 100.0, m)
-            an_env, outer, fine = anmod.run(
-                os.path.join(model_dir, "anuga"), dem_a, flooded, inflow_xy, direction, width_m,
+            return anmod.run(
+                os.path.join(model_dir, "anuga"), dem_a, flooded_k, inflow_xy, direction, width_m,
                 hy_a, ast, aprog, cancel, log, structures=st.structures, initial_depth=init_grid,
-                refine_lines=st.refine_lines, reuse=reuse and k == 0,
+                refine_lines=st.refine_lines, reuse=reuse_k,
                 run_key=state.key if k == 0 else None, **emb_kw)
-            a_runs.append({"buffer_m": ast.buffer_m, "stats": an_env.stats})
-            warnings += [n for n in an_env.notes if n not in warnings]
-            edge_ft = an_env.stats.get("max_edge_depth_ft", 0.0)
-            if edge_ft <= st.edge_tolerance_ft or k == 1:
-                if edge_ft > st.edge_tolerance_ft:
-                    warnings.append("ANUGA: the flood reaches the mesh boundary {:.1f} ft "
-                                    "deep; its extent is limited by the LISFLOOD-FP domain."
-                                    .format(edge_ft))
-                break
-            log("ANUGA flood reaches the mesh edge ({:.1f} ft); widening the mesh.".format(
-                edge_ft))
-            flooded = np.isfinite(an_env.depth.data) & (an_env.depth.data > 0.05) | flooded
-            ast.buffer_m *= 2
+        an_env, outer, fine, a_runs, a_warn = anuga_passes(
+            run_pass, state, os.path.join(model_dir, "anuga"), ast, flooded,
+            st.edge_tolerance_ft, log)
+        warnings += [n for n in a_warn if n not in warnings]
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
