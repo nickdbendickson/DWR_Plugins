@@ -2598,6 +2598,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                       elevation_label=terrain_label(terrain_src))
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
+        # a finished ANUGA of a resumed run is reused (the baseline below too)
+        reuse = bool(state.resumed and state.get("anuga_done"))
+
         def run_pass(k, flooded_k, reuse_k):
             def aprog(p, m, k=k):
                 progress(60 + 10 * k + 10 * p / 100.0, m)
