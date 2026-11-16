@@ -21,7 +21,7 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 | `ndfind:water_mosaic` Build a class-9 water mosaic from LiDAR tiles | a classified LiDAR tile or a folder of them (.las/.laz, ASPRS class 9); the water classes, their EPSG (only if the files carry none) and the cell size | `water_count.vrt` (class-9 points per cell) and `water_elev.vrt` (their mean elevation, the pond water surface), in North Dakota's UTM 14N (EPSG:26914): build once, then give the count VRT to the open-water tool as its **prebuilt class-9 water-count raster** |
 | `ndfind:osm` Extract dams, dikes and culverts from OpenStreetMap | an OpenStreetMap file (.osm.pbf, the Geofabrik extract) | `waterway=dam / weir`, `man_made=dyke / embankment`, `tunnel=culvert`, `ford=yes` as points: one more known-structure layer |
 | `ndfind:score` Score fills by how much they look like the listed dams | the `embankments` layers of one or more runs | A model learned from the fills already on a dam list (four kinds; reviewers' marks as trusted labels), and every fill scored 0-1 with it (look at the high-scoring new ones first) |
-| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check; for scored fills `review_order` (score first, what is below second) |
+| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check; for scored fills `review_order` (score first, then water, then what is below) |
 | `ndfind:review_batch` Pick a review batch | scored fills; cards already reviewed (optional); imagery years, NWI, the LiDAR return-count mosaic (optional) | A batch for review: random control, top-ranked, near the cut, each card with its chance of being picked; a share flagged for a blind second look; on each card the water evidence (`water_years`, NWI code, LiDAR drop-out) |
 
 The first three take **Known structures** (any number of point, line or polygon layers: DWR dams, DWR
@@ -479,20 +479,30 @@ downloaded again; the tiles themselves were not inspected.) Such an image is not
 year is "not read" for the fill, and the next run asks for it again. The same goes for a tile on
 disk that cannot be read (a download cut short): it is removed, and the next run asks for it.
 
-### Sort by what is downstream, as a second sort (`review_order`)
+### Sort by water and what is downstream, as a second sort (`review_order`)
 
 When the fills carry a score, the evidence tool writes `review_order` (1 = look at this first):
 
 1. by **score band** first: bands 0.1 wide, the highest first (0.9 to 1.0, then 0.8 to 0.9 ...);
-2. inside a band by **`conseq`**, the highest first, when it was computed (a DEM with buildings
+2. inside a band, **water first**: a fill with open water in its pool in 2 or more of the image
+   years read (`wet_years`) before one with less (0.7.1). A yes / no, not a count;
+3. then by **`conseq`**, the highest first, when it was computed (a DEM with buildings
    and / or roads). `conseq` counts 3 for each building in the first mile down the flow path, 2
    for each in miles 1 to 3, 1 for each in miles 3 to 5, and 1 for each road crossing in the
    first mile;
-3. then by the score itself, then in the order the fills came.
+4. then by the score itself, then in the order the fills came.
 
-So what is downstream only reorders fills the score cannot tell apart: a fill never passes one
-in a higher band, however much is below it. A fill with nothing computed below it counts as 0
-there, and a fill with no score comes last. The **CSV is written in this order; the layer keeps
+So water and what is downstream only reorder fills the score cannot tell apart: a fill never
+passes one in a higher band, however wet it is or however much is below it. A fill with no
+water history read or nothing computed below it counts as dry / as 0 there, and a fill with no
+score comes last. Why water: on a North Dakota review sheet of 90 dry fills (no pool in the
+LiDAR) picked at random, 6 of the 22 with water in 2 or more of the 10 image years were dams,
+against 2 of the other 68. Water says pond, not dam: a dug pond holds water too.
+
+**How far down to work.** On the two North Dakota review sheets of 2026-11-16 (Finder 0.7.0
+fills, 66 tiles), 55 of the 60 top-scored unlisted fills (0.73 and up) were dams, and the dams
+with no pool in the LiDAR, which are rare (about 9 % of such fills), scored 0.5 to 0.75. Work
+down the list to a score of about **0.5**; below that, real dams are few and far between. The **CSV is written in this order; the layer keeps
 the fills' own order** (sort it on `review_order` in the attribute table). Without a DEM the
 order is by score alone. The rule is `core/evidence.py` `review_order`.
 

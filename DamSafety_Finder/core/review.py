@@ -23,7 +23,8 @@ Marks: yes / no / unsure / offset (a real dam just off the point - a candidate-p
 not a ranking error). marks_to_labels turns them into training labels.
 
 The pick uses the card's id, place and score, nothing else. What is below a fill (the evidence
-tool's conseq) is a second sort for a work list (evidence.review_order), never a reason to pick.
+tool's conseq) and its water years are a second sort for a work list (evidence.review_order),
+never a reason to pick.
 """
 import hashlib
 import math

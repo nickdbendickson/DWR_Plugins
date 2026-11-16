@@ -276,7 +276,7 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(k6, json.loads(json.dumps(k6)))      # as it comes back from done.json
         self.assertIsNone(rfs.settings_key("0.6.0", a, None)["dem"])
         # a tile made by script 1.0 or 1.1 is a tile of script 1.2: the key holds the first number only
-        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.2", "1"))
+        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.3", "1"))
 
     def test_tile_box_from_done_json_or_from_the_id(self):
         self.assertEqual(rfs.tile_box("T10_W0370_N2620"), (-370000.0, 2620000.0, -360000.0, 2630000.0))
@@ -287,6 +287,78 @@ class NoGdal(unittest.TestCase):
 
 
 @needs_gdal
+class PackLookup(unittest.TestCase):
+    """Where the script looks for the data pack (script 1.3): --data, $NDSUITE_DATA, the suite data
+    folder and pack location set in the damsafety QGIS profile, ~/ND_Suite_Data; the pack folder
+    named ND_Dam_Suite_Pack or nd_offline_pack. Nothing is written outside the temp folder."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rfs pack ")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.home = os.path.join(self.tmp, "home")
+        os.makedirs(self.home)
+        env = {k: os.environ.get(k) for k in ("HOME", "NDSUITE_DATA", "NDSUITE_PACK", "DAMSAFETY_PROFILE", "DS_QGIS_PROFILE")}
+        self.addCleanup(lambda: [os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None)
+                                 for k, v in env.items()])
+        os.environ["HOME"] = self.home
+        for k in ("NDSUITE_DATA", "NDSUITE_PACK", "DAMSAFETY_PROFILE", "DS_QGIS_PROFILE"):
+            os.environ.pop(k, None)
+
+    def pack(self, folder):
+        f = os.path.join(folder, *rfs.STREAMS.split("/"))
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        open(f, "w").close()
+        return folder
+
+    def ini(self, text, prof="damsafety"):
+        d = os.path.join(self.home, "Library", "Application Support", "QGIS", "QGIS3", "profiles", prof, "QGIS")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "QGIS3.ini"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def args(self, data=""):
+        return types.SimpleNamespace(data=data)
+
+    def test_default_folder_and_the_old_pack_name(self):
+        self.pack(os.path.join(self.home, "ND_Suite_Data", "nd_offline_pack"))
+        data = rfs.find_data(self.args())
+        self.assertEqual(data, os.path.realpath(os.path.join(self.home, "ND_Suite_Data")))
+        self.assertTrue(rfs.find_pack(data).endswith("nd_offline_pack"))
+
+    def test_the_data_folder_set_in_qgis(self):
+        other = os.path.join(self.tmp, "Suite data, 2026")
+        self.pack(os.path.join(other, "ND_Dam_Suite_Pack"))
+        self.ini('[General]\nfoo=1\n\n[ndsuite]\ndata_folder="{}"\npack_path=@Invalid()\n'.format(other))
+        self.assertEqual(rfs.profile_settings(), {"data_folder": other})
+        data = rfs.find_data(self.args())
+        self.assertEqual(data, os.path.realpath(other))
+        self.assertTrue(rfs.find_pack(data).endswith("ND_Dam_Suite_Pack"))
+        # --data and $NDSUITE_DATA still come first
+        self.assertEqual(rfs.find_data(self.args("/x/y")), os.path.realpath("/x/y"))
+        os.environ["NDSUITE_DATA"] = "/p/q"
+        self.assertEqual(rfs.find_data(self.args()), os.path.realpath("/p/q"))
+
+    def test_the_pack_location_set_in_qgis(self):
+        packdir = self.pack(os.path.join(self.tmp, "elsewhere", "mypack"))
+        self.ini("[ndsuite]\npack_path={}\n".format(packdir))
+        data = rfs.find_data(self.args())          # no data_folder set: ~/ND_Suite_Data, which has none
+        self.assertEqual(rfs.find_pack(data), os.path.realpath(packdir))
+
+    def test_no_pack_says_how_to_find_it(self):
+        with self.assertRaises(rfs.UserError) as cm:
+            rfs.find_pack(rfs.find_data(self.args()))
+        self.assertIn("find ~ -maxdepth 5 -name 3DHP_flowlines.gpkg", str(cm.exception))
+        self.assertIn("still being built", str(cm.exception))
+
+    def test_an_unreadable_or_other_profile_settings_file(self):
+        self.ini("not an ini file at all\n[[[")
+        self.assertEqual(rfs.profile_settings(), {})
+        self.ini("[ndsuite]\ndata_folder=/a/b\n", prof="other")
+        self.assertEqual(rfs.profile_settings(), {})
+        os.environ["DAMSAFETY_PROFILE"] = "other"
+        self.assertEqual(rfs.profile_settings(), {"data_folder": "/a/b"})
+
+
 class Plain(unittest.TestCase):
     def test_builtin_outline(self):
         g = rfs.builtin_outline()
@@ -1112,6 +1184,7 @@ class Seams(unittest.TestCase):
         self.assertEqual(info["candidates_score_0.5_or_more"], str(want))
         self.assertEqual(info["short_list_rows"], "3")
         self.assertIn("  with a score of 0.5 or more: {:,}".format(want), out)
+        self.assertTrue(any(ln.startswith("    work down the list to about here") for ln in out))
         self.assertTrue(any(rfs.OUT_TOP in ln and "top 3" in ln for ln in out))
         # --top 0: no short list, and the one of an earlier merge is taken away
         a = rfs.parser().parse_args(["--no-checksums", "--top", "0"])
@@ -1395,7 +1468,7 @@ class Seams(unittest.TestCase):
         self.assertEqual((info["candidates_crowded"], info["short_list_crowded"]), ("16", str(in_top)))
         self.assertTrue(info["crowd_km2"].startswith("4.5 "))
         self.assertEqual(info["crowd_fills_counted"], "19")  # the 16, the one alone and the two of the east tile
-        self.assertEqual(info["script"], "run_finder_statewide.py 1.2")
+        self.assertEqual(info["script"], "run_finder_statewide.py 1.3")
         ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
         for layer, lead in (("embankments", []), ("candidates", ["rank"])):
             names = rfs.field_names(ds.GetLayerByName(layer))

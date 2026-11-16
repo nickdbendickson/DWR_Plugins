@@ -20,7 +20,11 @@ writes into one folder, `~/ND_Finder_Statewide`, and nowhere else. It downloads 
   Finder it found. Do the whole state with **one** Finder version: tiles made by another
   version are kept but are neither run again nor merged (see "If something goes wrong").
 * The SSD is plugged in: `/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt`.
-* The data pack is in your suite data folder (`~/ND_Suite_Data/ND_Dam_Suite_Pack`).
+* The data pack is in your suite data folder (`~/ND_Suite_Data/ND_Dam_Suite_Pack`). From script 1.3
+  it also looks in the suite data folder and pack location set in QGIS (DamSafety Core / the ND
+  Data Updater, `damsafety` profile) and takes a pack folder named `nd_offline_pack` too. If it
+  still says the pack is not there, `find ~ -maxdepth 5 -name 3DHP_flowlines.gpkg` shows where it
+  is: give `--data` the folder above `hydro`. A pack still being built has no such file yet.
 * The Mac is on power. The script keeps it awake while it runs.
 * About 3 GB free on the Mac's own disk.
 
@@ -133,7 +137,10 @@ ranked lists:
 
 Expect roughly 450,000 fills in all, most of them low-scoring, and about 300,000 rows in the
 full ranked list (a CSV of about 160 MB: it opens slowly in Excel or Numbers, which is why the
-short list is there). The summary says how many candidates score 0.5 or more. In QGIS the
+short list is there). The summary says how many candidates score 0.5 or more: **work down the
+list to about there.** On the review sheets of 2026-11-16 (Finder 0.7.0 fills), 55 of the 60
+top-scored candidates were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75. If
+more score 0.5 or more than the short list holds, `--top N` makes it longer. In QGIS the
 `candidates` layer is the full ranked list as points; filter it on `rank` for the top ones.
 
 **The ids.** `find_id` is made from the crest point of a fill.

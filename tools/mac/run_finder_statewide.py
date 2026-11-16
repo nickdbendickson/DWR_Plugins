@@ -206,7 +206,7 @@ import xml.etree.ElementTree as ET
 sys.dont_write_bytecode = True          # never leave .pyc files in the plugins folder
 warnings.filterwarnings("ignore", category=FutureWarning)   # GDAL's note about its exception mode (not switched)
 
-SCRIPT_VERSION = "1.2"
+SCRIPT_VERSION = "1.3"
 DEFAULT_DEM = "/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt"
 DEFAULT_OUT = os.path.join("~", "ND_Finder_Statewide")
 ENGINE = "DamSafety_Finder"
@@ -225,7 +225,7 @@ KNOWN = (("dwr/DWR_dams.gpkg", "DWR dams"), ("dwr/DWR_dam_lines.gpkg", "DWR dam 
          ("dwr/DWR_dugouts.gpkg", "DWR dugouts"), ("dwr/DWR_unknown_structures.gpkg", "DWR unknown"),
          ("hydro/NID_dams.gpkg", "NID dams"), ("barriers/SARP_dams.gpkg", "SARP dams"))
 COUNTIES = "boundaries/ND_counties.gpkg"
-PACK_NAMES = ("ND_Dam_Suite_Pack",)
+PACK_NAMES = ("ND_Dam_Suite_Pack", "nd_offline_pack")
 # The script's own edge test, for the tiles of a Finder that has none (0.6.x). Finder 0.7.0 decides
 # it itself (the kind em.K_EDGE) and writes its own edge_ft; these two are then not used.
 EDGE_SEARCH_M = 200.0                   # missing terrain is looked for this far from a fill
@@ -577,21 +577,60 @@ def load_engine(plugins):
     return importlib.import_module(ENGINE + ".finder")
 
 
+def profile_settings():
+    """{key: value} of the [ndsuite] section of the damsafety QGIS profile's settings file
+    (QGIS/QGIS3.ini): what DamSafety Core's suite folder chooser and the ND Data Updater set
+    (data_folder, pack_path). Empty when there is no such file or it cannot be read. Read only."""
+    import configparser
+    prof = os.environ.get("DAMSAFETY_PROFILE") or os.environ.get("DS_QGIS_PROFILE") or "damsafety"
+    home = os.path.expanduser("~")
+    for base in (os.path.join(home, "Library", "Application Support", "QGIS", "QGIS3", "profiles"),
+                 os.path.join(home, ".local", "share", "QGIS", "QGIS3", "profiles")):
+        ini = os.path.join(base, prof, "QGIS", "QGIS3.ini")
+        if not os.path.isfile(ini):
+            continue
+        cp = configparser.RawConfigParser(strict=False, interpolation=None)
+        try:
+            cp.read(ini, encoding="utf-8")
+        except (configparser.Error, OSError, UnicodeDecodeError):
+            return {}
+        if not cp.has_section("ndsuite"):
+            return {}
+        out = {}
+        for k in ("data_folder", "pack_path"):
+            v = cp.get("ndsuite", k, fallback="").strip()
+            if len(v) > 1 and v[0] == v[-1] == '"':            # QSettings quotes a value with a comma
+                v = v[1:-1]
+            if v and not v.startswith("@"):                     # @Invalid() / @Variant(...): no path
+                out[k] = v
+        return out
+    return {}
+
+
 def find_data(a):
-    d = a.data or os.environ.get("NDSUITE_DATA") or os.path.join("~", "ND_Suite_Data")
+    """--data, else $NDSUITE_DATA, else the suite data folder set in the damsafety QGIS profile
+    (what DamSafety Core and the ND Data Updater use), else ~/ND_Suite_Data."""
+    d = a.data or os.environ.get("NDSUITE_DATA") or profile_settings().get("data_folder") \
+        or os.path.join("~", "ND_Suite_Data")
     return real(d)
 
 
 def find_pack(data):
-    """The folder that holds hydro/3DHP_flowlines.gpkg: $NDSUITE_PACK, <data>/ND_Dam_Suite_Pack,
-    or the data folder itself."""
-    cands = [os.environ.get("NDSUITE_PACK")] + [os.path.join(data, n) for n in PACK_NAMES] + [data]
+    """The folder that holds hydro/3DHP_flowlines.gpkg: $NDSUITE_PACK, <data>/ND_Dam_Suite_Pack
+    (or nd_offline_pack), the data folder itself, then the pack location set in the damsafety
+    QGIS profile (ndsuite/pack_path)."""
+    prof = profile_settings()
+    cands = ([os.environ.get("NDSUITE_PACK")] + [os.path.join(data, n) for n in PACK_NAMES] + [data]
+             + [prof.get("pack_path")] + [os.path.join(prof["data_folder"], n) for n in PACK_NAMES
+                                          if prof.get("data_folder")])
     for c in cands:
         if c and os.path.isfile(os.path.join(os.path.expanduser(c), STREAMS)):
             return real(c)
-    raise UserError("the ND data pack was not found: no {} in {} or in {}. Give --data FOLDER (the suite "
-                    "data folder, or the pack folder itself).".format(
-                        STREAMS, data, os.path.join(data, PACK_NAMES[0])))
+    raise UserError("the ND data pack was not found: no {} in {}, in {} or in the pack location set in "
+                    "QGIS. To find it: find ~ -maxdepth 5 -name {} ; then give --data with the folder "
+                    "above 'hydro' (the pack folder itself), or the folder that holds the pack. A pack "
+                    "that is still being built has no {} yet.".format(
+                        STREAMS, data, os.path.join(data, PACK_NAMES[0]), os.path.basename(STREAMS), STREAMS))
 
 
 def pack_inputs(pack):
@@ -2547,6 +2586,8 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
                                      else "height (--no-score)"))
     if model is not None:
         L.append("  with a score of {} or more: {:,}".format(SCORE_CUT, n_cut))
+        L.append("    work down the list to about here: on the review sheets of 2026-11-16, 55 of the 60")
+        L.append("    top-scored fills were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75")
     if n_top:
         L.append("  the short list ({}): the top {:,} of them, each with a link to the satellite picture".format(
             OUT_TOP, n_short))
