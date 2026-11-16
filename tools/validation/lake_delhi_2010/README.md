@@ -54,7 +54,9 @@ artifact, and the next runs the same configuration with `--resume`, which reuses
 LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint. ANUGA's
 checkpoint-signing key goes along (`NDBREACH_CKPT_KEY_FILE`): without it a fresh runner
 refuses the checkpoints as not its own. With 4 threads the first leg reached 26.9 h, past
-the breach.
+the breach. The first ANUGA pass's flood reaches the mesh edge, so the Runner runs ANUGA a
+second time on a mesh twice as wide; before Runner 3.20.6 every resumed leg computed the
+first pass again from the start, so the second pass never finished (run 43602043685).
 
 | Run | The breach |
 |---|---|
