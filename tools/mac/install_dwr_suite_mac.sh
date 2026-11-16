@@ -57,8 +57,12 @@
 # installer, still sha256-checked), DS_THREADS, DS_JOBS (compile jobs),
 # DS_APPLE_CLANG=1 (compile with Apple's clang instead of conda-forge clang).
 #
-# GPU / Metal: the official LISFLOOD-FP 8.3 source has NO Metal back end (its
-# GPU code is CUDA only, which Macs cannot use), so DS_ENABLE_METAL is ignored.
+# GPU / Metal: the LISFLOOD-FP 8.3 source has a Metal back end for the FV1 solver only. It is
+# built when Apple's Metal compiler works on this Mac (Xcode plus, from Xcode 26,
+#   xcodebuild -downloadComponent MetalToolchain ) and left out otherwise; DS_ENABLE_METAL=1
+# insists on it (the build stops without the compiler), DS_ENABLE_METAL=0 never builds it.
+# LISFLOOD-FP uses it only when a .par file holds the `metal` or `cuda` keyword with fv1; the
+# Runner does not write that keyword, so its runs are on the CPU either way.
 # =============================================================================
 
 set -euo pipefail
@@ -305,6 +309,10 @@ finalize_lisflood() {
   mkdir -p "$PREFIX/bin" "$PREFIX/lib"
   [ "$src" -ef "$PREFIX/bin/lisflood" ] || cp -f "$src" "$PREFIX/bin/lisflood"
   chmod 755 "$PREFIX/bin/lisflood"
+  # the Metal kernels are loaded from the folder of the executable
+  if [ -f "$(dirname "$src")/metal_fv1_kernels.metallib" ] && ! [ "$src" -ef "$PREFIX/bin/lisflood" ]; then
+    cp -f "$(dirname "$src")/metal_fv1_kernels.metallib" "$PREFIX/bin/"
+  fi
   [ "$OS" = Darwin ] || return 0
   for ref in $(otool -L "$PREFIX/bin/lisflood" | awk 'NR>1 && /(libomp|libc\+\+|libc\+\+abi|libunwind)\.[0-9.]*dylib/{print $1}'); do
     case "$ref" in /usr/lib/*|/System/*) continue ;; esac
@@ -348,7 +356,6 @@ if [ -z "$LISFLOOD_EXE" ] && [ "$SKIP_LISFLOOD" -ne 1 ]; then
     warn "then re-run this script. (This is an Apple tool, not Homebrew.)"
     warn "For now the Runner will use its slower built-in Python engine (tick 'use built-in')."
   else
-    [ "${DS_ENABLE_METAL:-0}" = "1" ] && warn "DS_ENABLE_METAL ignored: LISFLOOD-FP 8.3 has no Metal back end (CUDA only)."
     say "Building LISFLOOD-FP 8.3: official Zenodo source + the Runner patch, conda-forge compilers."
     if [ "$OS" = Darwin ]; then
       create_env ndbuild cmake make llvm-openmp c-compiler cxx-compiler
@@ -359,6 +366,7 @@ if [ -z "$LISFLOOD_EXE" ] && [ "$SKIP_LISFLOOD" -ne 1 ]; then
            --python "$QGIS_PREFIX/bin/python" --patcher "$RUNNER_DIR/scripts/patch_lisflood.py")
     [ -n "${DS_LISFLOOD_ZIP:-}" ] && BARGS+=(--zip "$DS_LISFLOOD_ZIP")
     [ "${DS_APPLE_CLANG:-0}" = "1" ] && BARGS+=(--apple-clang)
+    case "${DS_ENABLE_METAL:-}" in 1) BARGS+=(--metal on) ;; 0) BARGS+=(--metal off) ;; esac
     BUILT=""
     if BUILT="$(bash "$HERE/lisflood/build_lisflood.sh" "${BARGS[@]}" | tail -n 1)" && [ -x "$BUILT" ]; then :
     elif [ "$OS" = Darwin ] && [ "${DS_APPLE_CLANG:-0}" != "1" ]; then
