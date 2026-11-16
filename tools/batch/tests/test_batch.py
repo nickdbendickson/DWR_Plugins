@@ -67,7 +67,8 @@ class Scratch(unittest.TestCase):
             fh.write(STUB)
         self.log = os.path.join(self.tmp, "stub.log")
         self.env = dict(os.environ, HOME=self.home, DAMCHAIN_PY=self.stub, STUB_LOG=self.log,
-                        NDSUITE_DATA=os.path.join(self.home, "data"), PATH=os.environ.get("PATH", ""))
+                        NDSUITE_DATA=os.path.join(self.home, "data"), PATH=os.environ.get("PATH", ""),
+                        BATCH_GET_PACK="0")     # no test starts a real pack download (test_get_pack.py)
         for k in ("BATCH_DATA_DIR", "STUB_FAIL", "STUB_RC", "STUB_NO_STATE"):
             self.env.pop(k, None)
 
