@@ -148,8 +148,12 @@ class SelfTestAlgorithm(_ToolBase):
         report.info = selftest.environment_info()
         num, text = qgis_version()
         report.info.insert(0, ("QGIS", "{} ({})".format(text or "?", num)))
-        report.info.append(("LISFLOOD-FP used", exe or "none found"))
-        report.info.append(("ANUGA Python used", py or "none found"))
+        lf_src, an_src, problems = self.engine_sources(parameters, context, exe, py)
+        report.info.append(("LISFLOOD-FP used", "{} (from: {})".format(exe or "none found", lf_src)))
+        report.info.append(("ANUGA Python used", "{} (from: {})".format(py or "none found", an_src)))
+        for note in problems:
+            report.info.append(("NOT USED", note))
+            feedback.reportError("NOT USED: " + note, fatalError=False)
         report.info.append(("Working folder", work))
         version, algorithms, hazard, handoff = self._qgis_checks()
 
