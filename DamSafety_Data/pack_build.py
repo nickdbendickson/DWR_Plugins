@@ -332,9 +332,12 @@ def check_target(out_parent, active=()):
                                      "never written into.".format(p))
     for a in active or ():
         if a and (_inside(a, p2) or _inside(a, p1)):
-            raise PackBuildError("The plugins are reading the pack in {} now. Choose another "
-                                 "output folder, or point the plugins at another pack "
-                                 "first.".format(out_parent))
+            raise PackBuildError("The plugins are reading the pack in {} now, so this window "
+                                 "does not build over it. To update that pack in place, use "
+                                 "Dam safety > Data > Check for updates now (it builds missing "
+                                 "layers and fetches again those older than the refresh "
+                                 "interval). To build a new pack, choose another output folder, "
+                                 "or point the plugins at another pack first.".format(out_parent))
     return p2, p1, wk
 
 

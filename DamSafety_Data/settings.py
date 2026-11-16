@@ -23,6 +23,17 @@ except ImportError:                     # outside QGIS (tests)
 
 from .sources import SOURCE_INFO
 
+
+def _active_pack():
+    """1.11.2: the pack the plugins read now ("" when none or no QGIS): the pack source looks
+    after it when Build offline pack made it, even if it was built from Terminal."""
+    try:
+        from .damsuite import suitedata
+        return suitedata.active_pack() or ""
+    except Exception:                                            # noqa: BLE001 - optional
+        return ""
+
+
 PREFIX = "nd_data_updater/"
 DEFAULT_DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "ND Structure Data")
 SUITE_KEY = "ndsuite/data_folder"
@@ -280,6 +291,7 @@ class Settings:
             "nsi_mode": self.nsi_mode,
             "nsi_match_m": self.nsi_match_m,
             "pack_out": self.pack_out,
+            "pack_active": _active_pack(),
             "pack_refresh_days": self.pack_refresh_days,
             "pack_dwr_folder": self.pack_dwr_folder,
             "pack_hifld_folder": self.pack_hifld_folder,

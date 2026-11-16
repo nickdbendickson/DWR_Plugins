@@ -197,3 +197,35 @@ def test_write_format2_rewrites_only_the_named_layers(tmp_path, mocked):
     after = {k: os.path.getmtime(os.path.join(p2, *e["file"].split("/")))
              for k, e in m2b["datasets"].items()}
     assert sorted(k for k in before if before[k] != after[k]) == ["NID_dams"]
+
+
+def test_the_pack_in_use_is_looked_after_without_the_window_folder(tmp_path, mocked):
+    """1.11.2: a pack built from Terminal (pack_build CLI / build-offline-pack.sh) never set the
+    window's folder, so Check for updates did not look after it, while the window refuses to
+    build over the pack in use. The folder of the pack the plugins read is used instead (either
+    format's folder), and only when Build offline pack made that pack."""
+    out, _calls = _built(tmp_path, mocked)
+
+    def pack(cfg):
+        got = [s for s in sources.build_sources(cfg) if s.id == "pack"]
+        return got[0].out_parent if got else None
+    for name in (PB.PACK2, PB.PACK1):
+        assert pack({"pack_active": os.path.join(str(out), name)}) == str(out)
+        assert pack({"pack_out": "", "pack_active": os.path.join(str(out), name) + os.sep}) == str(out)
+    # the window's folder still wins when it holds a pack built here
+    other = tmp_path / "other"
+    other.mkdir()
+    assert pack({"pack_out": str(out), "pack_active": str(other / PB.PACK2)}) == str(out)
+    # a window folder without a pack: the active one is used
+    assert pack({"pack_out": str(other), "pack_active": os.path.join(str(out), PB.PACK2)}) == str(out)
+    # an active pack this builder did not make is never taken
+    (other / PB.PACK2).mkdir()
+    assert pack({"pack_active": str(other / PB.PACK2)}) is None
+    assert pack({}) is None
+
+
+def test_refusal_points_at_check_for_updates(tmp_path, mocked):
+    out, _calls = _built(tmp_path, mocked)
+    with pytest.raises(PB.PackBuildError) as e:
+        PB.check_target(str(out), [os.path.join(str(out), PB.PACK2)])
+    assert "Check for updates now" in str(e.value)
