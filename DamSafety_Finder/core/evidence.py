@@ -18,7 +18,8 @@ asks of a candidate, from a source the DEM cannot see:
   WHAT IS BELOW IT (DEM, buildings, roads): the flow path from the fill downhill, the buildings
   beside it low enough to flood (Montana's small-dam screen: flood depth 75 % of the dam height,
   little damage past 5 miles) and the roads it crosses, in distance bands. A second sort for
-  the review list, not a dam probability.
+  the review list, not a dam probability: review_order puts the fills in bands of score 0.1
+  wide and lets what is below decide only inside a band.
 
 Nothing here is a determination; each is a field on the candidate for the reviewer and the score.
 """
@@ -30,6 +31,7 @@ import numpy as np
 MILE = 1609.344
 CONSEQ_BINS_M = (1.0 * MILE, 3.0 * MILE, 5.0 * MILE)      # 0-1, 1-3, 3-5 miles
 PERMIT_AF = 12.5            # ND: a water permit is needed to store more than 12.5 acre-feet
+SCORE_BAND = 0.1            # review_order: scores within one band this wide count as tied
 
 
 def disk(shape, gt, x, y, r):
@@ -239,6 +241,48 @@ def consequence(build_d, road_d, storage_af, bins=CONSEQ_BINS_M):
     out["conseq"] = score
     out["permit_check"] = bool(storage_af is not None and math.isfinite(storage_af) and storage_af > PERMIT_AF)
     return out
+
+
+def _number(v):
+    """v as a finite float, or None (blank, text, NaN)."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def review_order(scores, conseqs=None, band=SCORE_BAND):
+    """The order to look at scored fills in: one whole number per fill, 1 = look at this first.
+
+    Sorted by score band first (bands `band` wide, the highest first: 0.9 to 1.0, then 0.8 to
+    0.9 ...; a score of exactly 1 is in the top band), then inside a band by `conseq` (what is
+    below the fill, the highest first), then by the score itself, then by the order the fills
+    came in. So what is downstream only reorders fills the score cannot tell apart: it never
+    lifts a fill over one in a higher band. A fill whose consequence was not computed (blank)
+    counts as 0 there, the same as a fill with nothing found below it, so the score decides
+    between them. A fill with no score comes after every scored fill (by consequence, then as
+    it came). conseqs None: no consequence was computed, so the order is by score.
+    Returns a list as long as `scores`, in the order given."""
+    scores = list(scores)
+    conseqs = [None] * len(scores) if conseqs is None else list(conseqs)
+    if len(conseqs) != len(scores):
+        raise ValueError("review_order needs one consequence for each score")
+    top = int(math.ceil(1.0 / band - 1e-9)) - 1         # the band a score of exactly 1 falls in
+    keys = []
+    for i, (s, c) in enumerate(zip(scores, conseqs)):
+        s, c = _number(s), _number(c) or 0.0
+        if s is None:
+            keys.append((1, 0, -c, 0.0, i))
+            continue
+        b = int(math.floor(s / band + 1e-9))            # 0.3 / 0.1 is 2.9999...: still band 3
+        if s == 1.0:
+            b = top
+        keys.append((0, -b, -c, -s, i))
+    order = [0] * len(scores)
+    for n, i in enumerate(sorted(range(len(scores)), key=keys.__getitem__)):
+        order[i] = n + 1
+    return order
 
 
 def share_of_classes(grid, mask, classes):

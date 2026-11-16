@@ -21,6 +21,9 @@ of being picked, so the answers are unbiased (evaluate.ht_share):
 
 Marks: yes / no / unsure / offset (a real dam just off the point - a candidate-placement miss,
 not a ranking error). marks_to_labels turns them into training labels.
+
+The pick uses the card's id, place and score, nothing else. What is below a fill (the evidence
+tool's conseq) is a second sort for a work list (evidence.review_order), never a reason to pick.
 """
 import hashlib
 import math
@@ -81,6 +84,10 @@ def _near_chance(pool, n_near, tiles, cap, seed, replays=2000):
 def pick_batch(rows, n=90, random_frac=0.18, top_frac=0.37, second_frac=0.12, score_key="score",
                committee=None, tile_m=5000.0, per_tile_cap=3, seed=0, reviewed=()):
     """Pick a review batch from candidate rows (dicts with find_id, x, y and a score).
+    Those four are all the pick reads: water years, an NWI code, LiDAR drop-out or what is below
+    a fill never choose a card or change its chance, so the chances stay true whatever evidence
+    the rows carry (finder.run_review_batch reads the evidence after the pick, for the picked
+    cards only, and checks the pick unchanged).
     reviewed: find_ids already marked - left out of the batch altogether: a batch samples the
     cards not yet reviewed (the pool), and every chance below is a chance within that pool. For
     the whole list, add the reviewed cards with their marks at incl_prob 1 (they are a census of
