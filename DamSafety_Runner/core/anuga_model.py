@@ -488,6 +488,23 @@ def checkpointing(st):
                         or j["partial_every_min"] > 0)
 
 
+def omp_duplicate_hint(log_tail, python=""):
+    """3.20.7: what to do when the ANUGA environment loads two OpenMP runtimes ("OMP: Error #15",
+    seen on macOS in an older hand-made ANUGA env: the process ends with code -6 before the
+    first step). The cure is an environment with one runtime, e.g. the installer's locked
+    `ndanuga`; KMP_DUPLICATE_LIB_OK is NOT suggested (Intel/LLVM call it unsafe: wrong results
+    are possible). Empty for any other failure."""
+    if "OMP: Error #15" not in (log_tail or ""):
+        return ""
+    where = " ({})".format(python) if python else ""
+    return ("The ANUGA environment{} loads two copies of the OpenMP runtime, so ANUGA stops before "
+            "its first step. This is the environment, not the model: point the ANUGA Python "
+            "setting (Processing > Options > Providers > DamSafety Runner) at an environment "
+            "with one runtime, such as the dam-suite installer's ndanuga env "
+            "(<conda base>/envs/ndanuga/bin/python), or rebuild this one from conda-forge only. "
+            "Setting KMP_DUPLICATE_LIB_OK is not a fix: it can give wrong results.".format(where))
+
+
 def partial_note(workdir):
     """'' or a line naming anuga_partial.npz (the envelope so far) after a stopped run."""
     p = os.path.join(workdir, PARTIAL_NAME)
@@ -1605,8 +1622,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     if proc.returncode != 0 or not os.path.exists(result):
         tail = _tail_text(log_path)
         note = partial_note(workdir) if checkpoint_job(cst) else ""
-        raise ModelError("ANUGA stopped with code {}:\n{}{}".format(
-            proc.returncode, tail, "\n" + note if note else ""))
+        hint = omp_duplicate_hint(tail, getattr(cst, "python", "") or "")
+        raise ModelError("ANUGA stopped with code {}:\n{}{}{}".format(
+            proc.returncode, tail, "\n" + note if note else "", "\n" + hint if hint else ""))
     # 3.4.1: read the archive inside `with` - an open .npz keeps the file locked on Windows
     # until garbage collection, which stopped the work folder from being removed
     with np.load(result) as r:
