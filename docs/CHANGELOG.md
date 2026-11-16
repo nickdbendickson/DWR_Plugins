@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Smooth depth-velocity chart lines (Hazard 2.25.6, Runner 3.20.10, Screening 0.20.2, Core 1.5.2; NO number changes).** Nick saw that the Hazard report's chart lines are not smooth. The REG_05.2026 Figure 5.1 / 5.2 table is a hand digitization (a point every 0.5 ft/s for houses, 0.25 ft/s for mobile homes) and the charts joined its points with straight lines, so every digitizing step showed as a kink. Nick chose to smooth the drawing only:
+  - `damsuite.tm11_curves.drawn_polygons()` draws a smoothed line through the same table (Gaussian-weighted local-linear, 1.5x the table spacing; a line that reaches the velocity axis stays on it). It is within 0.021 ft of the table for houses and 0.004 ft for mobile homes.
+  - The table, `zone()` and `table_sha256` are unchanged, so no zone or class changes. The Hazard chart caption says the lines are drawn smoothed.
+  - Checked against Nick's screenshots of REG_05.2026 Figs 5.1/5.2: the table and the smoothed line both sit within 0.03 ft (house high), 0.06 ft (house low) and 0.015 ft (mobile homes) of the figures for 95% of the chart.
+
 - **Runner 3.20.8 and Hazard 2.25.5: fixes from the first batch-44 two-dam run (NO number changes).**
   - **Runner: CHECK THE INFLOW DEPTH.** With no dam line the Runner takes the lowest ground within 90 m (or 8 times the dam height) on the downstream side as the breach inflow, with no limit on how deep it is. On DWR-3034 it was 53 ft below the top of a 30.7 ft dam. The run now warns when the automatic inflow is more than 1.3 times the dam height below the top of dam, and records `depth_below_top_h` in `run_report.json`. The cell is chosen as before.
   - **Runner: the Model one dam wizard fills crest width, slopes and crest length from a DWR dam record** (it filled only height, storage and area). DWR elevations are still never filled: they are on NGVD 29 or a local datum.
