@@ -23,14 +23,18 @@ class _Alg(algs._Base):
         return self._p.get(name, "")
 
 
-def _with(suite=None, proc=None):
-    """Swap the suite store and the Processing options for dicts; returns a restore function."""
-    old = (algs._suite_setting, algs._setting)
+def _with(suite=None, proc=None, label=True):
+    """Swap the suite store and the Processing options for dicts; returns a restore function.
+    label: the suite value's label is the computer setting's too (the CI model-tests job sets
+    NDBREACH_LISFLOOD, which the real lookup would name instead)."""
+    old = (algs._suite_setting, algs._setting, algs._suite_source_label)
     algs._suite_setting = lambda key, default="": (suite or {}).get(key, default)
     algs._setting = lambda key, default="": (proc or {}).get(key, default) or default
+    if label:
+        algs._suite_source_label = lambda key: "suite setting ndsuite/" + key
 
     def restore():
-        algs._suite_setting, algs._setting = old
+        algs._suite_setting, algs._setting, algs._suite_source_label = old
     return restore
 
 
@@ -158,7 +162,7 @@ def engine_sources_says_where_the_suite_value_came_from():
     old_source, old_env = sc.source, os.environ.get("NDBREACH_LISFLOOD")
     with tempfile.TemporaryDirectory() as t:
         (lf,) = _files(t, "bin/lisflood")
-        restore = _with({"lisflood_exe": lf}, {})
+        restore = _with({"lisflood_exe": lf}, {}, label=False)
         try:
             for got, label in (("env", "environment variable NDBREACH_LISFLOOD"),
                                ("project", "project setting NDDamSuite/lisflood_exe"),
