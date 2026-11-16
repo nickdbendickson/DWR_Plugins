@@ -23,7 +23,9 @@
 #      creates the conda environment "anuga" with scripts/create_anuga_env.sh.
 #   5. Runs 'ndbreach_cli.py check' on both, then WRITES their paths into QGIS's Processing
 #      settings, the only file outside PREFIX it changes:
-#          ~/Library/Application Support/QGIS/QGIS3/profiles/default/QGIS/QGIS3.ini
+#          ~/Library/Application Support/QGIS/QGIS3/profiles/default/qgis.org/QGIS3.ini
+#      (QGIS on macOS keeps its settings in qgis.org/, Qt's organisation-domain folder; QGIS/ is
+#      the Linux and Windows name, which QGIS on a Mac never reads.)
 #          [Processing]
 #          Configuration\NDBREACH_LISFLOOD_EXE=<PREFIX>/bin/lisflood
 #          Configuration\NDBREACH_ANUGA_PYTHON=<conda env>/bin/python
@@ -349,7 +351,11 @@ qgis_running() {
 }
 
 default_ini() {
-  printf '%s/Library/Application Support/QGIS/QGIS3/profiles/%s/QGIS/QGIS3.ini' "$HOME" "$PROFILE"
+  # 3.20.7: qgis.org/ on macOS (Qt names the folder after the organisation domain there); it
+  # wrote QGIS/QGIS3.ini before, which QGIS on a Mac never reads, so the paths were ignored
+  local sub=QGIS
+  [ "$(uname -s)" = Darwin ] && sub=qgis.org
+  printf '%s/Library/Application Support/QGIS/QGIS3/profiles/%s/%s/QGIS3.ini' "$HOME" "$PROFILE" "$sub"
 }
 
 lisflood_ok() {

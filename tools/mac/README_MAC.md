@@ -287,8 +287,10 @@ bash run_finder_statewide.sh               # the whole state; the same command g
 ## Good to know
 
 * The box runs used patched LISFLOOD-FP **8.2**; the Mac uses patched **8.3**.
-* LISFLOOD-FP 8.3 has no Metal (GPU) support, so it runs on the CPU. HEC-RAS (the Runner's
-  *LISFLOOD-FP then HEC-RAS 2D* model) does not run on macOS.
+* LISFLOOD-FP 8.3 has a Metal (GPU) back end for its FV1 solver only. The installer builds it
+  when Apple's Metal compiler works (Xcode, then `xcodebuild -downloadComponent MetalToolchain`)
+  and leaves it out otherwise. The Runner does not ask for it, so its runs are on the CPU.
+  HEC-RAS (the Runner's *LISFLOOD-FP then HEC-RAS 2D* model) does not run on macOS.
 * Leave Hazard's *offline pack* setting empty (the run script passes the pack itself).
 * DWR-3161 (flagged road-fill structure) and DWR-4593 (breached) are not in the list.
 * If USGS 3DHP streams can't be downloaded (or the service answers an error or no
