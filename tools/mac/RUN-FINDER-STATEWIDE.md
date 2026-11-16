@@ -24,11 +24,14 @@ writes into one folder, `~/ND_Finder_Statewide`, and nowhere else. It downloads 
   it also looks in the suite data folder and pack location set in QGIS (DamSafety Core / the ND
   Data Updater, `damsafety` profile) and in `~/ND_Suite_Data`. It reads the format-2 pack
   `ND_Dam_Suite_Pack` (folders `hydro/`, `dwr/`, `roads/` ...: the three
-  `ND_Dam_Suite_Pack_part*.zip` downloads, or what Build offline pack writes). It cannot read the
+  `ND_Dam_Suite_Pack_part*.zip` downloads, or what Build offline pack writes). It finds each
+  layer the way the plugins do, through the pack's `manifest.json`, and under either name: the
+  downloaded pack calls the streams `3DHP_flowlines` and the barrier dams `SARP_dams`, a pack made
+  by Build offline pack `NHD_flowlines` and `ABI_dams`. It cannot read the
   older `nd_offline_pack` (one SQLite file); when that is all it finds, it says so. It also says
   when a pack is still being built, when not all three parts were unzipped into one folder, and
   when there is a pack in `~/Downloads`. To look yourself:
-  `find ~ -maxdepth 5 -name 3DHP_flowlines.gpkg`, then give `--data` the folder above `hydro`.
+  `find ~ -maxdepth 5 -name "*_flowlines.gpkg"`, then give `--data` the folder above `hydro`.
 * The Mac is on power. The script keeps it awake while it runs.
 * About 3 GB free on the Mac's own disk.
 
@@ -300,7 +303,7 @@ Not the `tiles` folder.
 | it says | do this |
 |---|---|
 | `the terrain file was not found ... The drive ... is not connected` | plug the SSD in; or give `--dem` |
-| `the ND data pack was not found` | read the lines under it (older pack, still being built, parts not unzipped, a pack in Downloads); else run `find ~ -maxdepth 5 -name 3DHP_flowlines.gpkg` and give `--data` the folder above `hydro` |
+| `the ND data pack was not found` | read the lines under it (older pack, still being built, parts not unzipped, a pack in Downloads); else run `find ~ -maxdepth 5 -name "*_flowlines.gpkg"` and give `--data` the folder above `hydro` |
 | `the DamSafety_Finder plugin was not found` | install the suite, or give `--plugins` with the folder that holds `DamSafety_Finder` |
 | `DamSafety_Finder ... is version 0.5.0; 0.6.0 or later is needed` | update the plugin |
 | `another run (process N ...) is using ...` | one is already running. If you are sure none is, delete `run.lock` in the output folder |

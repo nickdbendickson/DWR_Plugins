@@ -305,7 +305,7 @@ class PackLookup(unittest.TestCase):
             os.environ.pop(k, None)
 
     def pack(self, folder):
-        f = os.path.join(folder, *rfs.STREAMS.split("/"))
+        f = os.path.join(folder, *rfs.STREAMS[0].split("/"))
         os.makedirs(os.path.dirname(f), exist_ok=True)
         open(f, "w").close()
         return folder
@@ -339,6 +339,56 @@ class PackLookup(unittest.TestCase):
         self.assertEqual(data, os.path.realpath(os.path.join(self.home, "ND_Suite_Data")))
         self.assertTrue(rfs.find_pack(data).endswith("ND_Dam_Suite_Pack"))
 
+    def test_a_pack_made_by_build_offline_pack(self):
+        """DamSafety Data's builder keeps the names NHD_flowlines and ABI_dams (Nick's Mac, 2026-11-16:
+        a finished statewide build beside its _build work folder and nd_offline_pack)."""
+        base = os.path.join(self.home, "ND_Suite_Data")
+        pk = os.path.join(base, "ND_Dam_Suite_Pack")
+        rels = ["hydro/NHD_flowlines.gpkg", "roads/ND_roads_NG911.gpkg", "railroads/NARN_rail_lines.gpkg",
+                "dwr/DWR_dams.gpkg", "dwr/DWR_dam_lines.gpkg", "dwr/DWR_dugouts.gpkg",
+                "dwr/DWR_unknown_structures.gpkg", "hydro/NID_dams.gpkg", "barriers/ABI_dams.gpkg"]
+        for rel in rels:
+            f = os.path.join(pk, *rel.split("/"))
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            open(f, "w").close()
+        os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack_build"))
+        self.old_pack(base)
+        pack = rfs.find_pack(rfs.find_data(self.args()))
+        self.assertEqual(pack, os.path.realpath(pk))
+        got = rfs.pack_inputs(pack)
+        self.assertTrue(got["streams"].endswith(os.path.join("hydro", "NHD_flowlines.gpkg")))
+        self.assertTrue(got["known: SARP dams"].endswith(os.path.join("barriers", "ABI_dams.gpkg")))
+        # the newer name wins when both are there
+        open(os.path.join(pk, "hydro", "3DHP_flowlines.gpkg"), "w").close()
+        self.assertTrue(rfs.pack_inputs(pack)["streams"].endswith("3DHP_flowlines.gpkg"))
+        # a missing layer is named with both its names
+        os.remove(os.path.join(pk, "barriers", "ABI_dams.gpkg"))
+        with self.assertRaises(rfs.UserError) as cm:
+            rfs.pack_inputs(pack)
+        self.assertIn("barriers/SARP_dams.gpkg or barriers/ABI_dams.gpkg", str(cm.exception))
+
+    def test_layers_are_read_through_the_manifest_like_the_plugins(self):
+        pk = os.path.join(self.tmp, "mf", "ND_Dam_Suite_Pack")
+        for rel in ("hydro/3DHP_flowlines.gpkg", "hydro/NHD_flowlines.gpkg", "elsewhere/abi.gpkg"):
+            f = os.path.join(pk, *rel.split("/"))
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            open(f, "w").close()
+        man = {"datasets": {"3DHP_flowlines": {"file": "hydro/3DHP_flowlines.gpkg", "status": "failed"},
+                            "NHD_flowlines": {"file": "hydro/NHD_flowlines.gpkg", "status": "partial"},
+                            "ABI_dams": {"file": "elsewhere/abi.gpkg", "status": "complete"},
+                            "SARP_dams": {"file": "../../outside.gpkg", "status": "complete"}}}
+        with open(os.path.join(pk, "manifest.json"), "w") as fh:
+            json.dump(man, fh)
+        # a failed layer is not used even though its file is there; the other name is
+        self.assertTrue(rfs.pack_file(pk, rfs.STREAMS).endswith("NHD_flowlines.gpkg"))
+        # the manifest's file entry is followed; one that leaves the pack is not
+        self.assertTrue(rfs.pack_file(pk, dict((k[1], k[0]) for k in rfs.KNOWN)["SARP dams"])
+                        .endswith(os.path.join("elsewhere", "abi.gpkg")))
+        # no manifest entry: the plain path
+        self.assertEqual(rfs.pack_file(pk, ("hydro/NID_dams.gpkg",)), "")
+        open(os.path.join(pk, "hydro", "NID_dams.gpkg"), "w").close()
+        self.assertTrue(rfs.pack_file(pk, ("hydro/NID_dams.gpkg",)).endswith("NID_dams.gpkg"))
+
     def test_the_format1_pack_is_named_not_taken(self):
         """nd_offline_pack (one SQLite file) holds no hydro/: the error says it is the other kind."""
         self.old_pack(os.path.join(self.home, "ND_Suite_Data"))
@@ -361,7 +411,7 @@ class PackLookup(unittest.TestCase):
         os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack", "roads"))
         self.assertIn("not all of the pack's parts were unzipped", self.missing())
         os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack_build"))
-        self.assertIn("is still being built", self.missing())
+        self.assertIn("the build may still be running, or it ended without that layer", self.missing())
 
     def test_a_pack_in_downloads_is_shown_not_used(self):
         d = self.pack(os.path.join(self.home, "Downloads", "ND_Dam_Suite_Pack_part1", "ND_Dam_Suite_Pack"))
@@ -413,7 +463,7 @@ class PackLookup(unittest.TestCase):
 
     def test_no_pack_says_how_to_find_it(self):
         msg = self.missing()
-        self.assertIn("find ~ -maxdepth 5 -name 3DHP_flowlines.gpkg", msg)
+        self.assertIn('find ~ -maxdepth 5 -name "*_flowlines.gpkg"', msg)
         self.assertIn("still being built", msg)
 
     def test_an_unreadable_or_other_profile_settings_file(self):
@@ -1688,7 +1738,7 @@ class WholeRun(unittest.TestCase):
         self.pack = os.path.join(self.d, "ND_Suite_Data", "ND_Dam_Suite_Pack")
         s = osr.SpatialReference()
         s.ImportFromEPSG(4326)
-        for rel in [rfs.STREAMS, rfs.ROADS, rfs.RAILS] + [k[0] for k in rfs.KNOWN]:
+        for rel in [rfs.STREAMS[0], rfs.ROADS[0], rfs.RAILS[0]] + [k[0][0] for k in rfs.KNOWN]:
             p = os.path.join(self.pack, *rel.split("/"))
             os.makedirs(os.path.dirname(p), exist_ok=True)
             ds = ogr.GetDriverByName("GPKG").CreateDataSource(p)

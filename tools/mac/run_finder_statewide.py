@@ -219,13 +219,67 @@ WINDOW_MARGIN_M = 600.0                 # the terrain window is the tile + pad +
 EXTRACT_M = 4000.0                      # the vector extracts reach this far beyond the tile
 # The call the cloud test runs used (train6/run.py): Finder 0.6.0 defaults except these.
 CALL = {"cell": 3.0, "z_feet": False, "match_ft": 1000.0, "drainage_ac": 10.0, "hillshade": False}
-STREAMS = "hydro/3DHP_flowlines.gpkg"
-ROADS = "roads/ND_roads_NG911.gpkg"
-RAILS = "railroads/NARN_rail_lines.gpkg"
-KNOWN = (("dwr/DWR_dams.gpkg", "DWR dams"), ("dwr/DWR_dam_lines.gpkg", "DWR dam lines"),
-         ("dwr/DWR_dugouts.gpkg", "DWR dugouts"), ("dwr/DWR_unknown_structures.gpkg", "DWR unknown"),
-         ("hydro/NID_dams.gpkg", "NID dams"), ("barriers/SARP_dams.gpkg", "SARP dams"))
-COUNTIES = "boundaries/ND_counties.gpkg"
+# Each pack layer the run reads, as the file names it may have, first found wins. A pack from the
+# ND Data Updater (the downloaded ND_Dam_Suite_Pack_part*.zip) names its streams 3DHP_flowlines and
+# its barrier dams SARP_dams; a pack made by DamSafety Data's Build offline pack (pack_build) keeps
+# the names NHD_flowlines and ABI_dams for the same layers (damsuite.hydro3dhp / abi ALIASES).
+STREAMS = ("hydro/3DHP_flowlines.gpkg", "hydro/NHD_flowlines.gpkg")
+ROADS = ("roads/ND_roads_NG911.gpkg",)
+RAILS = ("railroads/NARN_rail_lines.gpkg",)
+KNOWN = ((("dwr/DWR_dams.gpkg",), "DWR dams"), (("dwr/DWR_dam_lines.gpkg",), "DWR dam lines"),
+         (("dwr/DWR_dugouts.gpkg",), "DWR dugouts"), (("dwr/DWR_unknown_structures.gpkg",), "DWR unknown"),
+         (("hydro/NID_dams.gpkg",), "NID dams"), (("barriers/SARP_dams.gpkg", "barriers/ABI_dams.gpkg"), "SARP dams"))
+COUNTIES = ("boundaries/ND_counties.gpkg",)
+
+
+USABLE = ("complete", "partial")        # damsuite.offline_pack.USABLE_STATUS
+
+
+def _manifest_datasets(pack):
+    """{data set name: entry} of the pack's manifest.json (format 2), {} without one."""
+    try:
+        with open(os.path.join(pack, "manifest.json"), encoding="utf-8") as fh:
+            m = json.load(fh)
+        ds = m.get("datasets") if isinstance(m, dict) else None
+        return ds if isinstance(ds, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _safe_rel(file):
+    """A manifest file entry that stays inside the pack folder, or "" (damsuite.gpkgpack._safe_rel)."""
+    f = str(file or "").replace("\\", "/")
+    parts = f.split("/")
+    if not f or f.startswith("/") or ":" in f or ".." in parts or "" in parts:
+        return ""
+    return f
+
+
+def pack_file(pack, names):
+    """The file of a pack layer, read the way the suite's pack reader (damsuite.gpkgpack) reads it:
+    names are its possible files (relative paths; the data set name is the file name without
+    .gpkg), first found wins. A data set the manifest lists is taken from the manifest's file entry
+    and only when its status is complete or partial (a failed or left-out layer is not used, as in
+    the plugins); one the manifest does not list, or a pack with no manifest, from its path. ""
+    when there is none."""
+    ds = _manifest_datasets(pack)
+    for rel in names:
+        e = ds.get(os.path.splitext(rel.split("/")[-1])[0])
+        if isinstance(e, dict):
+            r = _safe_rel(e.get("file"))
+            p = os.path.join(pack, *r.split("/")) if r else ""
+            if e.get("status") in USABLE and p and os.path.isfile(p):
+                return p
+            continue
+        p = os.path.join(pack, *rel.split("/"))
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def either(names):
+    """'a or b' of a layer's file names, for messages."""
+    return " or ".join(names)
 PACK_NAMES = ("ND_Dam_Suite_Pack",)
 # The script's own edge test, for the tiles of a Finder that has none (0.6.x). Finder 0.7.0 decides
 # it itself (the kind em.K_EDGE) and writes its own edge_ft; these two are then not used.
@@ -697,7 +751,7 @@ def _packs_in_downloads():
         return found
     for root, dirs, _files in os.walk(top):
         depth = root[len(top):].count(os.sep)
-        if os.path.basename(root) == PACK_NAMES[0] and os.path.isfile(os.path.join(root, STREAMS)):
+        if os.path.basename(root) == PACK_NAMES[0] and pack_file(root, STREAMS):
             found.append(root)
             dirs[:] = []
             continue
@@ -711,7 +765,8 @@ def _packs_in_downloads():
 
 
 def find_pack(data):
-    """The folder that holds hydro/3DHP_flowlines.gpkg (the format-2 pack, ND_Dam_Suite_Pack):
+    """The folder that holds the streams layer (hydro/3DHP_flowlines.gpkg, or hydro/NHD_flowlines.gpkg
+    in a pack made by Build offline pack): the format-2 pack, ND_Dam_Suite_Pack.
     $NDSUITE_PACK, <data>/ND_Dam_Suite_Pack, the data folder itself, then the pack location and the
     suite data folder set in the damsafety QGIS profile (ndsuite/pack_path, ndsuite/data_folder),
     then ~/ND_Suite_Data. When there is none, the error says what was found instead: the format-1
@@ -720,17 +775,19 @@ def find_pack(data):
     prof = profile_settings()
     cands, folders = _pack_candidates(data, prof)
     for c in cands:
-        if os.path.isfile(os.path.join(c, STREAMS)):
+        if pack_file(c, STREAMS):
             return c
     why = []
     for f in folders:
         p2 = os.path.join(f, PACK_NAMES[0])
         if os.path.isdir(os.path.join(f, PACK_NAMES[0] + "_build")):
-            why.append("{} is still being built (its work folder {}_build is there). Wait for the "
-                       "build to finish.".format(p2, PACK_NAMES[0]))
+            why.append("{} has no streams layer ({}) and the build's work folder {}_build is beside "
+                       "it: the build may still be running, or it ended without that layer (run "
+                       "it again: it resumes and fetches only what is missing).".format(
+                           p2, either(STREAMS), PACK_NAMES[0]))
         elif os.path.isdir(p2):
             why.append("{} is there but has no {}: not all of the pack's parts were unzipped into it "
-                       "(part 1 holds hydro/), or it is a pack that is still being built.".format(p2, STREAMS))
+                       "(part 1 holds hydro/), or it is a pack that is still being built.".format(p2, either(STREAMS)))
         old = _old_pack_in(f)
         if old:
             why.append("{} is the older offline pack (format 1: one SQLite file, nd_offline_pack). The "
@@ -750,25 +807,24 @@ def find_pack(data):
             lines.append(w)
     raise UserError(
         "the ND data pack was not found: no {} in any of {}.{} To find it: "
-        "find ~ -maxdepth 5 -name {} ; then give --data with the folder above 'hydro' (the pack "
+        "find ~ -maxdepth 5 -name \"*_flowlines.gpkg\" ; then give --data with the folder above 'hydro' (the pack "
         "folder itself), or the folder that holds the pack. A pack that is still being built has no "
-        "{} yet.".format(STREAMS, ", ".join(cands),
-                         "".join("\n  * " + w for w in lines) + ("\n" if lines else ""),
-                         os.path.basename(STREAMS), STREAMS))
+        "streams layer yet.".format(either(STREAMS), ", ".join(cands),
+                                    "".join("\n  * " + w for w in lines) + ("\n" if lines else "")))
 
 
 def pack_inputs(pack):
     """{role: path} of the pack layers the run reads; refuses when one is missing."""
     files = {"streams": STREAMS, "roads": ROADS, "rails": RAILS}
-    for rel, label in KNOWN:
-        files["known: " + label] = rel
+    for names, label in KNOWN:
+        files["known: " + label] = names
     out, missing = collections.OrderedDict(), []
-    for role, rel in files.items():
-        p = os.path.join(pack, *rel.split("/"))
-        if os.path.isfile(p):
+    for role, names in files.items():
+        p = pack_file(pack, names)
+        if p:
             out[role] = p
         else:
-            missing.append(rel)
+            missing.append(either(names))
     if missing:
         raise UserError("the pack {} lacks: {}".format(pack, ", ".join(missing)))
     return out
@@ -972,7 +1028,7 @@ def state_outline(a, pack):
     choice = (a.state_outline or "").strip()
     if choice.lower() == "none":
         return None, "none (fills outside North Dakota are kept; in_state is yes for all)"
-    counties = os.path.join(pack, *COUNTIES.split("/")) if pack else ""
+    counties = pack_file(pack, COUNTIES) if pack else ""
     mended = []
     if choice:
         if not os.path.exists(os.path.expanduser(choice)):
@@ -984,11 +1040,11 @@ def state_outline(a, pack):
             what += (" ({} polygon(s) in it cross themselves: mended before use, every part kept)"
                      .format(sum(mended)))
     elif counties and os.path.isfile(counties) and polygons_of(counties) is not None:
-        geom, what, buf = polygons_of(counties), "the pack's county boundaries ({})".format(COUNTIES), 0.0
+        geom, what, buf = polygons_of(counties), "the pack's county boundaries ({})".format(counties), 0.0
     else:
         geom, buf = builtin_outline(), BUILTIN_BUFFER_M
         what = ("the built-in simple outline of North Dakota (no --state-outline given and the pack "
-                "has no {})".format(COUNTIES))
+                "has no {})".format(either(COUNTIES)))
     if a.state_buffer_m is not None:
         buf = float(a.state_buffer_m)
     if buf:
@@ -999,12 +1055,12 @@ def state_outline(a, pack):
 def county_geom(a, pack):
     """The polygon (EPSG:5070) of --county NAME from --county-file or the pack's county layer."""
     _g, ogr, _s = gdal_mods()
-    path = a.county_file or os.path.join(pack, *COUNTIES.split("/"))
+    path = a.county_file or pack_file(pack, COUNTIES) or os.path.join(pack, *COUNTIES[0].split("/"))
     if not os.path.isfile(os.path.expanduser(path)):
         raise UserError(
             "--county {}: this pack has no county layer ({} is not there). Give --county-file FILE "
             "(any polygon file with a county name field), or use --bbox=W,S,E,N (lon / lat).".format(
-                a.county, COUNTIES))
+                a.county, either(COUNTIES)))
     path = real(path)
     want = a.county.strip().lower()
     if want.endswith(" county"):
@@ -1604,7 +1660,7 @@ def _run_tile(job, finder, work, parent, t0):
         n = extract(finder, src, dst, box)
         paths[role] = dst
         say("extract", role, n, "feature(s)")
-    known = [(paths["known: " + label], label, None) for _rel, label in KNOWN]
+    known = [(paths["known: " + label], label, None) for _names, label in KNOWN]
     gpkg = os.path.join(work, tid + ".gpkg")
     res = finder.run_embankments(dem_win, paths["streams"], gpkg, roads=paths["roads"], rails=paths["rails"],
                                  known=known, bbox=box, log=say, cancelled=orphaned, **CALL)
@@ -2793,7 +2849,7 @@ def parser():
     ap.add_argument("--bbox", default="", help="only the tiles that touch W,S,E,N (lon / lat degrees; or EPSG:5070 "
                                                "metres). Write it --bbox=-101.0,46.4,-100.5,46.8")
     ap.add_argument("--county", default="", help="only the tiles that touch this county (needs a county layer: the "
-                                                 "pack's {} or --county-file)".format(COUNTIES))
+                                                 "pack's {} or --county-file)".format(either(COUNTIES)))
     ap.add_argument("--county-file", default="", help="a polygon file with the county names, for --county")
     ap.add_argument("--limit", type=int, default=0, help="run at most N tiles in this run (a trial)")
     ap.add_argument("--list", action="store_true", help="list the tiles and what each would do; writes nothing")
