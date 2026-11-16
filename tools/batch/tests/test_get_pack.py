@@ -326,6 +326,16 @@ class RunScriptsTest(PackScratch):
         self.assertEqual(code, 0, out)
         self.assertIn("chosen outside the data folder", out)
         self.assertEqual(self.builds(), [])
+        # macOS keeps the profile's settings in qgis.org/QGIS3.ini (Qt's organisation domain)
+        mac = os.path.join(self.tmp, "mac-profiles", "damsafety", "qgis.org")
+        os.makedirs(mac)
+        with open(os.path.join(mac, "QGIS3.ini"), "w", encoding="utf-8") as fh:
+            fh.write("[ndsuite]\npack_path=%s\n" % other)
+        code, out = self.run_script("get_offline_pack.py",
+                                    DAMCHAIN_QGIS_PROFILES=os.path.join(self.tmp, "mac-profiles"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("chosen outside the data folder", out)
+        self.assertEqual(self.builds(), [])
         code, out = self.run_script("run_lisflood_44.py", "--only", "DWR-3034", "--redo",
                                     NDSUITE_PACK=os.path.join(self.tmp, "not there"))
         self.assertEqual(len(self.builds()), 1, "a chosen pack that does not exist is no pack")

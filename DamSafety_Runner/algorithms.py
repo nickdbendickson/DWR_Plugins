@@ -101,6 +101,22 @@ def _setting(key, default=""):
         return default
 
 
+def _suite_source_label(key):
+    """Where the suite value of `key` comes from, for the self-test report: a project entry, the
+    computer setting or the environment variable (suite_config.get reads them in that order)."""
+    try:
+        from .damsuite import suite_config as _sc
+        src = _sc.source(key)
+        env = _sc.ENV.get(key, "")
+    except Exception:                                            # noqa - a report label only
+        src, env = "", ""
+    if src == "project":
+        return "project setting NDDamSuite/" + key
+    if src == "env" and env:
+        return "environment variable " + env
+    return "suite setting ndsuite/" + key
+
+
 def _suite_setting(key, default=""):
     """The suite setting DamSafety Setup writes, read through the one suite store: a project
     override, the computer setting (QgsSettings 'ndsuite/<key>') or the environment variable.
@@ -113,6 +129,18 @@ def _suite_setting(key, default=""):
     except Exception:
         return default
 
+
+
+def _why_not_a_file(path):
+    """Why a set engine path cannot be used, in words: a link whose target is gone, a folder, or
+    nothing there at all."""
+    if os.path.islink(path) and not os.path.exists(path):
+        return "is a link to {}, which does not exist".format(os.path.realpath(path))
+    if os.path.isdir(path):
+        return "is a folder, not a program"
+    if os.path.lexists(path) or os.path.exists(os.path.realpath(path)):
+        return "is not a file"
+    return "does not exist"
 
 
 def _line_midpoint(part):
@@ -899,6 +927,53 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             if found:
                 py = os.path.realpath(found)
         return py
+
+    def engine_sources(self, parameters, context, exe, py):
+        """3.20.7: where the LISFLOOD-FP and ANUGA paths in use came from, for the self-test report
+        and the installation check: (lisflood source, anuga source, problems). find_lisflood /
+        find_anuga take the first set path (this tool's field, then the suite setting, then the
+        Processing option) and auto-detect another one when it is not a file, silently. On a Mac
+        with an older install the report showed the old LISFLOOD-FP and ANUGA env "used" while the
+        settings named the new ones, with no hint which source had won. `problems` has one line
+        for each set path that was NOT used because it is not a file on this computer."""
+        from .core import lisflood as lfmod
+        problems = []
+        lf_set = [(self._str(parameters, "LISFLOOD_EXE", context), "this tool's LISFLOOD-FP field"),
+                  (_suite_setting("lisflood_exe"), _suite_source_label("lisflood_exe")),
+                  (_setting(SET_LISFLOOD), "Processing option " + SET_LISFLOOD)]
+        an_set = [(self._str(parameters, "ANUGA_PYTHON", context), "this tool's ANUGA field"),
+                  (_setting(SET_ANUGA), "Processing option " + SET_ANUGA)]
+        flag = "Processing option {} (built-in engine)".format(SET_BUILTIN)
+
+        def builtin(used):
+            return bool(used) and os.path.abspath(used) == os.path.abspath(lfmod.BUILTIN_EXE)
+
+        def source(pairs, used, real):
+            first = next(((v, w) for v, w in pairs if v), None)
+            if first is None:
+                if real and builtin(used):                   # review: the flag, not detection
+                    return flag
+                return "auto-detected (no path set)" if used else "none set, none found"
+            v, w = first
+            if real and str(v).strip().lower() in lfmod.BUILTIN_WORDS:
+                return w + " (built-in engine)"
+            ok = os.path.isfile(v if real else os.path.realpath(v))
+            if ok:
+                return w
+            name = "LISFLOOD-FP" if real else "ANUGA Python"
+            same = used == (v if real else os.path.realpath(v))
+            if not used or same:
+                # review: find_lisflood / find_anuga hand the set path back when nothing else is
+                # found, so it is still the one in use; it was not auto-detected
+                problems.append("{} set to {} ({}) {}; nothing else was found, so the runs still "
+                                "use this path and will fail.".format(name, v, w, _why_not_a_file(v)))
+                return "{} (path is not a file; nothing auto-detected)".format(w)
+            problems.append("{} set to {} ({}) {}; using {} instead.".format(
+                name, v, w, _why_not_a_file(v), used))
+            if real and builtin(used):
+                return flag + ": the {} path is not a file".format(w)
+            return "auto-detected: the {} path is not a file".format(w)
+        return source(lf_set, exe, True), source(an_set, py, False), problems
 
     def run_settings(self, parameters, context, method=None, need_models=True):
         g = lambda n: self.parameterAsDouble(parameters, n, context)
@@ -2949,7 +3024,8 @@ class CheckAlgorithm(_Base):
         import tempfile
         exe = self.find_lisflood(parameters, context)
         py = self.find_anuga(parameters, context)
-        lines = []
+        lf_src, an_src, problems = self.engine_sources(parameters, context, exe, py)
+        lines = ["PROBLEM " + n for n in problems]
         with tempfile.TemporaryDirectory(prefix="ndbreach_check_") as tmp:
             if not exe:
                 lines.append("PROBLEM LISFLOOD-FP not found. Build it with "

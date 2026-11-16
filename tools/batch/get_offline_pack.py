@@ -77,7 +77,10 @@ def chosen_packs():
         for prof in names:
             ini = configparser.RawConfigParser(strict=False)
             try:
-                ini.read(os.path.join(root, prof, "QGIS", "QGIS3.ini"), encoding="utf-8")
+                # QGIS/ on Linux and Windows, qgis.org/ on macOS (Qt's organisation domain);
+                # read both, the macOS one last so it wins where both exist
+                ini.read([os.path.join(root, prof, sub, "QGIS3.ini") for sub in ("QGIS", "qgis.org")],
+                         encoding="utf-8")
                 v = ini.get("ndsuite", "pack_path", fallback="")
             except (configparser.Error, OSError, UnicodeDecodeError):
                 continue
