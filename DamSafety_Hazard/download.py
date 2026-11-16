@@ -22,7 +22,7 @@ import hashlib
 import gzip
 import itertools
 import threading
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtNetwork import QNetworkRequest
@@ -35,10 +35,11 @@ except ImportError:                          # pragma: no cover
     QgsSettings = None
 
 from .compat import NET_NO_ERROR, MSG_WARNING, MSG_INFO, enum_value
+from . import constants as C             # read at call time (data-source file overrides)
 from .constants import (
     NSI_API_URL, DOWNLOAD_TILE_DEG, ARCGIS_PAGE_SIZE, ARCGIS_MAX_PAGES,
     DOWNLOAD_FOLDER_NAME, ND_ADDRESS_POINTS_URL, USA_STRUCTURES_URL,
-    NID_URL, NID_MIRROR_URL, OVERPASS_URL, HTTP_USER_AGENT,
+    NID_URL, NID_MIRROR_URL, HTTP_USER_AGENT,
     NBI_URL, DOWNLOAD_WORKERS, OVERPASS_WORKERS,
 )
 from .helpers import log_message, CancelledByUser
@@ -93,11 +94,28 @@ def http_get_bytes(url, user_agent=None, timeout_s=None):
     with _HTTP_SLOTS:
         err = req.get(qreq, True)
     if enum_value(err) != enum_value(NET_NO_ERROR):
-        raise DownloadError(req.errorMessage() or "network error")
+        raise DownloadError(_with_host(req.errorMessage() or "network error", url))
     content = req.reply().content()
     if isinstance(content, (bytes, bytearray)):
         return bytes(content)
     return bytes(content.data())
+
+
+def _host_of(url):
+    """The server name of an address ("" when it has none)."""
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _with_host(msg, url):
+    """The error text with the server's name, e.g. "SSL handshake failed
+    (overpass-api.de)" - Qt's TLS / connection errors do not say which server."""
+    host = _host_of(url)
+    if not host or host in msg:
+        return msg
+    return "{} ({})".format(msg, host)
 
 
 # ---------------------------------------------------------------- parallel --
@@ -567,6 +585,10 @@ STALE_USED = []
 # run and reported into run.log / run.sources, so a truncated inventory is visible on the record
 # (log_message alone never reaches the report).
 INCOMPLETE_USED = []
+# Overpass queries answered by a backup server (constants.OVERPASS_MIRRORS) this run:
+# [(why the servers before it failed, server used)]. Cleared with STALE_USED at the start of
+# every run and reported into run.log / run.sources (a mirror's OSM copy can lag the main one).
+OVERPASS_MIRROR_USED = []
 
 
 def _stale_cache(path):
@@ -1839,8 +1861,63 @@ def _fetch_osm_lifelines_live(extent_4326, path):
     return _load(path, "OSM lifelines"), len(feats), path
 
 
+def _overpass_hosts():
+    """The Overpass servers in the order they are tried: OVERPASS_URL (the
+    data-source file's, when it sets one) first, then OVERPASS_MIRRORS. Read at
+    call time so an override applies. A data-source file that sets its own
+    OVERPASS_URL (an internal / approved server) gets no public backups unless
+    it also sets OVERPASS_MIRRORS."""
+    first = C.OVERPASS_URL
+    over = getattr(C, "SOURCE_OVERRIDES", None) or {}
+    if "OVERPASS_URL" in over and "OVERPASS_MIRRORS" not in over:
+        return [first]
+    return [first] + [u for u in (getattr(C, "OVERPASS_MIRRORS", None) or [])
+                      if u and u != first]
+
+
 def _overpass_get(query):
-    url = OVERPASS_URL + "?" + urlencode({"data": query})
+    """One Overpass query. A server that fails (TLS / connection error, busy,
+    partial result) is followed by the next of _overpass_hosts(); the error
+    names every server tried when none answers. A query too big for the study
+    area (timed out / out of memory) is also tried on each server - their limits
+    and load differ - so such a failure takes up to one try per server."""
+    failed = []
+    for base in _overpass_hosts():
+        url = base + "?" + urlencode({"data": query})
+        try:
+            data = _overpass_get_one(url)
+        except CancelledByUser:
+            raise
+        except NotInPack:
+            raise                            # offline mode: no server is asked
+        except DownloadError as e:
+            # each error names its server; Qt's HTTP errors repeat the whole address
+            failed.append(_with_host(str(e).replace(url, base), base))
+            continue
+        if failed:
+            used = _host_of(base) or base
+            log_message("Overpass: no answer ({}) - {} used instead".format(
+                "; ".join(failed), used), MSG_WARNING)
+            OVERPASS_MIRROR_USED.append(("; ".join(failed), used))
+        return data
+    raise DownloadError("Overpass: no server answered - {}".format("; ".join(failed)))
+
+
+def overpass_mirror_lines():
+    """[(run-log line, data-source line)] for the Overpass backups used this run,
+    one per distinct failure / server."""
+    out = []
+    for why, used in OVERPASS_MIRROR_USED:
+        line = (">>> WARNING: OpenStreetMap: the Overpass server did not answer ({}) - backup "
+                "server {} used; its OpenStreetMap copy can be slightly behind".format(why, used),
+                "OpenStreetMap (Overpass API): backup server {} used this run - the main server "
+                "did not answer ({})".format(used, why))
+        if line not in out:
+            out.append(line)
+    return out
+
+
+def _overpass_get_one(url):
     with _OVERPASS_SLOTS:                    # the public Overpass API allows few at once
         data = http_get_json(url, user_agent=HTTP_USER_AGENT)
     remark = data.get("remark") if isinstance(data, dict) else None

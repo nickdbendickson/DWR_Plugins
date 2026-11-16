@@ -84,6 +84,11 @@ POOL_SHALLOW_M = 0.1          # v3.12.10: fill that counts in a shallow pool aga
 POOL_TOUCH_M = 60.0           # v3.12.10: a pool this close to the dam line (or point) is its own
 INFLOW_MAX_FROM_DAM_M = 150.0  # v3.12.10: the inflow search never goes further from the dam line
 INFLOW_FAR = "CHECK THE INFLOW POINT"
+INFLOW_DEEP_FACTOR = 1.3      # v3.20.8: a warning only (the pick is kept): the automatic
+                              # inflow's ground is more than this times the dam height below the
+                              # top of dam (DWR-3034, no dam line: 53.3 ft below the 30.7 ft
+                              # dam's top, 1.74 H, maybe a deeper coulee beside the dam)
+INFLOW_DEEP = "CHECK THE INFLOW DEPTH"
 
 
 def dam_distance(X, Y, dam_xy, crest_line=None):
