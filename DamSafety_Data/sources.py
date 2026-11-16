@@ -16,15 +16,30 @@ SOURCE_INFO = _US.source_info(PACK_INFO)
 
 
 def pack_source(config, info):
-    """The pack source, or None when no pack was built in the Build offline pack folder."""
+    """The pack source, or None when no pack was built in the Build offline pack folder.
+
+    1.11.2: else the folder of the pack the plugins read (`pack_active`, either format's
+    folder), when Build offline pack made it. A pack built from Terminal (python -m
+    DamSafety_Data.pack_build, the installer's build-offline-pack.sh) never recorded its folder
+    in the window's setting, so "Check for updates now" did not look after it, and the window
+    refuses to write into the pack in use: there was no way left to update it in place."""
+    import os
     from . import packsource as PS
+    cands = []
     out = (config.get("pack_out") or "").strip()
-    if not out:
-        return None
-    try:
-        if not PS.built_here(out):
-            return None
-    except Exception:                                            # noqa: BLE001 - no GDAL etc.
+    if out:
+        cands.append(out)
+    active = (config.get("pack_active") or "").strip()
+    if active:
+        cands.append(os.path.dirname(os.path.normpath(active)))
+    for c in cands:
+        try:
+            if PS.built_here(c):
+                out = c
+                break
+        except Exception:                                        # noqa: BLE001 - no GDAL etc.
+            continue
+    else:
         return None
     return PS.DataPackSource(
         "pack", info["pack"][0], out, refresh_days=config.get("pack_refresh_days"),
@@ -35,5 +50,6 @@ def pack_source(config, info):
 def build_sources(config, merger=None):
     """config keys: enabled (dict id->bool), usa_structures_url, nsi_interval_days,
     nsi_mode ("merged", "nsi2026", "nsi2022"), nsi_match_m, pack_out (the Build offline pack
-    folder), pack_refresh_days, pack_dwr_folder, pack_hifld_folder."""
+    folder), pack_active (the pack the plugins read; its folder is used when pack_out holds no
+    pack built here), pack_refresh_days, pack_dwr_folder, pack_hifld_folder."""
     return _US.build_sources(config, merger=merger, pack=pack_source, info=SOURCE_INFO)
