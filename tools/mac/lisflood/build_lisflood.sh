@@ -17,7 +17,8 @@
 #   --apple-clang   compile with Apple's clang (Command Line Tools) instead of conda-forge clang
 #   --metal MODE    macOS: the Metal (GPU) back end of the FV1 solver: auto | on | off  [auto]
 #                   auto = build it when Apple's Metal compiler works on this Mac, else leave
-#                   it out and say how to get it; on = stop if it cannot be built
+#                   it out and say how to get it, and when it then fails to compile build
+#                   again without it; on = stop if it cannot be built
 #
 # Metal: the 8.3 source builds a Metal back end on every Mac ("if (APPLE)"), and its kernels
 # need Apple's `metal` compiler, which is NOT part of the Command Line Tools and, from Xcode 26,
@@ -34,7 +35,8 @@
 # Source: Zenodo record 13121119 (doi 10.5281/zenodo.13121119), LISFLOOD-FP-8.3.zip,
 # 73,900,738 bytes, sha256 below. Nothing is run except `lisflood -version`.
 # Logs: OUT/src/lisflood-logs/<compiler>-cmake_{configure,build}.log, one pair per compiler,
-# so a failed first attempt's logs survive the installer's Apple-clang retry.
+# so a failed first attempt's logs survive the installer's Apple-clang retry; a build with the
+# Metal back end logs to <compiler>-metal-cmake_{configure,build}.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LF_URL="https://zenodo.org/records/13121119/files/LISFLOOD-FP-8.3.zip?download=1"
@@ -56,7 +58,7 @@ while [ $# -gt 0 ]; do
     --patcher) PATCHER="$2"; shift 2 ;;
     --apple-clang) APPLE=1; shift ;;
     --metal) METAL="$2"; shift 2 ;;
-    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) echo "build_lisflood.sh: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -151,8 +153,7 @@ fi
 LOGDIR="$OUT/src/lisflood-logs"; mkdir -p "$LOGDIR"
 sed 's/set(_NETCDF 1)/set(_NETCDF 0)/' "$SRC/config.default.cmake" > "$SRC/nd-breach.cmake"
 CM=(-S "$SRC" -B "$SRC/build-nd" -D_CONFIG="$SRC/nd-breach.cmake" -DCMAKE_BUILD_TYPE=Release
-    -DCMAKE_CUDA_COMPILER=CMAKE_CUDA_COMPILER-NOTFOUND -DCMAKE_PREFIX_PATH="$EP"
-    -DNDBREACH_ENABLE_METAL="$METAL_FLAG")
+    -DCMAKE_CUDA_COMPILER=CMAKE_CUDA_COMPILER-NOTFOUND -DCMAKE_PREFIX_PATH="$EP")
 if [ "$OS" = Darwin ]; then
   SDK="$(xcrun --show-sdk-path 2>/dev/null || true)"
   [ -n "$SDK" ] || die "macOS SDK not found. Install Apple's Command Line Tools: xcode-select --install"
@@ -178,10 +179,37 @@ else
        -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,$EP/lib")
   TAG=linux-gcc
 fi
-CFG_LOG="$LOGDIR/$TAG-cmake_configure.log"; BLD_LOG="$LOGDIR/$TAG-cmake_build.log"
 say "compiler: $CXX_  (jobs $JOBS)"
-"$EP/bin/cmake" "${CM[@]}" > "$CFG_LOG" 2>&1 || { tail -30 "$CFG_LOG" >&2; die "cmake configure failed ($TAG; log $CFG_LOG)"; }
-"$EP/bin/cmake" --build "$SRC/build-nd" -j "$JOBS" --target lisflood > "$BLD_LOG" 2>&1 || { tail -30 "$BLD_LOG" >&2; die "compile failed ($TAG; log $BLD_LOG)"; }
+# show_errors LOG: the compiler's own error lines (with -j they are rarely in the last lines
+# of the log), then the end of the log
+show_errors() {
+  grep -n -A6 -E '(^|[ :])(fatal )?error[: ]' "$1" 2>/dev/null | head -60 >&2 || true
+  echo "  ... end of $1:" >&2; tail -15 "$1" >&2
+}
+# build_once ON|OFF LOGTAG: configure and compile in a fresh build folder; 0 when it compiled
+build_once() {
+  local metal="$1" cfg="$LOGDIR/$2-cmake_configure.log" bld="$LOGDIR/$2-cmake_build.log"
+  rm -rf "$SRC/build-nd"
+  "$EP/bin/cmake" "${CM[@]}" -DNDBREACH_ENABLE_METAL="$metal" > "$cfg" 2>&1 \
+    || { tail -30 "$cfg" >&2; die "cmake configure failed ($2; log $cfg)"; }
+  BLD_LOG="$bld"
+  "$EP/bin/cmake" --build "$SRC/build-nd" -j "$JOBS" --target lisflood > "$bld" 2>&1
+}
+if [ "$METAL_FLAG" = ON ]; then
+  if build_once ON "$TAG-metal"; then :
+  elif [ "$METAL" = on ]; then
+    show_errors "$BLD_LOG"; die "compile failed with the Metal back end ($TAG; log $BLD_LOG)"
+  else
+    # --metal auto: the Metal back end is an extra. When it does not compile on this Mac,
+    # build the same source without it instead of ending with no LISFLOOD-FP at all.
+    show_errors "$BLD_LOG"
+    say "the Metal (GPU) back end did not compile (log $BLD_LOG): building WITHOUT it (CPU / OpenMP only)"
+    METAL_FLAG=OFF
+    build_once OFF "$TAG" || { show_errors "$BLD_LOG"; die "compile failed ($TAG; log $BLD_LOG)"; }
+  fi
+else
+  build_once OFF "$TAG" || { show_errors "$BLD_LOG"; die "compile failed ($TAG; log $BLD_LOG)"; }
+fi
 BIN="$SRC/build-nd/lisflood"
 [ -x "$BIN" ] || die "no binary at $BIN"
 grep -aq inittm_depth "$BIN" || die "the built binary has no inittm_depth (patch not compiled in)"
