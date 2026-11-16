@@ -43,7 +43,7 @@ def table_on_grid(kind, level, n=TM11.DRAW_POINTS):
 
 
 # ---------------------------------------------------------------- Core: the table is untouched --
-SHA_BEFORE = "2fb490ca2f08"            # table_sha256() of the signed-off table (Core 1.5.1)
+SHA_BEFORE = "2fb490ca2f08"  # pragma: allowlist secret  (table_sha256() of the signed-off table, Core 1.5.1)
 check("table_sha256 unchanged", TM11.table_sha256().startswith(SHA_BEFORE), TM11.table_sha256())
 check("table check() clean", TM11.check() == [], TM11.check())
 CURVES_BEFORE = copy.deepcopy(TM11.CURVES)
