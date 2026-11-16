@@ -101,6 +101,22 @@ def _setting(key, default=""):
         return default
 
 
+def _suite_source_label(key):
+    """Where the suite value of `key` comes from, for the self-test report: a project entry, the
+    computer setting or the environment variable (suite_config.get reads them in that order)."""
+    try:
+        from .damsuite import suite_config as _sc
+        src = _sc.source(key)
+        env = _sc.ENV.get(key, "")
+    except Exception:                                            # noqa - a report label only
+        src, env = "", ""
+    if src == "project":
+        return "project setting NDDamSuite/" + key
+    if src == "env" and env:
+        return "environment variable " + env
+    return "suite setting ndsuite/" + key
+
+
 def _suite_setting(key, default=""):
     """The suite setting DamSafety Setup writes, read through the one suite store: a project
     override, the computer setting (QgsSettings 'ndsuite/<key>') or the environment variable.
@@ -923,14 +939,20 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         from .core import lisflood as lfmod
         problems = []
         lf_set = [(self._str(parameters, "LISFLOOD_EXE", context), "this tool's LISFLOOD-FP field"),
-                  (_suite_setting("lisflood_exe"), "suite setting ndsuite/lisflood_exe"),
+                  (_suite_setting("lisflood_exe"), _suite_source_label("lisflood_exe")),
                   (_setting(SET_LISFLOOD), "Processing option " + SET_LISFLOOD)]
         an_set = [(self._str(parameters, "ANUGA_PYTHON", context), "this tool's ANUGA field"),
                   (_setting(SET_ANUGA), "Processing option " + SET_ANUGA)]
+        flag = "Processing option {} (built-in engine)".format(SET_BUILTIN)
+
+        def builtin(used):
+            return bool(used) and os.path.abspath(used) == os.path.abspath(lfmod.BUILTIN_EXE)
 
         def source(pairs, used, real):
             first = next(((v, w) for v, w in pairs if v), None)
             if first is None:
+                if real and builtin(used):                   # review: the flag, not detection
+                    return flag
                 return "auto-detected (no path set)" if used else "none set, none found"
             v, w = first
             if real and str(v).strip().lower() in lfmod.BUILTIN_WORDS:
@@ -938,9 +960,18 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             ok = os.path.isfile(v if real else os.path.realpath(v))
             if ok:
                 return w
+            name = "LISFLOOD-FP" if real else "ANUGA Python"
+            same = used == (v if real else os.path.realpath(v))
+            if not used or same:
+                # review: find_lisflood / find_anuga hand the set path back when nothing else is
+                # found, so it is still the one in use; it was not auto-detected
+                problems.append("{} set to {} ({}) {}; nothing else was found, so the runs still "
+                                "use this path and will fail.".format(name, v, w, _why_not_a_file(v)))
+                return "{} (path is not a file; nothing auto-detected)".format(w)
             problems.append("{} set to {} ({}) {}; using {} instead.".format(
-                "LISFLOOD-FP" if real else "ANUGA Python", v, w, _why_not_a_file(v),
-                used or "nothing (none found)"))
+                name, v, w, _why_not_a_file(v), used))
+            if real and builtin(used):
+                return flag + ": the {} path is not a file".format(w)
             return "auto-detected: the {} path is not a file".format(w)
         return source(lf_set, exe, True), source(an_set, py, False), problems
 

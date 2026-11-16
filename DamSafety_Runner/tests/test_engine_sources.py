@@ -85,13 +85,20 @@ def engine_sources_reports_a_set_path_that_is_not_a_file():
             assert len(problems) == 2, problems
             assert gone in problems[0] and "does not exist" in problems[0] and old_lf in problems[0]
             assert "ANUGA Python set to" in problems[1] and old_py in problems[1]
-            # a link whose target is gone says so
-            restore2 = _with({}, {algs.SET_LISFLOOD: dangling})
+            # a link whose target is gone says so. Nothing else found: find_lisflood hands the
+            # set path back, so it is still the one in use, not "auto-detected" (review)
+            restore2 = _with({}, {algs.SET_LISFLOOD: dangling, algs.SET_ANUGA: dangling})
             try:
-                problems = _Alg().engine_sources({}, None, "", "")[2]
+                lf_src, an_src, problems = _Alg().engine_sources(
+                    {}, None, dangling, os.path.realpath(dangling))
                 assert "is a link to" in problems[0] and "does not exist" in problems[0], problems
                 assert "is a folder" not in problems[0]
-                assert "using nothing (none found)" in problems[0]
+                assert "nothing else was found, so the runs still use this path" in problems[0]
+                assert "instead" not in problems[0]
+                assert lf_src == "Processing option {} (path is not a file; nothing auto-detected)".format(
+                    algs.SET_LISFLOOD), lf_src
+                assert an_src.endswith("(path is not a file; nothing auto-detected)"), an_src
+                assert "auto-detected:" not in lf_src + an_src
             finally:
                 restore2()
             # a folder named as the program
@@ -121,6 +128,55 @@ def engine_sources_nothing_set():
             restore2()
     finally:
         restore()
+
+
+@test
+def engine_sources_builtin_by_the_provider_flag_is_named():
+    """review: the built-in engine chosen by NDBREACH_USE_BUILTIN is not 'auto-detected'."""
+    from nd_breach_runner.core import lisflood as lfmod
+    restore = _with({}, {algs.SET_BUILTIN: "1"})
+    try:
+        src, _a, problems = _Alg().engine_sources({}, None, lfmod.BUILTIN_EXE, "")
+        assert src == "Processing option {} (built-in engine)".format(algs.SET_BUILTIN), src
+        assert problems == []
+    finally:
+        restore()
+    restore = _with({"lisflood_exe": "/gone/lisflood"}, {algs.SET_BUILTIN: "1"})
+    try:
+        src, _a, problems = _Alg().engine_sources({}, None, lfmod.BUILTIN_EXE, "")
+        assert src.startswith("Processing option {} (built-in engine): the ".format(algs.SET_BUILTIN)), src
+        assert len(problems) == 1 and "/gone/lisflood" in problems[0] and lfmod.BUILTIN_EXE in problems[0]
+    finally:
+        restore()
+
+
+@test
+def engine_sources_says_where_the_suite_value_came_from():
+    """review: suite_config reads a project entry, then the computer setting, then the
+    environment variable NDBREACH_LISFLOOD; the label names the one that gave the value."""
+    from nd_breach_runner.damsuite import suite_config as sc
+    old_source, old_env = sc.source, os.environ.get("NDBREACH_LISFLOOD")
+    with tempfile.TemporaryDirectory() as t:
+        (lf,) = _files(t, "bin/lisflood")
+        restore = _with({"lisflood_exe": lf}, {})
+        try:
+            for got, label in (("env", "environment variable NDBREACH_LISFLOOD"),
+                               ("project", "project setting NDDamSuite/lisflood_exe"),
+                               ("computer", "suite setting ndsuite/lisflood_exe"),
+                               ("", "suite setting ndsuite/lisflood_exe")):
+                sc.source = lambda key, project=None, g=got: g
+                assert _Alg().engine_sources({}, None, lf, "")[0] == label, (got, label)
+            # and with the real lookup: only the environment variable is set
+            sc.source = old_source
+            os.environ["NDBREACH_LISFLOOD"] = lf
+            assert algs._suite_source_label("lisflood_exe") == "environment variable NDBREACH_LISFLOOD"
+        finally:
+            sc.source = old_source
+            if old_env is None:
+                os.environ.pop("NDBREACH_LISFLOOD", None)
+            else:
+                os.environ["NDBREACH_LISFLOOD"] = old_env
+            restore()
 
 
 @test
