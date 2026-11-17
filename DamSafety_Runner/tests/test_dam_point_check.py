@@ -481,7 +481,12 @@ def dpc_point_on_the_pond_is_moved_to_the_embankment():
     feat = out["geojson"]["features"][0]
     assert feat["properties"]["used"] is True
     assert np.allclose(feat["geometry"]["coordinates"], pc["embankment"]["line_xy"], atol=0.01)
-    assert rep.get("qa_maps", {}).get("point_check") is True, rep.get("qa_maps")
+    # the overlay is always worked out; the flag says it was drawn, so it is set exactly when
+    # the inflow map was written (the fast CI job has no plotting library and writes no map)
+    from nd_breach_runner.core import qa_maps as QA
+    assert QA.point_check_overlay(pc, (-120.0, 0.0)) is not None
+    qa = rep.get("qa_maps", {})
+    assert qa.get("point_check") is (True if qa.get("inflow_map") else None), qa
     # HEC-RAS and the products get the modelled point
     assert workflow.hecras_dam_xy(out["res"], (-120.0, 0.0)) == (mx, my)
     assert pc["dem"]["resampling"] == dpc.RESAMPLING_SOURCE
