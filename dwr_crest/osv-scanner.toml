@@ -19,3 +19,14 @@ reason = "better-auth 1.7 migration pending; affected feature not used"
 id = "GHSA-44jh-23m7-hpcf"
 ignoreUntil = 2027-02-01
 reason = "better-auth / adapters 1.7 migration pending; low severity"
+
+# picomatch 4.0.7 ReDoS (GHSA-fc5q-39xc-vjpf, CVSS 8.7). picomatch is a build-time
+# glob matcher pulled only by the dev/build toolchain (vite, unplugin, tinyglobby,
+# @tanstack/start-plugin-core); it is not in crest's shipped web/desktop bundle and is
+# never handed an attacker-controlled glob pattern, so the ReDoS is not reachable at
+# runtime. No fixed version is published yet (osv-scanner: "0 vulnerabilities can be
+# fixed"). Revisit by ignoreUntil to pick up a patched release.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-02-01
+reason = "picomatch ReDoS; build-time-only glob matcher, not reachable with untrusted patterns at runtime; no fix available"

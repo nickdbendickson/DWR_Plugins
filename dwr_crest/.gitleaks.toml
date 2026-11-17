@@ -2,5 +2,8 @@
 useDefault = true
 
 [allowlist]
-description = "detect-secrets baselines store hashed_secret values (SHA-1 of already-reviewed false positives), not secrets"
-paths = ['''(^|/)\.secrets\.baseline$''']
+description = "Generated hash manifests, not secrets: detect-secrets baselines store SHA-1 hashed_secret values of already-reviewed false positives, and the desktop bundle's build-info.json stores SHA-256 source-content hashes (one per source file, e.g. the crest-token.ts entry whose filename trips the generic-api-key keyword rule)."
+paths = [
+  '''(^|/)\.secrets\.baseline$''',
+  '''(^|/)build-info\.json$''',
+]
