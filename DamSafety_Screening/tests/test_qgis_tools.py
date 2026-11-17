@@ -12,8 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))          # parent of the plugin package
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
-                       make_layer, QgsVectorFileWriter, QgsApplication)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
+                       make_layer, QgsVectorFileWriter)
 from qgis import processing  # noqa: E402
 from osgeo import gdal  # noqa: E402
 import nd_dam_screening as pkg  # noqa: E402

@@ -1,5 +1,5 @@
 """Report builder: PNG encoder, per-dam page, statewide summary and review queue."""
-import os, sys, zlib, struct, tempfile, csv
+import os, sys, struct, tempfile, csv
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core import report as rp, gridutil as gu  # noqa: E402

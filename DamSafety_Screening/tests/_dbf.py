@@ -1,4 +1,4 @@
-import struct, datetime
+import struct
 def read_dbf(path):
     with open(path, "rb") as f:
         hd = f.read(32)

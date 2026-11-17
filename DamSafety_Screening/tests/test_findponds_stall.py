@@ -9,7 +9,6 @@ find ponds').
 - a progress line every HEARTBEAT_S seconds, and a warning saying why nothing was written.
 Simulated GDAL and QGIS: the CRS part is checked on the box in a real QGIS (see the PR).
 """
-import math
 import os
 import shutil
 import sys

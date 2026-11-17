@@ -2,7 +2,6 @@
 
 Run: python3 tests/test_ponds.py   (no QGIS needed)
 """
-import math
 import os
 import sys
 
