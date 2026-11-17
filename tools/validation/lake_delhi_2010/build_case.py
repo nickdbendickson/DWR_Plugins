@@ -185,10 +185,14 @@ def breach_hours(ob, start=START_CDT):
 
 
 def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None, manning_n=None,
-            lines=None, tier=None):
+            lines=None, tier=None, nlcd=None, formation_hr=None):
     """{run name: configuration} for ndbreach_cli.py. lines: {"roads": path, "rail": path}
     relative to the case folder (the crest burn and the gmsh breaklines); tier: the Runner's
-    model tier (None = LISFLOOD-FP only, its default)."""
+    model tier (None = LISFLOOD-FP only, its default). nlcd: an NLCD land cover raster
+    relative to the case folder; the Runner turns its classes into Manning's n with its own
+    table (core/nd_data.NLCD_N), manning_n (or the shared default) where it has no class.
+    formation_hr: the as_observed breach forms in this many hours instead of the observed
+    2.17 (a study of the peak outflow; the width stays the observed one)."""
     dam = ob["dam"]
     t_breach, t_form = breach_hours(ob)
     sim_hr = sim_hr if sim_hr else hours_between(START_CDT, END_CDT)
@@ -215,6 +219,8 @@ def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None
     }
     if manning_n:                    # left out: the suite's shared default (0.06) is used
         base["manning"] = {"n": float(manning_n)}
+    if nlcd:
+        base.setdefault("manning", {})["nlcd"] = nlcd
     for kind, key in (("roads", "receptor_roads"), ("rail", "receptor_rail")):
         if (lines or {}).get(kind):
             base["layers"][key] = lines[kind]
@@ -226,12 +232,12 @@ def configs(ob, out, dam_xy, cell_m=30.0, threads=0, sim_hr=None, inflow_xy=None
         cfg["breach"] = {"method": "overtopping", "overrides": {}}
         if name == "as_observed":
             cfg["breach"]["overrides"] = {"avg_width_ft": ob["breach"]["largest_width_ft"],
-                                          "formation_hr": round(t_form, 3)}
+                                          "formation_hr": round(formation_hr or t_form, 3)}
         cfg["output"] = {"folder": os.path.join("runs", name)}
         cfg["_run"] = ("The Runner works out the breach from the dam's height and storage."
                        if name == "blind" else
                        "The breach is {:g} ft wide and forms in {:.2f} h, as observed.".format(
-                           ob["breach"]["largest_width_ft"], t_form))
+                           ob["breach"]["largest_width_ft"], formation_hr or t_form))
         runs[name] = cfg
     return runs
 
@@ -312,6 +318,48 @@ def get_terrain(ob, folder, say=print, fetch=fetch):
         os.remove(p)
     say("terrain: {} ({} x {} cells, {:.0f} to {:.0f} m)".format(dem, nx, ny, lo, hi))
     return dem
+
+
+# ---------------------------------------------------------------------------- land cover
+NLCD_WCS = "https://www.mrlc.gov/geoserver/mrlc_download/wcs"
+NLCD_ORIGIN = 15.0                 # the NLCD grid in EPSG:5070: x, y = 15 + 30 k
+
+
+def nlcd_url(box, year):
+    """The MRLC WCS request for the NLCD land cover of `year` over `box` (EPSG:5070), widened
+    to whole NLCD cells."""
+    lo = [NLCD_ORIGIN + 30.0 * math.floor((v - NLCD_ORIGIN) / 30.0) for v in box[:2]]
+    hi = [NLCD_ORIGIN + 30.0 * math.ceil((v - NLCD_ORIGIN) / 30.0) for v in box[2:]]
+    q = [("service", "WCS"), ("request", "GetCoverage"), ("version", "2.0.1"),
+         ("coverageId", "mrlc_download__NLCD_{}_Land_Cover_L48".format(int(year))),
+         ("subset", "X({:.0f},{:.0f})".format(lo[0], hi[0])),
+         ("subset", "Y({:.0f},{:.0f})".format(lo[1], hi[1])), ("format", "image/geotiff")]
+    return NLCD_WCS + "?" + urllib.parse.urlencode(q)
+
+
+def get_nlcd(ob, out, year, say=print, fetch=fetch):
+    """inputs/nlcd_<year>_5070.tif: NLCD land cover over the terrain box (classes, 30 m).
+    Returns the path relative to the case folder."""
+    rel = os.path.join("inputs", "nlcd_{}_5070.tif".format(int(year)))
+    path = os.path.join(out, rel)
+    if os.path.isfile(path):
+        say("land cover: already there ({})".format(path))
+        return rel
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    for attempt in (1, 2, 3):
+        try:
+            raw = fetch(nlcd_url(ob["terrain"]["box"], year))
+            if raw[:4] not in (b"II*\x00", b"MM\x00*"):
+                raise OSError("the MRLC service did not send a picture")
+            break
+        except OSError as e:
+            if attempt == 3:
+                raise SystemExit("build_case: the NLCD download failed ({})".format(e))
+            time.sleep(5 * attempt)
+    with open(path, "wb") as f:
+        f.write(raw)
+    say("land cover: NLCD {} ({:.1f} MB)".format(year, len(raw) / 1e6))
+    return rel
 
 
 # ---------------------------------------------------------------------------- road and rail
@@ -430,6 +478,13 @@ def main(argv=None):
     ap.add_argument("--manning-n", type=float, default=None,
                     help="one Manning's n for the whole valley (default: the suite's shared "
                          "default, 0.06)")
+    ap.add_argument("--nlcd-year", type=int, default=None,
+                    help="Manning's n from NLCD land cover of this year (2001 to 2021; 2011 is the "
+                         "nearest to the flood), downloaded from MRLC; --manning-n then sets n "
+                         "only where the land cover has no class")
+    ap.add_argument("--formation-hr", type=float, default=None,
+                    help="the as_observed breach forms in this many hours (default: the observed "
+                         "2.17). 7 brings the peak outflow to the panel's 69,000 cfs")
     ap.add_argument("--no-terrain", action="store_true", help="do not download the terrain")
     ap.add_argument("--lines", action="store_true",
                     help="fetch the road and rail centrelines (Census TIGER) for the crest burn "
@@ -446,16 +501,20 @@ def main(argv=None):
         get_terrain(ob, os.path.join(out, "terrain"))
     lines = get_lines(ob, out) if (args.lines or args.anuga) else None
     tier = "lisflood+anuga" if args.anuga else None
+    nlcd = get_nlcd(ob, out, args.nlcd_year) if args.nlcd_year else None
     xy = to_5070(ob["dam"]["lon"], ob["dam"]["lat"])
     runs = configs(ob, out, xy, args.cell, args.threads, args.hours,
-                   to_5070(*ob["dam"]["outflow_point"]), args.manning_n, lines, tier)
+                   to_5070(*ob["dam"]["outflow_point"]), args.manning_n, lines, tier,
+                   nlcd, args.formation_hr)
     for name, cfg in runs.items():
         with open(os.path.join(out, name + ".json"), "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=1)
     factor = INFLOW_FACTOR if args.inflow_factor is None else args.inflow_factor
     t_breach, t_form = breach_hours(ob)
     case = {"case": ob["case"], "time_zero_cdt": START_CDT, "inflow_factor": round(factor, 4),
-            "inflow_lag_hr": args.inflow_lag_hr, "manning_n": args.manning_n, "inflow_peak_cfs": round(max(q for _t, q in rows)),
+            "inflow_lag_hr": args.inflow_lag_hr, "manning_n": args.manning_n,
+            "nlcd": nlcd, "formation_hr_as_run": args.formation_hr,
+            "inflow_peak_cfs": round(max(q for _t, q in rows)),
             "gates_at_top_of_dam_cfs": round(gates_cfs(ob, ob["dam"]["top_of_dam_ft_ngvd29"])),
             "breach_starts_hr": round(t_breach, 3), "breach_formation_hr_as_observed": round(t_form, 3),
             "surface_area_top_ac": round(surface_area_top_ac(ob), 1), "cell_m": args.cell,

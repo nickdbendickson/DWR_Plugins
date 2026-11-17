@@ -23,7 +23,7 @@ on:
       engine:
         description: "lisflood: the three LISFLOOD-FP runs; anuga: the observed breach with ANUGA on the gmsh mesh; both"
         type: choice
-        options: [lisflood, anuga, both]
+        options: [lisflood, anuga, both, roughness]
         default: lisflood
   pull_request:
     paths:
@@ -41,7 +41,9 @@ concurrency:
 jobs:
   lake-delhi-2010:
     name: Lake Delhi Dam 2010 (LISFLOOD-FP)
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.engine != 'anuga'
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      (github.event.inputs.engine != 'anuga' && github.event.inputs.engine != 'roughness')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     defaults:
@@ -146,6 +148,101 @@ jobs:
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/gauge_*.csv
             ${{ runner.temp }}/delhi/runs/*/*/_breach_model/breach_hydrograph.csv
             ${{ runner.temp }}/delhi/runs/*/*/WSE (Max).tif
+
+  # The roughness study (by hand with engine "roughness", or on a pull request whose title holds
+  # "[roughness]"): the observed breach four more ways, side by side, to tell how much of the
+  # high bias at the bridges is the Manning's n and how much is the breach's peak outflow.
+  #   nlcd   Manning's n from NLCD 2011 land cover with the Runner's own table (core/nd_data.NLCD_N)
+  #   n05    one n of 0.05
+  #   n035   one n of 0.035
+  #   slow   n 0.06, the breach formed in 7 h: the peak outflow is the panel's 69,000 cfs
+  lake-delhi-2010-roughness:
+    name: Lake Delhi Dam 2010 (LISFLOOD-FP, roughness study)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.engine == 'roughness') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[roughness]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      CELL: ${{ github.event.inputs.cell || '30' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      - name: Build the four cases
+        run: |
+          b="python tools/validation/lake_delhi_2010/build_case.py --cell $CELL --threads 1"
+          $b --out "$RUNNER_TEMP/d_nlcd" --nlcd-year 2011
+          for c in d_n05 d_n035 d_slow; do
+            mkdir -p "$RUNNER_TEMP/$c"; ln -s "$RUNNER_TEMP/d_nlcd/terrain" "$RUNNER_TEMP/$c/terrain"
+          done
+          $b --out "$RUNNER_TEMP/d_n05" --no-terrain --manning-n 0.05
+          $b --out "$RUNNER_TEMP/d_n035" --no-terrain --manning-n 0.035
+          $b --out "$RUNNER_TEMP/d_slow" --no-terrain --formation-hr 7
+      - name: Run the observed breach four ways with LISFLOOD-FP
+        run: |
+          cli="$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py"
+          cases="d_nlcd d_n05 d_n035 d_slow"
+          for c in $cases; do
+            ( cd "$RUNNER_TEMP/$c"; rc=0
+              python "$cli" run as_observed.json --lisflood "$HOME/lisflood-nd/lisflood" \
+                > as_observed.log 2>&1 || rc="$?"
+              echo "$rc" > "$RUNNER_TEMP/$c.rc" ) &
+          done
+          wait
+          bad=0
+          for c in $cases; do
+            echo "::group::$c (exit $(cat "$RUNNER_TEMP/$c.rc"))"
+            grep -v "^\[ *[0-9]*%\]" "$RUNNER_TEMP/$c/as_observed.log" | tail -n 40
+            grep -h "manningfile\|fpfric" "$RUNNER_TEMP/$c"/runs/as_observed/IA01297/_breach_model/lisflood/*.par || true
+            echo "::endgroup::"
+            [ "$(cat "$RUNNER_TEMP/$c.rc")" = "0" ] || bad=1
+          done
+          [ "$bad" = "0" ]
+      - name: Score against the surveyed high-water marks
+        if: always()
+        run: |
+          for c in d_nlcd d_n05 d_n035 d_slow; do
+            python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/$c" --runs as_observed || true
+            { printf '\n---\n\n# %s\n\n' "$c"
+              cat "$RUNNER_TEMP/$c/Lake_Delhi_2010_Score.md"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Keep the scores
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-delhi-2010-roughness
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/d_*/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/d_*/*.json
+            ${{ runner.temp }}/d_*/*.log
+            ${{ runner.temp }}/d_*/runs/*/*/_breach_model/gauge_*.csv
+            ${{ runner.temp }}/d_*/runs/*/*/_breach_model/breach_hydrograph.csv
 
   # LISFLOOD-FP + ANUGA on the gmsh mesh needs more than GitHub's 6-hour job: up to eight legs
   # run one after another (lake-delhi-anuga-leg.yml), each going on from the last one's
