@@ -2115,10 +2115,16 @@ def download_dwr_shapefiles(dest_folder, log=None, bbox=None, fmt="shp", only=No
         os.replace(zpath + ".part", zpath)
         sub = os.path.join(dest_folder, name)
         os.makedirs(sub, exist_ok=True)
+        from . import zipsafe
         try:
             with zipfile.ZipFile(zpath) as zf:
-                zf.extractall(sub)
+                # Cap the unpacked size and reject any member that would escape sub (the download is a
+                # network response, so it is untrusted: a bomb or a zip-slip entry must not get through).
+                zipsafe.extract(zf, sub, zipsafe.MAX_DATASET_BYTES)
                 names = zf.namelist()
+        except zipsafe.ZipRefused as ex:
+            log("  {} refused (unsafe or too large): {}".format(qlay, ex))
+            continue
         except zipfile.BadZipFile:
             log("  {} is not a zip ({} bytes)".format(qlay, len(raw)))
             continue
