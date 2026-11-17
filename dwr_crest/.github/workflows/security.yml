@@ -55,5 +55,5 @@ jobs:
           grep ' gitleaks_8.30.1_linux_x64.tar.gz$' gl.sums | sed 's/gitleaks_8.30.1_linux_x64.tar.gz/gl.tgz/' | sha256sum -c -
           tar xzf gl.tgz gitleaks
       - name: gitleaks (full history)
-        # Allowlist: .gitleaks.toml + .gitleaksignore
+        # Allowlist: .gitleaks.toml
         run: ./gitleaks git . --no-banner --redact --config .gitleaks.toml
