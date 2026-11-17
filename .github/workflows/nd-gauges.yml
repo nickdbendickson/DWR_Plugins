@@ -1,0 +1,105 @@
+name: Manning's n at ND streamgages
+
+# A study, not a gate: for each North Dakota streamgage in tools/validation/nd_gauges/gauges.json,
+# the measured open-water flood discharge is run steady through a 17 km reach (USGS 3DEP 1 m
+# terrain averaged to 10 m cells) with LISFLOOD-FP, through the Runner's own LISFLOOD-FP code,
+# at several Manning's n and with n from NLCD land cover. The model stage at the gauge is
+# compared with the stage measured with that discharge. The table is in the summary of the
+# "score" job. By hand from the Actions tab, or on a pull request that changes the study.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/validation/nd_gauges/**"
+      - ".github/workflows/nd-gauges.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nd-gauges-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reach:
+    name: ${{ matrix.gauge }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        gauge: [USGS-05116000, USGS-05117500, USGS-05120000, USGS-06335500, USGS-06336000, USGS-06348300, USGS-05090000]
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      # the same key as model-tests in ci.yml, so they share one build
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      - name: Build the reach (NHD river line, 3DEP 1 m terrain, NLCD)
+        run: python tools/validation/nd_gauges/reach.py build ${{ matrix.gauge }} --out "$RUNNER_TEMP/nd/${{ matrix.gauge }}"
+      # five runs, four side by side (a runner has four cores), one thread each
+      - name: Run n 0.035, 0.04, 0.05, 0.06 and NLCD
+        run: |
+          r="python tools/validation/nd_gauges/reach.py run $RUNNER_TEMP/nd/${{ matrix.gauge }} --lisflood $HOME/lisflood-nd/lisflood --threads 1"
+          $r --n 0.035 > n035.log 2>&1 & $r --n 0.04 > n040.log 2>&1 & $r --n 0.05 > n050.log 2>&1 & $r --n 0.06 > n060.log 2>&1 &
+          wait
+          $r --nlcd --threads 4 > nlcd.log 2>&1 || true
+          for f in n035 n040 n050 n060 nlcd; do echo "::group::$f"; grep -v -i warn $f.log | tail -n 20; echo "::endgroup::"; done
+          cat "$RUNNER_TEMP"/nd/${{ matrix.gauge }}/runs/*/result.json
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nd-gauge-${{ matrix.gauge }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/nd/${{ matrix.gauge }}/reach.json
+            ${{ runner.temp }}/nd/${{ matrix.gauge }}/runs/*/result.json
+
+  score:
+    needs: reach
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -q numpy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nd-gauge-*
+          path: nd
+      - name: Score
+        run: |
+          for d in nd/nd-gauge-*; do mv "$d" "nd/${d#nd/nd-gauge-}"; done
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import sys; sys.argv=["x"]
+          sys.path.insert(0, "tools/validation/nd_gauges")
+          import reach
+          reach.score("nd", say=print)
+          PY

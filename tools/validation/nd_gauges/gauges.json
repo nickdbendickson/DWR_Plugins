@@ -1,0 +1,26 @@
+{
+ "what_this_is": "USGS streamgages in North Dakota with a measured open-water flood discharge (a field measurement: discharge and mean gage height taken together, May to October, control clear or debris, no ice). Each measurement is a surveyed flood stage at a known flow: the model, given that flow, should reproduce that stage. Values from the USGS Water Data API (api.waterdata.usgs.gov, collections field-measurements and monitoring-locations), read 2026-11-17. Gage datum is the station's current datum; stage elevation = datum + gage height.",
+ "gauges": [
+  {"id": "USGS-05116000", "name": "Souris River near Foxholm", "river": "Souris River", "lon": -101.505, "lat": 48.372222,
+   "datum_ft": 1562.04, "datum": "NAVD88", "drainage_mi2": 9470, "median_annual_peak_cfs": 444,
+   "measured": {"time_utc": "2011-06-25T13:26", "q_cfs": 26400, "gage_height_ft": 22.42, "control": "Clear", "rated": "Good"}},
+  {"id": "USGS-05117500", "name": "Souris River above Minot", "river": "Souris River", "lon": -101.370833, "lat": 48.245833,
+   "datum_ft": 1546.88, "datum": "NAVD88", "drainage_mi2": 10600, "median_annual_peak_cfs": 918,
+   "measured": {"time_utc": "2011-06-25T18:04", "q_cfs": 26600, "gage_height_ft": 24.32, "control": "Debris - Moderate", "rated": "Fair"}},
+  {"id": "USGS-05120000", "name": "Souris River near Verendrye", "river": "Souris River", "lon": -100.729167, "lat": 48.159722,
+   "datum_ft": 1466.23, "datum": "NAVD88", "drainage_mi2": 11300, "median_annual_peak_cfs": 1240,
+   "measured": {"time_utc": "2011-06-30T08:52", "q_cfs": 21200, "gage_height_ft": 18.32, "control": "Clear", "rated": "Fair"}},
+  {"id": "USGS-06335500", "name": "Little Missouri River at Marmarth", "river": "Little Missouri River", "lon": -103.9175, "lat": 46.297778,
+   "datum_ft": 2688.11, "datum": "NAVD88", "drainage_mi2": 4670, "median_annual_peak_cfs": 6850,
+   "measured": {"time_utc": "2011-05-22T16:45", "q_cfs": 32000, "gage_height_ft": 19.45, "control": "Clear", "rated": "Good"}},
+  {"id": "USGS-06336000", "name": "Little Missouri River at Medora", "river": "Little Missouri River", "lon": -103.532283, "lat": 46.916842,
+   "datum_ft": 2246.62, "datum": "NAVD88", "drainage_mi2": 6210, "median_annual_peak_cfs": 8100,
+   "measured": {"time_utc": "2011-05-25T16:40", "q_cfs": 35600, "gage_height_ft": 20.23, "control": "Clear", "rated": "Fair"}},
+  {"id": "USGS-06348300", "name": "Heart River at Stark Bridge near Judson", "river": "Heart River", "lon": -101.213611, "lat": 46.703333,
+   "datum_ft": 1721.3, "datum": "NAVD88", "drainage_mi2": 2940, "median_annual_peak_cfs": 1560,
+   "measured": {"time_utc": "2011-06-15T14:52", "q_cfs": 6170, "gage_height_ft": 12.83, "control": "Clear", "rated": "Fair"}},
+  {"id": "USGS-05090000", "name": "Park River at Grafton", "river": "Park River", "lon": -97.411667, "lat": 48.424722,
+   "datum_ft": 812.07, "datum": "NAVD88", "drainage_mi2": 684, "median_annual_peak_cfs": 1430,
+   "measured": {"time_utc": "2013-05-01T14:43", "q_cfs": 5980, "gage_height_ft": 16.08, "control": "Clear", "rated": "Fair"}}
+ ]
+}
