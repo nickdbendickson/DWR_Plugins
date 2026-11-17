@@ -123,7 +123,7 @@ def _load_nodata_sample():
 
 NDS = _load_nodata_sample()
 
-MODULE_VERSION = "1.4.1"
+MODULE_VERSION = "1.4.2"
 POLICY = "North Dakota Dam Safety Standards Policy REG_05.2026, Sections 5.2 and 5.3"
 CHART_REFERENCE = ("Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                    "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), "
@@ -1250,6 +1250,22 @@ def finding_rows(c):
     return [{k: getattr(f, k) for k in FINDING_COLUMNS} for f in c.findings]
 
 
+def _drawn_zones(chart):
+    """(judgment, high) polygons the review figure DRAWS (1.4.2, Nick 2026-11-16): for the shipped
+    chart (its polygons are the table's) smooth lines through the same table
+    (damsuite.tm11_curves.drawn_polygons), so the digitizing steps no longer show as kinks.
+    Zones are still decided on the table. A chart file of other polygons, or an older DamSafety
+    Core without drawn_polygons, is drawn as given."""
+    fn = getattr(TM11, "drawn_polygons", None)
+    try:
+        if fn is not None and chart.table_mismatch_ft() <= 1e-6:
+            p = fn(chart.table_kind)
+            return p["judgment"], p["high"]
+    except Exception:                                                # noqa: BLE001
+        pass
+    return chart.judgment, chart.high
+
+
 def chart_svg(chart, structures=(), width=560, height=380, title=None):
     """SVG of one danger chart with its zones and the structures on it (review figure)."""
     ml, mr, mt, mb = 56, 16, 30, 44
@@ -1257,6 +1273,7 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
     sx = lambda v: ml + W * min(v, chart.v_max_fts) / chart.v_max_fts
     sy = lambda d: mt + H - H * min(d, chart.d_max_ft) / chart.d_max_ft
     poly = lambda p: " ".join("{:.1f},{:.1f}".format(sx(v), sy(d)) for v, d in p)
+    judgment, high = _drawn_zones(chart)
     out = ['<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" '
            'font-family="Helvetica,Arial,sans-serif" font-size="11">'.format(width, height),
            '<rect width="100%" height="100%" fill="#ffffff"/>',
@@ -1264,8 +1281,8 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
                ml, _esc(title or chart.title)),
            '<rect x="{}" y="{}" width="{}" height="{}" fill="#c4e0ad" stroke="#555"/>'.format(
                ml, mt, W, H),
-           '<polygon points="{}" fill="#f9f4a3" stroke="#b58400"/>'.format(poly(chart.judgment)),
-           '<polygon points="{}" fill="#ef9897" stroke="#a3271c"/>'.format(poly(chart.high))]
+           '<polygon points="{}" fill="#f9f4a3" stroke="#b58400"/>'.format(poly(judgment)),
+           '<polygon points="{}" fill="#ef9897" stroke="#a3271c"/>'.format(poly(high))]
     for i in range(6):
         v = chart.v_max_fts * i / 5.0
         d = chart.d_max_ft * i / 5.0
