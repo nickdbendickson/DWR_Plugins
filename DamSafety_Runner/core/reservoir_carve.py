@@ -572,10 +572,16 @@ def carve_cell(radius_m):
     return min(max(2.0 * radius_m / math.sqrt(MAX_CELLS), CELL_MIN_M), CELL_MAX_M)
 
 
-def downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy, cell, log=None):
+def downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy, cell, log=None, info=None):
     """(unit vector, how): the downstream side the run already uses for the inflow
     (terrain.downstream_direction on the pool grid, as workflow._downstream_inflow), else the
-    direction from the dam point to the inflow point."""
+    direction from the dam point to the inflow point. 3.20.12 (review): as there, the water
+    test does not override a dry reservoir (a substantial dry closed basin) on the other side of
+    the line, nor larger lower water there: the old rule's side is kept and `info` (a dict)
+    gets "side_conflict" with both readings (run_hook warns CHECK THE INFLOW SIDE). When the
+    water's side is taken against the old rules, `info` gets "side_conflict" too (kind
+    terrain.CONFLICT_WATER_KEPT) and run_hook warns the same way."""
+    info = {} if info is None else info
     from . import terrain
     from . import dam_point_check as dpc
     log = log or (lambda m: None)
@@ -586,9 +592,23 @@ def downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy, cell, log=No
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
-        d, how = terrain.downstream_direction(pool_grid, dam_xy, h_m,
-                                              crest_line=getattr(dam, "crest_line_xy", None),
-                                              top_m=top_m)
+        line = getattr(dam, "crest_line_xy", None)
+        wgrid = None
+        if line is not None and len(line) >= 2:
+            # 3.20.12: the reservoir's flat water decides a dam line's side, as in
+            # workflow._downstream_inflow
+            try:
+                fn = getattr(terrain_src, "native_cell_m", None)
+                native = fn() if fn is not None else None
+            except Exception:                 # noqa: BLE001
+                native = None
+            try:
+                wgrid = terrain.water_window(terrain_src.read, line, native)
+            except Exception as e:            # noqa: BLE001
+                log("Flat water round the dam line not read ({}).".format(e))
+        d, how = terrain.downstream_direction(
+            pool_grid, dam_xy, h_m, crest_line=line, top_m=top_m, water_grid=wgrid, info=info,
+            surface_ac=getattr(dam, "surface_area_top_ac", None), water_read=terrain_src.read)
     except Exception as e:                    # noqa: BLE001
         d, how = None, "downstream direction failed: {}".format(e)
     if d is None and inflow_xy is not None:
@@ -612,9 +632,25 @@ def run_hook(st, dam, dam_xy, inflow_xy, terrain_src, raw_terrain, model_dir, re
     try:
         h_m, top_m = float(dam.dam_height_ft) * FT, float(dam.top_of_dam_ft) * FT
         how = "the run's downstream side"
+        side = {}
         if downstream is None:
             downstream, how = downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy,
-                                             min(float(getattr(st, "cell_size_m", 10.0)), 20.0), log)
+                                             min(float(getattr(st, "cell_size_m", 10.0)), 20.0),
+                                             log, info=side)
+            if side.get("side_conflict"):
+                from . import terrain
+                c = side["side_conflict"]
+                if c.get("kind") == terrain.CONFLICT_WATER_KEPT:
+                    msg = ("{}: reservoir carve: {}. The carve took the side away from that "
+                           "water as downstream. Check the carve depth map.".format(
+                               terrain.INFLOW_SIDE, terrain.side_conflict_text(c)))
+                else:
+                    msg = ("{}: reservoir carve: the reservoir's flat water and the pool / "
+                           "ground rules disagree on the downstream side of the dam line; the "
+                           "carve kept {} ({}). Check the carve depth map.".format(
+                               terrain.INFLOW_SIDE, how, c.get("why")))
+                warnings.insert(0, msg)
+                log(msg)
         if downstream is None:
             report[REPORT_KEY] = {"mode": mode, "applied": False,
                                   "why": "the downstream side of the dam is not known ({})".format(how)}
@@ -632,6 +668,8 @@ def run_hook(st, dam, dam_xy, inflow_xy, terrain_src, raw_terrain, model_dir, re
                          crest_line=getattr(dam, "crest_line_xy", None), radius_m=rad)
         rep = res["report"]
         rep["downstream_how"] = how
+        if side.get("side_conflict"):
+            rep["side_conflict"] = side["side_conflict"]
         if inflow_xy is not None:
             v = (inflow_xy[0] - dam_xy[0], inflow_xy[1] - dam_xy[1])
             rep["inflow_on_downstream_side"] = bool(v[0] * downstream[0] + v[1] * downstream[1] > 0)

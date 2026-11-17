@@ -2460,6 +2460,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                     "nearest ground at the top of dam within {:.0f} m.".format(
                                         search_rad))
             report["inflow_point"] = {"xy": list(inflow_xy), "how": why}
+            # 3.20.12: how the downstream side was decided (terrain.SIDE_* codes) and the
+            # inflow water check
+            for k in ("side_how", "side_water", "water_check"):
+                if ai["ds_info"].get(k) is not None:
+                    report["inflow_point"][k] = ai["ds_info"][k]
             if not toe_pick:             # v3.20.8: a toe-band pick is the toe by design
                 _inflow_depth_check(local, inflow_xy, h_m, top_m, top_from_dem, warnings, log,
                                     has_line=toe_kw["toe_line"] is not None and len(
@@ -4439,6 +4444,205 @@ def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band
                                    max_from_dam_m=min(cap, hi + 60.0), dam_xy=dam_xy)
 
 
+def _water_window(terrain_src, line, pad_m=None, cover_xy=None):
+    """3.20.12: terrain.water_window on the run's terrain (its own cell when coarser)."""
+    return terrain.water_window(terrain_src.read, line, terrain_native_cell(terrain_src),
+                                pad_m=pad_m, cover_xy=cover_xy)
+
+
+def _covers(g, xy):
+    if g is None or xy is None:
+        return False
+    r, c = g.rc(xy[0], xy[1])
+    return 2 <= r < g.ny - 2 and 2 <= c < g.nx - 2
+
+
+def _side_conflict_warning(conflict, warnings, log):
+    """3.20.12 (review): terrain.downstream_direction kept the old rule's side against the
+    water test (info "side_conflict": a dry reservoir with a pond below the dam, or a small pond
+    higher than larger water on the other side), or (lead) took the water's side against the old
+    rules (kind terrain.CONFLICT_WATER_KEPT): CHECK THE INFLOW SIDE with both readings, first
+    in "Things to check". Returns the record for run_report.json
+    inflow_point.water_check.side_conflict (with the warning), or None."""
+    if not conflict:
+        return None
+    if conflict.get("kind") == terrain.CONFLICT_WATER_KEPT:
+        # 3.20.12 (lead): the water's side, against the old rules: kept, never silently
+        msg = ("{}: {}. The run took the side away from that water as downstream. Look at "
+               "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+                   terrain.INFLOW_SIDE, terrain.side_conflict_text(conflict)))
+        warnings.insert(0, msg)
+        log(msg)
+        return dict(conflict, warning=msg)
+    if conflict.get("kind") == terrain.CONFLICT_NO_OTHER_RULE and \
+            str(conflict.get("why", "")).startswith("the pool / ground rules could not be run"):
+        # 3.20.12 (final review): the old rules raised; the water's side, unchecked
+        msg = ("{}: {}. The run took the side away from that water as downstream. Look at "
+               "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+                   terrain.INFLOW_SIDE, conflict["why"]))
+        warnings.insert(0, msg)
+        log(msg)
+        return dict(conflict, warning=msg)
+    kept, water = conflict.get("kept") or {}, conflict.get("water") or {}
+    msg = ("{}: the reservoir's flat water and the pool / ground rules disagree on the downstream "
+           "side of the dam line; the run kept {} ({}). The water test reads: {}. Check "
+           "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+               terrain.INFLOW_SIDE, "the pool / ground rule's side"
+               if kept.get("side_how") != terrain.SIDE_WATER else "the higher water's side",
+               kept.get("how"), conflict.get("why") or water.get("why")))
+    warnings.insert(0, msg)
+    log(msg)
+    return dict(conflict, warning=msg)
+
+
+def _flip_blocked(pool_grid, pmask, side_how, toe_line, dam_xy, xy2, lvl):
+    """3.20.12 (review): why the inflow water check must not move the pick to `xy2` on the
+    other side of the dam line, or None: it is in the pool (pool_mask, `pmask`) that decided the
+    side (terrain.SIDE_POOL / SIDE_POOL_POINT), or in a closed depression of `pool_grid` whose
+    fill brings it to `lvl` (the first pick's water) or above (a dry reservoir behind the dam,
+    not its toe)."""
+    if pool_grid is None or xy2 is None:
+        return None
+    r, c = pool_grid.rc(xy2[0], xy2[1])
+    if not pool_grid.inside(r, c):
+        return None
+    if pmask is not None and side_how in (terrain.SIDE_POOL, terrain.SIDE_POOL_POINT):
+        dec = terrain.pool_at_dam(pmask, pool_grid, dam_xy, toe_line)
+        if dec[r, c]:
+            return "its toe is in the pool behind the dam that decided the side"
+    z = pool_grid.masked()
+    filled = terrain.priority_flood(z)
+    f = filled[r, c] - z[r, c]
+    if np.isfinite(f) and f > terrain.POOL_SHALLOW_M and filled[r, c] >= lvl:
+        return ("its toe is in a closed depression that fills to {:.1f} ft, above that "
+                "water".format(filled[r, c] / FT))
+    return None
+
+
+def _inflow_water_check(terrain_src, toe_line, direction, how, xy, why, h_m, top_m, pool,
+                        dam_xy, band_m, cell_m, max_from_dam_m, wgrid, warnings, log, out,
+                        pool_grid=None, pmask=None, side_how=None):
+    """3.20.12, the inflow water check (Nick, 2026-11-17: the breach inflow landed on the
+    reservoir with a dam line given): after the side is chosen, a toe-band pick on
+    hydro-flattened water no more than terrain.INFLOW_WATER_DROP x H below the top of dam that
+    touches the dam line on the inflow's side (terrain.inflow_water_hit) may be the reservoir.
+      - The other side holds higher flat water against the line (by WATER_LEVEL_TIE_M), not
+        much smaller (terrain.WATER_SIDE_AREA_RATIO): the inflow's water is below the reservoir
+        (a lake at the toe): kept.
+      - Else the toe band on the other side: used when its pick is not on such water itself and
+        its ground is at least WATER_LEVEL_TIE_M below the first pick's water (that water is
+        then held up by the dam); a warning says so. When that ground is at least
+        WATER_LEVEL_TIE_M above the water, the dam does not hold the water up (a lake at the
+        toe, DWR-5420): kept.
+      - Else (the other side found nothing, is on flat water too, or its toe is within
+        WATER_LEVEL_TIE_M of the water: DWR-3161, one level both sides; review: or its toe is
+        in the pool that decided the side, or in a closed depression filling to that water or
+        above, a dry reservoir: _flip_blocked) kept, with a CHECK THE INFLOW SIDE warning
+        (first in "Things to check").
+    Recorded in `out` (run_report.json inflow_point): water_check, and side_how
+    terrain.SIDE_FLIPPED on a flip. Returns (xy, why, direction, how), changed only on a flip.
+    Never stops the run."""
+    rec = {}
+    try:
+        g = wgrid if _covers(wgrid, xy) else _water_window(terrain_src, toe_line, cover_xy=xy)
+        hit = terrain.inflow_water_hit(g, toe_line, direction, h_m, top_m, xy)
+    except Exception as e:                       # noqa: BLE001
+        rec = {"ok": None, "why": "not checked: {}: {}".format(type(e).__name__, e)}
+        hit = None
+    if out is not None:
+        out["water_check"] = rec
+    if hit is None:
+        if not rec:
+            rec.update(ok=True, on_water=False)
+        return xy, why, direction, how
+    lvl, tie = hit["level_m"], terrain.WATER_LEVEL_TIE_M
+    rec.update(ok=False, on_water=True, level_ft=round(lvl / FT, 2),
+               below_top_h=hit["below_top_h"], area_ac=hit["area_ac"],
+               other_level_ft=(None if hit["other_level_m"] is None else
+                               round(hit["other_level_m"] / FT, 2)))
+    what = "flat water at {:.1f} ft, {:.2f} H below the top of dam, against the dam line".format(
+        lvl / FT, hit["below_top_h"])
+    if (hit["other_level_m"] is not None and hit["other_level_m"] >= lvl + tie and
+            hit.get("other_area_ac") is not None and
+            hit["other_area_ac"] >= terrain.WATER_SIDE_AREA_RATIO * hit["area_ac"]):
+        rec.update(ok=True, kept=("the other side holds higher flat water ({:.1f} ft): the "
+                                  "inflow's water is below the reservoir".format(
+                                      hit["other_level_m"] / FT)))
+        log("Breach inflow water check: the inflow is on {}; kept ({}).".format(what,
+                                                                                rec["kept"]))
+        return xy, why, direction, how
+    flip = (-direction[0], -direction[1])
+    reason = None
+    try:
+        # the pool mask (`pool`, as pool_mask found it) is not the reservoir on the side now
+        # taken as downstream (terrain.pool_downstream_off)
+        xy2, why2 = _toe_inflow(terrain_src, toe_line, flip, h_m, top_m,
+                                terrain.pool_downstream_off(pool, toe_line, flip), dam_xy,
+                                band_m, cell_m, max_from_dam_m)
+    except Exception as e:                       # noqa: BLE001
+        xy2, why2 = None, "{}: {}".format(type(e).__name__, e)
+    if xy2 is None:
+        reason = "the toe band there found nothing ({})".format(why2)
+    else:
+        try:
+            g2 = g if _covers(g, xy2) else _water_window(terrain_src, toe_line, cover_xy=xy2)
+            hit2 = terrain.inflow_water_hit(g2, toe_line, flip, h_m, top_m, xy2)
+            r, c = g2.rc(xy2[0], xy2[1])
+            z2 = float(g2.data[r, c]) if g2.inside(r, c) and g2.valid()[r, c] else float("nan")
+        except Exception as e:                   # noqa: BLE001
+            hit2, z2 = None, float("nan")
+            reason = "not read: {}: {}".format(type(e).__name__, e)
+        if reason is None:
+            if hit2 is not None:
+                reason = ("its toe is on flat water too ({:.1f} ft, {:.2f} H below the top of "
+                          "dam)".format(hit2["level_m"] / FT, hit2["below_top_h"]))
+            elif not math.isfinite(z2):
+                reason = "no DEM at its toe"
+            elif z2 >= lvl + tie:
+                # the water is lower than the other side's toe: the dam does not hold it up
+                # (DWR-5420: Chase Lake 0.9 H below the 5 ft dam's top, at its toe)
+                rec.update(ok=True, kept=("the other side's toe ({:.1f} ft) is higher than "
+                                          "this water: the dam does not hold it up".format(
+                                              z2 / FT)), other_toe_ft=round(z2 / FT, 2))
+                log("Breach inflow water check: the inflow is on {}; kept ({}).".format(
+                    what, rec["kept"]))
+                return xy, why, direction, how
+            elif z2 > lvl - tie:
+                reason = ("its toe ({:.1f} ft) is within {:.1f} ft of that water".format(
+                    z2 / FT, tie / FT))
+    if reason is None:
+        try:
+            reason = _flip_blocked(pool_grid, pmask, side_how, toe_line, dam_xy, xy2, lvl)
+        except Exception as e:                   # noqa: BLE001 - then do not move it
+            reason = "its toe's pool not checked: {}: {}".format(type(e).__name__, e)
+    if reason is None:
+        rec.update(ok=True, flipped=True, first_xy=[round(float(xy[0]), 2), round(float(xy[1]), 2)],
+                   first_side=how, other_toe_ft=round(z2 / FT, 2))
+        msg = ("Breach inflow: moved to the other side of the dam line. On the side first taken "
+               "as downstream ({}) the toe was on {}, which is likely the reservoir; the other "
+               "side's toe is {:.1f} ft lower than that water. Check qa_inflow_map.png.".format(
+                   how, what, (lvl - z2) / FT))
+        warnings.append(msg)
+        log(msg)
+        if out is not None:
+            out["side_how"] = terrain.SIDE_FLIPPED
+            out["direction"] = flip
+        how2 = ("turned round by the inflow water check: the toe on the side first taken ({}) "
+                "was on the reservoir's flat water, {:.1f} ft, {:.2f} H below the top of "
+                "dam".format(how, lvl / FT, hit["below_top_h"]))
+        if out is not None:
+            out["how"] = how2
+        return xy2, why2, flip, how2
+    msg = ("{}: the breach inflow ({:.1f}, {:.1f}) is on {}, on the side the run took as "
+           "downstream ({}). It may be the reservoir. The other side was not used: {}. Check "
+           "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+               terrain.INFLOW_SIDE, xy[0], xy[1], what, how, reason))
+    rec.update(warning=msg, other_side=reason)
+    warnings.insert(0, msg)
+    log(msg)
+    return xy, why, direction, how
+
+
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
                        out=None, max_from_dam_m=None, toe_line=None, toe_band_m=None,
                        toe_cell_m=None, toe_ds_slope_h=None, toe_min_outer_m=None,
@@ -4469,9 +4673,21 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
     found = dpc.found_line_side(dam)
+    has_line = toe_line is not None and len(toe_line) >= 2
+    # 3.20.12: the DEM at 2 m round the dam line: the reservoir's flat water decides the side
+    # (terrain.water_side) and the toe pick is checked against it (_inflow_water_check)
+    wgrid = None
+    if has_line:
+        try:
+            wgrid = _water_window(terrain_src, toe_line)
+        except Exception as e:                   # noqa: BLE001 - a refinement
+            log("Flat water round the dam line not read ({}: {}); the side comes from the pool "
+                "and the ground.".format(type(e).__name__, e))
+    side_info = {}
     try:
         if found is not None:
             direction, how = found
+            side_info["side_how"] = terrain.SIDE_FOUND_LINE
         else:
             crest_xy = None
             if pool_grid is not None:
@@ -4481,13 +4697,26 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
                                                     max(rad, 400.0))[0]
             direction, how = terrain.downstream_direction(
                 pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-                crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
+                crest_xy=crest_xy, top_m=top_m, pool=pmask,      # L05: reuse the mask above
+                water_grid=wgrid, water_line=toe_line, info=side_info,
+                surface_ac=getattr(dam, "surface_area_top_ac", None), water_read=terrain_src.read)
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
+        side_info["side_how"] = terrain.SIDE_NONE
     log("Downstream side of the crest: {}".format(
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
+        out["side_how"] = side_info.get("side_how", terrain.SIDE_NONE)
+        if side_info.get("water"):
+            out["side_water"] = side_info["water"]
+    conflict = _side_conflict_warning(side_info.get("side_conflict"), warnings, log)
+    # 3.20.12 (review, DWR-2791): a side not taken from the pool mask - the reservoir's flat
+    # water or the found line - leaves the mask's cells below the dam (a borrow pit, a road-held
+    # low: the false pool) out of the reservoir, so the toe band can reach the real toe there
+    pool_raw = pool
+    if has_line and direction is not None and side_info.get("side_how") in terrain.SIDES_NOT_POOL:
+        pool = terrain.pool_downstream_off(pool_raw, toe_line, direction)
     if toe_line is not None and len(toe_line) >= 2 and direction is not None:
         band_how = None
         if toe_band_m is None:
@@ -4519,6 +4748,12 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         except Exception as e:                   # noqa: BLE001 - the old search is the fallback
             xy, why = None, "{}: {}: {}".format(terrain.NO_TOE, type(e).__name__, e)
         if xy is not None:
+            xy, why, direction, how = _inflow_water_check(
+                terrain_src, toe_line, direction, how, xy, why, h_m, top_m, pool_raw, dam_xy,
+                toe_band_m, toe_cell_m, max_from_dam_m, wgrid, warnings, log, out,
+                pool_grid=pool_grid, pmask=pmask, side_how=side_info.get("side_how"))
+            if conflict is not None and out is not None:
+                out["water_check"] = dict(out.get("water_check") or {}, side_conflict=conflict)
             return xy, "{}, downstream side ({})".format(why, how)
         toe_why = why
     elif toe_line is None or len(toe_line) < 2:
@@ -4534,6 +4769,8 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     log(msg)
     if out is not None:
         out["toe"] = toe_why
+        if conflict is not None:
+            out["water_check"] = dict(out.get("water_check") or {}, side_conflict=conflict)
     xy, why = terrain.find_inflow_point(
         local, dam_xy, h_m, top_m, rad, downstream=direction, pool=pool,
         crest_line=getattr(dam, "crest_line_xy", None),
