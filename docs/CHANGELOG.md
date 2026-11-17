@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Screening 0.20.3: default terrain and larger clips use the configured offline pack.** A headless chain (and a settings JSON that still has the old 3DEP defaults) reads NDSUITE_DATA / NDSUITE_PACK / `ndsuite/data_folder` and `ndsuite/pack_path` in `~/.ndsuite/config.json`, uses that pack's DEM mosaic when it covers the dam, and only downloads fresh USGS 3DEP clips when the pack is missing or does not cover the area. The source is written to the log. The pack and ND_Dam_Suite_Pack are never written.
+
 - **Runner 3.20.12 (after 3.20.11): the downstream side of a dam line comes from the reservoir's flat water (CHANGES RESULTS for dams with a dam line whose side was wrong).** Nick, 2026-11-17: "Do breach inflow in res next". With a dam line given (DAM_LINES, a dam.json crest line or a batch's CREST_LINE), the toe-band breach inflow could land on the reservoir of a dam with a full hydro-flattened pond, 0.1-0.7 H below the top of dam, and the run said "downstream side (crest-line normal ...)".
   - **Why:** a hydro-flattened reservoir drains at its own level, so its fill is about 0 and `pool_mask` did not see it (its shallow band also stops at 0.5 H below the top). `pool_at_dam` then took a borrow pit, a road-held low or a toe ditch below the dam as "the pool" and turned the side away from it, or `_lower_side` found the water surface 20-80 m upstream lower than the downstream face or berm at the same distance.
   - **Found on** 17 of 124 DWR dams run with their own DWR line on 2 m 3DEP (10 m model cell): DWR-2624, 2641, 2791, 2662, 2798, 2914, 2760, 2847, 2713, 2809, 2621, 2824, 7449 (the pool test), 2979, 2983, 2635, 7541 (the lower side). With a 30 m cell 12 were wrong, DWR-2668 and 2996 among them.

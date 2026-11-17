@@ -28,7 +28,8 @@ def load_settings(text_or_path):
     s = wf.default_settings()
     t = (text_or_path or "").strip()
     if not t:
-        return s
+        from ..core.pack_terrain import apply_offline_pack_terrain
+        return apply_offline_pack_terrain(s)
     if os.path.isfile(t) and os.path.splitext(t)[1].lower() in (".xlsx", ".csv"):
         from ..damsuite import settings as DS
         try:
@@ -38,7 +39,8 @@ def load_settings(text_or_path):
         s.update(wf.window_settings_from(sf))
         s["settings_file"] = t
         DS.set_current_path(t, remember=False)
-        return s
+        from ..core.pack_terrain import apply_offline_pack_terrain
+        return apply_offline_pack_terrain(s)
     if os.path.isfile(t):
         with open(t, encoding="utf-8") as fh:
             t = fh.read()
@@ -50,7 +52,8 @@ def load_settings(text_or_path):
     if not isinstance(loaded, dict):
         raise QgsProcessingException("Settings must be a JSON object")
     s.update(loaded)
-    return s
+    from ..core.pack_terrain import apply_offline_pack_terrain
+    return apply_offline_pack_terrain(s)
 
 
 class RunChain(UnitAlgorithm):
