@@ -15,7 +15,8 @@
 # Environment (all optional):
 #   DS_QGIS_ENV        the conda env with QGIS                       [ndqgis]
 #   ND_LOCAL_TERRAIN   the terrain VRT, when --dem is not given      [the Extreme SSD path]
-#   NDSUITE_DATA       the suite data folder, when --data is not given [~/ND_Suite_Data]
+#   NDSUITE_DATA       the suite data folder, when --data is not given
+#                      [the one set in the damsafety QGIS profile, else ~/ND_Suite_Data]
 #   FINDER_PYTHON      a Python to use instead of mamba run (it must have GDAL, numpy, scipy)
 #
 # Ctrl-C stops the run; finished tiles are kept and the same command goes on from there.

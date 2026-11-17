@@ -19,7 +19,7 @@ asks of a candidate, from a source the DEM cannot see:
   beside it low enough to flood (Montana's small-dam screen: flood depth 75 % of the dam height,
   little damage past 5 miles) and the roads it crosses, in distance bands. A second sort for
   the review list, not a dam probability: review_order puts the fills in bands of score 0.1
-  wide and lets what is below decide only inside a band.
+  wide and lets water (2 or more image years) and then what is below decide only inside a band.
 
 Nothing here is a determination; each is a field on the candidate for the reviewer and the score.
 """
@@ -32,6 +32,7 @@ MILE = 1609.344
 CONSEQ_BINS_M = (1.0 * MILE, 3.0 * MILE, 5.0 * MILE)      # 0-1, 1-3, 3-5 miles
 PERMIT_AF = 12.5            # ND: a water permit is needed to store more than 12.5 acre-feet
 SCORE_BAND = 0.1            # review_order: scores within one band this wide count as tied
+WET_MIN_YEARS = 2           # review_order: water in this many image years or more puts a fill first in its band
 
 
 def disk(shape, gt, x, y, r):
@@ -252,33 +253,43 @@ def _number(v):
     return v if math.isfinite(v) else None
 
 
-def review_order(scores, conseqs=None, band=SCORE_BAND):
+def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=WET_MIN_YEARS):
     """The order to look at scored fills in: one whole number per fill, 1 = look at this first.
 
     Sorted by score band first (bands `band` wide, the highest first: 0.9 to 1.0, then 0.8 to
-    0.9 ...; a score of exactly 1 is in the top band), then inside a band by `conseq` (what is
-    below the fill, the highest first), then by the score itself, then by the order the fills
-    came in. So what is downstream only reorders fills the score cannot tell apart: it never
-    lifts a fill over one in a higher band. A fill whose consequence was not computed (blank)
-    counts as 0 there, the same as a fill with nothing found below it, so the score decides
-    between them. A fill with no score comes after every scored fill (by consequence, then as
-    it came). conseqs None: no consequence was computed, so the order is by score.
+    0.9 ...; a score of exactly 1 is in the top band), then inside a band by water: a fill with
+    open water in the pool in `wet_min` or more image years (`wet_years`) before one with less,
+    then by `conseq` (what is below the fill, the highest first), then by the score itself, then
+    by the order the fills came in. So water and what is downstream only reorder fills the score
+    cannot tell apart: neither ever lifts a fill over one in a higher band. Water is a yes / no
+    (wet_min years or more), not a count, so what is below still orders the fills on each side
+    of it. A fill whose water history or consequence was not read (blank) counts as dry / as 0
+    there, the same as a fill with none found, so the score decides between them. A fill with no
+    score comes after every scored fill (by water, by consequence, then as it came). conseqs /
+    wet_years None: not computed, so they do not reorder anything.
+    Why water: on a review sheet of 90 fills picked at random among the dry ones (no pool in the
+    LiDAR; North Dakota 2026-11-16) 6 of the 22 with water in 2 or more of the 10 image years
+    were dams, 2 of the other 68 (a dug pond holds water too: water says pond, not dam).
     Returns a list as long as `scores`, in the order given."""
     scores = list(scores)
     conseqs = [None] * len(scores) if conseqs is None else list(conseqs)
     if len(conseqs) != len(scores):
         raise ValueError("review_order needs one consequence for each score")
+    wets = [None] * len(scores) if wet_years is None else list(wet_years)
+    if len(wets) != len(scores):
+        raise ValueError("review_order needs one water history (wet_years) for each score")
     top = int(math.ceil(1.0 / band - 1e-9)) - 1         # the band a score of exactly 1 falls in
     keys = []
-    for i, (s, c) in enumerate(zip(scores, conseqs)):
-        s, c = _number(s), _number(c) or 0.0
+    for i, (s, c, w) in enumerate(zip(scores, conseqs, wets)):
+        s, c, w = _number(s), _number(c) or 0.0, _number(w)
+        dry = 0 if (w is not None and w >= wet_min) else 1
         if s is None:
-            keys.append((1, 0, -c, 0.0, i))
+            keys.append((1, 0, dry, -c, 0.0, i))
             continue
         b = int(math.floor(s / band + 1e-9))            # 0.3 / 0.1 is 2.9999...: still band 3
         if s == 1.0:
             b = top
-        keys.append((0, -b, -c, -s, i))
+        keys.append((0, -b, dry, -c, -s, i))
     order = [0] * len(scores)
     for n, i in enumerate(sorted(range(len(scores)), key=keys.__getitem__)):
         order[i] = n + 1

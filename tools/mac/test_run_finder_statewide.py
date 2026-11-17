@@ -276,7 +276,7 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(k6, json.loads(json.dumps(k6)))      # as it comes back from done.json
         self.assertIsNone(rfs.settings_key("0.6.0", a, None)["dem"])
         # a tile made by script 1.0 or 1.1 is a tile of script 1.2: the key holds the first number only
-        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.2", "1"))
+        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.3", "1"))
 
     def test_tile_box_from_done_json_or_from_the_id(self):
         self.assertEqual(rfs.tile_box("T10_W0370_N2620"), (-370000.0, 2620000.0, -360000.0, 2630000.0))
@@ -284,6 +284,195 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(rfs.tile_box("x", {"box": [1, 2, 3, 4]}), (1.0, 2.0, 3.0, 4.0))
         for t in rfs.lattice((-381234.5, -12000.0, 9000.0, 26000.0), 10000.0) + rfs.lattice((-7000.0, -7000.0, 7000.0, 7000.0), 5000.0):
             self.assertEqual(rfs.tile_box(t.id), t.box)
+
+
+class PackLookup(unittest.TestCase):
+    """Where the script looks for the data pack (script 1.3): --data, $NDSUITE_DATA, the suite data
+    folder and pack location set in the damsafety QGIS profile (qgis.org/QGIS3.ini on a Mac,
+    QGIS/QGIS3.ini elsewhere), ~/ND_Suite_Data; and what it says when it finds the wrong pack or none.
+    Pure Python, no GDAL. Nothing is written outside the temp folder."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rfs pack ")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.home = os.path.join(self.tmp, "home")
+        os.makedirs(self.home)
+        env = {k: os.environ.get(k) for k in ("HOME", "NDSUITE_DATA", "NDSUITE_PACK", "DAMSAFETY_PROFILE", "DS_QGIS_PROFILE")}
+        self.addCleanup(lambda: [os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None)
+                                 for k, v in env.items()])
+        os.environ["HOME"] = self.home
+        for k in ("NDSUITE_DATA", "NDSUITE_PACK", "DAMSAFETY_PROFILE", "DS_QGIS_PROFILE"):
+            os.environ.pop(k, None)
+
+    def pack(self, folder):
+        f = os.path.join(folder, *rfs.STREAMS[0].split("/"))
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        open(f, "w").close()
+        return folder
+
+    def old_pack(self, folder):
+        """A real-shaped format-1 pack: nd_offline_pack/ with the .sqlite and manifest.json."""
+        d = os.path.join(folder, "nd_offline_pack")
+        os.makedirs(os.path.join(d, "landcover"), exist_ok=True)
+        for n in ("nd_offline_pack.sqlite", "manifest.json", os.path.join("landcover", "NLCD_2021_landcover.gpkg")):
+            open(os.path.join(d, n), "w").close()
+        return d
+
+    def ini(self, text, prof="damsafety", sub=None):
+        sub = sub or ("qgis.org" if sys.platform == "darwin" else "QGIS")
+        d = os.path.join(self.home, "Library", "Application Support", "QGIS", "QGIS3", "profiles", prof, sub)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "QGIS3.ini"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def args(self, data=""):
+        return types.SimpleNamespace(data=data)
+
+    def missing(self, data=None):
+        with self.assertRaises(rfs.UserError) as cm:
+            rfs.find_pack(rfs.find_data(self.args()) if data is None else data)
+        return str(cm.exception)
+
+    def test_default_folder(self):
+        self.pack(os.path.join(self.home, "ND_Suite_Data", "ND_Dam_Suite_Pack"))
+        data = rfs.find_data(self.args())
+        self.assertEqual(data, os.path.realpath(os.path.join(self.home, "ND_Suite_Data")))
+        self.assertTrue(rfs.find_pack(data).endswith("ND_Dam_Suite_Pack"))
+
+    def test_a_pack_made_by_build_offline_pack(self):
+        """DamSafety Data's builder keeps the names NHD_flowlines and ABI_dams (Nick's Mac, 2026-11-16:
+        a finished statewide build beside its _build work folder and nd_offline_pack)."""
+        base = os.path.join(self.home, "ND_Suite_Data")
+        pk = os.path.join(base, "ND_Dam_Suite_Pack")
+        rels = ["hydro/NHD_flowlines.gpkg", "roads/ND_roads_NG911.gpkg", "railroads/NARN_rail_lines.gpkg",
+                "dwr/DWR_dams.gpkg", "dwr/DWR_dam_lines.gpkg", "dwr/DWR_dugouts.gpkg",
+                "dwr/DWR_unknown_structures.gpkg", "hydro/NID_dams.gpkg", "barriers/ABI_dams.gpkg"]
+        for rel in rels:
+            f = os.path.join(pk, *rel.split("/"))
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            open(f, "w").close()
+        os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack_build"))
+        self.old_pack(base)
+        pack = rfs.find_pack(rfs.find_data(self.args()))
+        self.assertEqual(pack, os.path.realpath(pk))
+        got = rfs.pack_inputs(pack)
+        self.assertTrue(got["streams"].endswith(os.path.join("hydro", "NHD_flowlines.gpkg")))
+        self.assertTrue(got["known: SARP dams"].endswith(os.path.join("barriers", "ABI_dams.gpkg")))
+        # the newer name wins when both are there
+        open(os.path.join(pk, "hydro", "3DHP_flowlines.gpkg"), "w").close()
+        self.assertTrue(rfs.pack_inputs(pack)["streams"].endswith("3DHP_flowlines.gpkg"))
+        # a missing layer is named with both its names
+        os.remove(os.path.join(pk, "barriers", "ABI_dams.gpkg"))
+        with self.assertRaises(rfs.UserError) as cm:
+            rfs.pack_inputs(pack)
+        self.assertIn("barriers/SARP_dams.gpkg or barriers/ABI_dams.gpkg", str(cm.exception))
+
+    def test_layers_are_read_through_the_manifest_like_the_plugins(self):
+        pk = os.path.join(self.tmp, "mf", "ND_Dam_Suite_Pack")
+        for rel in ("hydro/3DHP_flowlines.gpkg", "hydro/NHD_flowlines.gpkg", "elsewhere/abi.gpkg"):
+            f = os.path.join(pk, *rel.split("/"))
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            open(f, "w").close()
+        man = {"datasets": {"3DHP_flowlines": {"file": "hydro/3DHP_flowlines.gpkg", "status": "failed"},
+                            "NHD_flowlines": {"file": "hydro/NHD_flowlines.gpkg", "status": "partial"},
+                            "ABI_dams": {"file": "elsewhere/abi.gpkg", "status": "complete"},
+                            "SARP_dams": {"file": "../../outside.gpkg", "status": "complete"}}}
+        with open(os.path.join(pk, "manifest.json"), "w") as fh:
+            json.dump(man, fh)
+        # a failed layer is not used even though its file is there; the other name is
+        self.assertTrue(rfs.pack_file(pk, rfs.STREAMS).endswith("NHD_flowlines.gpkg"))
+        # the manifest's file entry is followed; one that leaves the pack is not
+        self.assertTrue(rfs.pack_file(pk, dict((k[1], k[0]) for k in rfs.KNOWN)["SARP dams"])
+                        .endswith(os.path.join("elsewhere", "abi.gpkg")))
+        # no manifest entry: the plain path
+        self.assertEqual(rfs.pack_file(pk, ("hydro/NID_dams.gpkg",)), "")
+        open(os.path.join(pk, "hydro", "NID_dams.gpkg"), "w").close()
+        self.assertTrue(rfs.pack_file(pk, ("hydro/NID_dams.gpkg",)).endswith("NID_dams.gpkg"))
+
+    def test_the_format1_pack_is_named_not_taken(self):
+        """nd_offline_pack (one SQLite file) holds no hydro/: the error says it is the other kind."""
+        self.old_pack(os.path.join(self.home, "ND_Suite_Data"))
+        msg = self.missing()
+        self.assertIn("nd_offline_pack.sqlite is the older offline pack (format 1", msg)
+        self.assertIn("ND_Dam_Suite_Pack", msg)
+        # also when QGIS's pack location names the zip of it
+        zp = os.path.join(self.tmp, "dl", "nd_offline_pack.zip")
+        os.makedirs(os.path.dirname(zp))
+        open(zp, "w").close()
+        self.ini("[ndsuite]\npack_path={}\n".format(zp))
+        self.assertIn("the pack location set in QGIS, {}, is the older offline pack".format(zp), self.missing())
+        # and a format-2 pack beside that zip is found
+        self.pack(os.path.join(self.tmp, "dl", "ND_Dam_Suite_Pack"))
+        self.assertEqual(rfs.find_pack(rfs.find_data(self.args())),
+                         os.path.realpath(os.path.join(self.tmp, "dl", "ND_Dam_Suite_Pack")))
+
+    def test_a_pack_being_built_or_not_all_unzipped(self):
+        base = os.path.join(self.home, "ND_Suite_Data")
+        os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack", "roads"))
+        self.assertIn("not all of the pack's parts were unzipped", self.missing())
+        os.makedirs(os.path.join(base, "ND_Dam_Suite_Pack_build"))
+        self.assertIn("the build may still be running, or it ended without that layer", self.missing())
+
+    def test_a_pack_in_downloads_is_shown_not_used(self):
+        d = self.pack(os.path.join(self.home, "Downloads", "ND_Dam_Suite_Pack_part1", "ND_Dam_Suite_Pack"))
+        msg = self.missing()
+        self.assertIn('there is a pack in {}: give --data "{}"'.format(d, d), msg)
+        with self.assertRaises(rfs.UserError):       # shown, never used by itself
+            rfs.find_pack(rfs.find_data(self.args()))
+
+    def test_the_data_folder_set_in_qgis(self):
+        other = os.path.join(self.tmp, "Suite data, 2026")
+        self.pack(os.path.join(other, "ND_Dam_Suite_Pack"))
+        self.ini('[General]\nfoo=1\n\n[ndsuite]\ndata_folder="{}"\npack_path=@Invalid()\n'.format(other))
+        self.assertEqual(rfs.profile_settings(), {"data_folder": other})
+        data = rfs.find_data(self.args())
+        self.assertEqual(data, os.path.realpath(other))
+        self.assertTrue(rfs.find_pack(data).endswith("ND_Dam_Suite_Pack"))
+        # --data and $NDSUITE_DATA still come first
+        self.assertEqual(rfs.find_data(self.args("/x/y")), os.path.realpath("/x/y"))
+        os.environ["NDSUITE_DATA"] = "/p/q"
+        self.assertEqual(rfs.find_data(self.args()), os.path.realpath("/p/q"))
+
+    def test_a_qgis_data_folder_without_the_pack_falls_back_to_the_default(self):
+        """A data folder set in QGIS does not hide a pack in ~/ND_Suite_Data."""
+        other = os.path.join(self.tmp, "empty suite folder")
+        os.makedirs(other)
+        self.ini("[ndsuite]\ndata_folder={}\n".format(other))
+        self.pack(os.path.join(self.home, "ND_Suite_Data", "ND_Dam_Suite_Pack"))
+        self.assertTrue(rfs.find_pack(rfs.find_data(self.args())).endswith("ND_Dam_Suite_Pack"))
+        # a data folder set in QGIS that does not exist is not used as the data folder
+        self.ini("[ndsuite]\ndata_folder={}\n".format(os.path.join(self.tmp, "gone")))
+        self.assertEqual(rfs.find_data(self.args()), os.path.realpath(os.path.join(self.home, "ND_Suite_Data")))
+
+    def test_the_pack_location_set_in_qgis(self):
+        packdir = self.pack(os.path.join(self.tmp, "elsewhere", "mypack"))
+        self.ini("[ndsuite]\npack_path={}\n".format(packdir))
+        data = rfs.find_data(self.args())          # no data_folder set: ~/ND_Suite_Data, which has none
+        self.assertEqual(rfs.find_pack(data), os.path.realpath(packdir))
+
+    def test_both_settings_files_are_read_the_one_qgis_uses_first(self):
+        first, second = ("qgis.org", "QGIS") if sys.platform == "darwin" else ("QGIS", "qgis.org")
+        self.ini("[ndsuite]\ndata_folder=/from/second\npack_path=/p2\n", sub=second)
+        self.assertEqual(rfs.profile_settings(), {"data_folder": "/from/second", "pack_path": "/p2"})
+        self.ini("[ndsuite]\ndata_folder=/from/first\n", sub=first)
+        self.assertEqual(rfs.profile_settings(), {"data_folder": "/from/first", "pack_path": "/p2"})
+
+    def test_qt_escapes_in_a_path(self):
+        self.ini('[ndsuite]\ndata_folder="/Users/n/Suite \\x00e9t\\xe9, \\\\x \\"q\\""\n')
+        self.assertEqual(rfs.profile_settings(), {"data_folder": '/Users/n/Suite \u00e9t\u00e9, \\x "q"'})
+
+    def test_no_pack_says_how_to_find_it(self):
+        msg = self.missing()
+        self.assertIn('find ~ -maxdepth 5 -name "*_flowlines.gpkg"', msg)
+        self.assertIn("still being built", msg)
+
+    def test_an_unreadable_or_other_profile_settings_file(self):
+        self.ini("not an ini file at all\n[[[")
+        self.assertEqual(rfs.profile_settings(), {})
+        self.ini("[ndsuite]\ndata_folder=/a/b\n", prof="other")
+        self.assertEqual(rfs.profile_settings(), {})
+        os.environ["DAMSAFETY_PROFILE"] = "other"
+        self.assertEqual(rfs.profile_settings(), {"data_folder": "/a/b"})
 
 
 @needs_gdal
@@ -1112,6 +1301,7 @@ class Seams(unittest.TestCase):
         self.assertEqual(info["candidates_score_0.5_or_more"], str(want))
         self.assertEqual(info["short_list_rows"], "3")
         self.assertIn("  with a score of 0.5 or more: {:,}".format(want), out)
+        self.assertTrue(any(ln.startswith("    work down the list to about here") for ln in out))
         self.assertTrue(any(rfs.OUT_TOP in ln and "top 3" in ln for ln in out))
         # --top 0: no short list, and the one of an earlier merge is taken away
         a = rfs.parser().parse_args(["--no-checksums", "--top", "0"])
@@ -1395,7 +1585,7 @@ class Seams(unittest.TestCase):
         self.assertEqual((info["candidates_crowded"], info["short_list_crowded"]), ("16", str(in_top)))
         self.assertTrue(info["crowd_km2"].startswith("4.5 "))
         self.assertEqual(info["crowd_fills_counted"], "19")  # the 16, the one alone and the two of the east tile
-        self.assertEqual(info["script"], "run_finder_statewide.py 1.2")
+        self.assertEqual(info["script"], "run_finder_statewide.py 1.3")
         ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
         for layer, lead in (("embankments", []), ("candidates", ["rank"])):
             names = rfs.field_names(ds.GetLayerByName(layer))
@@ -1548,7 +1738,7 @@ class WholeRun(unittest.TestCase):
         self.pack = os.path.join(self.d, "ND_Suite_Data", "ND_Dam_Suite_Pack")
         s = osr.SpatialReference()
         s.ImportFromEPSG(4326)
-        for rel in [rfs.STREAMS, rfs.ROADS, rfs.RAILS] + [k[0] for k in rfs.KNOWN]:
+        for rel in [rfs.STREAMS[0], rfs.ROADS[0], rfs.RAILS[0]] + [k[0][0] for k in rfs.KNOWN]:
             p = os.path.join(self.pack, *rel.split("/"))
             os.makedirs(os.path.dirname(p), exist_ok=True)
             ds = ogr.GetDriverByName("GPKG").CreateDataSource(p)

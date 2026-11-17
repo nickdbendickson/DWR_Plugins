@@ -42,7 +42,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -2867,8 +2867,9 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
     mosaic) and, with a `dem`, the buildings and roads down the flow path (consequence, a second
     sort). Every source is optional. Writes the fills with the evidence fields to layer 'evidence'
     (and a CSV). When the fills carry a score, each also gets review_order (1 = look at this
-    first; core/evidence.py review_order: score in bands 0.1 wide, then what is below, then the
-    score) and the CSV is written in that order; the layer keeps the fills' own order.
+    first; core/evidence.py review_order: score in bands 0.1 wide, then water in 2 or more image
+    years, then what is below, then the score) and the CSV is written in that order; the layer
+    keeps the fills' own order.
     An image host or image year that gives no answer (not reached, timed out, HTTP 502 / 503 /
     504) 3 times in a row is left alone for 10 minutes, with one log line, and each fill whose
     year was not asked meanwhile carries img_skipped (the years; the field is written only when
@@ -2894,12 +2895,14 @@ def run_evidence(fills, out_gpkg, images=None, image_cell=1.0, ndwi_threshold=0.
     for r in rows:
         r.pop(ORDER_FIELD[0], None)                     # an order from an earlier run is not this run's
     if any(r.get("score") is not None for r in rows):
-        for r, k in zip(rows, ev.review_order([r.get("score") for r in rows], [r.get("conseq") for r in rows])):
+        for r, k in zip(rows, ev.review_order([r.get("score") for r in rows], [r.get("conseq") for r in rows],
+                                              wet_years=[r.get("wet_years") for r in rows])):
             r[ORDER_FIELD[0]] = k
         fields = fields + [ORDER_FIELD]
         in_order = sorted(rows, key=lambda r: r[ORDER_FIELD[0]])
-        log("review_order: 1 = look at this fill first (score in bands of {:g}, then what is below, then the "
-            "score); the CSV is in that order, the layer keeps the fills' own order".format(ev.SCORE_BAND))
+        log("review_order: 1 = look at this fill first (score in bands of {:g}, then water in {} or more image "
+            "years, then what is below, then the score); the CSV is in that order, the layer keeps the fills' "
+            "own order".format(ev.SCORE_BAND, ev.WET_MIN_YEARS))
     out_csv = os.path.splitext(out_gpkg)[0] + "_evidence.csv"
     write_points(out_gpkg, "evidence", fields, rows)
     write_csv(out_csv, fields, in_order)
