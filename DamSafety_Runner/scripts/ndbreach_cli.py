@@ -723,11 +723,28 @@ class Frame(object):
             s.SetAxisMappingStrategy(self.osr.OAMS_TRADITIONAL_GIS_ORDER)
         return s
 
+    @staticmethod
+    def _srs_key(s):
+        """A stable key of an SRS: its WKT and axis order. 3.20.13 review: the cache was keyed
+        by id(), and an SRS freed after use (layer_to_work's) left its id behind for the next
+        SRS made at the same address (the batch's DWR lines, per dam), which then got the other
+        CRS's transformation."""
+        try:
+            axes = tuple(s.GetDataAxisToSRSAxisMapping())
+        except Exception:                                 # noqa: BLE001 - an older GDAL
+            axes = ()
+        try:
+            return s.ExportToWkt(), axes
+        except Exception:                                 # noqa: BLE001 - no WKT: the object
+            return "id", id(s)                            # (kept alive by the cache below)
+
     def _ct(self, src, dst):
-        key = (id(src), id(dst))
+        key = (self._srs_key(src), self._srs_key(dst))
         if key not in self._cts:
-            self._cts[key] = self.osr.CoordinateTransformation(src, dst)
-        return self._cts[key]
+            # the SRS objects are kept with their transformation, so an id() key is never
+            # taken over by another object
+            self._cts[key] = (self.osr.CoordinateTransformation(src, dst), src, dst)
+        return self._cts[key][0]
 
     def xy(self, x, y):
         """A point in the DEM's CRS -> the model CRS."""
@@ -2089,7 +2106,10 @@ def _dwr_sources(cfg, headers=()):
     if out["layer"] and not _is_geojson(out["layer"]):
         # the plugin's DAM_LINES takes any OGR layer: a GeoPackage here too
         idx = dwr_lines.line_index(out["layer"], dwr_lines.SOURCE_LAYER)
-        if idx is not None and idx.count:
+        if idx is not None and idx.count and not _crs_readable(idx.crs):
+            out["why"] = dwr_lines.unknown_crs_text(out["layer"], idx.crs)
+            say("DWR dam lines: none ({}); the dam points are used as given".format(out["why"]))
+        elif idx is not None and idx.count:
             out["index"] = idx
             say("DWR dam lines: {} lines from layers.dam_lines ({})".format(idx.count,
                                                                             out["layer"]))
@@ -2103,6 +2123,9 @@ def _dwr_sources(cfg, headers=()):
         say("DWR dam lines: layers.dam_lines ({})".format(out["layer"]))
     else:
         idx, path, label = dwr_lines.open_lines()          # never raises
+        if idx is not None and not _crs_readable(idx.crs):
+            # 3.20.13 review: said once here, not as 'not read' for every dam
+            idx, label = None, dwr_lines.unknown_crs_text(path, idx.crs)
         if idx is not None:
             out["index"] = idx
             say("DWR dam lines: {} lines from {} ({})".format(idx.count, label, path))
@@ -2117,6 +2140,20 @@ def _dwr_sources(cfg, headers=()):
         return cache["f"](v) if cache["f"] else ""
     out["nid"] = nid
     return out
+
+
+def _crs_readable(text):
+    """Can GDAL read this CRS text? (True without GDAL: the dams then say they need it.)"""
+    if not text:
+        return False
+    if not have_gdal():
+        return True
+    try:
+        _gdal, osr = gdal_io._gdal()
+        s = osr.SpatialReference()
+        return s.SetFromUserInput(str(text)) == 0
+    except Exception:                                    # noqa: BLE001
+        return False
 
 
 def _dam_record(folder):
@@ -2152,7 +2189,9 @@ def _dwr_line_cli(cfg, p, row, dam_id, dwr, layers):
             names = set()
             for _k, _parts, props in feats:
                 names.update(props or {})
-            idf = next((n for n in names if str(n).lower() in dwr_lines.SID_FIELDS), "")
+            # by SID_FIELDS priority, never the order of a set (3.20.13 review: a GeoJSON with
+            # structure_id and dwr_id matched by one or the other from run to run)
+            idf = dwr_lines.id_field_of(names)
             cx, cy = p.dam_xy
             r = dwr_lines.LAYER_RADIUS_M
             lines = [(np.asarray(part, dtype=float), props or {}) for k, parts, props in feats

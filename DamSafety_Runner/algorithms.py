@@ -251,16 +251,26 @@ def _dwr_ids(dam_id, rec):
     return out
 
 
+def _own_crest_lines(lines_attrs, ids, id_field):
+    """The crest lines whose structure id is one of the dam's (dwr_lines.sid_key on both sides:
+    2645, '02645', 'DWR-2645' match '2645')."""
+    if not (ids and id_field):
+        return []
+    return [(ln, at) for ln, at in lines_attrs if dwr_lines.sid_key(at.get(id_field)) in ids]
+
+
 def _pick_crest_line(lines_attrs, center_xy, ids, id_field):
     """(line, distance, how) of the crest line for this dam, or (None, d, reason). The line whose
     structure id matches the dam's DWR number wins; otherwise the line nearest the dam point, and
-    only within CREST_SNAP_M. `lines_attrs` is a list of (line, {field: value})."""
+    only within CREST_SNAP_M. `lines_attrs` is a list of (line, {field: value}). When the dam has
+    structure ids and the layer an id field but no line matches, only a line without a structure
+    id is taken (3.20.13 review: never another structure's line, which would also block the dam's
+    own DWR line). A value that is no structure id (blank, 0, a name such as 'Main dam', a NID)
+    counts as none (dwr_lines.sid_key)."""
     if not lines_attrs:
         return None, None, "no crest line near the dam"
     if ids and id_field:
-        hit = [(ln, at) for ln, at in lines_attrs
-               if str(at.get(id_field) if at.get(id_field) is not None else "").strip()
-               .split(".")[0].lstrip("0") in ids]
+        hit = _own_crest_lines(lines_attrs, ids, id_field)
         if hit:
             # 3.20.13: held to the DWR line guard (core/dwr_lines.guard: nearest point within
             # 500 m, centre within 1000 m, not degenerate); a refused match is never replaced
@@ -276,6 +286,14 @@ def _pick_crest_line(lines_attrs, center_xy, ids, id_field):
                 refused = refused or why
             return None, _nearest_on_line(hit[0][0], center_xy)[0], \
                 CREST_REFUSED.format(sorted(ids)[0], refused)
+        blank = [(ln, at) for ln, at in lines_attrs
+                 if dwr_lines.sid_key(at.get(id_field)) in ("", "0")]
+        if not blank:
+            ln = min((x[0] for x in lines_attrs), key=lambda l: _nearest_on_line(l, center_xy)[0])
+            return None, _nearest_on_line(ln, center_xy)[0], \
+                "no crest line for structure {} (the lines near it are other structures')" \
+                .format("/".join(sorted(ids)))
+        lines_attrs = blank
     ln = min((x[0] for x in lines_attrs), key=lambda l: _nearest_on_line(l, center_xy)[0])
     d = _nearest_on_line(ln, center_xy)[0]
     if d > CREST_SNAP_M:
@@ -1681,12 +1699,14 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                                fields=[id_field] if id_field else ())
             crest, _dist, how = _pick_crest_line(clines, center_xy, ids, id_field)
             if crest is None and how.startswith(CREST_REFUSED.split("{")[0]):
-                self._crest_refused = how            # 3.20.13: the run warns (workflow)
-                notes.append(how + ". The dam point is used as given.")
+                # 3.20.13: the run warns (workflow), saying what placed the dam instead
+                self._crest_refused = how
             # 3.20.11: the other dams' crest lines, so the dam point check never moves this dam
-            # onto one of them
+            # onto one of them (3.20.13 review: never this dam's own line, even when refused)
+            own = [ln for ln, _at in _own_crest_lines(clines, ids, id_field)]
             st.dam_point_lines = [[(float(p[0]), float(p[1])) for p in np.asarray(ln)]
-                                  for ln, _at in clines if ln is not crest] or None
+                                  for ln, _at in clines
+                                  if ln is not crest and not any(ln is o for o in own)] or None
             if crest is not None:
                 # 3.12.5: the line also places the dam point at mid-crest (workflow.place_midcrest)
                 st.midcrest_line = [(float(p[0]), float(p[1])) for p in np.asarray(crest)]
@@ -2698,16 +2718,22 @@ class BatchAlgorithm(_Base):
             lay = self.parameterAsSource(parameters, "DAM_LINES", context)
             if lay is not None:
                 out["layer"] = lay
-                out["layer_id"] = next((n for n in qio.field_names(lay)
-                                        if n.lower() in dwr_lines.SID_FIELDS), "")
+                out["layer_id"] = dwr_lines.id_field_of(qio.field_names(lay))
                 feedback.pushInfo("DWR dam lines: the DWR dam lines layer ({})".format(
                     "matched by {}".format(out["layer_id"]) if out["layer_id"] else
                     "no structure id field: the nearest line within {:.0f} m".format(
                         dwr_lines.NEAR_M)))
         if out["layer"] is None:
             idx, path, label = dwr_lines.open_lines()      # never raises
+            crs = None
             if idx is not None:
-                out["index"] = idx
+                # 3.20.13 review: a CRS QGIS cannot read is said once here, not as a distance
+                # refusal for every dam (an invalid transform passes the coordinates through)
+                crs = QgsCoordinateReferenceSystem(idx.crs) if idx.crs else None
+                if crs is None or not crs.isValid():
+                    idx, label = None, dwr_lines.unknown_crs_text(path, idx.crs)
+            if idx is not None:
+                out["index"], out["crs"] = idx, crs
                 feedback.pushInfo("DWR dam lines: {} lines from {} ({})".format(
                     idx.count, label, path))
             else:
@@ -2752,8 +2778,8 @@ class BatchAlgorithm(_Base):
                 feedback.pushInfo("{}: {}".format(dam_id, why))
                 return None
         elif dwr["index"] is not None:
-            ct = QgsCoordinateTransform(QgsCoordinateReferenceSystem(dwr["index"].crs), work,
-                                        context.transformContext())
+            ct = QgsCoordinateTransform(dwr.get("crs") or QgsCoordinateReferenceSystem(
+                dwr["index"].crs), work, context.transformContext())
 
             def to_work(pts, ct=ct):
                 out = []
@@ -2899,13 +2925,15 @@ class BatchAlgorithm(_Base):
                                               nid_lookup=dwr["nid"])
                 self._crest_ids = set(s_ for s_, _h in ids)
                 self.apply_features(st, parameters, context, work, (xy.x(), xy.y()))
-                if getattr(self, "_crest_refused", None):                 # 3.20.13
-                    dam._crest_line_refused = self._crest_refused
-                    feedback.pushInfo("{}: {}".format(dam_id, self._crest_refused))
                 new_xy = self._dwr_line(dam, st, dwr, attrs, ids, work, (xy.x(), xy.y()),
                                         context, dam_id, feedback)
                 if new_xy is not None:
                     xy = QgsPointXY(new_xy[0], new_xy[1])
+                if getattr(self, "_crest_refused", None):                 # 3.20.13
+                    dam._crest_line_refused = self._crest_refused
+                    # worded from what placed the dam instead (the DWR line or the point)
+                    feedback.pushInfo("{}: {}".format(dam_id, workflow.crest_refused_text(
+                        dam, self._crest_refused)))
                 # 3.20.11: the other dams of this batch near this one, for the dam point check
                 # (it never moves a dam onto its neighbour's embankment)
                 st.dam_point_others = _other_dams_near(others_dem, i, p, to_work, dem.crs())

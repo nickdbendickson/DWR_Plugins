@@ -47,6 +47,7 @@ it without QGIS. Coordinates come back in the file's CRS (LINE_CRS for the DWR l
 labelled EPSG:4326 but are NAD83 longitude / latitude); the caller converts them."""
 import math
 import os
+import pathlib
 import re
 import sqlite3
 import threading
@@ -111,6 +112,25 @@ def dwr_number(dam_id):
     return (m.group(1).lstrip("0") or "0") if m else ""
 
 
+def sid_key(v):
+    """The structure id key of a value, the same on the dam side (structure_ids) and on the
+    line side (LineIndex, find_in_lines, the batch's CREST_LINE, the NID table): 2645, '2645',
+    2645.0, '02645', 'DWR-2645' -> '2645'; '' for a blank value or one that is no structure id
+    (3.20.13 review: a lines layer whose id field holds 'DWR-3034' matches dam 3034)."""
+    s = norm_id(v)
+    return s if s.isdigit() else dwr_number(s)
+
+
+def id_field_of(names):
+    """The structure id field of a lines layer's field names: the first of SID_FIELDS (in that
+    priority, case-insensitive) it has, else ''. One rule for every reader (the GeoPackage and
+    OGR readers, the QGIS batch's DAM_LINES, the CLI's GeoJSON layers.dam_lines)."""
+    low = {}
+    for n in sorted((str(x) for x in names or ()), key=str):
+        low.setdefault(n.lower(), n)
+    return next((low[f] for f in SID_FIELDS if f in low), "")
+
+
 def _get(attrs, names):
     """The first non-empty value of `names` (case-insensitive) in a dict of attributes."""
     if not attrs:
@@ -156,10 +176,8 @@ def structure_ids(dam_id, attrs=None, rec=None, field=None, nid_lookup=None):
     out, seen = [], set()
 
     def add(v, how):
-        s = norm_id(v)
-        if s and not s.isdigit():
-            s = dwr_number(s)               # a structure id field holding 'DWR-3034'
-        if s and s.isdigit() and s not in seen:
+        s = sid_key(v)                      # a structure id field holding 'DWR-3034' too
+        if s and s not in seen:
             seen.add(s)
             out.append((s, how))
     attrs = attrs or {}
@@ -299,6 +317,20 @@ def dams_source(environ=None):
 
 
 # ======================================================================== reading ========
+def _connect_ro(path):
+    """A read-only SQLite connection to a file, its path encoded as a URI (offline_pack
+    .sqlite_ro_uri: '#', '?', '%' in a folder name, a Windows share //server/share)."""
+    try:
+        from ..damsuite.offline_pack import sqlite_ro_uri
+    except Exception:                                         # noqa: BLE001 - outside a plugin
+        def sqlite_ro_uri(p):
+            uri = p.as_uri()
+            if uri.startswith("file://") and not uri.startswith("file:///"):
+                uri = "file:////" + uri[len("file://"):]
+            return uri + "?mode=ro"
+    return sqlite3.connect(sqlite_ro_uri(pathlib.Path(os.path.abspath(path))), uri=True)
+
+
 def _gpkg_table(con, layer, want_lines):
     rows = con.execute("SELECT c.table_name, g.column_name, g.geometry_type_name, g.srs_id "
                        "FROM gpkg_contents c JOIN gpkg_geometry_columns g "
@@ -320,14 +352,56 @@ def _gpkg_table(con, layer, want_lines):
     return rows[0]
 
 
-def _crs_of(srs_id):
+def _crs_of(srs_id, org=None, org_id=None, definition=None):
+    """The CRS text of a GeoPackage srs_id with its gpkg_spatial_ref_sys row (organization,
+    organization_coordsys_id, definition): 'EPSG:n', another authority's 'ESRI:102039', else
+    the WKT definition (a custom CRS); lon/lat 4326 / 4269 and the undefined 0 / -1 are
+    LINE_CRS. 3.20.13 review: an srs_id is not always an EPSG code (ESRI:102039 is srs_id
+    102039 with organization ESRI; GDAL numbers a custom CRS 100000 and up)."""
     try:
         s = int(srs_id)
     except (TypeError, ValueError):
         return LINE_CRS
-    if s in (4326, 4269, 0, -1):
+    if s in (0, -1):
         return LINE_CRS
-    return "EPSG:{}".format(s)
+    o = str(org or "").strip().upper()
+    try:
+        code = int(org_id)
+    except (TypeError, ValueError):
+        code = None
+    wkt = str(definition or "").strip()
+    if wkt.lower() == "undefined":
+        wkt = ""
+    if o == "EPSG" and code is not None:
+        return LINE_CRS if code in (4326, 4269) else "EPSG:{}".format(code)
+    if o and o != "NONE" and code is not None:
+        return "{}:{}".format(o, code)
+    if wkt:
+        return wkt
+    if org is None and org_id is None:            # no gpkg_spatial_ref_sys row: as before
+        return LINE_CRS if s in (4326, 4269) else "EPSG:{}".format(s)
+    return ""                                      # no usable definition: unknown
+
+
+def _crs_of_ogr(sr):
+    """The CRS text of an OGR SpatialReference: 'AUTHORITY:code' (lon/lat 4326 / 4269:
+    LINE_CRS), else its WKT (an ESRI .prj without an authority), else LINE_CRS."""
+    if sr is None:
+        return LINE_CRS
+    try:
+        sr.AutoIdentifyEPSG()
+    except Exception:                                         # noqa: BLE001
+        pass
+    name, code = sr.GetAuthorityName(None), sr.GetAuthorityCode(None)
+    if name and code:
+        if str(name).upper() == "EPSG" and str(code) in ("4326", "4269"):
+            return LINE_CRS
+        return "{}:{}".format(str(name).upper(), code)
+    try:
+        wkt = sr.ExportToWkt()
+    except Exception:                                         # noqa: BLE001
+        wkt = ""
+    return wkt or LINE_CRS
 
 
 def _parts_of(geom):
@@ -369,24 +443,30 @@ class LineIndex(object):
             self._read_ogr(file_, lay)
 
     def _read_gpkg(self, path, layer):
-        con = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+        con = _connect_ro(path)
         try:
             t = _gpkg_table(con, layer, True)
             if t is None:
                 self.error = "no feature table"
                 return
             table, gcol, _gt, srs = t
-            self.crs = _crs_of(srs)
+            try:
+                row = con.execute("SELECT organization, organization_coordsys_id, definition "
+                                  "FROM gpkg_spatial_ref_sys WHERE srs_id = ?",
+                                  (srs,)).fetchone()
+            except sqlite3.Error:
+                row = None
+            self.crs = _crs_of(srs, *(row or (None, None, None)))
             cols = [r[1] for r in con.execute('PRAGMA table_info("{}")'.format(
                 table.replace('"', '""')))]
-            idc = next((c for n in SID_FIELDS for c in cols if c.lower() == n), None)
+            idc = id_field_of(cols) or None
             if idc is None:
                 self.error = "no structure id field"
                 return
             self.id_field = idc
             for sid, blob in con.execute('SELECT "{}", "{}" FROM "{}"'.format(
                     idc.replace('"', '""'), gcol.replace('"', '""'), table.replace('"', '""'))):
-                s = norm_id(sid)
+                s = sid_key(sid)
                 if s and blob is not None:
                     self._blobs.setdefault(s, []).append(blob)
                     self.count += 1
@@ -406,23 +486,16 @@ class LineIndex(object):
         lyr = ds.GetLayerByName(layer) if layer else ds.GetLayer(0)
         if lyr is None:
             return
-        sr = lyr.GetSpatialRef()
-        if sr is not None:
-            try:
-                sr.AutoIdentifyEPSG()
-            except Exception:                                 # noqa: BLE001
-                pass
-            code = sr.GetAuthorityCode(None)
-            self.crs = _crs_of(code) if code else LINE_CRS
+        self.crs = _crs_of_ogr(lyr.GetSpatialRef())
         defn = lyr.GetLayerDefn()
         names = [defn.GetFieldDefn(i).GetName() for i in range(defn.GetFieldCount())]
-        idc = next((c for n in SID_FIELDS for c in names if c.lower() == n), None)
+        idc = id_field_of(names) or None
         if idc is None:
             self.error = "no structure id field"
             return
         self.id_field = idc
         for f in lyr:
-            s = norm_id(f.GetField(idc))
+            s = sid_key(f.GetField(idc))
             g = f.GetGeometryRef()
             if not s or g is None:
                 continue
@@ -508,7 +581,7 @@ def nid_lookup_for(path):
     if hit is None or hit[0] != stamp:
         table = {}
         try:
-            con = sqlite3.connect("file:{}?mode=ro".format(file_), uri=True)
+            con = _connect_ro(file_)
             try:
                 t = _gpkg_table(con, "", False)
                 if t is not None:
@@ -518,9 +591,10 @@ def nid_lookup_for(path):
                     nc = next((c for n in NID_FIELDS for c in cols if c.lower() == n), None)
                     if idc and nc:
                         for sid, nid in con.execute('SELECT "{}", "{}" FROM "{}"'.format(
-                                idc, nc, t[0].replace('"', '""'))):
-                            if nid and norm_id(sid):
-                                table.setdefault(str(nid).strip().upper(), norm_id(sid))
+                                idc.replace('"', '""'), nc.replace('"', '""'),
+                            t[0].replace('"', '""'))):
+                            if nid and sid_key(sid):
+                                table.setdefault(str(nid).strip().upper(), sid_key(sid))
             finally:
                 con.close()
         except sqlite3.Error:
@@ -528,6 +602,16 @@ def nid_lookup_for(path):
         hit = (stamp, table)
         _NIDS[file_] = hit
     return lambda nid: hit[1].get(str(nid or "").strip().upper(), "")
+
+
+def unknown_crs_text(path, crs):
+    """The batch's one message for a DWR lines file whose CRS cannot be used (3.20.13 review:
+    said once, not as a distance refusal for every dam)."""
+    c = str(crs or "")
+    c = c if len(c) <= 60 else c[:57] + "..."
+    return "no DWR dam lines: {} is in a coordinate system that cannot be read ({})".format(
+        os.path.basename(str(path or "").split("|")[0]) or "the DWR dam lines file",
+        c or "none given")
 
 
 # ======================================================================== geometry =======
@@ -656,13 +740,20 @@ def _refusal(L, dn, dc):
             .format(dc, CENTRE_M) if dc > CENTRE_M else None)
 
 
+def dam_point_check_env(environ=None):
+    """The dam point check's environment override as the check reads it
+    (dam_point_check.env_mode: NDBREACH_DAM_POINT_CHECK, else DAM_POINT_CHECK): 'off', 'warn' or
+    'move', '' when unset or not understood (the setting then applies)."""
+    from . import dam_point_check
+    return dam_point_check.env_mode(os.environ if environ is None else environ) or ""
+
+
 def rule_state(environ=None):
     """The chain's runner-stage fingerprint term (core/chain.stage_inputs): the placement rule
     version, the DWR line switch and the dam point check override. Cheap (reads no file)."""
     env = os.environ if environ is None else environ
     return {"placement": PLACEMENT_RULE, "dwr_lines": "off" if env_off(env) else "on",
-            "dam_point_check_env": str(env.get("NDBREACH_DAM_POINT_CHECK") or "").strip()
-            .lower()}
+            "dam_point_check_env": dam_point_check_env(env)}
 
 
 def find(ids, index, to_work, inv_xy, label=None):
@@ -701,7 +792,7 @@ def find_in_lines(lines_attrs, id_field, ids, inv_xy, label=SOURCE_LAYER):
     if id_field:
         first = None
         for sid, how in ids or ():
-            hit = [ln for ln, at in lines_attrs if norm_id(at.get(id_field)) == sid]
+            hit = [ln for ln, at in lines_attrs if sid_key(at.get(id_field)) == sid]
             if hit:
                 line, info = choose([[tuple(map(float, q)) for q in h] for h in hit], inv_xy)
                 info.update(source=label, structure_id=sid, matched_by=how,

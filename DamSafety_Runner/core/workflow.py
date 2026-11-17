@@ -1329,6 +1329,17 @@ def fixed_clock_spreading_warning(sim_hr, reason=""):
                 float(sim_hr), " - {}".format(reason) if reason else ""))
 
 
+def add_crest_raised_warning(warnings, nraise, how):
+    """3.20.13: add the 'Crest raised' warning once per run, not once per LISFLOOD-FP pass (the
+    old check looked for 'crest raised' in lower case and so never matched its own warning).
+    Returns True when the warning was added."""
+    if not nraise or any(str(w).lower().startswith("crest raised") for w in warnings):
+        return False
+    warnings.append("Crest raised to the top of dam in the model grid "
+                    "({} cells, {}). The source DEM is unchanged.".format(nraise, how))
+    return True
+
+
 def latest_arrival_lower_bound(iterations, t_ref_hr=0.0):
     """v3.20.9 review: (flag, clock_hr, note) for the LAST LISFLOOD-FP pass. When some of its
     wet area was still first wet in the last 10% of the clock - the spread rule judged it not
@@ -2195,8 +2206,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # 3.20.13: a batch dam's DWR dam line (core/dwr_lines.py; set by the batch tools)
         crf = getattr(dam, "_crest_line_refused", None)
         if crf:
-            # a CREST_LINE matched by structure id that failed the DWR line guard
-            msg = crf + ". The dam point is used as given."
+            # a CREST_LINE matched by structure id that failed the DWR line guard; the warning
+            # says what places the dam instead (the DWR dam line, else the point)
+            msg = crest_refused_text(dam, crf)
             if msg not in warnings:
                 warnings.append(msg)
             log(msg)
@@ -2778,10 +2790,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 nraise += lfmod.raise_crest(
                     dem, dam_xy, inflow_xy, top_m,
                     length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
-            if nraise and "crest raised" not in " ".join(warnings):
-                how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
-                warnings.append("Crest raised to the top of dam in the model grid "
-                                "({} cells, {}). The source DEM is unchanged.".format(nraise, how))
+            how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
+            if add_crest_raised_warning(warnings, nraise, how):
                 log(warnings[-1])
         marker = os.path.join(wd, lfmod.STABILITY_MARKER)
         if not stability["on"] and os.path.exists(marker):
@@ -4303,6 +4313,22 @@ def _z_to_m_of(terrain_src):
 
 
 ROAD_NEAR_M = 30.0      # v3.10.18: a road this close to the dam point may be the embankment
+
+
+def crest_refused_text(dam, crf):
+    """3.20.13: the warning of a CREST_LINE matched by structure id that the guard refused,
+    worded from what places the dam instead: its DWR dam line (a batch), another dam line
+    given (DAM_LINES), else the point as given (which the dam point check may still move)."""
+    dli = getattr(dam, "_dam_line_info", None) or {}
+    if getattr(dam, "crest_line_xy", None):
+        if dli.get("used"):
+            return "{}. The DWR dam line is used instead ({}).".format(
+                crf, dwr_lines.describe(dli))
+        return "{}. The dam line given is used instead{}.".format(
+            crf, " ({})".format(dam._crest_line_source)
+            if getattr(dam, "_crest_line_source", None) else "")
+    return "{}. The dam point is used as given (the dam point check may still move " \
+        "it).".format(crf)
 
 
 def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, from_plan,

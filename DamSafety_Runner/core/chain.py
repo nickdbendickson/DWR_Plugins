@@ -342,7 +342,10 @@ def stage_inputs(stage, values, cv):
     out = {}
     pt = STAGE_TOOLS.get(stage)
     if pt:
-        out["rows"] = {k: v for (p, t, k), v in sorted(values.items()) if (p, t) == pt}
+        # the batch's USE_DWR_LINES row (new in 3.20.13) is carried by the dam_line_rule term
+        # below, not here: a 3.20.12 settings file given the row keeps its fingerprint
+        out["rows"] = {k: v for (p, t, k), v in sorted(values.items())
+                       if (p, t) == pt and (p, t, k) != USE_DWR_ROW}
     used = {"screening": ("SCREEN_WORK", "SCREEN_INCLUDE"),
             "runner": ("DEM", "ID_FIELD", "RUNNER_MODELS", "HEC_MODE"),
             "hec_build": ("HEC_STRUCTURES", "ANUGA_RUN"),
@@ -358,10 +361,89 @@ def stage_inputs(stage, values, cv):
     if stage == "runner":
         # 3.20.13: the dam point placement rules (each dam's DWR dam line, the dam point check
         # moving by default). A dam finished by an earlier Runner is run again once on a
-        # resume, so Nick's kit picks up the DWR line without --redo
+        # resume, so Nick's kit picks up the DWR line without --redo; with the DWR lines off
+        # (NDBREACH_DWR_LINES=off, or the batch's USE_DWR_LINES row false) only the dam point
+        # check override is in the term, and only when it is set (NDBREACH_DAM_POINT_CHECK or
+        # DAM_POINT_CHECK): unset, the fingerprint is the one an earlier Runner recorded. When
+        # the rerun places the dam where the recorded run did (run_report.json dam_xy,
+        # crest_line_xy and inflow_point xy) in a HEC Wait or Windows Run chain, the later
+        # stages are kept (run_dam, placement_of, KEEP_AFTER_RULE_MODES)
         from . import dwr_lines
-        out["dam_line_rule"] = dwr_lines.rule_state()
+        if dam_line_rule_on(values):
+            out[RULE_TERM] = dwr_lines.rule_state()
+        else:
+            dpc = dwr_lines.dam_point_check_env()
+            if dpc:
+                out[RULE_TERM] = {"dam_point_check_env": dpc}
     return out
+
+
+RULE_TERM = "dam_line_rule"
+USE_DWR_ROW = ("ndbreach", "batch", "USE_DWR_LINES")
+RUN_REPORT_REL = os.path.join("_breach_model", "run_report.json")   # = workflow.RUN_REPORT_REL
+PLACE_TOL_M = 0.01      # the dam point / dam line vertices within this: the same placement
+# the HEC modes whose later stages read none of the files a Runner rerun rewrites (skip: the
+# classification reads the Runner's final rasters; run_linux: the Runner runs HEC-RAS itself)
+KEEP_AFTER_RULE_MODES = ("wait", "run_windows")
+
+
+def dam_line_rule_on(values=None):
+    """Is the 3.20.13 dam placement in effect for the Runner stage? Not when the DWR lines are
+    off: NDBREACH_DWR_LINES=off, or the settings' batch row USE_DWR_LINES false."""
+    from . import dwr_lines
+    if dwr_lines.env_off():
+        return False
+    v = (values or {}).get(USE_DWR_ROW)
+    if v is not None and str(v).strip().lower() in dwr_lines.OFF_WORDS:
+        return False
+    return True
+
+
+def base_fingerprint(stage, values, cv):
+    """The stage's fingerprint without the dam_line_rule term (what a Runner before 3.20.13
+    recorded for the same inputs)."""
+    inp = stage_inputs(stage, values, cv)
+    inp.pop(RULE_TERM, None)
+    return fingerprint(inp)
+
+
+def placement_of(folder):
+    """The modelled dam point, dam line and breach inflow point of the Runner's last run of a
+    dam (run_report.json: dam_xy, crest_line_xy, inflow_point.xy), or None when there is no
+    readable report or no dam_xy."""
+    try:
+        with open(os.path.join(folder, RUN_REPORT_REL), encoding="utf-8") as f:
+            rep = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rep, dict) or not rep.get("dam_xy"):
+        return None
+    inflow = rep.get("inflow_point")
+    return {"dam_xy": rep.get("dam_xy"), "crest_line_xy": rep.get("crest_line_xy") or None,
+            "inflow_xy": (inflow.get("xy") if isinstance(inflow, dict) else None) or None}
+
+
+def same_placement(a, b, tol=PLACE_TOL_M):
+    """Do two placement_of records give the same dam point, dam line and inflow point (within
+    tol)? An inflow point in one record and not in the other is a change."""
+    if not a or not b:
+        return False
+
+    def close(p, q):
+        try:
+            return len(p) == len(q) and all(abs(float(x) - float(y)) <= tol
+                                            for x, y in zip(p, q))
+        except (TypeError, ValueError):
+            return False
+    if not close(a.get("dam_xy") or (), b.get("dam_xy") or ()):
+        return False
+    ia, ib = a.get("inflow_xy"), b.get("inflow_xy")
+    if (ia or ib) and not (ia and ib and close(ia, ib)):
+        return False
+    la, lb = a.get("crest_line_xy"), b.get("crest_line_xy")
+    if not la or not lb:
+        return not la and not lb
+    return len(la) == len(lb) and all(close(p, q) for p, q in zip(la, lb))
 
 
 # ---------------------------------------------------------------- plan ----
@@ -635,16 +717,35 @@ def run_dam(dam, ops, skip_done=True, log=None, cancelled=lambda: False):
             row["Last_Stage"] = stage
             log("{}: {} already done - kept".format(dam.dam_id, STAGE_LABELS[stage]))
             continue
-        rerun = True             # every later stage runs again
+        # 3.20.13: the Runner reruns only for the dam_line_rule term (a dam finished by an
+        # earlier Runner, or the term's value changed): what it placed before is compared with
+        # what it places now, and the later stages are kept when nothing moved and none of
+        # them reads the files the rerun rewrites (KEEP_AFTER_RULE_MODES)
+        before = None
+        base = base_fingerprint(stage, dam.values, dam.cv) if stage == "runner" else None
+        if skip_done and not rerun and base is not None and \
+                getattr(dam, "mode", None) in KEEP_AFTER_RULE_MODES and \
+                stage_kept(rec, (rec or {}).get("fingerprint")) and \
+                (rec.get("fingerprint_base") or rec.get("fingerprint")) == base:
+            before = placement_of(dam.folder)
+        rerun = True             # every later stage runs again (unless the placement is the same)
         log("{}: {}\u2026".format(dam.dam_id, STAGE_LABELS[stage]))
         st0 = time.time()
         rec = {"stage": stage, "status": "running", "started": now(), "fingerprint": fp,
                "outputs": {}, "message": ""}
+        if base is not None:
+            rec["fingerprint_base"] = base
         recs[stage] = rec
         try:
             out = ops.run(stage, dam) or {}
             rec.update(status="done", outputs=out)
             dam.outputs[stage] = out
+            if before is not None and same_placement(before, placement_of(dam.folder)):
+                rerun = False
+                rec["placement"] = "unchanged"
+                log("{}: {} run again for the 3.20.13 dam placement rules; the dam point, "
+                    "dam line and inflow point are where the recorded run put them, so the "
+                    "later stages are kept".format(dam.dam_id, STAGE_LABELS[stage]))
             row["Stage_" + stage] = "done"
             row["Last_Stage"] = stage
             if out.get("message"):
