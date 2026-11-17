@@ -1778,7 +1778,8 @@ def found_line_side(dam):
     """(direction, how) for a dam line the dam point check found: the line's normal on the side
     the embankment was found to fall away from its pond (dam._dpc_ds_dir), or None. Any other
     dam line, a user's included, keeps terrain.downstream_direction (workflow._downstream_inflow,
-    reservoir_carve.downstream_for)."""
+    reservoir_carve.downstream_for), which since 3.20.12 asks the reservoir's flat water first
+    (terrain.water_side); the toe pick on either is then checked (workflow._inflow_water_check)."""
     if getattr(dam, "_crest_line_source", None) != FOUND_LINE_SOURCE:
         return None
     ds = getattr(dam, "_dpc_ds_dir", None)
