@@ -13,8 +13,9 @@
    (st.class_stop, stoprule.py): an edge is also accepted where the breach
    flood's depth, or its rise over the no-breach baseline, has died out along
    the flow path near it (ND Dam Hazard's termination point) and no receptor
-   lies beyond. The duration is also extended if the flood is still advancing
-   at the end.
+   lies beyond. The duration is also extended (1.5x, the same domain run) while
+   the flood is still spreading at the end - v3.20.9: by AREA, see
+   spread_still_moving - at most MAX_CLOCK_EXTENSIONS times per domain run.
 4. Flood scenario: the no-breach baseline runs on the final domain, and the
    incremental depth and water-surface rise are worked out.
 5. Optionally ANUGA on a mesh around the LISFLOOD-FP flood extent, refined
@@ -1087,6 +1088,217 @@ def hit_run_cap(it, max_iterations, over):
     """The loop has used its last allowed domain run (max_iterations) and the flood is still
     leaving (`over` is non-empty). A clock/duration extension is not counted as a run."""
     return bool(over) and it == int(max_iterations)
+
+
+# v3.20.9 (Nick, 2026-11-16): the "flood still spreading" clock rule is AREA-BASED. Before, a
+# single cell first wet (at the arrival depth) in the last 10% of the clock lengthened the clock
+# 1.5x and re-ran the pass, with no limit on how often: a thin sheet creeping over flat ground
+# kept DWR-4031 (6.9 ac-ft pond, ~53 ac wet) extending 4.3 -> 6.5 -> ... -> 32.8 h on one DEM
+# and to 9 passes / a 93.7 h latest arrival on another, for a few cells at the fringe. Now the
+# flood is still spreading only when a real share of the wet area is still being reached:
+#   late_ac  = area first wet (arrival at >= the arrival depth, 0.1 ft) after
+#              SPREAD_LATE_WINDOW x the clock (the same late window as before: the last 10%)
+#   wet_ac   = area with an arrival (wet at >= the arrival depth) in this pass
+#   spreading = (late_ac >= SPREAD_LATE_FRACTION x wet_ac and late_ac >= SPREAD_MIN_LATE_AC)
+#               or late_ac >= SPREAD_LARGE_LATE_AC (whatever its share; v3.20.9 review)
+#               and, when this domain run has an earlier, shorter-clock pass on the same DEM
+#               and solver settings, wet_ac grew by >= SPREAD_GROWTH_FRACTION over that pass's
+#               wet area (or by >= SPREAD_LARGE_LATE_AC).
+# Cells already under pond water at the arrival depth when the run starts are left out of both
+# areas (their arrival is ~0, so they would only dilute the late share).
+# The growth test is a CONSISTENCY GUARD, not a third physical gate: in a deterministic re-run
+# on the same DEM a cell first wet after 0.9 x 1.5T was dry at T, so the growth is at least the
+# late area whenever the late test passes. It only bites when the two passes are not really
+# comparable, and a pass that is known not to be (a 3DEP refill, the ACC stability switch, a
+# record from before 3.20.9) is not compared at all (previous_pass_flooded_ac).
+# There is deliberately NO depth floor above the arrival depth: thin real sheets (0.1-0.5 ft)
+# decide road overtopping and wet structures on the ND plains.
+SPREAD_LATE_WINDOW = 0.9        # "late" = first wet after 90% of the clock (the last 10%)
+SPREAD_LATE_FRACTION = 0.01     # late area must be at least 1% of the wet area ...
+SPREAD_GROWTH_FRACTION = 0.01   # ... and the wet area must have grown 1% since the last pass
+# ... and the late area at least 0.25 ac: 11 cells at 10 m (0.0247 ac each), 2 cells at 30 m
+# (0.222 ac each), 1 cell at 50 m (0.618 ac). It only matters for small floods (under 25 ac the
+# 1% share is less than this), where one or two late fringe cells are noise in the wet/dry
+# front, not a flood still on its way.
+SPREAD_MIN_LATE_AC = 0.25
+# v3.20.9 review: on a large flood the early-flooded valley fills the denominator, so a real
+# thin sheet still advancing (e.g. 51 ac of a 20,000 ac flood in the last 3 h of a 30 h clock,
+# 0.26%) never reaches the 1% share. A late area this large is a flood still on its way
+# whatever its share (101 cells at 10 m, 113 at 30 m: not fringe noise).
+SPREAD_LARGE_LATE_AC = 25.0
+# At most this many clock extensions per domain run (the clock grows 1.5x each: 1.5^4 = 5.1x).
+# Reaching it with the flood still spreading stops the loop with a warning (stop reason
+# "clock-extension limit"), not silently.
+MAX_CLOCK_EXTENSIONS = 4
+
+
+def _spread_pct(x):
+    return "{:.1f}%".format(100.0 * x) if abs(x) < 0.1 else "{:.0f}%".format(100.0 * x)
+
+
+def spread_still_moving(arr_hr, hmax_m, sim_hr, cell_ac, prev_flooded_ac=None,
+                        arrival_depth_m=ARRIVAL_DEPTH_FT * FT, late_window=SPREAD_LATE_WINDOW,
+                        late_fraction=SPREAD_LATE_FRACTION, growth_fraction=SPREAD_GROWTH_FRACTION,
+                        min_late_ac=SPREAD_MIN_LATE_AC, large_late_ac=SPREAD_LARGE_LATE_AC,
+                        init_m=None):
+    """v3.20.9: is the flood still spreading at the end of a LISFLOOD-FP pass? (the area rule
+    above). arr_hr: arrival time (h) per cell, NaN where never wet at the arrival depth;
+    hmax_m: the depth (m) a cell counts as wet by (the rise over any initial pond water), or
+    None to trust arr_hr alone; sim_hr: this pass's clock (h); cell_ac: one cell's area (ac);
+    prev_flooded_ac: the wet area of the earlier, shorter-clock pass of the same domain run on
+    the same DEM (previous_pass_flooded_ac), None when there is none; init_m: the initial pond
+    water depth (m) or None - cells already at the arrival depth under it are left out.
+    Returns (still_spreading, info) with info = {late_ac, flooded_ac, late_frac, growth_frac,
+    prev_flooded_ac, late_after_hr, still_spreading, reason}; `reason` is a plain phrase for
+    the log ("12.3 ac (4.1%) first wet in the last 10% of the clock, wet area +6% since the
+    last pass")."""
+    arr = np.asarray(arr_hr, dtype=np.float64)
+    thr = float(arrival_depth_m) - lfmod.ARRIVAL_TOL_M
+    has = np.isfinite(arr) & (arr >= 0.0)
+    depth_wet = None
+    if hmax_m is not None:
+        h = np.asarray(hmax_m, dtype=np.float64)
+        depth_wet = np.isfinite(h) & (h >= thr)
+        has &= depth_wet
+    if init_m is not None:
+        # v3.20.9 review: pond cells wet at the start have an arrival of ~0 and are never
+        # "late"; counting them would only dilute the late share on pothole terrain
+        i0 = np.asarray(init_m, dtype=np.float64)
+        pond = np.isfinite(i0) & (i0 >= thr)
+        has &= ~pond
+        if depth_wet is not None:
+            depth_wet = depth_wet & ~pond
+    sim_hr = float(sim_hr)
+    late_after = float(late_window) * sim_hr
+    n_wet = int(has.sum())
+    n_late = int((has & (arr > late_after)).sum())
+    flooded_ac = n_wet * float(cell_ac)
+    late_ac = n_late * float(cell_ac)
+    late_frac = late_ac / flooded_ac if flooded_ac > 0 else 0.0
+    growth = None
+    if prev_flooded_ac is not None and float(prev_flooded_ac) > 0:
+        growth = (flooded_ac - float(prev_flooded_ac)) / float(prev_flooded_ac)
+    window = "the last {:.0f}% of the clock".format(100.0 * (1.0 - float(late_window)))
+    late_txt = "{:.2f} ac ({} of the {:.1f} ac wet area) first wet in {}".format(
+        late_ac, _spread_pct(late_frac), flooded_ac, window)
+    large = late_ac >= float(large_late_ac) - 1e-9
+    if large and late_frac < late_fraction:
+        late_txt += " (under {} of the wet area, but at least the {:g} ac that counts at any " \
+                    "share)".format(_spread_pct(late_fraction), float(large_late_ac))
+    grown_ac = (flooded_ac - float(prev_flooded_ac)) if growth is not None else None
+    if n_wet == 0:
+        if (depth_wet is not None and depth_wet.any()
+                and not np.isfinite(arr).any()):
+            # v3.20.9 review: no .inittm (read_results leaves the arrival grid all NaN) - the
+            # max-depth grid is wet, so do not say "nothing is wet"
+            go, why = False, "no arrival times were written (the arrival grid is empty)"
+        else:
+            go, why = False, "nothing is wet at the arrival depth"
+    elif n_late == 0:
+        go, why = False, "nothing first wet in {}".format(window)
+    elif late_frac < late_fraction and not large:
+        go, why = False, "only {}, under {}".format(late_txt, _spread_pct(late_fraction))
+    elif late_ac < min_late_ac and not large:
+        go, why = False, "only {}, under the {:g} ac floor".format(late_txt, min_late_ac)
+    elif prev_flooded_ac is not None and float(prev_flooded_ac) <= 0:
+        go, why = True, "{}, wet area new since the last pass".format(late_txt)
+    elif (growth is not None and growth < growth_fraction
+          and not (large and grown_ac >= float(large_late_ac) - 1e-9)):
+        g = 100.0 * growth
+        g = 0.0 if abs(g) < 0.05 else g      # the stored wet area is rounded to 0.01 ac
+        go, why = False, "{}, but the wet area {} since the last pass (under +{})".format(
+            late_txt, "grew only {:+.1f}%".format(g) if g >= 0 else "shrank {:.1f}%".format(-g),
+            _spread_pct(growth_fraction))
+    else:
+        go = True
+        why = late_txt + (", wet area +{} since the last pass".format(_spread_pct(growth))
+                          if growth is not None else "")
+    info = {"late_ac": round(late_ac, 2), "flooded_ac": round(flooded_ac, 2),
+            "late_frac": round(late_frac, 4),
+            "growth_frac": round(growth, 4) if growth is not None else None,
+            "prev_flooded_ac": (round(float(prev_flooded_ac), 2)
+                                if prev_flooded_ac is not None else None),
+            "late_after_hr": round(late_after, 2), "still_spreading": bool(go), "reason": why}
+    return bool(go), info
+
+
+def previous_pass_flooded_ac(iterations, run, sim_hr, stable_settings=False):
+    """The wet area (ac, at the arrival depth) of the pass the spread rule compares with: the
+    LAST recorded pass, when it belongs to the same domain run (`run`), ran a shorter clock than
+    `sim_hr`, and was not superseded by a 3DEP refill (a refill re-runs the same domain run on a
+    different DEM, so its wet area is not comparable). None otherwise (the first pass of a
+    domain run, or the first pass after a refill). Note: rec["clock_extension"] says whether a
+    pass was ITSELF an extension, not whether a previous pass exists, so it is not used here.
+    v3.20.9 review: also None when the previous pass ran other solver settings (the ACC
+    stability switch, `stable_settings` = this pass's) or has no `spread` record (a checkpoint
+    from before 3.20.9: its stats.flooded_acres counts the total depth, initial pond water
+    included and with no tolerance, so it is not the same measure - the growth test is then
+    skipped rather than compared with it)."""
+    if not iterations:
+        return None
+    prev = iterations[-1]
+    if prev.get("run") != run or prev.get("followed_by_dem_refill"):
+        return None
+    if bool(prev.get("stable_settings")) != bool(stable_settings):
+        return None
+    if float(prev.get("sim_time_hr") or 0.0) >= round(float(sim_hr), 2) - 1e-6:
+        return None
+    v = (prev.get("spread") or {}).get("flooded_ac")
+    return float(v) if v is not None else None
+
+
+def clock_extensions_used(iterations, run):
+    """How many clock extensions domain run `run` has had (passes recorded as extensions)."""
+    return sum(1 for r in iterations or () if r.get("run") == run and r.get("clock_extension"))
+
+
+def hit_clock_extension_cap(spreading, over, used, max_ext=MAX_CLOCK_EXTENSIONS):
+    """The flood is still spreading inside the domain (no edge to grow: `over` empty) but this
+    domain run has already had `max_ext` clock extensions: stop instead of lengthening again.
+    With an edge over (the domain grows), the next pass is a new domain run, so no cap."""
+    return bool(spreading) and not over and int(used) >= int(max_ext)
+
+
+def clock_extension_cap_warning(max_ext, sim_hr, reason=""):
+    # v3.20.9 review: name the duration to set (a chosen duration longer than this clock runs
+    # that long; with a longest simulated time it can still lengthen from there)
+    return ("Flood still spreading after {} clock extensions (clock {:.1f} h){}: the latest "
+            "arrival times may be cut short; check Arrival Time.tif near the edge of the wet "
+            "area, or set a simulation duration longer than {:.1f} h.".format(
+                int(max_ext), float(sim_hr), " - {}".format(reason) if reason else "",
+                float(sim_hr)))
+
+
+def fixed_clock_spreading_warning(sim_hr, reason=""):
+    """v3.20.9 review: a run that repeats an earlier run's plan (a probabilistic or sensitivity
+    case, the finer-grid re-run, a nested fine run) keeps that run's clock and never lengthens
+    it; when the flood is still spreading at its end, say so instead of staying silent."""
+    return ("The flood is still spreading at the end of the fixed clock ({:.1f} h) this run "
+            "reuses from the run it repeats{}: the latest arrival times may be cut short near "
+            "the edge of the wet area.".format(
+                float(sim_hr), " - {}".format(reason) if reason else ""))
+
+
+def latest_arrival_lower_bound(iterations, t_ref_hr=0.0):
+    """v3.20.9 review: (flag, clock_hr, note) for the LAST LISFLOOD-FP pass. When some of its
+    wet area was still first wet in the last 10% of the clock - the spread rule judged it not
+    spreading (or a limit stopped it) - the run's latest arrival is a LOWER BOUND at the fringe:
+    a longer clock could only make it later. clock_hr is that pass's clock from breach
+    initiation (h); note is a plain sentence, '' when the flag is False."""
+    if not iterations:
+        return False, None, ""
+    last = iterations[-1]
+    sp = last.get("spread") or {}
+    clock = last.get("sim_time_hr")
+    clock = round(float(clock) - float(t_ref_hr or 0.0), 2) if clock is not None else None
+    late = float(sp.get("late_ac") or 0.0)
+    if late <= 0:
+        return False, clock, ""
+    return True, clock, (
+        "a lower bound: {:.2f} ac ({} of the wet area) was first wet in the last {:.0f}% of the "
+        "{:.1f} h LISFLOOD-FP clock".format(
+            late, _spread_pct(float(sp.get("late_frac") or 0.0)),
+            100.0 * (1.0 - SPREAD_LATE_WINDOW), float(last.get("sim_time_hr") or 0.0)))
 
 
 def hit_extent_cap(next_w_m, next_h_m, max_extent_m, over):
@@ -2237,11 +2449,23 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 over = over + leak
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
-        still_moving = arr_max > 0.9 * sim_time / 3600.0
+        # v3.20.9: the area-based spread rule (spread_still_moving) replaces "any one cell
+        # first wet in the last 10% of the clock". Wet = the rise over any initial pond water
+        # (depth_eff) at the arrival depth; compared with the previous pass of this domain run
+        # on the same DEM (never across a 3DEP refill or the ACC stability switch); cells under
+        # pond water at the arrival depth from the start are left out (review).
+        stable_now = bool(stability["on"])
+        still_moving, spread = spread_still_moving(
+            lf_env.arrival_hr.data, depth_eff, sim_time / 3600.0, dem.dx ** 2 / 4046.8564224,
+            previous_pass_flooded_ac(iterations, it, sim_time / 3600.0, stable_now), arrival_m,
+            init_m=init_grid.data if init_grid is not None else None)
         # 3.13.2 (DWR-4031 toe10m): "run" is the domain run (a clock extension keeps it,
-        # by design); "pass" numbers every LISFLOOD-FP pass so the report can tell them apart
+        # by design); "pass" numbers every LISFLOOD-FP pass so the report can tell them apart.
+        # v3.20.9: a re-run after a 3DEP refill keeps the run number too but is not a clock
+        # extension (the previous pass is marked followed_by_dem_refill).
         rec = {"run": it, "pass": len(iterations) + 1,
-               "clock_extension": bool(iterations) and iterations[-1].get("run") == it,
+               "clock_extension": bool(iterations) and iterations[-1].get("run") == it
+               and not iterations[-1].get("followed_by_dem_refill"),
                "bounds": [round(b, 1) for b in bounds],
                "size_mi": [round((bounds[2] - bounds[0]) / MILE, 2),
                            round((bounds[3] - bounds[1]) / MILE, 2)],
@@ -2250,6 +2474,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                "edge_max_depth_ft": {k: round(v / FT, 2) for k, v in edges.items()},
                "edges_over_tolerance": over, "edges_over_outflow": leak,
                "latest_arrival_hr": round(arr_max, 2),
+               "spread": spread, "stable_settings": stable_now,
                "stats": lf_env.stats}
         iterations.append(rec)
         warnings += [n for n in lf_env.notes if n not in warnings]
@@ -2288,6 +2513,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
                         refill_paths.append(tile)
                         refilled = True
+                        # v3.20.9: the next pass re-runs this domain run on the refilled DEM:
+                        # not a clock extension, and not comparable for the spread rule
+                        rec["followed_by_dem_refill"] = True
                         msg = ("Wet cells sit on DEM no-data ({:,} cells). Requested one 3DEP "
                                "refill of that footprint plus 1 mile and will run again. "
                                "Dry no-data was left alone.".format(touch_n))
@@ -2374,14 +2602,29 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append("The flood leaves the base domain through {} deeper than "
                                 "{:.1f} ft in this case.".format(", ".join(over),
                                                                  st.edge_tolerance_ft))
+            elif still_moving:
+                # v3.20.9 review: a plan run never lengthens its clock; say when it should have
+                warnings.append(fixed_clock_spreading_warning(sim_time / 3600.0,
+                                                              spread["reason"]))
+                log(warnings[-1])
             break
         if not over and not still_moving:
+            # v3.20.9: two conditions stop here - the edges (the domain is big enough) and the
+            # spread rule (the clock is long enough); say both, so a stop the spread rule made
+            # is not credited to the edges alone
             log("Flood stays inside the domain (edge depths below {:.1f} ft, or nothing "
-                "downstream to reach).".format(st.edge_tolerance_ft))
+                "downstream to reach) and is no longer spreading: {}.".format(
+                    st.edge_tolerance_ft, spread["reason"]))
             break
-        if still_moving and st.sim_time_hr and not over:
-            # lengthen up to the cap instead of stopping on the first clock
-            pass
+        # v3.20.9: at most MAX_CLOCK_EXTENSIONS clock extensions per domain run, on the
+        # automatic and the chosen-duration path alike (the domain-growth path is unaffected:
+        # with an edge over, the next pass is a new domain run)
+        if hit_clock_extension_cap(still_moving, over, clock_extensions_used(iterations, it)):
+            stop_reason = "clock-extension limit"
+            warnings.append(clock_extension_cap_warning(MAX_CLOCK_EXTENSIONS, sim_time / 3600.0,
+                                                        spread["reason"]))
+            log(warnings[-1])
+            break
         if hit_run_cap(it, st.max_iterations, over):
             stop_reason = "domain-run limit"
             warnings.append(
@@ -2416,7 +2659,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     "{} runs x the per-run limit".format(st.max_iterations),
                     "leaving through {} deeper than {:.1f} ft".format(
                         ", ".join(over), st.edge_tolerance_ft) if over
-                    else "still moving inside the domain"))
+                    else "still spreading inside the domain"))
             log(warnings[-1])
             break
         if over:
@@ -2430,7 +2673,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      sim_time * (1.5 if still_moving else 1.0)))
         elif still_moving and sim_time < cap_s - 1.0 and st.sim_max_hr:
             # a chosen duration still lengthens, up to the longest clock, while the
-            # flood is moving (the same rule as the screening tool)
+            # flood is spreading (v3.20.9: the same area rule as the automatic path)
             new_sim = min(cap_s, sim_time * 1.5)
         if not over and new_sim <= sim_time * 1.001:
             stop_reason = "duration cap"
@@ -2441,8 +2684,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             break
         sim_time = new_sim
         if not over:
-            log("Flood still moving inside the domain; extending the clock to {:.1f} h "
-                "without using a domain run.".format(sim_time / 3600.0))
+            # v3.20.9: say why (the spread rule's numbers) and which extension this is
+            log("Flood still spreading: {}; extending the clock to {:.1f} h without using a "
+                "domain run (clock extension {} of at most {}).".format(
+                    spread["reason"], sim_time / 3600.0,
+                    clock_extensions_used(iterations, it) + 1, MAX_CLOCK_EXTENSIONS))
             state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
                        warnings=warnings, lisflood_done=False, next_it=it)
             continue
@@ -2461,6 +2707,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
+    report["spread_rule"] = {"late_window": SPREAD_LATE_WINDOW,       # v3.20.9
+                             "late_fraction": SPREAD_LATE_FRACTION,
+                             "growth_fraction": SPREAD_GROWTH_FRACTION,
+                             "min_late_ac": SPREAD_MIN_LATE_AC,
+                             "large_late_ac": SPREAD_LARGE_LATE_AC,
+                             "max_clock_extensions": MAX_CLOCK_EXTENSIONS}
     if stop_reason:
         report["cut_off"] = {
             "reason": stop_reason,
@@ -2857,6 +3109,15 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # breach_occurs False keeps ND Dam Hazard's model gate and the dam record from reading
         # these rasters as a failure flood.
         summary["no_breach_scenario"] = True
+    # v3.20.9 review: when the last LISFLOOD-FP pass still had area first wet in the last 10%
+    # of its clock, the latest arrival is a lower bound (shown in run_report.md / the docx;
+    # HEC-RAS sizes its window from the clock instead of the arrival)
+    lb, lb_clock, lb_note = latest_arrival_lower_bound(iterations, t_ref_hr)
+    if lb and summary.get("latest_arrival_hr") is not None:
+        summary["latest_arrival_lower_bound"] = True
+        summary["latest_arrival_note"] = lb_note
+        summary["lisflood_clock_hr"] = lb_clock
+        log("Latest arrival {} h is {}.".format(summary["latest_arrival_hr"], lb_note))
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
@@ -3970,9 +4231,12 @@ def render_report(r):
                  s["flooded_acres"], s["flooded_acres_over_arrival_depth"]),
              "| Maximum depth / velocity | {} ft / {} ft/s |".format(s["max_depth_ft"],
                                                                   s["max_velocity_fps"]),
-             "| Latest arrival | {} h after {} |".format(
+             "| Latest arrival | {} h after {}{} |".format(
                  s["latest_arrival_hr"], "the start of the inflow" if s.get("no_breach_scenario")
-                 else "breach initiation"),
+                 else "breach initiation",
+                 # v3.20.9 review: say when it is a lower bound (area still first wet late)
+                 " ({})".format(s["latest_arrival_note"])
+                 if s.get("latest_arrival_lower_bound") and s.get("latest_arrival_note") else ""),
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
@@ -4033,21 +4297,43 @@ def render_report(r):
             lines.append("| Reaches | {} |".format(ss["receptors_flooded"]))
         lines.append("")
     warns = list(r.get("warnings") or [])
-    cut = any("still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower() or "edge" in w.lower())
-              for w in warns)
+    # v3.20.9 review: "spreading" is the loop's word now (the wall-clock budget and the
+    # clock-extension limit warnings say it), and those two limits are matched by name, not by
+    # whatever other word their sentence happens to contain
+    clk = any("clock extensions (clock" in w for w in warns)         # v3.20.9
+    budget = any("of wall time, the budget for the domain-growth loop" in w for w in warns)
+    fixed = any("end of the fixed clock" in w for w in warns)
+    cut = clk or budget or fixed or any(
+        "still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower()
+                                  or "spreading" in w.lower() or "edge" in w.lower())
+        for w in warns)
     if cut:
         hole = any("held up by a hole" in w for w in warns)
         cap = any("duration cap" in w for w in warns)
         runs = any("domain runs" in w for w in warns)
         if hole:
             why = "Wet cells are still on DEM no-data after one refill. Depth is held up by a hole, not by the clock."
+        elif clk:
+            why = ("The clock-extension limit ({} per domain run) stopped the clock while the flood was still "
+                   "spreading. Latest arrival times near the edge of the wet area may be cut short. This is "
+                   "not the duration cap or the domain-run limit.".format(MAX_CLOCK_EXTENSIONS))
+        elif budget:
+            why = ("The wall-clock budget for the domain-growth loop stopped the run while the flood was "
+                   "still spreading or leaving an edge. The area, depth and latest arrival times below "
+                   "may be incomplete. This is not the duration cap or the domain-run limit.")
         elif cap:
             why = "The duration cap stopped the clock while water was still moving. This is not the domain-run limit."
         elif runs:
             why = "The domain-run limit stopped the run while water was still leaving an edge. The duration cap did not stop it."
+        elif fixed:
+            why = ("This run reuses the clock of the run it repeats and never lengthens it, and the flood "
+                   "was still spreading at its end. Latest arrival times near the edge of the wet area "
+                   "may be cut short.")
         else:
             why = "The flood was still moving when the run stopped. The area and depth below are incomplete."
-        reason = "DEM hole" if hole else ("duration cap" if cap else ("domain-run limit" if runs else "still moving"))
+        reason = "DEM hole" if hole else ("clock-extension limit" if clk else (
+            "wall-clock budget" if budget else ("duration cap" if cap else (
+                "domain-run limit" if runs else ("fixed clock" if fixed else "still moving")))))
         r["cut_off"] = {"reason": reason, "detail": why}
         lines += ["## Results cut off", "", why, ""]
     if warns:
@@ -4105,6 +4391,30 @@ def render_report(r):
             ", ".join(it.get("edges_over_after_class_stop", it.get(
                 "edges_over_after_receptors", it["edges_over_tolerance"]))) or "none",
             it["runtime_min"]))
+    # v3.20.9: why each pass did or did not lengthen the clock (the area-based spread rule)
+    runs_ = r["lisflood_runs"]
+
+    def _spread_note(i, it):
+        # v3.20.9 review: a pass whose spread result did not decide a clock extension says so
+        if it.get("followed_by_dem_refill"):
+            return " (wet cells on DEM no-data: the same domain run was re-run on the 3DEP-refilled DEM, not a clock decision)"
+        if i + 1 < len(runs_) and runs_[i + 1].get("run") != it.get("run"):
+            return " (an edge was over, so the domain grew; this only set whether the clock grew 1.5x with it)"
+        return ""
+    spr = [(pass_number(it, i), it["spread"], _spread_note(i, it)) for i, it in enumerate(runs_)
+           if isinstance(it.get("spread"), dict)]
+    if spr:
+        lines += ["", "Clock rule (v3.20.9): the clock is lengthened while at least {:g}% of the "
+                  "wet area (and {:g} ac), or {:g} ac at any share, is first wet in the last "
+                  "{:.0f}% of the clock; a pass is compared with the last pass of the same domain "
+                  "run (same DEM and solver settings) only as a consistency check that the wet "
+                  "area grew ({:g}% or {:g} ac); at most {} clock extensions per domain run.".format(
+                      100 * SPREAD_LATE_FRACTION, SPREAD_MIN_LATE_AC, SPREAD_LARGE_LATE_AC,
+                      100 * (1 - SPREAD_LATE_WINDOW), 100 * SPREAD_GROWTH_FRACTION,
+                      SPREAD_LARGE_LATE_AC, MAX_CLOCK_EXTENSIONS)]
+        lines += ["- Pass {}: {} - {}{}.".format(
+            n, "still spreading" if sp.get("still_spreading") else "not spreading",
+            sp.get("reason", ""), note) for n, sp, note in spr]
     last = r["lisflood_runs"][-1]["stats"]
     lines += ["", "{} (last pass): max volume error {}% of the breach volume, {}.".format(
         r.get("flood_engine_short", "LISFLOOD-FP"), last.get("max_volume_error_pct"),
