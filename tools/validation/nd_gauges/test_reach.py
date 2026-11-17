@@ -137,5 +137,53 @@ class RunnerReadsIt(unittest.TestCase):
             self.assertEqual(out["q_cms"], q_cms)
 
 
+class NhdFallback(unittest.TestCase):
+    """When the whole-envelope NHD query times out (long rivers make a heavy query the service
+    504s on), nhd_parts tiles the box into a 3x3 grid, unions the lines and drops the duplicates
+    a feature picks up by intersecting two tiles."""
+
+    def test_tiles_the_box_and_dedupes_on_a_504(self):
+        import urllib.error
+        calls = {"n": 0}
+        whole = reach._nhd_box
+
+        def fake(river, box, timeout=180):
+            calls["n"] += 1
+            if calls["n"] == 1:                                   # the whole box times out
+                raise urllib.error.HTTPError(reach.NHD, 504, "Gateway Time-out", {}, None)
+            dup = np.array([[100.0, 200.0], [110.0, 200.0]])      # same feature in every tile
+            uniq = np.array([[float(calls["n"]), 0.0], [float(calls["n"]) + 1.0, 0.0]])
+            return [dup, uniq]
+
+        reach._nhd_box = fake
+        try:
+            parts = reach.nhd_parts({"river": "Test", "lon": -103.0, "lat": 46.0, "id": "USGS-x"},
+                                    say=lambda *a: None)
+        finally:
+            reach._nhd_box = whole
+        self.assertEqual(calls["n"], 10)                          # 1 whole box + 9 tiles
+        self.assertEqual(len(parts), 10)                          # 1 shared feature + 9 unique
+
+    def test_fetch_gives_up_on_a_4xx_but_retries_a_5xx(self):
+        import urllib.error
+        import urllib.request
+        orig_sleep, orig_open = reach.time.sleep, urllib.request.urlopen
+        reach.time.sleep = lambda *a: None
+        try:
+            for code, expect in ((404, 1), (503, 4)):
+                n = {"k": 0}
+
+                def boom(req, timeout=0, code=code, n=n):
+                    n["k"] += 1
+                    raise urllib.error.HTTPError("https://x/y", code, "e", {}, None)
+
+                urllib.request.urlopen = boom
+                with self.assertRaises(urllib.error.HTTPError):
+                    reach.fetch("https://x/y", tries=4)
+                self.assertEqual(n["k"], expect, code)
+        finally:
+            reach.time.sleep, urllib.request.urlopen = orig_sleep, orig_open
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

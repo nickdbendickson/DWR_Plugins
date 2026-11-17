@@ -24,6 +24,7 @@ import math
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -58,7 +59,13 @@ def fetch(url, timeout=180, tries=4):
             with urllib.request.urlopen(urllib.request.Request(url, headers=UA),
                                         timeout=timeout) as r:
                 return r.read()
-        except OSError:
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429:     # a real 4xx won't improve on retry
+                raise
+            if k == tries - 1:
+                raise
+            time.sleep(5 * (k + 1))
+        except OSError:                            # timeout, reset, DNS, URLError
             if k == tries - 1:
                 raise
             time.sleep(5 * (k + 1))
@@ -79,25 +86,61 @@ def to_utm(lon, lat):
 
 
 # ------------------------------------------------------------------------ the river line
-def nhd_parts(g, half_deg=0.22):
-    """The named river's NHD flowlines within about 30 km of the gauge, in EPSG:26914."""
-    box = (g["lon"] - half_deg, g["lat"] - half_deg * 0.7, g["lon"] + half_deg, g["lat"] + half_deg * 0.7)
+def _nhd_box(river, box, timeout=180):
+    """All flowlines of `river` intersecting one lon/lat envelope, paginated, in EPSG:26914.
+    Raises OSError (through fetch) if the service times out so the caller can tile the box."""
     parts, offset = [], 0
     while True:
-        q = {"where": "gnis_name = '{}'".format(g["river"]), "geometry": "{},{},{},{}".format(*box),
+        q = {"where": "gnis_name = '{}'".format(river), "geometry": "{},{},{},{}".format(*box),
              "geometryType": "esriGeometryEnvelope", "inSR": 4326, "outSR": EPSG,
              "spatialRel": "esriSpatialRelIntersects", "outFields": "gnis_name",
              "returnGeometry": "true", "maxAllowableOffset": 5, "resultOffset": offset,
              "resultRecordCount": 200, "f": "json"}
-        d = json.loads(fetch(NHD + "?" + urllib.parse.urlencode(q), timeout=300).decode("utf-8"))
+        d = json.loads(fetch(NHD + "?" + urllib.parse.urlencode(q), timeout=timeout).decode("utf-8"))
         if "error" in d:
             raise SystemExit("NHD: {}".format(d["error"]))
         for ft in d.get("features", []):
             for path in ft["geometry"]["paths"]:
                 parts.append(np.asarray(path, float)[:, :2])
         if not d.get("exceededTransferLimit"):
-            break
+            return parts
         offset += len(d.get("features", []))
+
+
+def _dedupe(parts):
+    """Drop a flowline returned by more than one tile (one feature intersects both)."""
+    seen, out = set(), []
+    for p in parts:
+        k = (round(p[0, 0]), round(p[0, 1]), round(p[-1, 0]), round(p[-1, 1]), len(p))
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+    return out
+
+
+def nhd_parts(g, half_deg=0.22, say=print):
+    """The named river's NHD flowlines within about 30 km of the gauge, in EPSG:26914.
+
+    One envelope query first. A long river makes a heavy gnis_name query that the service can
+    time out on (504); when that happens, split the envelope into a 3x3 grid of smaller boxes
+    and union the lines, so no single query has to cover the whole river."""
+    box = (g["lon"] - half_deg, g["lat"] - half_deg * 0.7, g["lon"] + half_deg, g["lat"] + half_deg * 0.7)
+    try:
+        parts = _nhd_box(g["river"], box)
+    except OSError as e:                            # 5xx/timeout after retries -> tile the box
+        say("NHD whole-box query failed ({}); tiling the envelope".format(e))
+        x0, y0, x1, y1 = box
+        xs, ys, parts, failed = np.linspace(x0, x1, 4), np.linspace(y0, y1, 4), [], 0
+        for i in range(3):
+            for j in range(3):
+                try:
+                    parts += _nhd_box(g["river"], (xs[i], ys[j], xs[i + 1], ys[j + 1]))
+                except OSError as te:
+                    failed += 1
+                    say("  NHD tile {},{} failed: {}".format(i, j, te))
+        if failed:
+            say("  NHD: {} of 9 tiles failed".format(failed))
+        parts = _dedupe(parts)
     if not parts:
         raise SystemExit("NHD has no '{}' near {}".format(g["river"], g["id"]))
     return parts
@@ -240,7 +283,7 @@ def build(gid, out, say=print):
     g = gauges()[gid]
     os.makedirs(out, exist_ok=True)
     gxy = to_utm(g["lon"], g["lat"])
-    line = chain(nhd_parts(g), gxy)
+    line = chain(nhd_parts(g, say=say), gxy)
     seg, up, down = cut(line, gxy)
     say("{}: river line {:.1f} km up, {:.1f} km down".format(gid, up / 1000, down / 1000))
     box = (seg[:, 0].min() - BUFFER_M, seg[:, 1].min() - BUFFER_M,
