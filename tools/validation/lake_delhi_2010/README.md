@@ -140,6 +140,29 @@ the Runner work the breach out from the dam alone, as it would for a dam that ha
 | U.S. 151, down side | 21.0 | +1.64 | +1.59 | -0.26 |
 | **The eight bridge marks: mean, largest** | | **+2.07, +3.69** | **+2.02, +3.63** | **+0.30, +1.47** |
 
+**ANUGA on the gmsh mesh, with road breaklines and the crest burn** (as observed, n 0.06,
+run 43785088347 on 2026-11-16 and 17: LISFLOOD-FP, then ANUGA twice, the second time on a mesh
+twice as wide because the first flood reached the mesh edge; 228,162 triangles, 10 m bed, 3,706
+road crest nodes held; six legs of about 5.5 hours):
+
+| Mark | Miles below | ANUGA | LISFLOOD-FP (same run settings) |
+|---|---|---|---|
+| Below the dam (tailwater) | 0.0 | +15.84 | +14.31 |
+| Hopkinton, up side | 9.4 | +4.80 | +3.57 |
+| Hopkinton, down side | 9.4 | +4.88 | +3.69 |
+| Highway 38, up side | 18.6 | +2.33 | +2.10 |
+| Highway 38, down side | 18.6 | +1.07 | +1.82 |
+| Main Street, up side | 20.1 | +1.26 | +0.66 |
+| Main Street, down side | 20.1 | +1.52 | +1.46 |
+| U.S. 151, up side | 21.0 | +1.49 | +1.64 |
+| U.S. 151, down side | 21.0 | +1.27 | +1.64 |
+| **The eight bridge marks: mean, largest** | | **+2.33, +4.88** | **+2.07, +3.69** |
+
+ANUGA's peak flow past Hopkinton is 55,748 cfs at 28.2 h (LISFLOOD-FP 53,989 at 28.3 h). The
+finer engine, mesh and road crests do not remove the high bias: it stays with the roughness (n
+0.04 gives +0.30 with LISFLOOD-FP). ANUGA is about 1.2 ft higher than LISFLOOD-FP at Hopkinton,
+where the D47 embankment is a held crest line; why is not yet looked at.
+
 What it says:
 
 - **The blind breach is close to the real one**: 243 ft against 235 ft, formed in 1.6 hours
