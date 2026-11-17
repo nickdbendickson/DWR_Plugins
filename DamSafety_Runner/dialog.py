@@ -301,10 +301,11 @@ class NDBreachRunnerDialog(QDialog):
             "Check the dam point on the DEM when there is no dam line, crest line, breach inflow "
             "point or top of dam. Move: when the point is clearly off the dam and the embankment "
             "is unambiguous, use the embankment found as the dam line (the run says so first in "
-            "its warnings); otherwise keep the point and add a REVIEW warning. Warn only (the "
-            "default) never moves: its REVIEW warning says where the embankment is and whether "
-            "Move would use it. Off is as before 3.20.11. NDBREACH_DAM_POINT_CHECK wins over "
-            "this.")
+            "its warnings); otherwise keep the point and add a REVIEW warning. A point on the "
+            "embankment but off its centre moves along to the centre. Move is the default "
+            "(3.20.13); a batch dam with a DWR dam line uses that line instead. Warn only never "
+            "moves: its REVIEW warning says where the embankment is and whether Move would use "
+            "it. Off is as before 3.20.11. NDBREACH_DAM_POINT_CHECK wins over this.")
         self.dpc_combo.currentIndexChanged.connect(self._changed)
         self.datum_combo = QComboBox()                       # 3.12.0: ELEV_DATUM
         for key, label in zip(pl.ELEV_DATUM_CHOICES, ("Auto (as stated; else NGVD29)",

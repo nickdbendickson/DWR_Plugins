@@ -100,12 +100,12 @@ CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERV
 ELEV_DATUM_CHOICES = ("auto", "NAVD88", "NGVD29", "local")
 # 3.20.11: the DAM_POINT_CHECK enum (algorithms.DAM_POINT_CHECK_MODES)
 DAM_POINT_CHECK_CHOICES = ("off", "warn", "move")
-DAM_POINT_CHECK_DEFAULT = "warn"        # core/dam_point_check.DEFAULT_MODE
+DAM_POINT_CHECK_DEFAULT = "move"        # core/dam_point_check.DEFAULT_MODE (3.20.13)
 
 
 def dam_point_check_choice(value):
     """A saved dam_point_check value (a mode, or False / True from a checkbox) as a choice;
-    missing or unknown is the tool's default (warn); True (a checkbox on) is move."""
+    missing or unknown is the tool's default (move, 3.20.13); True (a checkbox on) is move."""
     if value is False:
         return "off"
     if value is True:
