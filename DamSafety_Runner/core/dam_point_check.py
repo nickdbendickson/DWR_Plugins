@@ -1818,21 +1818,26 @@ _LOCK = threading.Lock()          # a preview and a run may check in two Process
 
 
 def dem_stamp(terrain):
-    """What identifies the DEM a check read: the file (path, size, mtime) of the source
-    under the wrappers, else its dpc_stamp attribute, else None (no caching)."""
+    """What identifies the DEM a check read: the file (path, size, mtime, z factor, resample
+    method) of the source under the wrappers, else its dpc_stamp attribute, else None (no
+    caching). The resample method (review 2026-11-17): the replay and V read through the
+    run's terrain read (GdalTerrain.resample), only the survey reads with average."""
     t = terrain
+    rs = None
     for _i in range(6):
         if t is None:
             break
         st = getattr(t, "dpc_stamp", None)
         if st is not None:
             return st
+        if rs is None and isinstance(getattr(t, "resample", None), str):
+            rs = t.resample
         p = getattr(t, "dem_path", None)
         if isinstance(p, str) and p:
             try:
                 s = os.stat(p)
                 return (p, s.st_size, getattr(s, "st_mtime_ns", s.st_mtime),
-                        float(getattr(t, "z_to_m", 1.0) or 1.0))
+                        float(getattr(t, "z_to_m", 1.0) or 1.0), rs)
             except OSError:
                 return None
         t = getattr(t, "base", None)

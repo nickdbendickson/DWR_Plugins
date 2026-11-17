@@ -1535,17 +1535,48 @@ def _dpc_ds(sv):
     return (float(d[0]), float(d[1])) if d else None
 
 
-def _dpc_normal_pool_m(dam, st):
-    """G7e's normal pool (m, DEM datum) or None: only after the datum conversion, never a
-    local datum (under 500 ft)."""
+def _dpc_converted_pool_ft(dam, st, dam_xy, crs):
+    """The flood's normal pool (ft) as the run's datum conversion will make it, on copies: the
+    run converts the dam elevations (vdatum_run.apply) only after the dam point check, and the
+    batch tools and the CLI not before run_dam (review 2026-11-17: G7e never ran there). The
+    same conversion as the run's (the record from the dam's lon / lat, its stated datum and the
+    run's elevations); nothing on the dam or the settings changes. None when not converted."""
+    fl = getattr(st, "flood", None)
+    try:
+        fl2 = copy.copy(fl)
+        for k, v in (("spillway", None), ("outlets", [])):      # not read for the pool
+            if hasattr(fl2, k):
+                setattr(fl2, k, v)
+        st2 = copy.copy(st)
+        st2.flood = fl2
+        st2.vertical_datum = None
+        d2 = copy.copy(dam)
+        ll = vdrun.lonlat_of(st, dam_xy, crs)
+        vdrun.apply(d2, st2, ll[0] if ll else None, ll[1] if ll else None,
+                    top_is_dem=dam.top_of_dam_ft is None, log=_quiet)
+        v = getattr(fl2, "normal_pool_ft", None)
+        return None if v is None else float(v)
+    except Exception:                                   # noqa: BLE001 - no G7e, no stop
+        return None
+
+
+def _dpc_normal_pool_m(dam, st, dam_xy=None, crs=None):
+    """G7e's normal pool (m, DEM datum) or None: after the datum conversion (the run's, or the
+    same conversion on copies when it has not run yet: _dpc_converted_pool_ft), never a local
+    datum (under 500 ft)."""
     fl = getattr(st, "flood", None)
     npft = getattr(fl, "normal_pool_ft", None) if fl is not None else None
+    done = getattr(dam, "_vdatum_done", False) or \
+        getattr(st, "vertical_datum", None) is not None
+    if npft is not None and not done and not getattr(fl, "_vdatum_done", False):
+        npft = _dpc_converted_pool_ft(dam, st, dam_xy, crs)
+        done = True
+    elif npft is not None and getattr(fl, "_vdatum_done", False):
+        done = True
     if npft is None:
         npft = getattr(dam, "normal_pool_ft", None)
     try:
-        if npft is not None and (getattr(dam, "_vdatum_done", False) or
-                                 getattr(st, "vertical_datum", None) is not None) and \
-                float(npft) > 500.0:
+        if npft is not None and done and float(npft) > 500.0:
             return float(npft) * FT
     except (TypeError, ValueError):
         pass
@@ -1562,9 +1593,14 @@ def _dpc_parts(sv, h_m):
         emb["crest_z_m"], dpc.end_tol_m(h_m))
 
 
-def _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native):
+_UNSET = object()
+
+
+def _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native, npool=_UNSET):
     """The check itself (reads, survey, replay, decision, V): the record with its private
-    parts (_line, _parts, _moved_xy, _mid_xy)."""
+    parts (_line, _parts, _moved_xy, _mid_xy). `npool`: G7e's normal pool (m) as the caller
+    worked it out (_dpc_normal_pool_m), else worked out here. V runs on a move and, in warn
+    mode, on an embankment that passed every gate (it would move only when V passes)."""
     t0 = time.time()
     h_m = float(dam.dam_height_ft) * FT
     sa = getattr(dam, "surface_area_top_ac", None)
@@ -1573,21 +1609,25 @@ def _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native):
     rp = _dpc_replay(dam, st, dam_xy, terrain_src, cs)
     sv["inflow"] = dpc.inflow_facts(sv, rp.get("inflow_xy"))
     cl = getattr(dam, "crest_length_ft", None)
-    npool = _dpc_normal_pool_m(dam, st)
+    if npool is _UNSET:
+        npool = _dpc_normal_pool_m(dam, st, dam_xy)
     dec = dpc.decide(sv, rp, h_m, sa_ac=sa, crest_length_m=(float(cl) * FT if cl else None),
                      normal_pool_m=npool, others=getattr(st, "dam_point_others", None),
                      other_lines=getattr(st, "dam_point_lines", None), mode=mode)
     ver = None
     moved_xy = None
     outcome = dec["outcome"]
-    if outcome == "move":
+    if outcome == "move" or dec.get("would_move"):
+        # warn mode (review 2026-11-17): "would move" only when V passes as well
         ver = _dpc_verify(dam, st, sv, terrain_src, cs, h_m)
         if ver.get("ok"):
-            outcome = "moved"
-            moved_xy = ver["_xy"]
+            if outcome == "move":
+                outcome = "moved"
+                moved_xy = ver["_xy"]
         else:
             outcome = "review"
             dec["warn"] = True
+            dec["would_move"] = False
             dec["gates_failed"].append(("V", "{}: {}".format(dpc.GATE_TEXT["V"],
                                                              ver.get("why", ""))))
     rec = dpc.record(outcome, mode, dam_xy, sv=sv, rp=rp, dec=dec,
@@ -1652,10 +1692,12 @@ def _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, cs, report, warnin
             log(dpc.log_line(rec))
             return dam_xy
         key = rec = None
+        npool = _UNSET
         try:
             # everything the decision reads besides the DEM (review 2026-11-17): the normal
             # pool of G7e, the other dams and crest lines of G7c, the toe band settings of V
-            npool = _dpc_normal_pool_m(dam, st)
+            npool = _dpc_normal_pool_m(dam, st, dam_xy,
+                                       crs or getattr(terrain_src, "work_srs", None))
             key = dpc.cache_key(dam, dam_xy, terrain_src, extra=(
                 mode, round(float(cs), 3),
                 None if npool is None else round(npool, 3),
@@ -1677,7 +1719,8 @@ def _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, cs, report, warnin
                 "is used")
         else:
             try:
-                rec = _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native)
+                rec = _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native,
+                                   npool=npool)
                 if rec.get("outcome") != "error":
                     dpc.cache_put(key, copy.deepcopy(rec))
             except Exception as e:                       # noqa: BLE001 - never stop the run
@@ -2143,7 +2186,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # line the rest of this block and the run follow, as a DAM_LINES line)
         dam_xy = _dam_point_check(dam, st, dam_xy, inflow_xy, raw_terrain, cs, report,
                                   warnings, log, out_folder=out_folder,
-                                  crs=getattr(writer, "work_srs", None))
+                                  crs=getattr(writer, "work_srs", None)
+                                  or report.get("work_crs"))
         dam_xy, mc_rec = place_midcrest(dam, st, dam_xy, raw_terrain.read, min(cs, 1.0))
         report["dam_point"] = mcmod.public(mc_rec)
         report["dam_xy"] = [float(dam_xy[0]), float(dam_xy[1])]

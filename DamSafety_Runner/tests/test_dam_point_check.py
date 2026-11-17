@@ -250,17 +250,14 @@ def dpc_hecras_stage_and_products_get_the_modelled_point():
     assert workflow.hecras_dam_xy(R(), (5.0, 6.0)) == (5.0, 6.0)
     R.modelled_dam_xy = [1.5, 2.5]
     assert workflow.hecras_dam_xy(R(), (5.0, 6.0)) == (1.5, 2.5)
-    # critique 7: the tools and the CLI pass the modelled point to the HEC-RAS stage (which
-    # hands it to adopt_final_engine and the products)
-    with open(os.path.join(PLUGIN, "algorithms.py"), encoding="utf-8") as f:
-        a = f.read()
-    with open(os.path.join(PLUGIN, "scripts", "ndbreach_cli.py"), encoding="utf-8") as f:
-        c = f.read()
-    assert a.count("workflow.hecras_dam_xy(res,") == 2, a.count("workflow.hecras_dam_xy(res,")
-    assert "workflow.hecras_dam_xy(res, p.dam_xy)" in c
+    # critique 7: the tools and the CLI pass the modelled point to the HEC-RAS stage (run in
+    # dpc_tools_and_the_cli_pass_neighbours_and_the_modelled_point)
     from nd_breach_runner.core import hecras_model as hm
     assert hm.FOUND_LINE_SOURCE == dpc.FOUND_LINE_SOURCE
     assert hm.FOUND_LINE_SOURCE in hm.USER_LINE_SOURCES and "your dam line" in hm.USER_LINE_SOURCES
+    # the found line is never labelled as the user's own (review 2026-11-17)
+    assert dpc.FOUND_LINE_SOURCE != "your dam line"
+    assert "your dam line" not in dpc.FOUND_LINE_SOURCE and "found" in dpc.FOUND_LINE_SOURCE
 
 
 @test
@@ -271,14 +268,31 @@ def dpc_batch_columns_are_the_same_in_the_tool_and_the_cli():
     c = cli()
     assert tuple(algs.BATCH_FIELDS) == tuple(c.BATCH_FIELDS)
     assert algs.BATCH_FIELDS[-1] == "Dam_Point_Check"
-    # the CLI setting (model.dam_point_check) and its default
+    # the CLI setting (model.dam_point_check) and its default: warn in the template and
+    # without the key
     assert c.MODEL_KEYS["dam_point_check"][0] == "dam_point_check"
-    # the tools' parameter: an advanced enum, move by default
+    assert c.TEMPLATE["model"]["dam_point_check"] == dpc.DEFAULT_MODE == "warn"
+    import sys
+    opts = type("O", (), {"lisflood": sys.executable, "anuga_python": None})()
+    d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+    try:
+        tp = os.path.join(d, "t.json")
+        with open(tp, "w", encoding="utf-8") as f:
+            f.write(c.template_text())
+        for cfg in (c.load_config(tp), c.Config({"model": {}}, "")):
+            assert c.build_settings(cfg, opts, need_models=False).dam_point_check == "warn"
+        assert c.build_settings(c.Config({"model": {"dam_point_check": "move"}}, ""), opts,
+                                need_models=False).dam_point_check == "move"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    # the tools' parameter: an advanced enum, warn by default
     for cls in (algs.RunDamAlgorithm, algs.BatchAlgorithm):
         a = cls()
         a.initAlgorithm()
         p = a.parameterDefinition("DAM_POINT_CHECK")
         assert p is not None, cls
+        assert algs.dam_point_check_param(p.defaultValue()) == dpc.DEFAULT_MODE == "warn", \
+            (cls, p.defaultValue())
     assert algs.DAM_POINT_CHECK_MODES == dpc.MODES
     assert [algs.dam_point_check_param(i) for i in (0, 1, 2)] == ["off", "warn", "move"]
     assert algs.dam_point_check_param("warn") == "warn"
@@ -368,6 +382,26 @@ def dpc_gates_never_move_onto_a_neighbour_and_warn_mode_never_moves():
     # a closed line (G4c)
     sv_c = dict(sv, closed=(True, "the line found closes on itself"))
     assert "G4c" in _codes(_decide(sv_c, rp, S.H)["gates_failed"])
+    # review 2026-11-17: each of G2, G3, G4 and G7f on its own sends the move to review
+    emb = sv["emb"]
+    lq = sv["line_q"]
+    cases = [("G2", dict(sv, emb=dict(emb, height_ratio=dpc.HR_MAX + 0.5))),
+             ("G2", dict(sv, emb=dict(emb, height_ratio=dpc.HR_MIN - 0.2))),
+             ("G3", dict(sv, emb=dict(emb, point_to_crest_m=dpc.MAX_MOVE_M + 50.0))),
+             ("G4", dict(sv, line_q=dict(lq, on_crest=dpc.LINE_ON_CREST - 0.2))),
+             ("G4", dict(sv, line_q=dict(lq, on_water=0.1))),
+             ("G4", dict(sv, line_q=dict(lq, below_pool=dpc.LINE_BELOW_POOL + 0.1))),
+             ("G4", dict(sv, line_q=dict(lq, perp95_m=dpc.perp95_limit_m(S.H) + 5.0))),
+             ("G4", dict(sv, line_q=dict(lq, length_m=dpc.LEN_MIN_M - 5.0))),
+             ("G4", dict(sv, emb=dict(emb, line=None))),
+             ("G7f", dict(sv, pond_between=dpc.POND_BETWEEN_FRAC + 0.1, point_side_m=None))]
+    for code, sv_x in cases:
+        d = _decide(sv_x, rp, S.H)
+        assert d["outcome"] == "review" and d["warn"], (code, d)
+        assert code in _codes(d["gates_failed"]), (code, d["gates_failed"])
+    # a pond that is not between them (G7f below the share) still moves
+    assert _decide(dict(sv, pond_between=dpc.POND_BETWEEN_FRAC - 0.1, point_side_m=None), rp,
+                   S.H)["outcome"] == "move"
     # warn mode: every gate passed, still not moved
     w = _decide(sv, rp, S.H, mode="warn")
     assert w["outcome"] == "review" and w["would_move"] and w["warn"] and not w["gates_failed"]
@@ -677,6 +711,9 @@ def dpc_record_texts():
     assert "moved 121 m" in dpc.report_line(rec)
     fc = dpc.found_line_geojson(rec)
     assert fc["properties"]["used"] is True and fc["geometry"]["type"] == "LineString"
+    for o in ("review", "kept"):
+        fr = dpc.found_line_geojson(dict(rec, outcome=o))
+        assert fr["properties"]["used"] is False and fr["properties"]["outcome"] == o
     assert dpc.found_line_geojson({"embankment": None}) is None
     from nd_breach_runner.core import report_docx
     assert report_docx.dam_location_text({"outcome": "skipped"}) is None
@@ -739,8 +776,31 @@ def dpc_closed_line_is_judged_by_net_turning():
     a = np.radians(np.arange(0.0, 330.0, 10.0))
     ring = [(100.0 * math.cos(t), 100.0 * math.sin(t)) for t in a]
     assert dpc.turning_deg(ring) > dpc.CLOSED_TURN_DEG and dpc.line_closed(ring)[0]
+    # review 2026-11-17: each rule on its own
+    # the end gap only: a hairpin (ends 10 m apart on a 400 m line, 177 deg of turning)
+    hairpin = [(0.0, 0.0), (200.0, 5.0), (0.0, 10.0)]
+    assert dpc.turning_deg(hairpin) <= dpc.CLOSED_TURN_DEG
+    c, why = dpc.line_closed(hairpin)
+    assert c is True and "closes on itself" in why and "ends 10 m apart" in why, why
+    # the turning only: an opening spiral (330 deg, 315 deg after simplifying; ends 0.29 L
+    # apart)
+    a = np.radians(np.arange(0.0, 331.0, 5.0))
+    r = 20.0 + 280.0 * a / a[-1]
+    spiral = [(float(rr * math.cos(t)), float(rr * math.sin(t))) for rr, t in zip(r, a)]
+    sp = np.asarray(spiral)
+    assert math.hypot(*(sp[-1] - sp[0])) >= dpc.CLOSED_GAP_FRAC * dpc.line_length(spiral)
+    assert dpc.turning_deg(spiral) > dpc.CLOSED_TURN_DEG
+    c, why = dpc.line_closed(spiral)
+    assert c is True and why.startswith("the line found turns") and "a ring or a U" in why, why
+    # the left-out crest cells only: tested on the synthetic ring (dpc_ring_dike_goes_to_review)
+    # a U with long arms closes by its ends (120 m apart on a 534 m line), not by its 180 deg
     u = [(0.0, 200.0), (0.0, 0.0), (60.0, -30.0), (120.0, 0.0), (120.0, 200.0)]
-    assert dpc.line_closed(u)[0] is False or dpc.turning_deg(u) <= 270.0
+    assert abs(dpc.turning_deg(u) - 180.0) < 1.0
+    c, why = dpc.line_closed(u)
+    assert c is True and "ends 120 m apart on a 534 m line" in why, why
+    # a wide-open U (short arms) is not closed
+    u2 = [(0.0, 50.0), (0.0, 0.0), (60.0, -30.0), (120.0, 0.0), (120.0, 50.0)]
+    assert dpc.line_closed(u2) == (False, ""), dpc.line_closed(u2)
 
 
 @test
@@ -802,20 +862,34 @@ def dpc_cache_key_holds_what_the_decision_reads():
     dpc.cache_clear()
     t = S.DamTerrain(S.enclosed)
     dam = _dam()
-    workflow._dam_point_check(dam, _st(), (-120.0, 0.0), None, t, 20.0, {}, [], lambda m: None)
-    assert t.checks() == 1
-    for st in (_st(dam_point_lines=[[(4.0, 120.0), (4.0, -120.0)]]),
-               _st(inflow_toe_min_outer_m=40.0)):
-        rep = {}
-        workflow._dam_point_check(_dam(), st, (-120.0, 0.0), None, t, 20.0, rep, [],
-                                  lambda m: None)
-    assert t.checks() == 3, t.checks()
+    rep = {}
+    workflow._dam_point_check(dam, _st(), (-120.0, 0.0), None, t, 20.0, rep, [], lambda m: None)
+    assert t.checks() == 1 and rep["dam_point_check"]["outcome"] == "moved"
+    # review 2026-11-17: the neighbours reach the decision (G7c) through the full check, and
+    # a check made without them is not reused
+    n = 1
+    for st, g7c in ((_st(dam_point_lines=[[(4.0, 120.0), (4.0, -120.0)]]), True),
+                    (_st(dam_point_others=[("B", (0.0, 0.0), S.H_FT)]), True),
+                    (_st(dam_point_others=[("B", (-700.0, 0.0), S.H_FT)]), False),
+                    (_st(inflow_toe_min_outer_m=40.0), False)):
+        rep, w = {}, []
+        xy = workflow._dam_point_check(_dam(), st, (-120.0, 0.0), None, t, 20.0, rep, w,
+                                       lambda m: None)
+        n += 1
+        assert t.checks() == n, (t.checks(), n)
+        pc = rep["dam_point_check"]
+        if g7c:
+            assert pc["outcome"] == "review" and xy == (-120.0, 0.0), pc
+            assert "G7c" in _codes(pc["gates_failed"]), pc["gates_failed"]
+            assert any(x.startswith(dpc.REVIEW_PREFIX) for x in w), w
+        else:
+            assert pc["outcome"] == "moved", pc
     d2 = _dam()
     d2.normal_pool_ft = 1700.0                      # as the batch / DWR record sets it
     d2._vdatum_done = True
     rep = {}
     workflow._dam_point_check(d2, _st(), (-120.0, 0.0), None, t, 20.0, rep, [], lambda m: None)
-    assert t.checks() == 4 and rep["dam_point_check"]["outcome"] == "review"
+    assert t.checks() == n + 1 and rep["dam_point_check"]["outcome"] == "review"
     assert "G7e" in _codes(rep["dam_point_check"]["gates_failed"])
     assert dpc.cache_get(("nothing",)) is None and isinstance(dpc._LOCK, type(dpc._LOCK))
 
@@ -837,6 +911,17 @@ def dpc_preview_and_a_dem_filled_top_read_once_and_agree():
     assert t.checks() == n and rec["outcome"] == "moved", rec
     assert abs(dam.top_of_dam_ft - S.TOP / 0.3048) < 1.0 and dam._top_from_dem
     assert dam._point_check is rec
+    # review 2026-11-17: run_dam's own check (no precheck) clears the filled top on a move, so
+    # the run reads the mid-crest top; a top given is never touched (the check does not run)
+    d3 = _dam(top_of_dam_ft=S.POOL / 0.3048)
+    d3._top_from_dem = True
+    workflow._dam_point_check(d3, _st(), xy, None, t, 20.0, {}, [], lambda m: None)
+    assert d3._point_check["outcome"] == "moved" and d3.top_of_dam_ft is None
+    d4 = _dam(top_of_dam_ft=S.POOL / 0.3048)
+    d4._top_from_dem = True
+    workflow._dam_point_check(d4, _st(dam_point_check="warn"), xy, None, t, 20.0, {}, [],
+                              lambda m: None)
+    assert d4._point_check["outcome"] == "review" and d4.top_of_dam_ft == S.POOL / 0.3048
 
 
 @test
@@ -920,3 +1005,316 @@ def dpc_far_clean_embankment_warns_and_a_doubtful_far_one_is_a_note():
     d3 = _decide(sv3, rp3, S.H)
     assert _codes(d3["triggers"]) == {"A2"} and "G1" in _codes(d3["gates_failed"]), d3
     assert d3["outcome"] == "kept" and not d3["warn"] and "a note only" in d3["kept_why"], d3
+
+
+# ------------------------------------------------------------ review fixes, 2026-11-17 ---
+def _flood(npft):
+    from nd_breach_runner.core import flood as fl
+    return fl.FloodInputs.triangle(5000.0, 2.0, 8.0, normal_pool_ft=npft)
+
+
+@test
+def dpc_g7e_reads_the_normal_pool_before_the_runs_datum_conversion():
+    """Review 2026-11-17: the batch tool and the CLI convert the dam elevations (NGVD29 ->
+    NAVD88) only in run_dam, after the dam point check; G7e used to see no normal pool there
+    and was skipped. The check now converts a copy of the pool the same way, changing nothing
+    on the dam or the settings, and the run (batch / CLI order: no conversion before run_dam)
+    sends a pond far from its normal pool to review."""
+    from nd_breach_runner.core import vdatum_run as vdrun
+    lvl_ft = S.POOL / 0.3048
+    ll = {"point": {"lon": -100.5, "lat": 47.0}}
+    # the pool as the run's datum block makes it, before that block runs
+    st = _st(flood=_flood(1450.0), dam_record=ll)
+    dam = _dam()
+    got = workflow._dpc_normal_pool_m(dam, st, (-120.0, 0.0))
+    assert st.vertical_datum is None and st.flood.normal_pool_ft == 1450.0
+    assert not getattr(dam, "_vdatum_done", False) and not getattr(st.flood, "_vdatum_done", False)
+    vdrun.apply(dam, st, -100.5, 47.0, top_is_dem=True)
+    assert st.flood.normal_pool_ft != 1450.0                     # NGVD29 shifted
+    assert abs(got - st.flood.normal_pool_ft * 0.3048) < 1e-9, (got, st.flood.normal_pool_ft)
+    assert workflow._dpc_normal_pool_m(dam, st) == got           # the same after it ran
+    assert workflow._dpc_normal_pool_m(_dam(), _st(flood=_flood(400.0), dam_record=ll)) is None
+    # the full check and the run, in the batch / CLI order
+    from nd_breach_runner.tests.synthetic import npy_writer
+    for npft, want in ((lvl_ft - 20.0, "review"), (lvl_ft, "moved")):
+        dpc.cache_clear()
+        st = _st(flood=_flood(npft), dam_record=ll)
+        rep = {}
+        workflow._dam_point_check(_dam(), st, (-120.0, 0.0), None, S.DamTerrain(S.enclosed),
+                                  20.0, rep, [], lambda m: None)
+        pc = rep["dam_point_check"]
+        assert pc["outcome"] == want, (npft, pc)
+        assert ("G7e" in _codes(pc["gates_failed"])) == (want == "review"), pc["gates_failed"]
+        assert st.flood.normal_pool_ft == npft and st.vertical_datum is None
+        dpc.cache_clear()
+        d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+        try:
+            st = _st(flood=_flood(npft), dam_record=ll)
+            with _fake_models():
+                r = workflow.run_dam(_dam(), (-120.0, 0.0), st, S.DamTerrain(S.enclosed),
+                                     npy_writer, os.path.join(d, "T1"))
+            with open(r.report_json) as f:
+                rr = json.load(f)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        pc = rr["dam_point_check"]
+        assert pc["outcome"] == want, (npft, pc)
+        if want == "review":
+            g = [x for x in pc["gates_failed"] if x.startswith("G7e ")]
+            # the pool G7e read is the pool the run converted
+            assert g and "{:.1f} ft".format(rr["vertical_datum"]["fields"]["normal_pool_ft"][
+                "navd88"]) in g[0], (g, rr["vertical_datum"]["fields"])
+    dpc.cache_clear()
+
+
+@test
+def dpc_warn_mode_runs_v_and_a_failed_v_is_never_moved():
+    """Review 2026-11-17: V (the toe inflow 0.5-1.3 H below the found mid-crest) runs in warn
+    mode too, so "would move" is said only of an embankment that move would use; a failed V
+    sends a move to review and keeps the point."""
+    t = S.DamTerrain(S.enclosed)
+    dpc.cache_clear()
+    rep = {}
+    workflow._dam_point_check(_dam(), _st(dam_point_check="warn"), (-120.0, 0.0), None, t,
+                              20.0, rep, [], lambda m: None)
+    pc = rep["dam_point_check"]
+    assert pc["outcome"] == "review" and pc["would_move"] and pc["verify"]["ok"], pc
+    assert dpc.batch_text(pc) == "review (would move)"
+    old = workflow._dpc_verify
+    why = "the toe band along the line found no inflow"
+    workflow._dpc_verify = lambda *a, **k: {"ok": False, "why": why, "toe_band": False}
+    try:
+        for mode in ("move", "warn"):
+            dpc.cache_clear()
+            dam, rep, w = _dam(), {}, []
+            xy = workflow._dam_point_check(dam, _st(dam_point_check=mode), (-120.0, 0.0), None,
+                                           t, 20.0, rep, w, lambda m: None)
+            pc = rep["dam_point_check"]
+            assert pc["outcome"] == "review" and not pc["would_move"], (mode, pc)
+            v = [g for g in pc["gates_failed"] if g.startswith("V ")]
+            assert v and why in v[0], (mode, pc["gates_failed"])
+            assert pc["verify"]["ok"] is False and pc.get("modelled_xy") is None
+            assert xy == (-120.0, 0.0) and not getattr(dam, "crest_line_xy", None)
+            assert getattr(dam, "_crest_line_source", None) is None
+            assert dpc.batch_text(pc) == "review", dpc.batch_text(pc)
+            txt = [x for x in w if x.startswith(dpc.REVIEW_PREFIX)]
+            assert txt and "would be used" not in txt[0] and "found but not used" in txt[0], txt
+            assert not any(x.startswith(dpc.MOVED_PREFIX) for x in w)
+    finally:
+        workflow._dpc_verify = old
+        dpc.cache_clear()
+
+
+@test
+def dpc_cache_key_holds_the_runs_resample_method():
+    """Review 2026-11-17: the replay and V read through the run's terrain read (its resample
+    method); a check made with one method is not reused with another."""
+    need_osgeo()
+    from nd_breach_runner.core import gdal_io as GI
+    d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+    try:
+        path = S.write_geotiff(S.enclosed, os.path.join(d, "dem.tif"),
+                               bounds=(-1200.0, -1200.0, 1200.0, 1200.0))
+        mk = lambda how: GI.GdalTerrain(path, "EPSG:26914", z_choice=GI.Z_METERS, resample=how)
+        assert dpc.dem_stamp(mk("bilinear")) != dpc.dem_stamp(mk("near"))
+        assert dpc.dem_stamp(mk("bilinear")) == dpc.dem_stamp(mk("bilinear"))
+        assert dpc.dem_stamp(mk("near"))[-1] == "near"
+
+        class _Wrap(object):                     # a wrapper over the file source (the run's)
+            def __init__(self, base):
+                self.base = base
+        assert dpc.dem_stamp(_Wrap(mk("near"))) == dpc.dem_stamp(mk("near"))
+        dpc.cache_clear()
+        reused = []
+        for how in ("bilinear", "bilinear", "near"):
+            logs = []
+            workflow._dam_point_check(_dam(), _st(dam_point_check="warn"), (-120.0, 0.0), None,
+                                      mk(how), 20.0, {}, [], logs.append)
+            reused.append(any("earlier check" in m for m in logs))
+        assert reused == [False, True, False], reused
+    finally:
+        dpc.cache_clear()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def dpc_found_line_file_says_not_used_in_warn_mode():
+    """Review 2026-11-17: inputs/dam_line_found.geojson of a warn-mode run says used = false."""
+    dpc.cache_clear()
+    d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+    try:
+        rep = {}
+        workflow._dam_point_check(_dam(), _st(dam_point_check="warn"), (-120.0, 0.0), None,
+                                  S.DamTerrain(S.enclosed), 20.0, rep, [], lambda m: None,
+                                  out_folder=d)
+        assert rep["dam_point_check"]["outcome"] == "review"
+        with open(os.path.join(d, "inputs", dpc.FOUND_LINE_FILE)) as f:
+            gj = json.load(f)
+        props = gj["features"][0]["properties"]
+        assert props["used"] is False and props["outcome"] == "review", props
+    finally:
+        dpc.cache_clear()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def dpc_hecras_model_labels_the_found_line_as_found():
+    """Review 2026-11-17: build_model hands the run's found line to the crest step with the
+    found label (its notes and record), a user's line with "your dam line"."""
+    from nd_breach_runner.core import hecras_model as hm
+    from nd_breach_runner.core import hecras_crest as hc
+    from nd_breach_runner.tests import test_hecras_p0 as p0
+    if p0._skip():
+        return
+    d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+    seen = []
+    old = hm.crest_dam_line
+
+    def fake(*a, **k):
+        seen.append(k.get("user_line_source"))
+        raise hc.CrestTraceError("test: stop at the crest step")
+    try:
+        p0._run(d)
+        rp = os.path.join(d, "_breach_model", "run_report.json")
+        with open(rp) as f:
+            rep = json.load(f)
+        x0, y0 = rep["dam_xy"][:2]
+        rep["crest_line_xy"] = [[x0 - 150.0, y0], [x0 + 150.0, y0]]
+        hm.crest_dam_line = fake
+        for src, want in ((dpc.FOUND_LINE_SOURCE, dpc.FOUND_LINE_SOURCE),
+                          (None, "your dam line")):
+            rep["crest_line_source"] = src
+            with open(rp, "w") as f:
+                json.dump(rep, f)
+            hm.build_model(d, out_folder=os.path.join(d, "m{}".format(len(seen))))
+            assert seen and seen[-1] == want, (seen, want)
+    finally:
+        hm.crest_dam_line = old
+        shutil.rmtree(d, ignore_errors=True)
+    assert seen == [dpc.FOUND_LINE_SOURCE, "your dam line"], seen
+
+
+@test
+def dpc_tools_and_the_cli_pass_neighbours_and_the_modelled_point():
+    """Review 2026-11-17: what the QGIS tools and the CLI hand run_dam and the HEC-RAS stage:
+    the other crest lines (CREST_LINE) and the batch's other dams as neighbours for G7c, and the
+    modelled (moved) point to HEC-RAS (critique 7), not the point given."""
+    import csv
+    import sys
+    import types
+    from nd_breach_runner.core import hecras_engine
+    from nd_breach_runner.tests.preflight_stub import without_dem_and_smoke_checks
+    from nd_breach_runner.tests.run_tests import _patched_algs
+    from nd_breach_runner.tests.test_v320 import _FakeRaster
+    from nd_breach_runner.tests import test_cli as tc
+    algs, fq = _patched_algs()
+    # the CREST_LINE layer: this dam's line and another dam's (apply_features)
+    own, other = [(0.0, -100.0), (0.0, 100.0)], [(400.0, -100.0), (400.0, 100.0)]
+    lines = fq.FakeSource([fq.FakeFeature(fq.FakeGeometry("line", [own])),
+                           fq.FakeFeature(fq.FakeGeometry("line", [other]))])
+    a0 = algs.RunDamAlgorithm()
+    a0.initAlgorithm()
+    st0 = workflow.RunSettings()
+    a0.apply_features(st0, {"CREST_LINE": lines}, fq.QgsProcessingContext(),
+                      fq.QgsCoordinateReferenceSystem("EPSG:26914"), (0.0, 0.0))
+    assert st0.midcrest_line == own and st0.dam_point_lines == [other], st0.dam_point_lines
+    # Model one dam and the batch tool with models = LISFLOOD-FP then HEC-RAS 2D
+    tier = [t_[0] for t_ in algs.TIERS].index(workflow.TIER_HECRAS)
+    seen, staged = [], []
+
+    def fake_run_dam(dam, xy, st, *a, **k):
+        seen.append((dam.dam_id, st.dam_point_others, st.dam_point_lines))
+        return types.SimpleNamespace(summary={"breach_occurs": True}, warnings=[],
+                                     modelled_dam_xy=(float(xy[0]) + 7.0, float(xy[1]) + 3.0))
+
+    def fake_stage(folder, res, writer, st, dam_xy, log, **k):
+        staged.append((float(dam_xy[0]), float(dam_xy[1])))
+        raise algs.HecRasTierError("test: stop at the HEC-RAS stage")
+    keep = (workflow.run_dam, algs.hecras_tier_stage, hecras_engine.detect)
+    workflow.run_dam = fake_run_dam
+    algs.hecras_tier_stage = fake_stage
+    hecras_engine.detect = lambda *a, **k: {"available": True, "reason": ""}
+    d = tempfile.mkdtemp(prefix="ndbr_dpc_")
+    common = {"DEM": _FakeRaster(), "CELL": 20.0, "LENGTH_MI": 1.0, "HALF_WIDTH_MI": 0.5,
+              "MAX_RUNS": 1, "LISFLOOD_EXE": sys.executable, "DAMS_FOLDER": d, "TIER": tier}
+
+    @without_dem_and_smoke_checks
+    def tools():
+        a = algs.RunDamAlgorithm()
+        a.initAlgorithm()
+        try:
+            a.processAlgorithm(dict(common, DAM_ID="A", DAM_POINT=fq.QgsPointXY(0, 0),
+                                    HEIGHT_FT=25, STORAGE_ACFT=500, TOP_FT=1850, AREA_AC=60,
+                                    CREST_LINE=lines),
+                               fq.QgsProcessingContext(), fq.QgsProcessingFeedback())
+            raise AssertionError("expected the stop at the HEC-RAS stage")
+        except fq.QgsProcessingException as e:
+            assert "stop at the HEC-RAS stage" in str(e), e
+        pt = lambda x: fq.FakeGeometry("point", [[(x, 0.0)]])
+        feats = [fq.FakeFeature(pt(0.0), NIDID="B1", H=25.0, S=500.0, TOP=1850.0),
+                 fq.FakeFeature(pt(300.0), NIDID="B2", H=30.0, S=500.0, TOP=1850.0)]
+        b = algs.BatchAlgorithm()
+        b.initAlgorithm()
+        b.processAlgorithm(dict(common, DAMS=fq.FakeSource(feats), F_ID="NIDID", F_HEIGHT="H",
+                                F_STORAGE="S", F_TOP="TOP", SKIP_DONE=False),
+                           fq.QgsProcessingContext(), fq.QgsProcessingFeedback())
+    try:
+        tools()
+    finally:
+        workflow.run_dam, algs.hecras_tier_stage, hecras_engine.detect = keep
+        shutil.rmtree(d, ignore_errors=True)
+    assert [s_[0] for s_ in seen] == ["A", "B1", "B2"], seen
+    assert seen[0][2] == [other], seen[0]                            # Model one dam
+    assert seen[1][1] == [("B2", (300.0, 0.0), 30.0)], seen[1]       # the batch tool
+    assert seen[2][1] == [("B1", (0.0, 0.0), 25.0)], seen[2]
+    assert staged == [(7.0, 3.0), (7.0, 3.0), (307.0, 3.0)], staged
+    # the CLI: the batch's other dams, and the modelled point to its HEC-RAS stage
+    c = tc.cli()
+    calls = []
+    with tc.Tmp() as d:
+        p, cfg = tc.base_config(d)
+        cfg["dam"] = {"point": None}
+        cfg["batch"] = {"crs": None}
+        cfg["scenario"] = {"type": "sunny"}
+        tc.dump(p, cfg)
+        table = os.path.join(d, "dams.csv")
+        with open(table, "w") as f:
+            f.write("NIDID,Dam Name,Dam Height (ft),Max Storage (acre-feet),Surface Area (acres),"
+                    "Top of Dam (ft),x,y\n")
+            f.write("C1,Alpha,25,20,4,1850,0,0\n")
+            f.write("C2,Beta,30,20,4,1850,300,0\n")
+        fake_exe = os.path.join(d, "lisflood")
+        with open(fake_exe, "w") as f:
+            f.write("x")
+
+        def cli_run_dam(dam, dam_xy, st, *a, **k):
+            calls.append((dam.dam_id, st.dam_point_others))
+            return tc._FakeResult(dam.dam_id)
+        keep = c.workflow.run_dam
+        c.workflow.run_dam = cli_run_dam
+        try:
+            tc.run_cli("batch", table, p, "--lisflood", fake_exe)
+        finally:
+            c.workflow.run_dam = keep
+        with open(os.path.join(d, "out", "Batch_Breach_Runs.csv")) as fh:
+            rows = {r["Dam"]: r for r in csv.DictReader(fh)}
+    assert rows["C1"]["Status"] == "done" and rows["C2"]["Status"] == "done", rows
+    assert [x[0] for x in calls] == ["C1", "C2"], calls
+    for (did, oth), (oid, oxy, oh) in zip(calls, (("C2", (300.0, 0.0), 30.0),
+                                                  ("C1", (0.0, 0.0), 25.0))):
+        assert oth and len(oth) == 1 and oth[0][0] == oid and oth[0][2] == oh, (did, oth)
+        assert np.allclose(oth[0][1], oxy, atol=0.01), (did, oth)
+    got = []
+    keep = c.workflow.run_hecras_stage
+    c.workflow.run_hecras_stage = lambda folder, res, writer, st, xy, log, **k: got.append(xy)
+    try:
+        pp = types.SimpleNamespace(st=types.SimpleNamespace(tier=workflow.TIER_HECRAS),
+                                   folder="", setup=types.SimpleNamespace(writer=None),
+                                   dam_xy=(-120.0, 0.0))
+        for mxy in ((1.5, 2.5), None):
+            res = types.SimpleNamespace(summary={"breach_occurs": True}, modelled_dam_xy=mxy)
+            c._hecras_stage(pp, res, lambda m: None)
+            c._hecras_stage(pp, res, lambda m: None, unattended=True)
+    finally:
+        c.workflow.run_hecras_stage = keep
+    assert got == [(1.5, 2.5), (1.5, 2.5), (-120.0, 0.0), (-120.0, 0.0)], got
