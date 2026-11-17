@@ -37,7 +37,8 @@ from .download import (
     fetch_nsi, fetch_nd_address_points, fetch_usa_structures, fetch_osm_camps,
     fetch_arcgis_layer, fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings,
     fetch_osm_places, try_download, STALE_USED, PACK_USED, INCOMPLETE_USED, pack_has,
-    configure_tile_cache_from_cfg, tile_cache_report_lines,
+    configure_tile_cache_from_cfg, tile_cache_report_lines, OVERPASS_MIRROR_USED,
+    overpass_mirror_lines,
 )
 from .extent import distance_xy_in_crs
 from .helpers import (
@@ -403,6 +404,7 @@ def download_data(cfg, clip, depth_layer, output_folder, dam_folder="", progress
     del STALE_USED[:]
     del PACK_USED[:]
     del INCOMPLETE_USED[:]             # H01: downloads cut short but used this run
+    del OVERPASS_MIRROR_USED[:]        # Overpass queries a backup server answered
     # v2.8.0: per-tile download cache from cfg (data_cache_folder, data_max_age_days,
     # refresh_data, data_cache_max_mb); off when data_cache_folder is absent / empty
     configure_tile_cache_from_cfg(cfg)
@@ -466,6 +468,8 @@ def download_data(cfg, clip, depth_layer, output_folder, dam_folder="", progress
         log(">>> WARNING: {}: the download was cut short ({}) - only {} feature(s) kept; the "
             "inventory may be incomplete. Re-run from a smaller study area for the full "
             "layer.".format(name, reason, kept))
+    for line, _source in overpass_mirror_lines():
+        log(line)
     for line in tile_cache_report_lines():
         log(line)
     from .pipeline import pack_report_lines

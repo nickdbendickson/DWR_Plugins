@@ -35,6 +35,29 @@ at 30 m this valley takes it about 9 hours, at 40 m about 25 minutes a run, and 
 flow at the bridges swings between nothing and several times the flood (see Results).
 `build_case.py --manning-n` sets one Manning's n for the valley (default: the suite's 0.06).
 
+**ANUGA on the gmsh mesh, with road breaklines and the crest burn.** `build_case.py --anuga`
+makes the two runs the Runner's `lisflood+anuga` tier and fetches the road and rail centrelines
+of the terrain box from Census TIGERweb (`inputs/roads.geojson`; private drives left out; there is
+no railroad in the box). With `NDBREACH_ANUGA_MESHER=gmsh` the Runner meshes ANUGA's domain with
+gmsh and keeps as breaklines the pieces of those roads that stand on a fill near the flood. The
+same lines drive the crest burn: each 30 m cell a road crosses is raised to the road's highest
+1 m elevation (USGS 3DEP 1 m, downloaded along the roads into the suite data folder, so set
+`NDSUITE_DATA`). `--lines` alone gives the crest burn to the LISFLOOD-FP runs. The
+workflow's second job does this for the observed breach (by hand with `engine` set to `anuga`
+or `both`, or on a pull request whose title holds `[anuga]`). It needs gmsh's Python module in
+the ANUGA environment (`python-gmsh` from conda-forge). It takes far longer than GitHub's
+6-hour job: on the first try (2026-11-14, 2 ANUGA threads) LISFLOOD-FP took 55 min, then ANUGA
+reached 16.1 h of the 48 h flood in 4 h 24 min, before the breach (24.5 h). So the workflow runs
+it in up to eight legs (`.github/workflows/lake-delhi-anuga-leg.yml`, 4 threads, a checkpoint
+every 15 min): each stops the Runner before the job limit and keeps the case folder as an
+artifact, and the next runs the same configuration with `--resume`, which reuses the finished
+LISFLOOD-FP run and the gmsh mesh and goes on from ANUGA's newest checkpoint. ANUGA's
+checkpoint-signing key goes along (`NDBREACH_CKPT_KEY_FILE`): without it a fresh runner
+refuses the checkpoints as not its own. With 4 threads the first leg reached 26.9 h, past
+the breach. The first ANUGA pass's flood reaches the mesh edge, so the Runner runs ANUGA a
+second time on a mesh twice as wide; before Runner 3.20.6 every resumed leg computed the
+first pass again from the start, so the second pass never finished (run 43602043685).
+
 | Run | The breach |
 |---|---|
 | `blind` | The Runner works it out from the dam's height and storage (Froehlich 2008, overtopping), as it would for a dam that has not failed. |
@@ -116,6 +139,29 @@ the Runner work the breach out from the dam alone, as it would for a dam that ha
 | U.S. 151, up side | 21.0 | +1.64 | +1.58 | -0.30 |
 | U.S. 151, down side | 21.0 | +1.64 | +1.59 | -0.26 |
 | **The eight bridge marks: mean, largest** | | **+2.07, +3.69** | **+2.02, +3.63** | **+0.30, +1.47** |
+
+**ANUGA on the gmsh mesh, with road breaklines and the crest burn** (as observed, n 0.06,
+run 43785088347 on 2026-11-16 and 17: LISFLOOD-FP, then ANUGA twice, the second time on a mesh
+twice as wide because the first flood reached the mesh edge; 228,162 triangles, 10 m bed, 3,706
+road crest nodes held; six legs of about 5.5 hours):
+
+| Mark | Miles below | ANUGA | LISFLOOD-FP (same run settings) |
+|---|---|---|---|
+| Below the dam (tailwater) | 0.0 | +15.84 | +14.31 |
+| Hopkinton, up side | 9.4 | +4.80 | +3.57 |
+| Hopkinton, down side | 9.4 | +4.88 | +3.69 |
+| Highway 38, up side | 18.6 | +2.33 | +2.10 |
+| Highway 38, down side | 18.6 | +1.07 | +1.82 |
+| Main Street, up side | 20.1 | +1.26 | +0.66 |
+| Main Street, down side | 20.1 | +1.52 | +1.46 |
+| U.S. 151, up side | 21.0 | +1.49 | +1.64 |
+| U.S. 151, down side | 21.0 | +1.27 | +1.64 |
+| **The eight bridge marks: mean, largest** | | **+2.33, +4.88** | **+2.07, +3.69** |
+
+ANUGA's peak flow past Hopkinton is 55,748 cfs at 28.2 h (LISFLOOD-FP 53,989 at 28.3 h). The
+finer engine, mesh and road crests do not remove the high bias: it stays with the roughness (n
+0.04 gives +0.30 with LISFLOOD-FP). ANUGA is about 1.2 ft higher than LISFLOOD-FP at Hopkinton,
+where the D47 embankment is a held crest line; why is not yet looked at.
 
 What it says:
 

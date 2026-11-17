@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.25.4"
+PLUGIN_VERSION = "2.25.6"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -402,6 +402,12 @@ def lifeline_fetches(has=None):
 # OpenStreetMap (Overpass API) fills the gaps: substations and drinking-water
 # plants have no agency source; the rest complements the agency layers.
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Other public Overpass servers, tried in this order when OVERPASS_URL does not answer
+# (TLS / connection error, busy, partial result). OVERPASS_URL is always tried first.
+# Data-source file: "OVERPASS_MIRRORS": [] turns the backups off; a file that sets its own
+# OVERPASS_URL gets no backups unless it also sets OVERPASS_MIRRORS (to other addresses).
+OVERPASS_MIRRORS = ["https://overpass.private.coffee/api/interpreter",
+                    "https://overpass.kumi.systems/api/interpreter"]
 OSM_LIFELINE_TAGS = [
     ("power", "substation", "Electric substation"),
     ("power", "plant", "Power plant"),
@@ -555,8 +561,8 @@ WEBMAP_URL_TEMPLATE = "https://www.google.com/maps/search/?api=1&query={lat}%2C{
 # ------------------------------------------------------------------------------
 SOURCE_KEYS = ("NSI_API_URL", "NARN_URL", "CROSSINGS_URL", "USA_STRUCTURES_URL",
                "ND_ADDRESS_POINTS_URL", "NID_URL", "NID_MIRROR_URL", "OVERPASS_URL",
-               "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL", "NBI_URL",
-               "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL", "AERIAL_IMAGERY_URL",
+               "OVERPASS_MIRRORS", "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL",
+               "NBI_URL", "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL", "AERIAL_IMAGERY_URL",
                "WEBMAP_URL_TEMPLATE", "AERIAL_SOURCES", "AERIAL_SOURCE_ORDER",
                "AERIAL_LABEL_URLS")
 SOURCES_FILE_NAME = "ND_Dam_Hazard_Helper_data_sources.json"

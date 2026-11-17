@@ -143,20 +143,47 @@ def _finish(fig, ax, bbox, grid, bm, opts):
     return rec
 
 
+def point_check_overlay(point_check, dam_xy):
+    """3.20.11: what the inflow map draws of the dam point check (core/dam_point_check.py), or
+    None: the point given (when the check moved it or flagged it), how far, and on a review the
+    embankment found but not used."""
+    pc = point_check or {}
+    if pc.get("outcome") not in ("moved", "review") or not pc.get("original_xy"):
+        return None
+    ox, oy = (float(v) for v in pc["original_xy"][:2])
+    emb = pc.get("embankment") or {}
+    return {"outcome": pc["outcome"], "original_xy": (ox, oy),
+            "distance_m": math.hypot(ox - dam_xy[0], oy - dam_xy[1]),
+            "moved_m": pc.get("moved_m"),
+            "unused_line": (emb.get("line_xy") if pc["outcome"] == "review" else None)}
+
+
 def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None, trace=None,
-                    crest_line=None, breach_xy=None, basemap=None):
+                    crest_line=None, breach_xy=None, basemap=None, point_check=None):
     """qa_inflow_map.png. `grid` is a core.grid.Grid of terrain (m) around the dam.
-    `basemap`: options for core.basemap.render (mode, labels, avoid, ...; None = defaults)."""
+    `basemap`: options for core.basemap.render (mode, labels, avoid, ...; None = defaults).
+    3.20.11 `point_check`: the run_report "dam_point_check" block; a moved or flagged point
+    is drawn as a hollow red circle (the window widens to show it; when it is past the
+    terrain read, an arrow at the map's edge points to it)."""
     half = max(3.0 * (radius_m or 90.0), 300.0)
+    ov = point_check_overlay(point_check, dam_xy)
+    if ov is not None:
+        half = max(half, ov["distance_m"] + 60.0)
     a, ext = _window(grid, dam_xy, half)
+    if ov is not None:
+        ox, oy = ov["original_xy"]
+        ov["inside"] = ext[0] <= ox <= ext[1] and ext[2] <= oy <= ext[3]
     r, c = grid.rc(*inflow_xy) if inflow_xy else (-1, -1)
     z = grid.masked()
     inflow_z = float(z[r, c]) if grid.inside(r, c) else None
     title = inflow_title(dam_id, inflow_z, top_m)
+    if ov is not None and ov["outcome"] == "moved":
+        title += " - dam point moved {:.0f} m".format(ov.get("moved_m") or ov["distance_m"])
     try:
         plt = _plt()
     except Exception:                        # noqa: BLE001 - no matplotlib: plain Qt image
-        return _qt_map(path, a, ext, grid.dx, title, dam_xy, inflow_xy, trace, None)
+        return _qt_map(path, a, ext, grid.dx, title, dam_xy, inflow_xy, trace, None,
+                       original_xy=ov["original_xy"] if ov else None)
     opts = dict(basemap or {}, key="inflow_map")
     bbox = _bbox(ext)
     bm = _get_basemap(bbox, grid, opts)
@@ -196,8 +223,10 @@ def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None,
             ax.add_patch(plt.Circle(dam_xy, radius_m, fill=False, ls=":",
                                     color="w" if bm.rgb is not None else "k", zorder=6,
                                     label="inflow search ({:.0f} m)".format(radius_m)))
-        if breach_xy is not None and tuple(breach_xy) != tuple(dam_xy):
+        if breach_xy is not None and tuple(breach_xy) != tuple(dam_xy) and ov is None:
             ax.plot(*breach_xy, "kx", ms=10, mec="w", label="dam point given", zorder=7)
+        if ov is not None:
+            _draw_point_check(ax, ov, dam_xy, ext)
         ax.plot(*dam_xy, "k*", ms=14, mec="w", label="breach (dam) point", zorder=7)
         if inflow_xy:
             ax.plot(*inflow_xy, "ro", ms=11, mec="w", label="breach inflow point", zorder=7)
@@ -214,6 +243,42 @@ def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None,
     finally:
         plt.close(fig)
     return path
+
+
+def _edge_arrow(dam_xy, target, ext, frac=0.08):
+    """(tail, head) of an arrow inside the window `ext` pointing from dam_xy to `target`
+    (outside the window): it ends at the window's edge."""
+    dx, dy = target[0] - dam_xy[0], target[1] - dam_xy[1]
+    n = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / n, dy / n
+    ts = []
+    for v, lo, hi, p in ((ux, ext[0], ext[1], dam_xy[0]), (uy, ext[2], ext[3], dam_xy[1])):
+        if abs(v) > 1e-12:
+            ts.append(((hi if v > 0 else lo) - p) / v)
+    t = max(0.0, min(ts) if ts else 0.0)
+    w = min(ext[1] - ext[0], ext[3] - ext[2])
+    head = (dam_xy[0] + ux * t * 0.97, dam_xy[1] + uy * t * 0.97)
+    tail = (head[0] - ux * frac * w, head[1] - uy * frac * w)
+    return tail, head
+
+
+def _draw_point_check(ax, ov, dam_xy, ext):
+    """The dam point check overlay (3.20.11)."""
+    lbl = "point given ({}, {:.0f} m)".format(
+        "moved" if ov["outcome"] == "moved" else "dam point check: review", ov["distance_m"])
+    if ov.get("inside", True):
+        ax.plot(*ov["original_xy"], "o", ms=13, mfc="none", mec="red", mew=2.2, label=lbl,
+                zorder=8)
+    else:
+        tail, head = _edge_arrow(dam_xy, ov["original_xy"], ext)
+        ax.annotate("", xy=head, xytext=tail, zorder=8,
+                    arrowprops=dict(arrowstyle="-|>", color="red", lw=2.2))
+        ax.plot([], [], "-", color="red", lw=2.2, label=lbl + " (off the map)")
+    line = ov.get("unused_line")
+    if line and len(line) >= 2:
+        xy = np.asarray(line, dtype=float)
+        ax.plot(xy[:, 0], xy[:, 1], "--", color="darkorange", lw=2.2,
+                label="embankment found (not used)", zorder=6)
 
 
 def depth_title(dam_id, acres, dmax_ft, metrics=None):
@@ -310,7 +375,7 @@ def _qt_has_fonts():
         return False
 
 
-def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
+def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft, original_xy=None):
     """Fallback without matplotlib: a Qt image (hillshade, depth in blue, symbols). The title
     is left off when there is no Qt application to draw text with (_qt_has_fonts)."""
     from qgis.PyQt.QtGui import QImage, QPainter, QColor, QPen
@@ -343,6 +408,11 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
         if inflow_xy:
             p.setPen(QPen(QColor(255, 0, 0), 3))
             p.drawEllipse(px(*inflow_xy), 5, 5)
+        if original_xy is not None:          # 3.20.11: the dam point given (clamped to the map)
+            ox = min(max(original_xy[0], ext[0]), ext[1])
+            oy = min(max(original_xy[1], ext[2]), ext[3])
+            p.setPen(QPen(QColor(255, 0, 0), 2))
+            p.drawEllipse(px(ox, oy), 9, 9)
         if _qt_has_fonts():
             p.setPen(QPen(QColor(0, 0, 0)))
             p.drawText(4, 14, title.split("\n")[0])
@@ -356,7 +426,7 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
 def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top_m, radius_m=None,
                   trace=None, crest_line=None, breach_xy=None, model_grid=None, depth_m=None,
                   log=None, metrics=None, water_mask=None, basemap=None, basemap_labels=True,
-                  avoid=(), dem_label=None, basemap_opts=None):
+                  avoid=(), dem_label=None, basemap_opts=None, point_check=None):
     """Write the QA maps `mode` asks for into `out_folder`. Never raises.
     Returns ({"inflow_map": path, "depth_map": path, "seconds": s, "mode": mode,
     "basemap": {"mode", "inflow_map": {...}, "depth_map": {...}}}, [problems]).
@@ -389,7 +459,7 @@ def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top
         return out, ["QA maps not written: {}".format(e)]
     jobs = [("inflow_map", INFLOW_PNG, lambda p: draw_inflow_map(
         p, terrain_grid, dam_id, dam_xy, inflow_xy, top_m, radius_m, trace, crest_line, breach_xy,
-        basemap=opts), terrain_grid is not None)]
+        basemap=opts, point_check=point_check), terrain_grid is not None)]
     if mode == QA_BOTH:
         jobs.append(("depth_map", DEPTH_PNG, lambda p: draw_depth_map(
             p, model_grid, depth_m, dam_id, dam_xy, inflow_xy, trace, metrics, water_mask,
@@ -409,6 +479,8 @@ def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top
     credits = [rec.get("credit") for rec in record.values() if rec.get("credit")]
     if credits:
         out["basemap"]["credit"] = credits[0]
+    if point_check_overlay(point_check, dam_xy) is not None and out.get("inflow_map"):
+        out["point_check"] = True                         # 3.20.11: the overlay was drawn
     out["seconds"] = round(time.time() - t0, 2)
     if log:
         for p in problems:

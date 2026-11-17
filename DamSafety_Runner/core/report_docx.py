@@ -63,6 +63,28 @@ STATUS_SHADES = {"yes": "E2EFDA", "check": "FFF2CC", "no": "F8CBAD", "n/a": "EDE
 _BAD_XML = re.compile(u"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
 
+def dam_location_text(rec):
+    """3.20.11 (critique 17): the "Dam location" line of run_report.md and the docx from the
+    run_report "dam_point_check" block (core/dam_point_check.py), or None (no check block, or
+    the check was skipped)."""
+    if not isinstance(rec, dict) or rec.get("outcome") in (None, "skipped", "error"):
+        return None
+    o = rec.get("original_xy") or [0.0, 0.0]
+    if rec.get("outcome") == "moved" and rec.get("modelled_xy"):
+        m = rec["modelled_xy"]
+        return ("DWR point {:,.1f}, {:,.1f}; modelled point {:,.1f}, {:,.1f} (moved {:,.0f} m to "
+                "the embankment found on the DEM by the dam point check)".format(
+                    o[0], o[1], m[0], m[1], rec.get("moved_m") or 0.0))
+    if rec.get("outcome") == "review":
+        return ("DWR point {:,.1f}, {:,.1f}, used as given (dam point check: review; see the "
+                "warnings)".format(o[0], o[1]))
+    return "DWR point {:,.1f}, {:,.1f}, used as given (dam point check: {})".format(
+        o[0], o[1], rec.get("kept_because") or "kept")
+
+
+_dam_location = dam_location_text
+
+
 def clean_text(s):
     """Text with the characters XML 1.0 cannot carry removed."""
     if s is None:
@@ -2194,7 +2216,10 @@ class _Report(object):
             add("Flooded area, water bodies masked", s.get("flooded_acres_masked"), "ac")
             add("Flooded area at or above 1 ft, water bodies masked",
                 s.get("flooded_acres_ge_1ft_masked"), "ac")
-        add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation")
+        add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation" + (
+            # v3.20.9 (Runner review): a lower bound when area was still first wet late
+            " ({})".format(s["latest_arrival_note"]) if s.get("latest_arrival_lower_bound")
+            and s.get("latest_arrival_note") else ""))
         if s.get("domain_mi"):
             add("Model domain", "{} x {} mi after {} run(s) of {}".format(
                 s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs"),
@@ -2244,6 +2269,9 @@ class _Report(object):
         if self.rep.get("dam_xy"):
             rows.append(["Dam point (working CRS, m)", ", ".join(
                 "{:,.1f}".format(v) for v in self.rep["dam_xy"][:2])])
+        dl = _dam_location(self.rep.get("dam_point_check"))      # 3.20.11 (critique 17)
+        if dl:
+            rows.append(["Dam location", dl])
         ip = self.rep.get("inflow_point")
         if ip:
             rows.append(["Breach inflow point (working CRS, m)", "{} ({})".format(
@@ -2486,7 +2514,9 @@ class _Report(object):
             rows = [(k, v) for k, v in (
                 ("Maximum depth (ft)", s.get("max_depth_ft")),
                 ("Maximum velocity (ft/s)", s.get("max_velocity_fps")),
-                ("Latest arrival (h after breach initiation)", s.get("latest_arrival_hr")),
+                ("Latest arrival (h after breach initiation{})".format(   # v3.20.9
+                    "; a lower bound" if s.get("latest_arrival_lower_bound") else ""),
+                 s.get("latest_arrival_hr")),
                 ("Flooded area (ac)", s.get("flooded_acres")),
                 ("Flooded area at or above the arrival depth (ac)",
                  s.get("flooded_acres_over_arrival_depth")),

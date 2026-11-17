@@ -13,8 +13,9 @@
    (st.class_stop, stoprule.py): an edge is also accepted where the breach
    flood's depth, or its rise over the no-breach baseline, has died out along
    the flow path near it (ND Dam Hazard's termination point) and no receptor
-   lies beyond. The duration is also extended if the flood is still advancing
-   at the end.
+   lies beyond. The duration is also extended (1.5x, the same domain run) while
+   the flood is still spreading at the end - v3.20.9: by AREA, see
+   spread_still_moving - at most MAX_CLOCK_EXTENSIONS times per domain run.
 4. Flood scenario: the no-breach baseline runs on the final domain, and the
    incremental depth and water-surface rise are worked out.
 5. Optionally ANUGA on a mesh around the LISFLOOD-FP flood extent, refined
@@ -54,6 +55,7 @@ from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
+from . import dam_point_check as dpc             # 3.20.11
 from ..damsuite import midcrest as mcmod
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
@@ -404,6 +406,16 @@ class RunSettings:
         # 3.12.5: the dam (crest) line a batch run picked from CREST_LINE for the mid-crest dam
         # point (damsuite.midcrest) when the dam has no crest_line_xy. Not in as_dict
         self.midcrest_line = None
+        # 3.20.11: the dam point checked on the DEM before it is used (core/dam_point_check.py):
+        # "warn" (the default: never moves; a REVIEW warning says where the embankment is and
+        # whether "move" would use it), "move" (a clear misplacement uses the embankment found
+        # as the dam line, every gate must pass, else a warning) or "off" (as 3.20.10).
+        # NDBREACH_DAM_POINT_CHECK wins over this (_dam_point_mode). Never in the run key.
+        self.dam_point_check = dpc.DEFAULT_MODE
+        # the other inventory dams near this one [(id, (x, y)[, height ft])] and the other dams' crest lines
+        # (work CRS), so the check never moves a dam onto its neighbour. Not in as_dict
+        self.dam_point_others = None
+        self.dam_point_lines = None
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -459,8 +471,11 @@ class RunSettings:
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "dam_record":
                 d[k] = v is not None
-            elif k in ("vertical_datum", "elev_datum_stated", "midcrest_line"):
+            elif k in ("vertical_datum", "elev_datum_stated", "midcrest_line",
+                       "dam_point_others", "dam_point_lines"):
                 continue                 # 3.12.0: run_report["vertical_datum"] records them
+            elif k == "dam_point_check" and v in (dpc.DEFAULT_MODE, None, ""):
+                continue                 # 3.20.11 default: the report stays as before
             elif k == "elev_datum" and v in ("auto", None, ""):
                 continue                 # 3.12.0: the default - the report stays as before
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
@@ -558,6 +573,10 @@ def key_settings(st):
                                                             "water_mask",
                                                             "anuga_dt_diag")}
     d.pop("near_dam_fv1", None)
+    # 3.20.11: the dam point check reaches the key only through the dam point it gives
+    # (dam_xy) and the dam's top (dam_to_dict), as DAM_LINES does
+    for k in ("dam_point_check", "dam_point_others", "dam_point_lines"):
+        d.pop(k, None)
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -618,6 +637,34 @@ def _env_flag(name):
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_off(name):
+    """3.20.11 (critique 13): NDBREACH_<name> (or <name>) as a switch that can also say off:
+    True for off / 0 / no / false, False for on / 1 / yes / true, None when unset (or another
+    word). _env_flag cannot tell "off" from "unset"."""
+    v = (os.environ.get("NDBREACH_" + name) or os.environ.get(name) or "").strip().lower()
+    if v in ("off", "0", "no", "false"):
+        return True
+    if v in ("on", "1", "yes", "true"):
+        return False
+    return None
+
+
+def _dam_point_mode(st):
+    """(mode, source) of the dam point check: NDBREACH_DAM_POINT_CHECK (off / 0 / no / false,
+    warn, move / on / 1 / yes / true) wins over the run setting (a headless kill switch)."""
+    off = _env_off("DAM_POINT_CHECK")
+    if off is True:
+        return "off", "environment"
+    env = dpc.env_mode()
+    if env is not None:
+        return env, "environment"
+    try:
+        return dpc.normalize_mode(getattr(st, "dam_point_check", dpc.DEFAULT_MODE)), "setting"
+    except ValueError:
+        return dpc.DEFAULT_MODE, "setting (not understood: {!r})".format(
+            getattr(st, "dam_point_check", None))
+
+
 class RunResult:
     def __init__(self):
         self.dam_id = ""
@@ -642,6 +689,8 @@ class RunResult:
         self.receptor_csv = ""
         self.eap_map = ""
         self.flood = None         # flood.FloodResult
+        self.dam_point_check = None   # 3.20.11: the run_report "dam_point_check" block
+        self.modelled_dam_xy = None   # 3.20.11: the mid-crest point when the check moved it
         self.t_ref_hr = 0.0       # breach initiation within the record (flood scenario)
         self.cascade_offset_h = 0.0
         self.animation = None     # animation.AnimationResult when frames were rendered
@@ -1089,6 +1138,217 @@ def hit_run_cap(it, max_iterations, over):
     return bool(over) and it == int(max_iterations)
 
 
+# v3.20.9 (Nick, 2026-11-16): the "flood still spreading" clock rule is AREA-BASED. Before, a
+# single cell first wet (at the arrival depth) in the last 10% of the clock lengthened the clock
+# 1.5x and re-ran the pass, with no limit on how often: a thin sheet creeping over flat ground
+# kept DWR-4031 (6.9 ac-ft pond, ~53 ac wet) extending 4.3 -> 6.5 -> ... -> 32.8 h on one DEM
+# and to 9 passes / a 93.7 h latest arrival on another, for a few cells at the fringe. Now the
+# flood is still spreading only when a real share of the wet area is still being reached:
+#   late_ac  = area first wet (arrival at >= the arrival depth, 0.1 ft) after
+#              SPREAD_LATE_WINDOW x the clock (the same late window as before: the last 10%)
+#   wet_ac   = area with an arrival (wet at >= the arrival depth) in this pass
+#   spreading = (late_ac >= SPREAD_LATE_FRACTION x wet_ac and late_ac >= SPREAD_MIN_LATE_AC)
+#               or late_ac >= SPREAD_LARGE_LATE_AC (whatever its share; v3.20.9 review)
+#               and, when this domain run has an earlier, shorter-clock pass on the same DEM
+#               and solver settings, wet_ac grew by >= SPREAD_GROWTH_FRACTION over that pass's
+#               wet area (or by >= SPREAD_LARGE_LATE_AC).
+# Cells already under pond water at the arrival depth when the run starts are left out of both
+# areas (their arrival is ~0, so they would only dilute the late share).
+# The growth test is a CONSISTENCY GUARD, not a third physical gate: in a deterministic re-run
+# on the same DEM a cell first wet after 0.9 x 1.5T was dry at T, so the growth is at least the
+# late area whenever the late test passes. It only bites when the two passes are not really
+# comparable, and a pass that is known not to be (a 3DEP refill, the ACC stability switch, a
+# record from before 3.20.9) is not compared at all (previous_pass_flooded_ac).
+# There is deliberately NO depth floor above the arrival depth: thin real sheets (0.1-0.5 ft)
+# decide road overtopping and wet structures on the ND plains.
+SPREAD_LATE_WINDOW = 0.9        # "late" = first wet after 90% of the clock (the last 10%)
+SPREAD_LATE_FRACTION = 0.01     # late area must be at least 1% of the wet area ...
+SPREAD_GROWTH_FRACTION = 0.01   # ... and the wet area must have grown 1% since the last pass
+# ... and the late area at least 0.25 ac: 11 cells at 10 m (0.0247 ac each), 2 cells at 30 m
+# (0.222 ac each), 1 cell at 50 m (0.618 ac). It only matters for small floods (under 25 ac the
+# 1% share is less than this), where one or two late fringe cells are noise in the wet/dry
+# front, not a flood still on its way.
+SPREAD_MIN_LATE_AC = 0.25
+# v3.20.9 review: on a large flood the early-flooded valley fills the denominator, so a real
+# thin sheet still advancing (e.g. 51 ac of a 20,000 ac flood in the last 3 h of a 30 h clock,
+# 0.26%) never reaches the 1% share. A late area this large is a flood still on its way
+# whatever its share (101 cells at 10 m, 113 at 30 m: not fringe noise).
+SPREAD_LARGE_LATE_AC = 25.0
+# At most this many clock extensions per domain run (the clock grows 1.5x each: 1.5^4 = 5.1x).
+# Reaching it with the flood still spreading stops the loop with a warning (stop reason
+# "clock-extension limit"), not silently.
+MAX_CLOCK_EXTENSIONS = 4
+
+
+def _spread_pct(x):
+    return "{:.1f}%".format(100.0 * x) if abs(x) < 0.1 else "{:.0f}%".format(100.0 * x)
+
+
+def spread_still_moving(arr_hr, hmax_m, sim_hr, cell_ac, prev_flooded_ac=None,
+                        arrival_depth_m=ARRIVAL_DEPTH_FT * FT, late_window=SPREAD_LATE_WINDOW,
+                        late_fraction=SPREAD_LATE_FRACTION, growth_fraction=SPREAD_GROWTH_FRACTION,
+                        min_late_ac=SPREAD_MIN_LATE_AC, large_late_ac=SPREAD_LARGE_LATE_AC,
+                        init_m=None):
+    """v3.20.9: is the flood still spreading at the end of a LISFLOOD-FP pass? (the area rule
+    above). arr_hr: arrival time (h) per cell, NaN where never wet at the arrival depth;
+    hmax_m: the depth (m) a cell counts as wet by (the rise over any initial pond water), or
+    None to trust arr_hr alone; sim_hr: this pass's clock (h); cell_ac: one cell's area (ac);
+    prev_flooded_ac: the wet area of the earlier, shorter-clock pass of the same domain run on
+    the same DEM (previous_pass_flooded_ac), None when there is none; init_m: the initial pond
+    water depth (m) or None - cells already at the arrival depth under it are left out.
+    Returns (still_spreading, info) with info = {late_ac, flooded_ac, late_frac, growth_frac,
+    prev_flooded_ac, late_after_hr, still_spreading, reason}; `reason` is a plain phrase for
+    the log ("12.3 ac (4.1%) first wet in the last 10% of the clock, wet area +6% since the
+    last pass")."""
+    arr = np.asarray(arr_hr, dtype=np.float64)
+    thr = float(arrival_depth_m) - lfmod.ARRIVAL_TOL_M
+    has = np.isfinite(arr) & (arr >= 0.0)
+    depth_wet = None
+    if hmax_m is not None:
+        h = np.asarray(hmax_m, dtype=np.float64)
+        depth_wet = np.isfinite(h) & (h >= thr)
+        has &= depth_wet
+    if init_m is not None:
+        # v3.20.9 review: pond cells wet at the start have an arrival of ~0 and are never
+        # "late"; counting them would only dilute the late share on pothole terrain
+        i0 = np.asarray(init_m, dtype=np.float64)
+        pond = np.isfinite(i0) & (i0 >= thr)
+        has &= ~pond
+        if depth_wet is not None:
+            depth_wet = depth_wet & ~pond
+    sim_hr = float(sim_hr)
+    late_after = float(late_window) * sim_hr
+    n_wet = int(has.sum())
+    n_late = int((has & (arr > late_after)).sum())
+    flooded_ac = n_wet * float(cell_ac)
+    late_ac = n_late * float(cell_ac)
+    late_frac = late_ac / flooded_ac if flooded_ac > 0 else 0.0
+    growth = None
+    if prev_flooded_ac is not None and float(prev_flooded_ac) > 0:
+        growth = (flooded_ac - float(prev_flooded_ac)) / float(prev_flooded_ac)
+    window = "the last {:.0f}% of the clock".format(100.0 * (1.0 - float(late_window)))
+    late_txt = "{:.2f} ac ({} of the {:.1f} ac wet area) first wet in {}".format(
+        late_ac, _spread_pct(late_frac), flooded_ac, window)
+    large = late_ac >= float(large_late_ac) - 1e-9
+    if large and late_frac < late_fraction:
+        late_txt += " (under {} of the wet area, but at least the {:g} ac that counts at any " \
+                    "share)".format(_spread_pct(late_fraction), float(large_late_ac))
+    grown_ac = (flooded_ac - float(prev_flooded_ac)) if growth is not None else None
+    if n_wet == 0:
+        if (depth_wet is not None and depth_wet.any()
+                and not np.isfinite(arr).any()):
+            # v3.20.9 review: no .inittm (read_results leaves the arrival grid all NaN) - the
+            # max-depth grid is wet, so do not say "nothing is wet"
+            go, why = False, "no arrival times were written (the arrival grid is empty)"
+        else:
+            go, why = False, "nothing is wet at the arrival depth"
+    elif n_late == 0:
+        go, why = False, "nothing first wet in {}".format(window)
+    elif late_frac < late_fraction and not large:
+        go, why = False, "only {}, under {}".format(late_txt, _spread_pct(late_fraction))
+    elif late_ac < min_late_ac and not large:
+        go, why = False, "only {}, under the {:g} ac floor".format(late_txt, min_late_ac)
+    elif prev_flooded_ac is not None and float(prev_flooded_ac) <= 0:
+        go, why = True, "{}, wet area new since the last pass".format(late_txt)
+    elif (growth is not None and growth < growth_fraction
+          and not (large and grown_ac >= float(large_late_ac) - 1e-9)):
+        g = 100.0 * growth
+        g = 0.0 if abs(g) < 0.05 else g      # the stored wet area is rounded to 0.01 ac
+        go, why = False, "{}, but the wet area {} since the last pass (under +{})".format(
+            late_txt, "grew only {:+.1f}%".format(g) if g >= 0 else "shrank {:.1f}%".format(-g),
+            _spread_pct(growth_fraction))
+    else:
+        go = True
+        why = late_txt + (", wet area +{} since the last pass".format(_spread_pct(growth))
+                          if growth is not None else "")
+    info = {"late_ac": round(late_ac, 2), "flooded_ac": round(flooded_ac, 2),
+            "late_frac": round(late_frac, 4),
+            "growth_frac": round(growth, 4) if growth is not None else None,
+            "prev_flooded_ac": (round(float(prev_flooded_ac), 2)
+                                if prev_flooded_ac is not None else None),
+            "late_after_hr": round(late_after, 2), "still_spreading": bool(go), "reason": why}
+    return bool(go), info
+
+
+def previous_pass_flooded_ac(iterations, run, sim_hr, stable_settings=False):
+    """The wet area (ac, at the arrival depth) of the pass the spread rule compares with: the
+    LAST recorded pass, when it belongs to the same domain run (`run`), ran a shorter clock than
+    `sim_hr`, and was not superseded by a 3DEP refill (a refill re-runs the same domain run on a
+    different DEM, so its wet area is not comparable). None otherwise (the first pass of a
+    domain run, or the first pass after a refill). Note: rec["clock_extension"] says whether a
+    pass was ITSELF an extension, not whether a previous pass exists, so it is not used here.
+    v3.20.9 review: also None when the previous pass ran other solver settings (the ACC
+    stability switch, `stable_settings` = this pass's) or has no `spread` record (a checkpoint
+    from before 3.20.9: its stats.flooded_acres counts the total depth, initial pond water
+    included and with no tolerance, so it is not the same measure - the growth test is then
+    skipped rather than compared with it)."""
+    if not iterations:
+        return None
+    prev = iterations[-1]
+    if prev.get("run") != run or prev.get("followed_by_dem_refill"):
+        return None
+    if bool(prev.get("stable_settings")) != bool(stable_settings):
+        return None
+    if float(prev.get("sim_time_hr") or 0.0) >= round(float(sim_hr), 2) - 1e-6:
+        return None
+    v = (prev.get("spread") or {}).get("flooded_ac")
+    return float(v) if v is not None else None
+
+
+def clock_extensions_used(iterations, run):
+    """How many clock extensions domain run `run` has had (passes recorded as extensions)."""
+    return sum(1 for r in iterations or () if r.get("run") == run and r.get("clock_extension"))
+
+
+def hit_clock_extension_cap(spreading, over, used, max_ext=MAX_CLOCK_EXTENSIONS):
+    """The flood is still spreading inside the domain (no edge to grow: `over` empty) but this
+    domain run has already had `max_ext` clock extensions: stop instead of lengthening again.
+    With an edge over (the domain grows), the next pass is a new domain run, so no cap."""
+    return bool(spreading) and not over and int(used) >= int(max_ext)
+
+
+def clock_extension_cap_warning(max_ext, sim_hr, reason=""):
+    # v3.20.9 review: name the duration to set (a chosen duration longer than this clock runs
+    # that long; with a longest simulated time it can still lengthen from there)
+    return ("Flood still spreading after {} clock extensions (clock {:.1f} h){}: the latest "
+            "arrival times may be cut short; check Arrival Time.tif near the edge of the wet "
+            "area, or set a simulation duration longer than {:.1f} h.".format(
+                int(max_ext), float(sim_hr), " - {}".format(reason) if reason else "",
+                float(sim_hr)))
+
+
+def fixed_clock_spreading_warning(sim_hr, reason=""):
+    """v3.20.9 review: a run that repeats an earlier run's plan (a probabilistic or sensitivity
+    case, the finer-grid re-run, a nested fine run) keeps that run's clock and never lengthens
+    it; when the flood is still spreading at its end, say so instead of staying silent."""
+    return ("The flood is still spreading at the end of the fixed clock ({:.1f} h) this run "
+            "reuses from the run it repeats{}: the latest arrival times may be cut short near "
+            "the edge of the wet area.".format(
+                float(sim_hr), " - {}".format(reason) if reason else ""))
+
+
+def latest_arrival_lower_bound(iterations, t_ref_hr=0.0):
+    """v3.20.9 review: (flag, clock_hr, note) for the LAST LISFLOOD-FP pass. When some of its
+    wet area was still first wet in the last 10% of the clock - the spread rule judged it not
+    spreading (or a limit stopped it) - the run's latest arrival is a LOWER BOUND at the fringe:
+    a longer clock could only make it later. clock_hr is that pass's clock from breach
+    initiation (h); note is a plain sentence, '' when the flag is False."""
+    if not iterations:
+        return False, None, ""
+    last = iterations[-1]
+    sp = last.get("spread") or {}
+    clock = last.get("sim_time_hr")
+    clock = round(float(clock) - float(t_ref_hr or 0.0), 2) if clock is not None else None
+    late = float(sp.get("late_ac") or 0.0)
+    if late <= 0:
+        return False, clock, ""
+    return True, clock, (
+        "a lower bound: {:.2f} ac ({} of the wet area) was first wet in the last {:.0f}% of the "
+        "{:.1f} h LISFLOOD-FP clock".format(
+            late, _spread_pct(float(sp.get("late_frac") or 0.0)),
+            100.0 * (1.0 - SPREAD_LATE_WINDOW), float(last.get("sim_time_hr") or 0.0)))
+
+
 def hit_extent_cap(next_w_m, next_h_m, max_extent_m, over):
     """The next domain would exceed the largest-domain cap (max_extent, in metres) and the flood
     is still leaving."""
@@ -1145,6 +1405,402 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
         return dam_xy, rec
     rec["moved"] = True
     return (float(rec["_xy"][0]), float(rec["_xy"][1])), rec
+
+
+def _dem_crest_near_point(read, dam_xy, cs):
+    """The point-only top-of-dam read (as _run_dam_once): the 98th percentile of the DEM within
+    30 m of the point, read +-60 m at min(cs, 3) m. Metres, or None (no DEM data)."""
+    near = read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60), min(cs, 3.0))
+    z = near.masked()
+    X, Y = np.meshgrid(near.x_centers(), near.y_centers())
+    sel = np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= 30.0
+    fin_z = z[sel & np.isfinite(z)]
+    return float(np.nanpercentile(fin_z, 98)) if fin_z.size else None
+
+
+def _quiet(*_a):
+    return None
+
+
+def _dpc_replay(dam, st, dam_xy, terrain_src, cs):
+    """3.20.11: what the point-only path would do with the point as given (no line), on scratch
+    warnings: the top read (the 98th percentile of the DEM near the point, whatever top a
+    caller filled from the DEM: the preview, the single-dam tool and the cascade then replay
+    the same top and agree) and _auto_inflow. A dict for dam_point_check.decide."""
+    h_m = float(dam.dam_height_ft) * FT
+    top_m = _dem_crest_near_point(terrain_src.read, dam_xy, cs)
+    rp = {"top_m": float("nan") if top_m is None else top_m, "inflow_xy": None,
+          "inflow_why": "", "method": "failed", "failed": True, "direction": None}
+    if top_m is None:
+        rp["inflow_why"] = "no DEM data at the point"
+        return rp
+    rad = max(90.0, 8.0 * h_m)
+    search_rad = max(rad, 400.0)
+    search_cell = min(cs, 20.0)
+    local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
+                              dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
+                             search_cell)
+    d0 = copy.copy(dam)
+    d0.crest_line_xy = None
+    st0 = copy.copy(st)
+    st0.midcrest_line = None
+    ai = _auto_inflow(terrain_src, local, d0, dam_xy, h_m, top_m, rad, search_rad, search_cell,
+                      st0, [], _quiet)
+    why = str(ai["why"] or "")
+    method = ("toe band" if ai["toe_pick"] else "place_from_crest" if ai["from_crest"] else
+              "find_inflow_point")
+    if why.startswith(terrain.INFLOW_FAR):
+        method += " (INFLOW_FAR)"
+    elif why.startswith(terrain.NO_DOWNSTREAM):
+        method += " (NO_DOWNSTREAM)"
+    rp.update(inflow_xy=ai["xy"], inflow_why=why, direction=ai["ds_info"].get("direction"),
+              failed=ai["xy"] is None, method="failed" if ai["xy"] is None else method)
+    if ai["xy"] is not None:
+        r, c = local.rc(*ai["xy"])
+        if local.inside(r, c) and local.valid()[r, c]:
+            rp["drop_m"] = top_m - float(local.data[r, c])
+            rp["drop_h"] = rp["drop_m"] / h_m
+    return rp
+
+
+def _dpc_verify(dam, st, sv, terrain_src, cs, h_m):
+    """3.20.11 V: the found line as a dam line on a copy of the dam: its mid-crest point and
+    top (place_midcrest) and the toe-band inflow below it (_downstream_inflow). A dict with
+    ok, the mid-crest point / top and the inflow."""
+    line = sv["emb"]["line"]
+    d2 = copy.copy(dam)
+    d2.crest_line_xy = [tuple(p) for p in line]
+    d2._point_original = None
+    d2._crest_line_source = dpc.FOUND_LINE_SOURCE
+    d2._dpc_ds_dir = _dpc_ds(sv)              # the run's downstream side, as after a move
+    st2 = copy.copy(st)
+    st2.breach_xy = None
+    st2.midcrest_line = None
+    L = mcmod.line_length(line)
+    mid = mcmod.point_at(line, 0.5 * L)[0]
+    xy, mc = place_midcrest(d2, st2, mid, terrain_src.read, min(cs, 1.0))
+    out = {"ok": False}
+    if "_z_m" not in mc:
+        out["why"] = mc.get("warning", "no mid-crest")
+        return out
+    z_mc = float(mc["_z_m"])
+    out.update(midcrest_xy=[round(xy[0], 2), round(xy[1], 2)], midcrest_ft=round(z_mc / FT, 2),
+               _xy=(float(xy[0]), float(xy[1])), _z_m=z_mc)
+    rad = max(90.0, 8.0 * h_m)
+    search_rad = max(rad, 400.0)
+    search_cell = min(cs, 20.0)
+    local = terrain_src.read((xy[0] - search_rad - 30, xy[1] - search_rad - 30,
+                              xy[0] + search_rad + 30, xy[1] + search_rad + 30), search_cell)
+    ds = {}
+    ixy, why = _downstream_inflow(terrain_src, local, d2, xy, h_m, z_mc, rad, search_cell, [],
+                                  _quiet, out=ds,
+                                  max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None),
+                                  **_toe_kwargs(d2, st2))
+    out["inflow_how"] = why
+    if ixy is None:
+        out["why"] = "no inflow below the line"
+        return out
+    out["inflow_xy"] = [round(float(ixy[0]), 2), round(float(ixy[1]), 2)]
+    out["toe_band"] = "toe" not in ds
+    g2 = sv["g2"]
+    zi = float(g2.sample_bilinear(np.array([ixy[0]]), np.array([ixy[1]]))[0])
+    f = dpc.inflow_facts(sv, ixy)
+    ok, dh = dpc.verify_ok(z_mc, zi, h_m, bool(f.get("on_pool_water") or f.get("in_pool")))
+    out.update(ok=bool(ok and out["toe_band"]), drop_x_h=None if dh is None else round(dh, 2))
+    if not out["toe_band"]:
+        out["why"] = "the toe band along the line found no inflow"
+    elif not ok:
+        out["why"] = ("the inflow below it is {:.2f} x H below the mid-crest".format(dh)
+                      if dh is not None else "no DEM at the inflow") + \
+            (" and on the pond" if f.get("on_pool_water") or f.get("in_pool") else "")
+    return out
+
+
+def _dpc_ds(sv):
+    """The found embankment's downstream side (pond to low ground), the mean over its crest
+    cells, or None. A run on the found line takes this side for the toe-band inflow instead of
+    terrain.downstream_direction, which can turn round on a full hydro-flattened reservoir or a
+    closed low below the dam (validation 2026-11-17: DWR-2635, 2662, 2760)."""
+    emb = sv.get("emb") or {}
+    md = emb.get("mid_ds")
+    if md is not None and len(md):
+        m = np.asarray(md, float)
+        m = m[np.all(np.isfinite(m), axis=1)]
+        if len(m):
+            v = m.mean(axis=0)
+            n = math.hypot(v[0], v[1])
+            if n > 0.2:
+                return (float(v[0] / n), float(v[1] / n))
+    d = emb.get("ds_dir")
+    return (float(d[0]), float(d[1])) if d else None
+
+
+def _dpc_converted_pool_ft(dam, st, dam_xy, crs):
+    """The flood's normal pool (ft) as the run's datum conversion will make it, on copies: the
+    run converts the dam elevations (vdatum_run.apply) only after the dam point check, and the
+    batch tools and the CLI not before run_dam (review 2026-11-17: G7e never ran there). The
+    same conversion as the run's (the record from the dam's lon / lat, its stated datum and the
+    run's elevations); nothing on the dam or the settings changes. None when not converted."""
+    fl = getattr(st, "flood", None)
+    try:
+        fl2 = copy.copy(fl)
+        for k, v in (("spillway", None), ("outlets", [])):      # not read for the pool
+            if hasattr(fl2, k):
+                setattr(fl2, k, v)
+        st2 = copy.copy(st)
+        st2.flood = fl2
+        st2.vertical_datum = None
+        d2 = copy.copy(dam)
+        ll = vdrun.lonlat_of(st, dam_xy, crs)
+        vdrun.apply(d2, st2, ll[0] if ll else None, ll[1] if ll else None,
+                    top_is_dem=dam.top_of_dam_ft is None, log=_quiet)
+        v = getattr(fl2, "normal_pool_ft", None)
+        return None if v is None else float(v)
+    except Exception:                                   # noqa: BLE001 - no G7e, no stop
+        return None
+
+
+def _dpc_normal_pool_m(dam, st, dam_xy=None, crs=None):
+    """G7e's normal pool (m, DEM datum) or None: after the datum conversion (the run's, or the
+    same conversion on copies when it has not run yet: _dpc_converted_pool_ft), never a local
+    datum (under 500 ft)."""
+    fl = getattr(st, "flood", None)
+    npft = getattr(fl, "normal_pool_ft", None) if fl is not None else None
+    done = getattr(dam, "_vdatum_done", False) or \
+        getattr(st, "vertical_datum", None) is not None
+    if npft is not None and not done and not getattr(fl, "_vdatum_done", False):
+        npft = _dpc_converted_pool_ft(dam, st, dam_xy, crs)
+        done = True
+    elif npft is not None and getattr(fl, "_vdatum_done", False):
+        done = True
+    if npft is None:
+        npft = getattr(dam, "normal_pool_ft", None)
+    try:
+        if npft is not None and done and float(npft) > 500.0:
+            return float(npft) * FT
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _dpc_parts(sv, h_m):
+    """The on-crest parts of the found line for the crest raise (critique 6: a spillway notch or
+    a low saddle on the line is not raised to the top of dam)."""
+    emb = sv["emb"]
+    g2 = sv["g2"]
+    return dpc.on_crest_parts(
+        emb["line"], lambda x, y: g2.sample_bilinear(np.asarray(x), np.asarray(y)),
+        emb["crest_z_m"], dpc.end_tol_m(h_m))
+
+
+_UNSET = object()
+
+
+def _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native, npool=_UNSET):
+    """The check itself (reads, survey, replay, decision, V): the record with its private
+    parts (_line, _parts, _moved_xy, _mid_xy). `npool`: G7e's normal pool (m) as the caller
+    worked it out (_dpc_normal_pool_m), else worked out here. V runs on a move and, in warn
+    mode, on an embankment that passed every gate (it would move only when V passes)."""
+    t0 = time.time()
+    h_m = float(dam.dam_height_ft) * FT
+    sa = getattr(dam, "surface_area_top_ac", None)
+    g2, g4, how = dpc.read_grids(terrain_src, dam_xy)
+    sv = dpc.survey(g2, g4, dam_xy, h_m, sa)
+    rp = _dpc_replay(dam, st, dam_xy, terrain_src, cs)
+    sv["inflow"] = dpc.inflow_facts(sv, rp.get("inflow_xy"))
+    cl = getattr(dam, "crest_length_ft", None)
+    if npool is _UNSET:
+        npool = _dpc_normal_pool_m(dam, st, dam_xy)
+    dec = dpc.decide(sv, rp, h_m, sa_ac=sa, crest_length_m=(float(cl) * FT if cl else None),
+                     normal_pool_m=npool, others=getattr(st, "dam_point_others", None),
+                     other_lines=getattr(st, "dam_point_lines", None), mode=mode)
+    ver = None
+    moved_xy = None
+    outcome = dec["outcome"]
+    if outcome == "move" or dec.get("would_move"):
+        # warn mode (review 2026-11-17): "would move" only when V passes as well
+        ver = _dpc_verify(dam, st, sv, terrain_src, cs, h_m)
+        if ver.get("ok"):
+            if outcome == "move":
+                outcome = "moved"
+                moved_xy = ver["_xy"]
+        else:
+            outcome = "review"
+            dec["warn"] = True
+            dec["would_move"] = False
+            dec["gates_failed"].append(("V", "{}: {}".format(dpc.GATE_TEXT["V"],
+                                                             ver.get("why", ""))))
+    rec = dpc.record(outcome, mode, dam_xy, sv=sv, rp=rp, dec=dec,
+                     verify=None if ver is None else {k: v for k, v in ver.items()
+                                                      if not k.startswith("_")},
+                     moved_xy=moved_xy, seconds=time.time() - t0, native_cell=native,
+                     resampling=how, sa_ac=sa)
+    rec["_warn"] = bool(dec.get("warn"))
+    emb = sv.get("emb")
+    if emb is not None and emb.get("line"):
+        rec["_line"] = [tuple(p) for p in emb["line"]]
+        if outcome == "moved":
+            rec["_parts"] = _dpc_parts(sv, h_m)
+            L = mcmod.line_length(emb["line"])
+            rec["_mid_xy"] = tuple(mcmod.point_at(emb["line"], 0.5 * L)[0])
+            rec["_moved_xy"] = moved_xy
+            rec["_midcrest_ft"] = ver["midcrest_ft"]
+            rec["_ds_dir"] = _dpc_ds(sv)
+    return rec
+
+
+def _write_found_line(rec, out_folder, crs, log):
+    """inputs/dam_line_found.geojson in the dam folder (critique 17), or ""."""
+    feat = dpc.found_line_geojson(rec)
+    if feat is None or not out_folder:
+        return ""
+    try:
+        from . import products
+        from .nd_data import INPUT_SUBFOLDER
+        d = os.path.join(out_folder, INPUT_SUBFOLDER)
+        os.makedirs(d, exist_ok=True)
+        return products.write_geojson(os.path.join(d, dpc.FOUND_LINE_FILE), [feat], crs=crs)
+    except Exception as e:                                   # noqa: BLE001 - an extra
+        log("Dam point check: the found line was not written: {}: {}".format(
+            type(e).__name__, e))
+        return ""
+
+
+def _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, cs, report, warnings, log,
+                     out_folder=None, crs=None):
+    """3.20.11: the dam point checked on the run's DEM (core/dam_point_check.py) before it is
+    used. `terrain_src` is the source before the DEM edits (the run's raw_terrain; preview's
+    unedited source). On a move: dam.crest_line_xy is the found line (the run then follows the
+    dam-line path exactly as for a user dam line), dam._point_original the point given, a DEM
+    top of dam (dam._top_from_dem) is cleared for the mid-crest top, and the line's midpoint is
+    returned (place_midcrest then puts the point at mid-crest). Otherwise the point is returned
+    as given. The result is kept on the dam (reruns of the same dam reuse it, no reads) and in a
+    cache by dam, point and DEM stamp (preview and the run agree). Never stops a run: an error
+    is recorded and the point is used as given."""
+    mode, msrc = _dam_point_mode(st)
+    prev = getattr(dam, "_point_check", None)
+    if prev is not None:
+        rec = prev
+        log("Dam point check: the result for this dam is reused ({})".format(rec.get("outcome")))
+    else:
+        native = terrain_native_cell(terrain_src)
+        ok, why = dpc.should_check(dam, st, inflow_xy, native, mode=mode)
+        if not ok:
+            rec = dpc.record("skipped", mode, dam_xy, skipped_because=why)
+            rec["mode_source"] = msrc
+            report["dam_point_check"] = dpc.public(rec)
+            log(dpc.log_line(rec))
+            return dam_xy
+        key = rec = None
+        npool = _UNSET
+        try:
+            # everything the decision reads besides the DEM (review 2026-11-17): the normal
+            # pool of G7e, the other dams and crest lines of G7c, the toe band settings of V
+            npool = _dpc_normal_pool_m(dam, st, dam_xy,
+                                       crs or getattr(terrain_src, "work_srs", None))
+            key = dpc.cache_key(dam, dam_xy, terrain_src, extra=(
+                mode, round(float(cs), 3),
+                None if npool is None else round(npool, 3),
+                getattr(st, "inflow_max_from_dam_m", None),
+                repr(getattr(st, "inflow_toe_band_m", None)),
+                getattr(st, "inflow_toe_cell_m", None),
+                getattr(st, "inflow_toe_min_outer_m", None),
+                getattr(st, "inflow_toe_ds_slope_h", None), getattr(dam, "ds_slope_h", None),
+                getattr(dam, "dwr_ds_slope_h", None),
+                repr(getattr(st, "dam_point_others", None)),
+                repr(getattr(st, "dam_point_lines", None))))
+            rec = dpc.cache_get(key)
+        except Exception as e:                           # noqa: BLE001 - no cache, no stop
+            log("Dam point check: no cache ({}: {})".format(type(e).__name__, e))
+            key = rec = None
+        if rec is not None:
+            rec = copy.deepcopy(rec)
+            log("Dam point check: the result of this dam's earlier check (same point and DEM) "
+                "is used")
+        else:
+            try:
+                rec = _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native,
+                                   npool=npool)
+                if rec.get("outcome") != "error":
+                    dpc.cache_put(key, copy.deepcopy(rec))
+            except Exception as e:                       # noqa: BLE001 - never stop the run
+                rec = dpc.record("error", mode, dam_xy,
+                                 error="{}: {}".format(type(e).__name__, e))
+        rec["mode_source"] = msrc
+        if rec.get("outcome") == "moved":
+            if not getattr(dam, "_point_original", None):
+                dam._point_original = (float(dam_xy[0]), float(dam_xy[1]))
+            dam.crest_line_xy = list(rec["_line"])
+            dam._crest_line_source = dpc.FOUND_LINE_SOURCE
+            dam._crest_raise_parts = [list(p) for p in rec.get("_parts") or []]
+            dam._dpc_ds_dir = rec.get("_ds_dir")
+            if getattr(dam, "_top_from_dem", False):
+                dam.top_of_dam_ft = None         # the mid-crest top, not the fill at the point
+        dam._point_check = rec
+        if out_folder and rec.get("outcome") in ("moved", "review") and rec.get("_line"):
+            p = _write_found_line(rec, out_folder, crs, log)
+            if p:
+                rec["found_line_file"] = os.path.join("inputs", dpc.FOUND_LINE_FILE)
+    report["dam_point_check"] = dpc.public(rec)
+    log(dpc.log_line(rec))
+    o = rec.get("outcome")
+    if o == "moved":
+        msg = dpc.warning_text(rec)
+        if msg not in warnings:
+            warnings.insert(0, msg)
+        return rec["_mid_xy"]
+    if o == "review" and rec.get("_warn"):
+        msg = dpc.review_text(rec)
+        if msg not in warnings:
+            warnings.append(msg)
+    return dam_xy
+
+
+def precheck_dam_point(dam, st, dam_xy, inflow_xy, terrain_src, out_folder=None, crs=None,
+                       log=None):
+    """3.20.11 (review 2026-11-17): the dam point check before a caller uses a top of dam it
+    filled from the DEM at the point (the single-dam tool's solve gate, the cascade's overtop
+    routing and WSE trigger, the preview). On a move the top becomes the mid-crest top of the
+    found line (still marked dam._top_from_dem), so the caller's decision and the run agree;
+    run_dam then reuses the result on the dam (no second read). `terrain_src` is the source
+    run_dam gets (unedited). The record, or None (a proposed dam). Never raises."""
+    if getattr(st, "proposed", None):
+        return None
+    try:
+        _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, st.cell_size_m, {}, [],
+                         log or _quiet, out_folder=out_folder, crs=crs)
+    except Exception as e:                                   # noqa: BLE001 - never stop
+        (log or _quiet)("Dam point check: not done ({}: {})".format(type(e).__name__, e))
+        return None
+    rec = getattr(dam, "_point_check", None)
+    if rec is not None and rec.get("outcome") == "moved" and \
+            rec.get("_midcrest_ft") is not None and \
+            (dam.top_of_dam_ft is None or getattr(dam, "_top_from_dem", False)):
+        dam.top_of_dam_ft = float(rec["_midcrest_ft"])
+        dam._top_from_dem = True
+    return rec
+
+
+def _crest_raise_lines(dam, half_m=0.0):
+    """The line(s) lisflood.raise_crest burns to the top of dam: the dam line, or (3.20.11,
+    critique 6) only the on-crest parts of a line the dam point check found, each cut back by
+    half_m (the burn's half-width) where it meets a gap, so a spillway notch or a low saddle on
+    it stays open; [None] without a line (the point fallback)."""
+    parts = getattr(dam, "_crest_raise_parts", None)
+    if parts and getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE:
+        parts = [p for p in parts if p and len(p) >= 2]
+        if half_m and getattr(dam, "crest_line_xy", None):
+            parts = dpc.trim_parts(parts, dam.crest_line_xy, half_m)
+        return parts                       # [] (nothing on the crest): nothing is raised
+    return [getattr(dam, "crest_line_xy", None)]
+
+
+def hecras_dam_xy(res, given_xy):
+    """3.20.11 (critique 7): the dam point for the HEC-RAS stage and the final products of a
+    finished run: the modelled (mid-crest) point when the dam point check moved it, else the
+    point the caller gave (unchanged for every other dam)."""
+    m = getattr(res, "modelled_dam_xy", None)
+    return (float(m[0]), float(m[1])) if m is not None else given_xy
 
 
 def _bridge_points(st):
@@ -1526,6 +2182,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     mc_rec = None
     mc_why = "no mid-crest (proposed dam)"
     if not getattr(st, "proposed", None):
+        # 3.20.11: the dam point checked on the DEM first (a clear misplacement gives the dam
+        # line the rest of this block and the run follow, as a DAM_LINES line)
+        dam_xy = _dam_point_check(dam, st, dam_xy, inflow_xy, raw_terrain, cs, report,
+                                  warnings, log, out_folder=out_folder,
+                                  crs=getattr(writer, "work_srs", None)
+                                  or report.get("work_crs"))
         dam_xy, mc_rec = place_midcrest(dam, st, dam_xy, raw_terrain.read, min(cs, 1.0))
         report["dam_point"] = mcmod.public(mc_rec)
         report["dam_xy"] = [float(dam_xy[0]), float(dam_xy[1])]
@@ -1541,6 +2203,15 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             # the pick is kept (method unchanged) but flagged
             warnings.append("REVIEW: Dam point: " + mc_rec["review"] + ".")
             report["crest_pick_review"] = mc_rec["review"]
+        dpc_rec = getattr(dam, "_point_check", None)
+        if dpc_rec is not None:
+            res.dam_point_check = report.get("dam_point_check")
+            if dpc_rec.get("outcome") == "moved" and mc_rec is not None and "z_m" in mc_rec:
+                res.modelled_dam_xy = (float(dam_xy[0]), float(dam_xy[1]))
+                report["dam_point_check"]["modelled_xy"] = [round(float(dam_xy[0]), 2),
+                                                            round(float(dam_xy[1]), 2)]
+        elif report.get("dam_point_check"):
+            res.dam_point_check = report["dam_point_check"]
 
     # --- 3.12.0: dam elevations NGVD29 -> NAVD88 (core/vdatum_run.py) ------------------
     # the rundam / batch tools convert in prepare() (before their DEM checks); this covers the
@@ -1588,6 +2259,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # 3.12.5: the DEM at mid-crest (place_midcrest), not the 98th percentile near the point
         crest_dem_ft = float(mc_rec["_z_m"]) / FT
         report["dem_crest_from"] = MIDCREST_FROM
+        if getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE:
+            report["dem_crest_from"] = MIDCREST_FROM + "; the dam line found by the dam point check"
     else:
         # the 98th percentile of the DEM within 30 m, not the single highest cell (nanmax):
         # nanmax can latch onto a nearby hill, road embankment or spike and read the crest
@@ -1698,6 +2371,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if hy is None:
             report["summary"] = {"dam_id": dam.dam_id, "final_model": "none",
                                  "breach_occurs": False, "flooded_acres": 0}
+            if report.get("dam_point_check"):                     # 3.20.11
+                report["summary"]["dam_point_check"] = dpc.batch_text(report["dam_point_check"])
             warnings += fr.notes
             if st.dam_record is not None and st.write_final:
                 report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder,
@@ -1767,17 +2442,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                  search_cell)
         qa_ctx["local"], qa_ctx["radius_m"] = local, rad
         if inflow_xy is None:
-            ds_info = {}
-            inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                                search_cell, warnings, log, out=ds_info,
-                                                max_from_dam_m=getattr(
-                                                    st, "inflow_max_from_dam_m", None),
-                                                **_toe_kwargs(dam, st))
-            ds_dir = ds_info.get("direction")
-            qa_ctx["downstream"] = ds_dir
-            if inflow_xy is None:
-                inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m,
-                                                                 search_rad, downstream=ds_dir)
+            # 3.20.11: the automatic placement is _auto_inflow, shared with preview() and the
+            # dam point check's replay (behaviour unchanged)
+            ai = _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad,
+                              search_cell, st, warnings, log)
+            inflow_xy, why, toe_kw, toe_pick = ai["xy"], ai["why"], ai["toe_kw"], ai["toe_pick"]
+            qa_ctx["downstream"] = ai["ds_info"].get("direction")
+            if ai["from_crest"]:
+                crest = ai["crest"]
                 if inflow_xy is None:
                     raise brmod.BreachInputError("{}: could not place the breach inflow: {}"
                                                  .format(dam.dam_id, why))
@@ -1788,6 +2460,16 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                     "nearest ground at the top of dam within {:.0f} m.".format(
                                         search_rad))
             report["inflow_point"] = {"xy": list(inflow_xy), "how": why}
+            # 3.20.12: how the downstream side was decided (terrain.SIDE_* codes) and the
+            # inflow water check
+            for k in ("side_how", "side_water", "water_check"):
+                if ai["ds_info"].get(k) is not None:
+                    report["inflow_point"][k] = ai["ds_info"][k]
+            if not toe_pick:             # v3.20.8: a toe-band pick is the toe by design
+                _inflow_depth_check(local, inflow_xy, h_m, top_m, top_from_dem, warnings, log,
+                                    has_line=toe_kw["toe_line"] is not None and len(
+                                        toe_kw["toe_line"]) >= 2,
+                                    out=report["inflow_point"])
         else:
             report["inflow_point"] = {"xy": list(inflow_xy), "how": "given"}
     log("Breach inflow at {:.1f}, {:.1f} ({})".format(inflow_xy[0], inflow_xy[1],
@@ -2060,10 +2742,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         pass
         top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
         if top_m and getattr(st, "raise_crest", True):
-            nraise = lfmod.raise_crest(
-                dem, dam_xy, inflow_xy, top_m,
-                length_m=(dam.crest_length_ft or 400.0) * FT,
-                line_xy=getattr(dam, "crest_line_xy", None))
+            nraise = 0
+            for _ln in _crest_raise_lines(dam, max(12.0, dem.dx) / 2.0):
+                nraise += lfmod.raise_crest(
+                    dem, dam_xy, inflow_xy, top_m,
+                    length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
             if nraise and "crest raised" not in " ".join(warnings):
                 how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
                 warnings.append("Crest raised to the top of dam in the model grid "
@@ -2229,11 +2912,23 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 over = over + leak
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
-        still_moving = arr_max > 0.9 * sim_time / 3600.0
+        # v3.20.9: the area-based spread rule (spread_still_moving) replaces "any one cell
+        # first wet in the last 10% of the clock". Wet = the rise over any initial pond water
+        # (depth_eff) at the arrival depth; compared with the previous pass of this domain run
+        # on the same DEM (never across a 3DEP refill or the ACC stability switch); cells under
+        # pond water at the arrival depth from the start are left out (review).
+        stable_now = bool(stability["on"])
+        still_moving, spread = spread_still_moving(
+            lf_env.arrival_hr.data, depth_eff, sim_time / 3600.0, dem.dx ** 2 / 4046.8564224,
+            previous_pass_flooded_ac(iterations, it, sim_time / 3600.0, stable_now), arrival_m,
+            init_m=init_grid.data if init_grid is not None else None)
         # 3.13.2 (DWR-4031 toe10m): "run" is the domain run (a clock extension keeps it,
-        # by design); "pass" numbers every LISFLOOD-FP pass so the report can tell them apart
+        # by design); "pass" numbers every LISFLOOD-FP pass so the report can tell them apart.
+        # v3.20.9: a re-run after a 3DEP refill keeps the run number too but is not a clock
+        # extension (the previous pass is marked followed_by_dem_refill).
         rec = {"run": it, "pass": len(iterations) + 1,
-               "clock_extension": bool(iterations) and iterations[-1].get("run") == it,
+               "clock_extension": bool(iterations) and iterations[-1].get("run") == it
+               and not iterations[-1].get("followed_by_dem_refill"),
                "bounds": [round(b, 1) for b in bounds],
                "size_mi": [round((bounds[2] - bounds[0]) / MILE, 2),
                            round((bounds[3] - bounds[1]) / MILE, 2)],
@@ -2242,6 +2937,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                "edge_max_depth_ft": {k: round(v / FT, 2) for k, v in edges.items()},
                "edges_over_tolerance": over, "edges_over_outflow": leak,
                "latest_arrival_hr": round(arr_max, 2),
+               "spread": spread, "stable_settings": stable_now,
                "stats": lf_env.stats}
         iterations.append(rec)
         warnings += [n for n in lf_env.notes if n not in warnings]
@@ -2280,6 +2976,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
                         refill_paths.append(tile)
                         refilled = True
+                        # v3.20.9: the next pass re-runs this domain run on the refilled DEM:
+                        # not a clock extension, and not comparable for the spread rule
+                        rec["followed_by_dem_refill"] = True
                         msg = ("Wet cells sit on DEM no-data ({:,} cells). Requested one 3DEP "
                                "refill of that footprint plus 1 mile and will run again. "
                                "Dry no-data was left alone.".format(touch_n))
@@ -2366,14 +3065,29 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append("The flood leaves the base domain through {} deeper than "
                                 "{:.1f} ft in this case.".format(", ".join(over),
                                                                  st.edge_tolerance_ft))
+            elif still_moving:
+                # v3.20.9 review: a plan run never lengthens its clock; say when it should have
+                warnings.append(fixed_clock_spreading_warning(sim_time / 3600.0,
+                                                              spread["reason"]))
+                log(warnings[-1])
             break
         if not over and not still_moving:
+            # v3.20.9: two conditions stop here - the edges (the domain is big enough) and the
+            # spread rule (the clock is long enough); say both, so a stop the spread rule made
+            # is not credited to the edges alone
             log("Flood stays inside the domain (edge depths below {:.1f} ft, or nothing "
-                "downstream to reach).".format(st.edge_tolerance_ft))
+                "downstream to reach) and is no longer spreading: {}.".format(
+                    st.edge_tolerance_ft, spread["reason"]))
             break
-        if still_moving and st.sim_time_hr and not over:
-            # lengthen up to the cap instead of stopping on the first clock
-            pass
+        # v3.20.9: at most MAX_CLOCK_EXTENSIONS clock extensions per domain run, on the
+        # automatic and the chosen-duration path alike (the domain-growth path is unaffected:
+        # with an edge over, the next pass is a new domain run)
+        if hit_clock_extension_cap(still_moving, over, clock_extensions_used(iterations, it)):
+            stop_reason = "clock-extension limit"
+            warnings.append(clock_extension_cap_warning(MAX_CLOCK_EXTENSIONS, sim_time / 3600.0,
+                                                        spread["reason"]))
+            log(warnings[-1])
+            break
         if hit_run_cap(it, st.max_iterations, over):
             stop_reason = "domain-run limit"
             warnings.append(
@@ -2408,7 +3122,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     "{} runs x the per-run limit".format(st.max_iterations),
                     "leaving through {} deeper than {:.1f} ft".format(
                         ", ".join(over), st.edge_tolerance_ft) if over
-                    else "still moving inside the domain"))
+                    else "still spreading inside the domain"))
             log(warnings[-1])
             break
         if over:
@@ -2422,7 +3136,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      sim_time * (1.5 if still_moving else 1.0)))
         elif still_moving and sim_time < cap_s - 1.0 and st.sim_max_hr:
             # a chosen duration still lengthens, up to the longest clock, while the
-            # flood is moving (the same rule as the screening tool)
+            # flood is spreading (v3.20.9: the same area rule as the automatic path)
             new_sim = min(cap_s, sim_time * 1.5)
         if not over and new_sim <= sim_time * 1.001:
             stop_reason = "duration cap"
@@ -2433,8 +3147,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             break
         sim_time = new_sim
         if not over:
-            log("Flood still moving inside the domain; extending the clock to {:.1f} h "
-                "without using a domain run.".format(sim_time / 3600.0))
+            # v3.20.9: say why (the spread rule's numbers) and which extension this is
+            log("Flood still spreading: {}; extending the clock to {:.1f} h without using a "
+                "domain run (clock extension {} of at most {}).".format(
+                    spread["reason"], sim_time / 3600.0,
+                    clock_extensions_used(iterations, it) + 1, MAX_CLOCK_EXTENSIONS))
             state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
                        warnings=warnings, lisflood_done=False, next_it=it)
             continue
@@ -2453,6 +3170,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
+    report["spread_rule"] = {"late_window": SPREAD_LATE_WINDOW,       # v3.20.9
+                             "late_fraction": SPREAD_LATE_FRACTION,
+                             "growth_fraction": SPREAD_GROWTH_FRACTION,
+                             "min_late_ac": SPREAD_MIN_LATE_AC,
+                             "large_late_ac": SPREAD_LARGE_LATE_AC,
+                             "max_clock_extensions": MAX_CLOCK_EXTENSIONS}
     if stop_reason:
         report["cut_off"] = {
             "reason": stop_reason,
@@ -2849,6 +3572,15 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # breach_occurs False keeps ND Dam Hazard's model gate and the dam record from reading
         # these rasters as a failure flood.
         summary["no_breach_scenario"] = True
+    # v3.20.9 review: when the last LISFLOOD-FP pass still had area first wet in the last 10%
+    # of its clock, the latest arrival is a lower bound (shown in run_report.md / the docx;
+    # HEC-RAS sizes its window from the clock instead of the arrival)
+    lb, lb_clock, lb_note = latest_arrival_lower_bound(iterations, t_ref_hr)
+    if lb and summary.get("latest_arrival_hr") is not None:
+        summary["latest_arrival_lower_bound"] = True
+        summary["latest_arrival_note"] = lb_note
+        summary["lisflood_clock_hr"] = lb_clock
+        log("Latest arrival {} h is {}.".format(summary["latest_arrival_hr"], lb_note))
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
@@ -2926,6 +3658,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if fetched is not None:
             cbr["tiles_downloaded"] = fetched
             cbr["tiles_cached"] = getattr(burner.fine, "cached", 0)
+    if report.get("dam_point_check"):                      # 3.20.11: the batch column
+        summary["dam_point_check"] = dpc.batch_text(report["dam_point_check"])
+    dpc.pin_first(warnings)            # 3.20.11 (critique 18): the move stays the first warning
     report["summary"] = summary
     report["warnings"] = warnings
     report["outputs"] = {"final": res.final, "baseline": res.baseline,
@@ -3172,6 +3907,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         warnings.append(msg)
     if fallback and fallback not in warnings:
         warnings.insert(0, fallback)
+    dpc.pin_first(warnings)                  # 3.20.11: the dam point move stays first
     report["warnings"] = warnings
     vec = {k: v for k, v in old_vectors.items() if os.path.basename(str(v)) not in
            FINAL_VECTOR_NAMES}
@@ -3225,8 +3961,20 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         attach_proposed(st, out_folder, dam, warnings, lambda _m: None)
     if st.breach_xy is not None:
         dam_xy = (float(st.breach_xy[0]), float(st.breach_xy[1]))
+    src0 = terrain_src                     # 3.20.11: the dam point check reads it unedited
     if st.edits is not None and not st.edits.empty():
         terrain_src = cond.ConditionedTerrain(terrain_src, st.edits)
+    # 3.20.11 (critique 9): the dam point check as the run does it, on the unedited source;
+    # its result is cached by dam, point and DEM, so the run that follows gets the same answer
+    pc = {}
+    if not getattr(st, "proposed", None):
+        _dam_point_check(dam, st, dam_xy, inflow_xy, src0, cs, pc, warnings, _quiet)
+        rec = getattr(dam, "_point_check", None)
+        if rec is not None and rec.get("outcome") == "moved":
+            dam_xy = tuple(rec.get("_moved_xy") or rec["_mid_xy"])
+            if rec.get("_midcrest_ft") is not None and (
+                    dam.top_of_dam_ft is None or getattr(dam, "_top_from_dem", False)):
+                dam.top_of_dam_ft = float(rec["_midcrest_ft"])
     near = terrain_src.read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60),
                             min(cs, 3.0))
     z = near.masked()
@@ -3258,15 +4006,11 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
-        ds_info = {}
-        inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                            search_cell, warnings, lambda *_a: None, out=ds_info,
-                                            max_from_dam_m=getattr(
-                                                st, "inflow_max_from_dam_m", None),
-                                            **_toe_kwargs(dam, st))
-        if inflow_xy is None:
-            inflow_xy, crest, why = terrain.place_from_crest(
-                local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
+        ai = _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad,
+                          search_cell, st, warnings, lambda *_a: None)
+        inflow_xy, why = ai["xy"], ai["why"]
+        if ai["from_crest"]:
+            crest = ai["crest"]
             if inflow_xy is None:
                 raise brmod.BreachInputError("{}: could not place the breach inflow: {}".format(
                     dam.dam_id, why))
@@ -3294,7 +4038,8 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
             "baseline": bool((flood_mode or (st.ambient_cfs or 0) > 0) and st.baseline
                              and (hy_nb is not None or not flood_mode)),
             "trace_mi": plen / MILE, "warnings": warnings, "path": path, "bounds": bounds,
-            "direction": terrain.flow_direction(path)}
+            "direction": terrain.flow_direction(path), "dam_xy": tuple(dam_xy),
+            "dam_point_check": pc.get("dam_point_check")}
 
 
 def _shift(h, spin_s):
@@ -3368,6 +4113,7 @@ def _flood_hydrographs(dam, st, warnings):
 
 
 def _write_no_breach(res, report, warnings, model_dir, hy_nb):
+    dpc.pin_first(warnings)                  # 3.20.11: the dam point move stays first
     report["warnings"] = warnings
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     res.summary = report["summary"]
@@ -3560,15 +4306,20 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     ld = terrain.nearest_line_distance(dam_xy, [line]) if line else None
     report["dam_point_checks"] = {"road_m": None if rd is None else round(rd, 1),
                                   "dam_line_m": None if ld is None else round(ld, 1)}
+    found = getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE
+    what = "the dam line found on the DEM" if found else "the DWR dam line"
     if line:
         # v3.10.22: the DWR dam line (run CRS), for the HEC-RAS dam line along the crest
         report["crest_line_xy"] = [[round(float(x), 3), round(float(y), 3)] for x, y in line]
+        if found:                       # 3.20.11: HEC-RAS labels it as found, not "yours"
+            report["crest_line_source"] = dpc.FOUND_LINE_SOURCE
     if rd is not None and rd <= ROAD_NEAR_M:
         if line:
             # v3.10.22: say "on the dam line" only when the dam point is (it may not be)
-            where = ("which is on the DWR dam line" if ld is not None and ld <= ROAD_NEAR_M else
-                     "{:.0f} m from the DWR dam line".format(ld) if ld is not None else
-                     "with a DWR dam line given")
+            where = ("which is on {}".format(what) if ld is not None and ld <= ROAD_NEAR_M else
+                     "{:.0f} m from {}".format(ld, what) if ld is not None else
+                     ("with a dam line found on the DEM" if found else
+                      "with a DWR dam line given"))
             msg = ("A road runs {:.0f} m from the dam point, {}: the road is on (or beside) "
                    "this embankment; the crest comes from the dam line.".format(rd, where))
         else:
@@ -3579,6 +4330,31 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
         report["dam_point_checks"]["note"] = msg
         warnings.append(msg)
         log(msg)
+
+
+def _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad, search_cell, st,
+                 warnings, log):
+    """3.20.11: the automatic breach inflow, as _run_dam_once placed it before (lines taken out
+    unchanged so preview() and the dam point check's replay use the same sequence):
+    _downstream_inflow (the toe band along a dam line, else find_inflow_point), then
+    terrain.place_from_crest when that found nothing. Returns {"xy", "why", "crest" (the crest
+    place_from_crest moved to, or None), "from_crest" (it ran), "ds_info", "toe_kw",
+    "toe_pick" (the toe band placed it)}; "xy" is None when both failed (the callers raise)."""
+    ds_info = {}
+    toe_kw = _toe_kwargs(dam, st)
+    xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
+                                 search_cell, warnings, log, out=ds_info,
+                                 max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None),
+                                 **toe_kw)
+    # out["toe"] is set only when the toe band did not place it
+    toe_pick = xy is not None and "toe" not in ds_info
+    crest, from_crest = None, False
+    if xy is None:
+        from_crest = True
+        xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad,
+                                                  downstream=ds_info.get("direction"))
+    return {"xy": xy, "why": why, "crest": crest, "from_crest": from_crest,
+            "ds_info": ds_info, "toe_kw": toe_kw, "toe_pick": toe_pick}
 
 
 def _toe_kwargs(dam, st):
@@ -3611,6 +4387,44 @@ def _toe_slope(dam, st):
         why or "no DWR record downstream_slope")}
 
 
+def _inflow_depth_check(local, inflow_xy, h_m, top_m, top_from_dem, warnings, log,
+                        has_line=False, out=None):
+    """v3.20.8: a warning only (the pick is kept): the automatic breach inflow's ground, read
+    on the search grid (`local`), is more than terrain.INFLOW_DEEP_FACTOR times the dam height
+    below the top of dam. DWR-3034 (no dam line): 53.3 ft below the 30.7 ft dam's top, 1.74 H,
+    maybe a deeper coulee beside the dam. Not run on a toe-band pick (read on the fine DEM).
+    `has_line`: a dam line was given (the toe band did not place it), so the advice does not
+    ask for one. `out` (run_report.json inflow_point) gets depth_below_top_h and, with the
+    warning, depth_check. Skipped quietly when the height, top or ground is not known.
+    Returns the message, or None."""
+    try:
+        h, top = float(h_m), float(top_m)
+        r, c = local.rc(inflow_xy[0], inflow_xy[1])
+        if not local.inside(r, c) or not local.valid()[r, c]:
+            return None
+        z = float(local.data[r, c])
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return None
+    if not (math.isfinite(h) and math.isfinite(top) and math.isfinite(z)) or h <= 0:
+        return None
+    drop = top - z
+    if out is not None:
+        out["depth_below_top_h"] = round(drop / h, 2)
+    if drop <= terrain.INFLOW_DEEP_FACTOR * h:
+        return None
+    msg = ("{}: the breach inflow is {:.1f} ft below the top of dam, {:.1f} times the dam "
+           "height ({:.1f} ft): it may be in a deeper drainage beside the dam, or the top of "
+           "dam{} may be high. Check qa_inflow_map.png, or give the inflow point{}.".format(
+               terrain.INFLOW_DEEP, drop / FT, drop / h, h / FT,
+               " estimated from the DEM" if top_from_dem else "",
+               "" if has_line else " or a dam line"))
+    if out is not None:
+        out["depth_check"] = msg
+    warnings.insert(0, msg)              # first in "Things to check", as the other CHECK flags
+    log(msg)
+    return msg
+
+
 def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
                 cell_m=None, max_from_dam_m=None):
     """v3.12.10: terrain.toe_band_inflow on the fine DEM read around the dam line."""
@@ -3628,6 +4442,205 @@ def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band
                              a[:, 0].max() + pad, a[:, 1].max() + pad), cell)
     return terrain.toe_band_inflow(fine, a, direction, h_m, top_m, band_m=(lo, hi), pool=pool,
                                    max_from_dam_m=min(cap, hi + 60.0), dam_xy=dam_xy)
+
+
+def _water_window(terrain_src, line, pad_m=None, cover_xy=None):
+    """3.20.12: terrain.water_window on the run's terrain (its own cell when coarser)."""
+    return terrain.water_window(terrain_src.read, line, terrain_native_cell(terrain_src),
+                                pad_m=pad_m, cover_xy=cover_xy)
+
+
+def _covers(g, xy):
+    if g is None or xy is None:
+        return False
+    r, c = g.rc(xy[0], xy[1])
+    return 2 <= r < g.ny - 2 and 2 <= c < g.nx - 2
+
+
+def _side_conflict_warning(conflict, warnings, log):
+    """3.20.12 (review): terrain.downstream_direction kept the old rule's side against the
+    water test (info "side_conflict": a dry reservoir with a pond below the dam, or a small pond
+    higher than larger water on the other side), or (lead) took the water's side against the old
+    rules (kind terrain.CONFLICT_WATER_KEPT): CHECK THE INFLOW SIDE with both readings, first
+    in "Things to check". Returns the record for run_report.json
+    inflow_point.water_check.side_conflict (with the warning), or None."""
+    if not conflict:
+        return None
+    if conflict.get("kind") == terrain.CONFLICT_WATER_KEPT:
+        # 3.20.12 (lead): the water's side, against the old rules: kept, never silently
+        msg = ("{}: {}. The run took the side away from that water as downstream. Look at "
+               "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+                   terrain.INFLOW_SIDE, terrain.side_conflict_text(conflict)))
+        warnings.insert(0, msg)
+        log(msg)
+        return dict(conflict, warning=msg)
+    if conflict.get("kind") == terrain.CONFLICT_NO_OTHER_RULE and \
+            str(conflict.get("why", "")).startswith("the pool / ground rules could not be run"):
+        # 3.20.12 (final review): the old rules raised; the water's side, unchecked
+        msg = ("{}: {}. The run took the side away from that water as downstream. Look at "
+               "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+                   terrain.INFLOW_SIDE, conflict["why"]))
+        warnings.insert(0, msg)
+        log(msg)
+        return dict(conflict, warning=msg)
+    kept, water = conflict.get("kept") or {}, conflict.get("water") or {}
+    msg = ("{}: the reservoir's flat water and the pool / ground rules disagree on the downstream "
+           "side of the dam line; the run kept {} ({}). The water test reads: {}. Check "
+           "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+               terrain.INFLOW_SIDE, "the pool / ground rule's side"
+               if kept.get("side_how") != terrain.SIDE_WATER else "the higher water's side",
+               kept.get("how"), conflict.get("why") or water.get("why")))
+    warnings.insert(0, msg)
+    log(msg)
+    return dict(conflict, warning=msg)
+
+
+def _flip_blocked(pool_grid, pmask, side_how, toe_line, dam_xy, xy2, lvl):
+    """3.20.12 (review): why the inflow water check must not move the pick to `xy2` on the
+    other side of the dam line, or None: it is in the pool (pool_mask, `pmask`) that decided the
+    side (terrain.SIDE_POOL / SIDE_POOL_POINT), or in a closed depression of `pool_grid` whose
+    fill brings it to `lvl` (the first pick's water) or above (a dry reservoir behind the dam,
+    not its toe)."""
+    if pool_grid is None or xy2 is None:
+        return None
+    r, c = pool_grid.rc(xy2[0], xy2[1])
+    if not pool_grid.inside(r, c):
+        return None
+    if pmask is not None and side_how in (terrain.SIDE_POOL, terrain.SIDE_POOL_POINT):
+        dec = terrain.pool_at_dam(pmask, pool_grid, dam_xy, toe_line)
+        if dec[r, c]:
+            return "its toe is in the pool behind the dam that decided the side"
+    z = pool_grid.masked()
+    filled = terrain.priority_flood(z)
+    f = filled[r, c] - z[r, c]
+    if np.isfinite(f) and f > terrain.POOL_SHALLOW_M and filled[r, c] >= lvl:
+        return ("its toe is in a closed depression that fills to {:.1f} ft, above that "
+                "water".format(filled[r, c] / FT))
+    return None
+
+
+def _inflow_water_check(terrain_src, toe_line, direction, how, xy, why, h_m, top_m, pool,
+                        dam_xy, band_m, cell_m, max_from_dam_m, wgrid, warnings, log, out,
+                        pool_grid=None, pmask=None, side_how=None):
+    """3.20.12, the inflow water check (Nick, 2026-11-17: the breach inflow landed on the
+    reservoir with a dam line given): after the side is chosen, a toe-band pick on
+    hydro-flattened water no more than terrain.INFLOW_WATER_DROP x H below the top of dam that
+    touches the dam line on the inflow's side (terrain.inflow_water_hit) may be the reservoir.
+      - The other side holds higher flat water against the line (by WATER_LEVEL_TIE_M), not
+        much smaller (terrain.WATER_SIDE_AREA_RATIO): the inflow's water is below the reservoir
+        (a lake at the toe): kept.
+      - Else the toe band on the other side: used when its pick is not on such water itself and
+        its ground is at least WATER_LEVEL_TIE_M below the first pick's water (that water is
+        then held up by the dam); a warning says so. When that ground is at least
+        WATER_LEVEL_TIE_M above the water, the dam does not hold the water up (a lake at the
+        toe, DWR-5420): kept.
+      - Else (the other side found nothing, is on flat water too, or its toe is within
+        WATER_LEVEL_TIE_M of the water: DWR-3161, one level both sides; review: or its toe is
+        in the pool that decided the side, or in a closed depression filling to that water or
+        above, a dry reservoir: _flip_blocked) kept, with a CHECK THE INFLOW SIDE warning
+        (first in "Things to check").
+    Recorded in `out` (run_report.json inflow_point): water_check, and side_how
+    terrain.SIDE_FLIPPED on a flip. Returns (xy, why, direction, how), changed only on a flip.
+    Never stops the run."""
+    rec = {}
+    try:
+        g = wgrid if _covers(wgrid, xy) else _water_window(terrain_src, toe_line, cover_xy=xy)
+        hit = terrain.inflow_water_hit(g, toe_line, direction, h_m, top_m, xy)
+    except Exception as e:                       # noqa: BLE001
+        rec = {"ok": None, "why": "not checked: {}: {}".format(type(e).__name__, e)}
+        hit = None
+    if out is not None:
+        out["water_check"] = rec
+    if hit is None:
+        if not rec:
+            rec.update(ok=True, on_water=False)
+        return xy, why, direction, how
+    lvl, tie = hit["level_m"], terrain.WATER_LEVEL_TIE_M
+    rec.update(ok=False, on_water=True, level_ft=round(lvl / FT, 2),
+               below_top_h=hit["below_top_h"], area_ac=hit["area_ac"],
+               other_level_ft=(None if hit["other_level_m"] is None else
+                               round(hit["other_level_m"] / FT, 2)))
+    what = "flat water at {:.1f} ft, {:.2f} H below the top of dam, against the dam line".format(
+        lvl / FT, hit["below_top_h"])
+    if (hit["other_level_m"] is not None and hit["other_level_m"] >= lvl + tie and
+            hit.get("other_area_ac") is not None and
+            hit["other_area_ac"] >= terrain.WATER_SIDE_AREA_RATIO * hit["area_ac"]):
+        rec.update(ok=True, kept=("the other side holds higher flat water ({:.1f} ft): the "
+                                  "inflow's water is below the reservoir".format(
+                                      hit["other_level_m"] / FT)))
+        log("Breach inflow water check: the inflow is on {}; kept ({}).".format(what,
+                                                                                rec["kept"]))
+        return xy, why, direction, how
+    flip = (-direction[0], -direction[1])
+    reason = None
+    try:
+        # the pool mask (`pool`, as pool_mask found it) is not the reservoir on the side now
+        # taken as downstream (terrain.pool_downstream_off)
+        xy2, why2 = _toe_inflow(terrain_src, toe_line, flip, h_m, top_m,
+                                terrain.pool_downstream_off(pool, toe_line, flip), dam_xy,
+                                band_m, cell_m, max_from_dam_m)
+    except Exception as e:                       # noqa: BLE001
+        xy2, why2 = None, "{}: {}".format(type(e).__name__, e)
+    if xy2 is None:
+        reason = "the toe band there found nothing ({})".format(why2)
+    else:
+        try:
+            g2 = g if _covers(g, xy2) else _water_window(terrain_src, toe_line, cover_xy=xy2)
+            hit2 = terrain.inflow_water_hit(g2, toe_line, flip, h_m, top_m, xy2)
+            r, c = g2.rc(xy2[0], xy2[1])
+            z2 = float(g2.data[r, c]) if g2.inside(r, c) and g2.valid()[r, c] else float("nan")
+        except Exception as e:                   # noqa: BLE001
+            hit2, z2 = None, float("nan")
+            reason = "not read: {}: {}".format(type(e).__name__, e)
+        if reason is None:
+            if hit2 is not None:
+                reason = ("its toe is on flat water too ({:.1f} ft, {:.2f} H below the top of "
+                          "dam)".format(hit2["level_m"] / FT, hit2["below_top_h"]))
+            elif not math.isfinite(z2):
+                reason = "no DEM at its toe"
+            elif z2 >= lvl + tie:
+                # the water is lower than the other side's toe: the dam does not hold it up
+                # (DWR-5420: Chase Lake 0.9 H below the 5 ft dam's top, at its toe)
+                rec.update(ok=True, kept=("the other side's toe ({:.1f} ft) is higher than "
+                                          "this water: the dam does not hold it up".format(
+                                              z2 / FT)), other_toe_ft=round(z2 / FT, 2))
+                log("Breach inflow water check: the inflow is on {}; kept ({}).".format(
+                    what, rec["kept"]))
+                return xy, why, direction, how
+            elif z2 > lvl - tie:
+                reason = ("its toe ({:.1f} ft) is within {:.1f} ft of that water".format(
+                    z2 / FT, tie / FT))
+    if reason is None:
+        try:
+            reason = _flip_blocked(pool_grid, pmask, side_how, toe_line, dam_xy, xy2, lvl)
+        except Exception as e:                   # noqa: BLE001 - then do not move it
+            reason = "its toe's pool not checked: {}: {}".format(type(e).__name__, e)
+    if reason is None:
+        rec.update(ok=True, flipped=True, first_xy=[round(float(xy[0]), 2), round(float(xy[1]), 2)],
+                   first_side=how, other_toe_ft=round(z2 / FT, 2))
+        msg = ("Breach inflow: moved to the other side of the dam line. On the side first taken "
+               "as downstream ({}) the toe was on {}, which is likely the reservoir; the other "
+               "side's toe is {:.1f} ft lower than that water. Check qa_inflow_map.png.".format(
+                   how, what, (lvl - z2) / FT))
+        warnings.append(msg)
+        log(msg)
+        if out is not None:
+            out["side_how"] = terrain.SIDE_FLIPPED
+            out["direction"] = flip
+        how2 = ("turned round by the inflow water check: the toe on the side first taken ({}) "
+                "was on the reservoir's flat water, {:.1f} ft, {:.2f} H below the top of "
+                "dam".format(how, lvl / FT, hit["below_top_h"]))
+        if out is not None:
+            out["how"] = how2
+        return xy2, why2, flip, how2
+    msg = ("{}: the breach inflow ({:.1f}, {:.1f}) is on {}, on the side the run took as "
+           "downstream ({}). It may be the reservoir. The other side was not used: {}. Check "
+           "qa_inflow_map.png, or give the inflow point (just below the dam).".format(
+               terrain.INFLOW_SIDE, xy[0], xy[1], what, how, reason))
+    rec.update(warning=msg, other_side=reason)
+    warnings.insert(0, msg)
+    log(msg)
+    return xy, why, direction, how
 
 
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
@@ -3659,21 +4672,51 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
+    found = dpc.found_line_side(dam)
+    has_line = toe_line is not None and len(toe_line) >= 2
+    # 3.20.12: the DEM at 2 m round the dam line: the reservoir's flat water decides the side
+    # (terrain.water_side) and the toe pick is checked against it (_inflow_water_check)
+    wgrid = None
+    if has_line:
+        try:
+            wgrid = _water_window(terrain_src, toe_line)
+        except Exception as e:                   # noqa: BLE001 - a refinement
+            log("Flat water round the dam line not read ({}: {}); the side comes from the pool "
+                "and the ground.".format(type(e).__name__, e))
+    side_info = {}
     try:
-        crest_xy = None
-        if pool_grid is not None:
-            # v3.10.16: the crest of this dam (ground at the top of dam), not the highest
-            # ground in the circle (a hill)
-            crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
-        direction, how = terrain.downstream_direction(
-            pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
+        if found is not None:
+            direction, how = found
+            side_info["side_how"] = terrain.SIDE_FOUND_LINE
+        else:
+            crest_xy = None
+            if pool_grid is not None:
+                # v3.10.16: the crest of this dam (ground at the top of dam), not the highest
+                # ground in the circle (a hill)
+                crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m,
+                                                    max(rad, 400.0))[0]
+            direction, how = terrain.downstream_direction(
+                pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
+                crest_xy=crest_xy, top_m=top_m, pool=pmask,      # L05: reuse the mask above
+                water_grid=wgrid, water_line=toe_line, info=side_info,
+                surface_ac=getattr(dam, "surface_area_top_ac", None), water_read=terrain_src.read)
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
+        side_info["side_how"] = terrain.SIDE_NONE
     log("Downstream side of the crest: {}".format(
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
+        out["side_how"] = side_info.get("side_how", terrain.SIDE_NONE)
+        if side_info.get("water"):
+            out["side_water"] = side_info["water"]
+    conflict = _side_conflict_warning(side_info.get("side_conflict"), warnings, log)
+    # 3.20.12 (review, DWR-2791): a side not taken from the pool mask - the reservoir's flat
+    # water or the found line - leaves the mask's cells below the dam (a borrow pit, a road-held
+    # low: the false pool) out of the reservoir, so the toe band can reach the real toe there
+    pool_raw = pool
+    if has_line and direction is not None and side_info.get("side_how") in terrain.SIDES_NOT_POOL:
+        pool = terrain.pool_downstream_off(pool_raw, toe_line, direction)
     if toe_line is not None and len(toe_line) >= 2 and direction is not None:
         band_how = None
         if toe_band_m is None:
@@ -3705,6 +4748,12 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         except Exception as e:                   # noqa: BLE001 - the old search is the fallback
             xy, why = None, "{}: {}: {}".format(terrain.NO_TOE, type(e).__name__, e)
         if xy is not None:
+            xy, why, direction, how = _inflow_water_check(
+                terrain_src, toe_line, direction, how, xy, why, h_m, top_m, pool_raw, dam_xy,
+                toe_band_m, toe_cell_m, max_from_dam_m, wgrid, warnings, log, out,
+                pool_grid=pool_grid, pmask=pmask, side_how=side_info.get("side_how"))
+            if conflict is not None and out is not None:
+                out["water_check"] = dict(out.get("water_check") or {}, side_conflict=conflict)
             return xy, "{}, downstream side ({})".format(why, how)
         toe_why = why
     elif toe_line is None or len(toe_line) < 2:
@@ -3720,6 +4769,8 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     log(msg)
     if out is not None:
         out["toe"] = toe_why
+        if conflict is not None:
+            out["water_check"] = dict(out.get("water_check") or {}, side_conflict=conflict)
     xy, why = terrain.find_inflow_point(
         local, dam_xy, h_m, top_m, rad, downstream=direction, pool=pool,
         crest_line=getattr(dam, "crest_line_xy", None),
@@ -3787,7 +4838,8 @@ def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, 
             model_grid=dem, depth_m=depth, metrics=report.get("summary"),
             water_mask=water_mask, basemap=getattr(st, "qa_basemap", None) or "auto",
             basemap_labels=bool(getattr(st, "qa_basemap_labels", True)),
-            avoid=_qa_cache_avoid(st, out_folder))
+            avoid=_qa_cache_avoid(st, out_folder),
+            point_check=report.get("dam_point_check"))       # 3.20.11
         report["qa_maps"] = info
         for p in problems:
             warnings.append(p)
@@ -3924,12 +4976,18 @@ def render_report(r):
                  s["flooded_acres"], s["flooded_acres_over_arrival_depth"]),
              "| Maximum depth / velocity | {} ft / {} ft/s |".format(s["max_depth_ft"],
                                                                   s["max_velocity_fps"]),
-             "| Latest arrival | {} h after {} |".format(
+             "| Latest arrival | {} h after {}{} |".format(
                  s["latest_arrival_hr"], "the start of the inflow" if s.get("no_breach_scenario")
-                 else "breach initiation"),
+                 else "breach initiation",
+                 # v3.20.9 review: say when it is a lower bound (area still first wet late)
+                 " ({})".format(s["latest_arrival_note"])
+                 if s.get("latest_arrival_lower_bound") and s.get("latest_arrival_note") else ""),
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
+    _dl = dpc.report_line(r.get("dam_point_check"))      # 3.20.11 (critique 17)
+    if _dl:
+        lines.append("| Dam location | {} |".format(_dl))
     if r.get("boundary_outflow_pct") is not None:      # Grok audit 3.1 (3.16.8)
         lines.append("| Breach volume that left the model | {:.0f}% ({:,.0f} ac-ft) |".format(
             r["boundary_outflow_pct"], r.get("boundary_outflow_acft") or 0.0))
@@ -3987,21 +5045,43 @@ def render_report(r):
             lines.append("| Reaches | {} |".format(ss["receptors_flooded"]))
         lines.append("")
     warns = list(r.get("warnings") or [])
-    cut = any("still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower() or "edge" in w.lower())
-              for w in warns)
+    # v3.20.9 review: "spreading" is the loop's word now (the wall-clock budget and the
+    # clock-extension limit warnings say it), and those two limits are matched by name, not by
+    # whatever other word their sentence happens to contain
+    clk = any("clock extensions (clock" in w for w in warns)         # v3.20.9
+    budget = any("of wall time, the budget for the domain-growth loop" in w for w in warns)
+    fixed = any("end of the fixed clock" in w for w in warns)
+    cut = clk or budget or fixed or any(
+        "still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower()
+                                  or "spreading" in w.lower() or "edge" in w.lower())
+        for w in warns)
     if cut:
         hole = any("held up by a hole" in w for w in warns)
         cap = any("duration cap" in w for w in warns)
         runs = any("domain runs" in w for w in warns)
         if hole:
             why = "Wet cells are still on DEM no-data after one refill. Depth is held up by a hole, not by the clock."
+        elif clk:
+            why = ("The clock-extension limit ({} per domain run) stopped the clock while the flood was still "
+                   "spreading. Latest arrival times near the edge of the wet area may be cut short. This is "
+                   "not the duration cap or the domain-run limit.".format(MAX_CLOCK_EXTENSIONS))
+        elif budget:
+            why = ("The wall-clock budget for the domain-growth loop stopped the run while the flood was "
+                   "still spreading or leaving an edge. The area, depth and latest arrival times below "
+                   "may be incomplete. This is not the duration cap or the domain-run limit.")
         elif cap:
             why = "The duration cap stopped the clock while water was still moving. This is not the domain-run limit."
         elif runs:
             why = "The domain-run limit stopped the run while water was still leaving an edge. The duration cap did not stop it."
+        elif fixed:
+            why = ("This run reuses the clock of the run it repeats and never lengthens it, and the flood "
+                   "was still spreading at its end. Latest arrival times near the edge of the wet area "
+                   "may be cut short.")
         else:
             why = "The flood was still moving when the run stopped. The area and depth below are incomplete."
-        reason = "DEM hole" if hole else ("duration cap" if cap else ("domain-run limit" if runs else "still moving"))
+        reason = "DEM hole" if hole else ("clock-extension limit" if clk else (
+            "wall-clock budget" if budget else ("duration cap" if cap else (
+                "domain-run limit" if runs else ("fixed clock" if fixed else "still moving")))))
         r["cut_off"] = {"reason": reason, "detail": why}
         lines += ["## Results cut off", "", why, ""]
     if warns:
@@ -4059,6 +5139,30 @@ def render_report(r):
             ", ".join(it.get("edges_over_after_class_stop", it.get(
                 "edges_over_after_receptors", it["edges_over_tolerance"]))) or "none",
             it["runtime_min"]))
+    # v3.20.9: why each pass did or did not lengthen the clock (the area-based spread rule)
+    runs_ = r["lisflood_runs"]
+
+    def _spread_note(i, it):
+        # v3.20.9 review: a pass whose spread result did not decide a clock extension says so
+        if it.get("followed_by_dem_refill"):
+            return " (wet cells on DEM no-data: the same domain run was re-run on the 3DEP-refilled DEM, not a clock decision)"
+        if i + 1 < len(runs_) and runs_[i + 1].get("run") != it.get("run"):
+            return " (an edge was over, so the domain grew; this only set whether the clock grew 1.5x with it)"
+        return ""
+    spr = [(pass_number(it, i), it["spread"], _spread_note(i, it)) for i, it in enumerate(runs_)
+           if isinstance(it.get("spread"), dict)]
+    if spr:
+        lines += ["", "Clock rule (v3.20.9): the clock is lengthened while at least {:g}% of the "
+                  "wet area (and {:g} ac), or {:g} ac at any share, is first wet in the last "
+                  "{:.0f}% of the clock; a pass is compared with the last pass of the same domain "
+                  "run (same DEM and solver settings) only as a consistency check that the wet "
+                  "area grew ({:g}% or {:g} ac); at most {} clock extensions per domain run.".format(
+                      100 * SPREAD_LATE_FRACTION, SPREAD_MIN_LATE_AC, SPREAD_LARGE_LATE_AC,
+                      100 * (1 - SPREAD_LATE_WINDOW), 100 * SPREAD_GROWTH_FRACTION,
+                      SPREAD_LARGE_LATE_AC, MAX_CLOCK_EXTENSIONS)]
+        lines += ["- Pass {}: {} - {}{}.".format(
+            n, "still spreading" if sp.get("still_spreading") else "not spreading",
+            sp.get("reason", ""), note) for n, sp, note in spr]
     last = r["lisflood_runs"][-1]["stats"]
     lines += ["", "{} (last pass): max volume error {}% of the breach volume, {}.".format(
         r.get("flood_engine_short", "LISFLOOD-FP"), last.get("max_volume_error_pct"),

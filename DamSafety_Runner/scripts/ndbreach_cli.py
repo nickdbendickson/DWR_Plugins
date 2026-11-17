@@ -137,7 +137,9 @@ BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Brea
                 # v3.10.27 (#91): appended after 3.10.23's flag columns, so the columns above keep their places
                 "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
                 "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
-                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
+                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac",
+                # 3.20.11: appended, so the columns above keep their places
+                "Dam_Point_Check")
 
 
 def _batch_metrics(s):
@@ -223,6 +225,8 @@ MODEL_KEYS = {
     "crest_burn_dem": ("crest_burn_dem", ("path",)),
     "grid_refine": ("grid_refine", ("bool",)),
     "grid_check_cell_m": ("grid_check_cell_m", ("num", 0.0, None)),
+    # 3.20.11: the dam point checked on the DEM (core/dam_point_check.py)
+    "dam_point_check": ("dam_point_check", ("enum", ("off", "warn", "move"))),
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
@@ -498,7 +502,7 @@ TEMPLATE = {
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
         "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
-        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M,
+        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M, "dam_point_check": "warn",
         "max_wall_s": 0.0, "max_total_wall_s": 0.0, "lisflood_rate": None},
     "output": {
         "_help": "Each dam goes to <folder>/<Dam ID>/, as in the QGIS tools.",
@@ -1527,6 +1531,29 @@ def cmd_run(args):
     return 0
 
 
+def _batch_others(points, i, xy, frame, radius_m=3000.0):
+    """3.20.11: the other dams of a batch table within radius_m of row i (point xy, DEM CRS) as
+    [(id, (x, y) in the work CRS, height ft or None)] for the dam point check (G7c), or None."""
+    try:
+        here = frame.xy(xy[0], xy[1])
+    except Exception:                                   # noqa: BLE001
+        return None
+    out = []
+    for pt in points or ():
+        j, did, x, y = pt[:4]
+        h = pt[4] if len(pt) > 4 else None
+        if j == i:
+            continue
+        try:
+            w = frame.xy(x, y)
+        except Exception:                               # noqa: BLE001
+            continue
+        d = math.hypot(w[0] - here[0], w[1] - here[1])
+        if 0.0 < d <= radius_m:
+            out.append((did, (float(w[0]), float(w[1])), h))
+    return out or None
+
+
 def _hecras_stage(p, res, log, unattended=False):
     """3.10.66: model.tier 'hecras' (LISFLOOD-FP then HEC-RAS 2D) runs the HEC-RAS 2D stage
     after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError.
@@ -1540,7 +1567,9 @@ def _hecras_stage(p, res, log, unattended=False):
     # audit M18 (3.17.7): Ctrl-C (CANCEL["flag"], _install_sigint) stops the Wine preprocess
     # and RasUnsteady through wallclock.stop_group - start_new_session keeps the terminal's
     # SIGINT away from them - and lfmod.Cancelled reaches the command's cancel exit (130)
-    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log,
+    # 3.20.11 (critique 7): the modelled point when the dam point check moved it
+    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st,
+                              workflow.hecras_dam_xy(res, p.dam_xy), log,
                               unattended=unattended, cancel=lambda: CANCEL["flag"])
 
 
@@ -1839,6 +1868,19 @@ def cmd_batch(args):
     only_row = int(getattr(args, "only_row", 0) or 0)       # 3.20.0: a worker's one dam
     workers = 1 if only_row else bworkers.clamp_workers(getattr(args, "workers", 1))
     queue, seen = [], set()
+    all_points = []          # 3.20.11: (row index, dam id, x, y in the DEM CRS, height ft or None)
+    for j, r_ in enumerate(rows):
+        xj, yj = num(r_.get(xc)), num(r_.get(yc))
+        if xj is None or yj is None:
+            continue
+        try:
+            if batch_crs:
+                xj, yj = _batch_point_to_dem(cfg, cache, batch_crs, xj, yj)
+        except Exception:                               # noqa: BLE001 - that row says why
+            continue
+        idj = (r_.get(fld["F_ID"]) or "").strip() if fld.get("F_ID") else ""
+        hj = num(r_.get(fld["F_HEIGHT"])) if fld.get("F_HEIGHT") else None
+        all_points.append((j, idj or "row{}".format(j + 1), xj, yj, hj))
 
     def run_one(i, row, dam_id, vals, folder, out, pr):
         """One dam in this process; True when the run was cancelled. 3.20.0: the body of the
@@ -1861,10 +1903,13 @@ def cmd_batch(args):
             out["Scenario"] = p.st.scenario
             for note in p.notes:
                 say(note)
+            # 3.20.11: the table's other dams near this one, for the dam point check
+            p.st.dam_point_others = _batch_others(all_points, i, (x, y), p.setup.frame)
             res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
                                    p.folder, None, pr.progress, pr.log, pr.cancel)
             _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
             s = res.summary
+            out["Dam_Point_Check"] = s.get("dam_point_check", "")       # 3.20.11
             if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
                 out.update({"Status": "no breach",
                             "Message": "the dam does not fail in this flood"})

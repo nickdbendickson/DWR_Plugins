@@ -5,7 +5,9 @@ wizard, docs/gui-grammar.md).
 
     dams()        the DWR records of one county / name, read straight from the GeoPackage,
                   with the NID filling blank heights and storages (nid_fill) and the records
-                  that are not a dam to model set aside (dam_filter)
+                  that are not a dam to model set aside (dam_filter); 3.20.8: also the crest
+                  width, slopes and crest length. Never the DWR elevations: they are on
+                  NGVD 29 or a local datum, so the top of dam is read from the DEM
     nid_get()     the NID web service through QGIS's network manager (only on a click)
     run_task()    dem_estimate in a QgsTask, off the window's thread
 
@@ -196,6 +198,12 @@ def dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None, hidden=None):
                     "storage": amount("max_pool_vol", "max_pool_v"),
                     "normal_vol": amount("normal_vol"),
                     "area": amount("max_pool_area", "normal_area", "surface_area", "max_pool_a"),
+                    # 3.20.8: the embankment's own numbers (no datum); a text such as "2.5;3"
+                    # (two slopes) or "varies" is left blank
+                    "crest_width": amount("top_width"),
+                    "us_slope": amount("upstream_slope", "upstream_s"),
+                    "ds_slope": amount("downstream_slope", "downstream"),
+                    "crest_length": amount("dam_length"),
                     "point": "{},{} [EPSG:4326]".format(lon, lat) if lon and lat else "",
                     "county": str(pick("county") or county or ""),
                     "status": str(pick("status") or ""),
@@ -251,6 +259,10 @@ def dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None, hidden=None):
                          "normal_vol": _positive(pick("normal_vol", "normal_pool_vol")),
                          "area": _positive(pick("max_pool_area", "normal_area", "surface_area")),
                          "crest": pick("crest_elev", "top_of_dam", "crest", "elev_crest"),
+                         "crest_width": _positive(pick("top_width", "crest_width")),
+                         "us_slope": _positive(pick("upstream_slope", "us_slope")),
+                         "ds_slope": _positive(pick("downstream_slope", "ds_slope")),
+                         "crest_length": _positive(pick("dam_length", "crest_length")),
                          "point": point, "county": got,
                          "status": str(pick("status") or "")})
             why = dam_filter.reason(pick("status"), pick("remarks"))

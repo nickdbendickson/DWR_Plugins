@@ -1174,6 +1174,9 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
         row.update(report_metrics.table_values(s))      # v3.10.27 (#91)
         if any("leaves the base domain" in w for w in (r.warnings or [])):
             row["domain_too_small"] = True
+        # v3.20.9 (Runner review): every run keeps the base run's clock and never lengthens it
+        if any("end of the fixed clock" in w for w in (r.warnings or [])):
+            row["clock_too_short"] = True
         if classify is not None and row["status"] == "done":
             try:
                 row["hazard_class"] = classify(folder)
@@ -1455,6 +1458,14 @@ def write_outputs(out, st, dam, grid, stats, thresholds_ft, rep, plan, t_study):
                     for c in uniq) + ".")
             else:
                 flags.append("The hazard class is {} in every run.".format(uniq[0]))
+        short = [r["run"] for r in ok_rows if r.get("clock_too_short")]
+        if short:
+            out.warnings.append("{} run(s) are still spreading at the end of the base run's "
+                                "clock (runs {}); every run keeps that clock and never "
+                                "lengthens it, so their latest arrival times near the edge of "
+                                "the wet area may be cut short. Set a simulation duration longer "
+                                "than the base run's clock and run the study again.".format(
+                                    len(short), ", ".join(map(str, short))))
         small = [r["run"] for r in ok_rows if r.get("domain_too_small")]
         if small:
             out.warnings.append("{} run(s) leave the base domain deeper than the edge tolerance "

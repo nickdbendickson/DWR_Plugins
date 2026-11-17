@@ -42,6 +42,7 @@ The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker 
 - **QA maps** (`QA_MAPS`, "QA maps written into the dam folder"): "Off", "Inflow map only", or "Inflow map and depth map" (the default). On the command line, use `qa_maps: off | inflow | inflow+depth`. Check `qa_inflow_map.png` after every run to see where the inflow point landed relative to the dam.
 - **Inflow point (#14):** the lowest qualifying cell within the usual radius. The QA inflow map shows the point, the search radius and the inflow elevation against the top of dam.
 - **Inflow side check (#84, Runner 3.10.18+):** the inflow point is always picked on the downstream side of the dam. Check `inflow_point.side_check` in `run_report.json`. If the trace from the inflow runs back over the dam point, or the inflow is behind the dam or on the upstream side of the crest, the first warning reads **"CHECK THE DAM POINT"**. Fix the dam point or give the dam line before trusting the run.
+- **Downstream side of a dam line (Runner 3.20.12+):** with a dam line (DAM_LINES, dam.json or CREST_LINE), the side whose hydro-flattened water lies 0-0.75 x the dam height below the top of dam against the line is the reservoir, and the inflow goes on the other side. With no such water, the side comes from the pool and the ground as before. If the inflow still lands on flat water touching the line on its own side (within 1.5 x the dam height below the top), the Runner tries the other side. If it moves the inflow there, a warning says so. If it can't tell, or the water and the pool disagree (a dry reservoir with a pond below the dam: the run keeps the pool's side), the first warning reads **"CHECK THE INFLOW SIDE"**. The same warning comes first when the flat water decides the side against the older pool or ground rule: the run uses the water's side and the warning names both readings, so look at `qa_inflow_map.png` to confirm. See `inflow_point.side_how` and `inflow_point.water_check` in `run_report.json`.
 - **Road-fill warning (#84):** if a road from the receptor road layer is within 30 m of the dam point and no DWR dam line (`DAM_LINES`) was given, the Runner warns that the embankment in the DEM may be the road's fill (`dam_point_checks` in `run_report.json`).
 
 ## Grid size (CELL) on flat plains (Runner 3.14.7)
@@ -68,7 +69,8 @@ The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker 
 - **Arrival times:** `Arrival Time.tif` and the arrival lines and zones (`Arrival Zones.geojson`, the EAP preview), and `latest_arrival_hr` in `run_report.json`.
 - **"Flooded" in the run summary:** `flooded_acres_over_arrival_depth`, `receptors_flooded` (structures, road and rail flooded), the velocity at flooded structures, roads and rail, the per-pass flood extent, and `Flood Extent.geojson`.
 - **The in-run LISFLOOD-FP vs ANUGA comparison** in `run_report.json` (`comparison`: areas and the fit index F) is counted at this depth.
-- **The run's clock.** When the run length is automatic, the Runner runs LISFLOOD-FP again 1.5 times longer if the latest arrival falls in the last 10% of the run (the flood is "still moving"). Shallow edges arrive late, so at 0.1 ft this happens more often. Some runs will simulate longer than they did at 1 ft. A longer run can also spread further.
+- **The run's clock.** When the run length is automatic, the Runner runs LISFLOOD-FP again 1.5 times longer only while the flood is still spreading by area (Runner 3.20.9). "Still spreading" means the ground first flooded (to the arrival depth) in the last 10% of the run is at least 1% of the flooded area and at least 0.25 ac, or at least 25 ac whatever its share; from the second pass on, the flooded area must also have grown by at least 1% (or 25 ac) since the previous pass. Pond and lake cells wet at the start are not counted. The clock is extended at most 4 times (1.5^4 = 5.1 times the first clock); a run that is still spreading then warns and keeps the last clock. Before 3.20.9 one late cell was enough and there was no limit, so a thin sheet creeping over flat ground could stretch the clock run after run (DWR-4031: 9 runs, latest arrival 93.7 h).
+- **Latest arrival when the clock was cut.** When the last pass ended still spreading, or at the clock-extension limit, the wall-clock budget or a fixed run length, `latest_arrival_hr` is a lower bound: `run_report.json` then has `latest_arrival_lower_bound: true` and `latest_arrival_note`, and the report says so.
 - It is part of the run key, so a 0.1 ft run never resumes an older 1 ft checkpoint.
 
 **What it does not change.** Depth, velocity and water surface are worked out the same way. The 1 ft edge tolerance (`EDGE_TOL_FT`), which decides when the model area grows, is unchanged. The fixed-depth areas `flooded_acres_ge_0_1ft`, `flooded_acres_ge_1ft` and `flooded_acres_ge_2ft` don't depend on it. Neither do the ND hazard class or the ACER TM 11 class: Hazard and the Runner's ND hazard tool decide "flooded" with their own 0.1 ft "any depth", not with the arrival depth.
@@ -697,6 +699,43 @@ Two special cases:
 The run log shows the strip it used and how it worked it out. For example, DWR-4031 (20.7 ft = 6.31 m high, DWR slope 2:1) used a 5-18.9 m strip and its inflow was about 18 m downstream of the dam. DWR-2801 (27.5 ft, DWR 2.5:1) uses 5-29.3 m.
 
 You can still choose an inflow point yourself (INFLOW_POINT); that overrides the search.
+
+## Dam point check: the point is checked on the DEM (Runner 3.20.11)
+
+Inventory dam points are sometimes not on the dam: on the pond, on a knoll beside it, or on the upstream face. With no dam line the Runner used to take the top of dam and the breach inflow from around that point. From 3.20.11 it first checks the point on the run's own DEM.
+
+**When it runs:** only when the dam has no dam line (DAM_LINES), crest line (CREST_LINE), breach position, breach inflow point (INFLOW_POINT) or top of dam, the DEM is LiDAR (5 m or finer, cell size known) and the dam height is known. A top of dam the tool read from the DEM itself does not count as given.
+
+**What it looks for:** hydro-flattened water (or a closed basin) within 400 m, and the embankment between it and the lower ground. The DEM is read at 2 m with average resampling, whatever resample method the run uses.
+
+**What it does:**
+
+- **The point is on the embankment, or nothing points to a problem:** the point is used as given.
+- **The point is clearly off the dam, every check on the embankment passes, and the setting is *Move clear cases*:** the embankment is used as the dam line, exactly as if you had given it. The dam point moves to mid-crest, the top of dam is read there, and the inflow goes in at the toe on the side the embankment falls away from its pond. The first warning says `DAM POINT MOVED` and how far. With *Warn only* (the default) the point is kept and the REVIEW warning says the embankment would be used with *Move clear cases*.
+  - "Clearly off" means the point is on the pond's water more than 30 m from the embankment, or it is more than 30 m from the embankment and the top read there is off by more than max(3 ft, a quarter of the dam height), or the inflow would land on the pond side of the embankment, or no inflow could be placed.
+  - The checks are: flat water and a confirmed embankment whose low side is open ground (not another dam's dry reservoir), the right height (0.8-1.25 x the dam height), within 400 m, a clean crest line, not a ring, one pond at that level (tailwater does not count), the pond area, at most 3 x the inventory crest length, the normal pool, not another dam's embankment (another inventory point on the line, or nearer it and of its height), the point not on another ridge, not on the downstream side unless on the low ground there, the pond not between the point and the embankment, and an inflow 0.5-1.3 x the dam height below the crest.
+- **Anything less:** the point is used as given. When it looks wrong, a `REVIEW: Dam point check` warning says why and where the embankment it found is. A point 50 m or more from a clean embankment of the dam's height gets that warning too.
+
+**Where to look:**
+
+- **The inflow QA map** shows the DWR point, the line found and the arrow between them.
+- **The report** has a "Dam location" line in `run_report.md` and the docx, and a `dam_point_check` block in `run_report.json`.
+- **The batch summary** has a `Dam_Point_Check` column (`moved 121 m`, `kept`, `review`, `off`, `skipped: ...`).
+- **The found line** is in the dam folder as `inputs/dam_line_found.geojson`. If it is right, add it to your DAM_LINES (or use it as CREST_LINE): later runs then use it as given and do not depend on the check.
+
+**Turning it off or down:**
+
+- In **Model one dam** or the **batch tool**, set *Check the dam point on the DEM* (Advanced) to *Off* (as before 3.20.11), *Warn only* (check and warn, never move; the default) or *Move clear cases*.
+- In the **Runner window**, use Advanced > *Dam point check*.
+- In the **CLI**, set `model.dam_point_check: off`, `warn` (the default) or `move`.
+- **Anywhere**, the environment variable `NDBREACH_DAM_POINT_CHECK=off` (or `warn`, `move`) wins over the setting.
+
+**Limits:**
+
+- Water that is not hydro-flattened, a pond smaller than about a quarter acre, two flat levels (a seam between LiDAR projects), a ring dike or a lagoon, and a dam next to another dam's pond all go to review, never to a move.
+- Batches and cascades pass the other dams nearby (with their height when the batch has a height field), so a point is not moved onto a neighbour's embankment. A single dam has no neighbours passed; the report then says the neighbour check was not made.
+- The check adds about 3 s per dam it runs on.
+- Validated on 2026-11-17 on the batch-44 dams and on 81 other DWR dams (2 m 3DEP). With *Move clear cases*, one hold-out dam (DWR-2713) moved 30 m past the end of its dam line onto a side dike of the same pond; that is why the default is *Warn only*. Not yet checked on the 1 m statewide DEM.
 
 ## A house in the judgment zone makes the dam MEDIUM (Hazard 2.22.0, Runner 3.13.0, Screening 0.18.0; #241)
 
