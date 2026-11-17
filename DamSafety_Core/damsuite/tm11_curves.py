@@ -27,6 +27,7 @@ Pure Python standard library.
 """
 import hashlib
 import json
+import math
 
 FIGURES = {
     "house": "ND REG_05.2026 Figure 5.1 - houses built on foundations (ACER TM 11 Fig. 2)",
@@ -163,6 +164,91 @@ def polygons(kind):
     high = hi + [[vmax, dmax], [0.0, dmax]]
     judgment = lo + hi[::-1]
     return high, judgment
+
+
+# ---------------------------------------------------------------- drawing only (Core 1.5.2) --
+# Nick, 2026-11-16: the chart lines looked bumpy. The table is a hand digitization (a point every
+# 0.5 ft/s for houses, 0.25 ft/s for mobile homes) and a chart that joins its points with straight
+# lines shows every small digitizing step as a kink. Charts now DRAW a smoothed line through the
+# same table (Gaussian-weighted local-linear fit, bandwidth DRAW_SMOOTH_WIDTH x the table spacing;
+# a line that reaches the velocity axis stays on it). It is for drawing only: zone(), thresholds()
+# and the table (and table_sha256) are unchanged, so no classification changes. The drawn line is
+# within drawn_offset_ft() of the table: 0.021 ft (houses) and 0.004 ft (mobile homes).
+DRAW_SMOOTH_WIDTH = 1.5
+DRAW_POINTS = 241
+
+
+def _local_linear(xs, ys, x, h):
+    sw = sx = sy = sxx = sxy = 0.0
+    for xi, yi in zip(xs, ys):
+        u = (xi - x) / h
+        if abs(u) > 4.0:
+            continue
+        w = math.exp(-0.5 * u * u)
+        dx = xi - x
+        sw += w
+        sx += w * dx
+        sy += w * yi
+        sxx += w * dx * dx
+        sxy += w * dx * yi
+    den = sw * sxx - sx * sx
+    return (sxx * sy - sx * sxy) / den if den > 1e-12 else sy / sw
+
+
+def smooth_points(v, d, d_max=None, n=DRAW_POINTS, width=DRAW_SMOOTH_WIDTH):
+    """[(velocity, depth), ...] n points of a smoothed line through the table points (v, d), for
+    DRAWING only. A zero tail (the line has reached the velocity axis) stays exactly at 0 from the
+    first tabulated zero on, and the line is kept within 0..d_max. Pure Python."""
+    v = [float(x) for x in v]
+    d = [float(x) for x in d]
+    if len(v) < 3:
+        return list(zip(v, d))
+    gaps = sorted(b - a for a, b in zip(v, v[1:]))
+    h = max(1e-9, width * gaps[len(gaps) // 2])
+    iz = len(d)
+    while iz > 1 and d[iz - 1] <= 0.0 and d[iz - 2] <= 0.0:
+        iz -= 1
+    vs, ds = v[:iz], d[:iz]
+    tail = iz < len(d)
+    out = []
+    for k in range(n):
+        x = v[0] + (v[-1] - v[0]) * k / (n - 1)
+        y = 0.0 if (tail and x >= vs[-1]) else _local_linear(vs, ds, x, h)
+        y = max(0.0, y)
+        if d_max is not None:
+            y = min(float(d_max), y)
+        out.append((x, y))
+    return out
+
+
+def drawn_line(kind, level, n=DRAW_POINTS):
+    """The smoothed "low" or "high" boundary of chart `kind` as drawn on the charts."""
+    k = kind_of(kind)
+    if level not in (LOW, HIGH):
+        raise KeyError("level must be 'low' or 'high'")
+    c = CURVES[k]
+    return smooth_points(c["v"], c[level], AXES[k][1], n=n)
+
+
+def drawn_polygons(kind, n=DRAW_POINTS):
+    """{"low", "judgment", "high"} closed polygons [(velocity ft/s, depth ft), ...] for DRAWING the
+    chart: the smoothed lines (drawn_line). Classification uses zone() on the table, not these."""
+    k = kind_of(kind)
+    vmax, dmax = AXES[k]
+    lo, hi = drawn_line(k, LOW, n), drawn_line(k, HIGH, n)
+    return {"low": [(v, 0.0) for v, _d in lo] + lo[::-1],
+            "judgment": lo + hi[::-1],
+            "high": hi + [(vmax, dmax), (0.0, dmax)]}
+
+
+def drawn_offset_ft(kind):
+    """The largest depth (ft) between the drawn (smoothed) lines and the table, both lines."""
+    k = kind_of(kind)
+    worst = 0.0
+    for level in (LOW, HIGH):
+        for v, d in drawn_line(k, level):
+            worst = max(worst, abs(d - depth_at(k, level, v)))
+    return worst
 
 
 def table_sha256():

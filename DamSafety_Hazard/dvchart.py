@@ -573,6 +573,30 @@ def zone_polygons(kind):
             "high": [(p[0], p[1]) for p in high], "v_max": vmax, "d_max": dmax}
 
 
+def drawn_zone_polygons(kind):
+    """The polygons the PNG DRAWS (2.25.6, Nick 2026-11-16): smooth lines through the same table
+    (damsuite.tm11_curves.drawn_polygons), so the digitizing steps no longer show as kinks. Zones
+    and counts still come from tm11_curves.zone() on the table. An older DamSafety Core without
+    drawn_polygons draws the table's straight segments as before."""
+    fn = getattr(TM11, "drawn_polygons", None)
+    if fn is None:
+        return zone_polygons(kind)
+    vmax, dmax = TM11.AXES[kind]
+    out = dict(fn(kind))
+    out.update({"v_max": vmax, "d_max": dmax})
+    return out
+
+
+def smoothing_note():
+    """One sentence for the chart caption, '' with an older Core (straight segments)."""
+    off = getattr(TM11, "drawn_offset_ft", None)
+    if off is None:
+        return ""
+    worst = max(off(KIND_HOUSE), off(KIND_MOBILE))
+    return ("Zone lines are drawn smoothed through the REG_05.2026 table, within {:.2f} ft of the "
+            "table the zones are decided on".format(max(0.01, worst)))
+
+
 def write_csv(points, path):
     folder = os.path.dirname(path)
     if folder:
@@ -645,7 +669,7 @@ def draw(points, meta, path, left=None, dpi=130):
         os.makedirs(folder, exist_ok=True)
     try:
         for ax, (kind, zoom, pts) in zip(axs, panels):
-            poly = zone_polygons(kind)
+            poly = drawn_zone_polygons(kind)
             vm, dm = poly["v_max"], poly["d_max"]
             # high first (full axes), then judgment, then low on top - same draw
             # order as Runner/Screening chart_svg (low visible in the corner)
@@ -682,6 +706,9 @@ def draw(points, meta, path, left=None, dpi=130):
                         transform=ax.transAxes, ha="center", va="center", fontsize=11,
                         color="#444", zorder=6, bbox={"fc": "white", "ec": "#888", "alpha": 0.9})
         first, second, third = title_lines(meta, c, left)
+        sm = smoothing_note()
+        if sm:
+            third += ". " + sm
         fig.suptitle(first + "\n" + second, fontsize=10.5)
         handles = [Patch(fc=COLORS["high"], label="High danger"),
                    Patch(fc=COLORS["judgment"], label="Judgment (MEDIUM)"),
