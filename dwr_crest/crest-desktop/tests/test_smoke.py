@@ -241,12 +241,10 @@ class ServedEngineTests(unittest.TestCase):
 
     def test_serves_the_bundle(self):
         body, ctype = self.get("/index.html")
-        # the server adds the per-launch API token (crest.__main__.API_TOKEN) to the page it serves
-        from crest.__main__ import API_TOKEN
-
-        meta = f'<meta name="crest-token" content="{API_TOKEN}">'.encode()
-        self.assertIn(meta, body)
-        self.assertEqual(body.replace(meta, b"", 1), (WEB / "index.html").read_bytes())
+        # the token is NOT written into the page; the desk fetches it from /api/token (see test_local_api.py), so a
+        # saved copy of the HTML can never carry it
+        self.assertNotIn(b"crest-token", body)
+        self.assertEqual(body, (WEB / "index.html").read_bytes())
         self.assertIn("text/html", ctype)
         for ref in ASSET_RE.findall(body.decode("utf-8")):
             data, ctype = self.get("/" + ref)

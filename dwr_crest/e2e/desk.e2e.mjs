@@ -1,8 +1,8 @@
-// Browser click-through of the desk's eight steps, on the three ways Crest ships (see walk.mjs):
-//   Crest.html opened from disk, the desktop bundle behind the Python server, and the web app.
+// Browser click-through of the desk's eight steps, on the two ways Crest ships (see walk.mjs):
+//   the desktop bundle behind the Python server, and the web app.
 // Each also checks that its Content-Security-Policy is in force: present, blocking nothing the walk needs, and
 // blocking a script injected into the page.
-// Then the batch screen on the same three (see batch-walk.mjs): run, stop, reload, resume, pause when the terrain
+// Then the batch screen on the same two (see batch-walk.mjs): run, stop, reload, resume, pause when the terrain
 // service drops, retry, CSV, open a row on the desk.
 //
 // Run with `npm run test:e2e` (after `npm run build` for the web app; without a build that one test is skipped,
@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 
@@ -99,22 +99,6 @@ const skip =
   !built && process.env.E2E_WEB !== "1" ? "the web app is not built (run `npm run build`)" : false;
 
 describe("desk click-through", { timeout: TIMEOUT * 3 }, () => {
-  it("Crest.html, opened from disk", { timeout: TIMEOUT }, async () => {
-    const page = await newPage();
-    try {
-      const url = pathToFileURL(join(REPO, "Crest.html")).href;
-      await walkDesk(page, url, { ownOrigin: "null" });
-      const policy = await page
-        .locator('meta[http-equiv="Content-Security-Policy"]')
-        .getAttribute("content");
-      assert.match(policy, /script-src 'sha256-/);
-      assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
-      assert.equal(await inlineScriptBlocked(page), true, "an injected inline script ran");
-    } finally {
-      await page.close();
-    }
-  });
-
   it("the desktop bundle, served by the Python server", { timeout: TIMEOUT }, async () => {
     const { child, found } = desktopServer();
     const page = await newPage();
@@ -162,15 +146,6 @@ describe("desk click-through", { timeout: TIMEOUT * 3 }, () => {
 });
 
 describe("batch click-through", { timeout: TIMEOUT * 3 }, () => {
-  it("Crest.html, opened from disk", { timeout: TIMEOUT }, async () => {
-    const page = await newPage();
-    try {
-      await walkBatch(page, pathToFileURL(join(REPO, "Crest.html")).href, { ownOrigin: "null" });
-    } finally {
-      await page.close();
-    }
-  });
-
   it("the desktop bundle, served by the Python server", { timeout: TIMEOUT }, async () => {
     const { child, found } = desktopServer();
     const page = await newPage();

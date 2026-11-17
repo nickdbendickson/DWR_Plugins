@@ -17,7 +17,6 @@ The same Terminal has to stay open while you use the desk.
 Report step — Plugins already in QGIS
 --------------------------------------
 These buttons need QGIS and the ND Dam plugins already installed.
-They do nothing from Crest.html by itself.
 
 Layers
   ND offline pack: the folder both plugin sets already share

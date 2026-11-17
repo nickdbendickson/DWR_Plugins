@@ -55,10 +55,27 @@ class LocalApiTests(unittest.TestCase):
         conn.close()
         return r.status, data
 
-    def test_index_carries_token(self):
+    def test_index_has_no_token(self):
+        # The token must never be written into the served HTML; a saved copy of the page could otherwise carry it.
         status, data = self.req("GET", "/index.html", token=False)
         self.assertEqual(status, 200)
-        self.assertIn(f'<meta name="crest-token" content="{m.API_TOKEN}">'.encode(), data)
+        self.assertNotIn(b"crest-token", data)
+        self.assertNotIn(m.API_TOKEN.encode(), data)
+
+    def test_token_endpoint_hands_out_token(self):
+        # The page fetches the token from /api/token, which is guarded by the Host/Origin checks but not the
+        # token itself (the page does not have it yet).
+        status, data = self.req("GET", "/api/token", token=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data).get("token"), m.API_TOKEN)
+
+    def test_token_endpoint_foreign_origin_rejected(self):
+        status, _ = self.req("GET", "/api/token", token=False, headers={"Origin": "https://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_token_endpoint_rebinding_host_rejected(self):
+        status, _ = self.req("GET", "/api/token", token=False, host=f"evil.example:{self.port}")
+        self.assertEqual(status, 403)
 
     def test_token_is_random_and_long(self):
         self.assertGreaterEqual(len(m.API_TOKEN), 32)
@@ -221,6 +238,25 @@ class ResolveWorkTests(unittest.TestCase):
     def test_non_string(self):
         with self.assertRaises(WorkFolderError):
             resolve_work(["/etc"])
+
+
+class OpenExternalTests(unittest.TestCase):
+    """Api.open_external hands only http/https links to the OS browser; the nav guard routes every off-origin
+    link through it, so the desk window never navigates to an outside site."""
+
+    @mock.patch.object(m.webbrowser, "open")
+    def test_http_and_https_open_in_browser(self, wb):
+        api = m.Api()
+        self.assertEqual(api.open_external("https://usgs.gov/x"), {"opened": "https://usgs.gov/x"})
+        self.assertEqual(api.open_external("http://example.com/"), {"opened": "http://example.com/"})
+        self.assertEqual([c.args[0] for c in wb.call_args_list], ["https://usgs.gov/x", "http://example.com/"])
+
+    @mock.patch.object(m.webbrowser, "open")
+    def test_non_web_schemes_refused(self, wb):
+        api = m.Api()
+        for bad in ("file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "mailto:a@b.c", "", "nope"):
+            self.assertIn("error", api.open_external(bad), bad)
+        wb.assert_not_called()
 
 
 if __name__ == "__main__":

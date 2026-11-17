@@ -9,6 +9,7 @@ import { HILLSHADE_URL } from "@/lib/crest/dashboard";
 import type { FloodStrip } from "@/lib/crest/floodstrip";
 import { ND_CENTER } from "@/lib/crest/mapview";
 import type { Bounds, Overlay } from "./ResultsMap";
+import { escHtml } from "@/lib/crest/esc-html";
 
 const LAYERS = basemaps(import.meta.env);
 const PANE = "crest-dash";
@@ -149,7 +150,7 @@ export function DashboardMap({ depth, points, arrival, hillshade, overlays, fit 
               fillColor: p.color,
               fillOpacity: p.ring ? 0.15 : 0.95,
             });
-            m.bindTooltip(p.label ?? p.name, { direction: "top" });
+            m.bindTooltip(escHtml(p.label ?? p.name), { direction: "top" });
             g.addLayer(m);
           }
           return g;

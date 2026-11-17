@@ -14,14 +14,12 @@ adds `trace_version` (`outline.ts TRACE_VERSION`).
 
 ## Start here
 
-**Three ways to run the same desk** (one `src/`, one engine; the records you enter autosave in the browser or app):
+**Two ways to run the same desk** (one `src/`, one engine; the records you enter autosave in the browser or app):
 
-1. **`Crest.html`** — download the one file from the repo root and double-click it. No install, no server. (The QGIS
-   hand-off buttons on the Report step need the desktop app; everything else works.)
-2. **Desktop app** — `crest-desktop/`, `python run.py` (Python 3.10+, `pip install -r requirements.txt` once), or the
+1. **Desktop app** — `crest-desktop/`, `python run.py` (Python 3.10+, `pip install -r requirements.txt` once), or the
    built `Crest.exe` / `Crest.app`. Same desk in a native window, plus the local-DEM option and the QGIS plugin hand-off.
    See **Desktop app** below.
-3. **Web app** — the Vercel deploy of this repo (`npm run dev` on :8080 for a local copy). Same desk; nothing is stored
+2. **Web app** — the Vercel deploy of this repo (`npm run dev` on :8080 for a local copy). Same desk; nothing is stored
    on the server.
 
 **The steps**, left to right across the top of the desk:
@@ -72,7 +70,7 @@ list:
 
 - **Save desk to file** writes every dam on the desk to one file, `crest-desk-<date>.json`: inputs, receptors, drawn
   lines and areas, saved 911 / PLSS lookups, the terrain layer and any imported run's summary. This is the backup, and
-  the way to move a desk to another computer or between `Crest.html`, the desktop app and the web app.
+  the way to move a desk to another computer or between the desktop app and the web app.
 - **Open desk file or dam.json** reads that file back. *Add to this desk* never changes a dam already on the desk: a
   dam that is already there and identical is left alone, and one with the same id but different content is added
   beside it as "(from file)". *Replace this desk* makes the desk exactly the file's dams.
@@ -111,7 +109,7 @@ from the shared defaults and has a button to put it back on them.
 | Where | Your values live in | How to change them |
 | --- | --- | --- |
 | Desktop app | `~/DamSafety/defaults.json` (or the path in `CREST_DEFAULTS` / `DAMSAFETY_DEFAULTS`) | Settings > Save writes the file. Editing it in QGIS or by hand works too; Crest reads it when it opens. |
-| Web desk, Crest.html | this browser | Settings > Save. *Open settings file* reads a `defaults.json`; *Save settings file* writes one to hand to the plugins. |
+| Web desk | this browser | Settings > Save. *Open settings file* reads a `defaults.json`; *Save settings file* writes one to hand to the plugins. |
 | Batch command line | a file you name | `npm run batch:dams -- --defaults ~/DamSafety/defaults.json ...` |
 
 Your file holds only the keys you changed, so a key you never touched follows the suite's value when the suite is
@@ -159,7 +157,7 @@ warning asks you to check the drawing.
 The map uses key-free tiles: **USGS The National Map Topo** by default (public domain, with contours and streams),
 with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the one thing the desk fetches without being
 asked; the terrain, 911 and PLSS lookups are on buttons and saved with the dam (see **Start here**). To use another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
-build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle and `Crest.html` pick it up
+build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle picks it up
 when rebuilt with the variable set, and the Content-Security-Policy of that build allows the configured server's origin.
 
 ## Security
@@ -168,14 +166,14 @@ The desk runs under a Content-Security-Policy built in one place, `src/lib/crest
 
 - **Scripts** run only from the app itself. The web app sends the policy as a header with a fresh nonce per request
   (`src/server.ts`) for the one inline script the framework writes; the desktop app's local server sends it from
-  `web/security-headers.json`; `Crest.html` carries it in a `<meta>` tag with the SHA-256 of its one inline script.
+  `web/security-headers.json`.
   No `unsafe-inline` or `unsafe-eval` for scripts anywhere.
 - **Network** is limited to the services named under **Start here**: USGS basemap tiles and OpenStreetMap, USGS 3DEP,
   the ND GIS Hub 911 points and the BLM PLSS service (plus a tile server set with `VITE_CREST_TILE_URL`). A new
   service has to be added to `csp.ts`; `csp.test.ts` fails when the source names a host the policy does not.
 - **Subresource Integrity**: the desktop bundle's `index.html` carries a `sha384` hash for its script, preloads and
   stylesheet. Nothing is loaded from another origin, so there is no third-party file to pin. `.gitattributes` stops
-  git converting line endings in `Crest.html` and the bundle, which would break the hashes on Windows.
+  git converting line endings in the bundle, which would break the hashes on Windows.
 - Also sent: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` / `frame-ancestors 'none'`, `Referrer-Policy`,
   `Cross-Origin-Opener-Policy`, `Permissions-Policy`.
 
@@ -237,7 +235,7 @@ Refresh only when asked: `npm run data:nd-dams` (downloads the NID CSV; `--from 
 or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp> --pulled <UTC time>`
 (a folder with `Dams_navd88.csv` and `Dugouts_navd88.csv`, converted to NAVD 88 by per-point VERTCON outside the app,
 plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value against stated + shift and refuses a
-local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
+local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle
 afterwards.
 
 ## Batch screen (many structures at once)
@@ -325,7 +323,7 @@ own `hu_sub_bas` names are not used: they mix two WBD vintages ("Maple" and "Map
 download Dams and Dugouts from the mapservice.dwr.nd.gov download form (*Full data set*, NAD83 geographic, shapefile),
 `ogr2ogr -f CSV Dams.csv Dams.shp` (and Dugouts), put both CSVs and a `SHA256SUMS.txt` for the zips in
 `data-raw/dwr_structures_<stamp>/`, then `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp> --pulled
-<UTC>` (it downloads the WBD HUC8 polygons once into that folder). Rebuild the desktop bundle and `Crest.html`
+<UTC>` (it downloads the WBD HUC8 polygons once into that folder). Rebuild the desktop bundle
 afterwards.
 
 ## Judgment-zone homes (ND rule)
@@ -335,12 +333,6 @@ loss of life and is not flagged High. Homes in the high zone stay High, and TM 1
 old rule is kept as an option, off by default: on the desk, **Judgment zone** -> *Count as probable loss of life (High,
 old option)* (`judgmentAsProbable: true` in the dam record) screens such a home High (flagged: judgment zone). A saved
 record that chose it keeps it; a record without the setting screens Medium.
-
-## Crest.html (one file)
-
-`Crest.html` is the whole desk in a single file that opens in any browser, with no install and no server: the same
-`src/` desk and engine as the web app and the desktop app, inlined by `npm run build:crest-html`. Do not edit it by
-hand. `npm test` fails while it is older than the sources, so rebuild and commit it with the desktop bundle.
 
 ## Desktop app (Windows and macOS)
 
@@ -375,15 +367,14 @@ Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.
    ```
 3. Optional app: `sh build_mac.sh` gives `dist/Crest.app`. It is unsigned, so the first time right-click it and choose Open.
 
-The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Get layers** either uses the ND offline pack both plugin sets already share (`NDSUITE_DATA`, or `ndsuite/data_folder` in `~/.ndsuite/config.json`) or downloads a 3DEP DEM and NHD streams and waterbodies for the drawn area. **Write the dam folder** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, both hydrographs, the LISFLOOD `.par` / `.bci` / `.bdy`, and the flood strip) and does not start a model. **Write folder and run screening** does that write, runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. Pick LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in screening engine. It needs a DEM (`dem.tif` in the work folder, the DEM field, the pack DEM, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude GeoJSON; it is sent as `DAM_LINES` and the Runner reprojects it to the DEM so the toe-band inflow can be placed. `line_xy` (the embankment insert in DEM coordinates) is still not set from that file. The flood strip is straight down the valley at the breach (the dam segment nearest the breach, not the end-to-end chord, and not later bends in the stream). The log is on the Report step. `Crest.html` has no local server, so those buttons work from `python run.py`, not from the one-file page.
+The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Get layers** either uses the ND offline pack both plugin sets already share (`NDSUITE_DATA`, or `ndsuite/data_folder` in `~/.ndsuite/config.json`) or downloads a 3DEP DEM and NHD streams and waterbodies for the drawn area. **Write the dam folder** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, both hydrographs, the LISFLOOD `.par` / `.bci` / `.bdy`, and the flood strip) and does not start a model. **Write folder and run screening** does that write, runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. Pick LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in screening engine. It needs a DEM (`dem.tif` in the work folder, the DEM field, the pack DEM, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude GeoJSON; it is sent as `DAM_LINES` and the Runner reprojects it to the DEM so the toe-band inflow can be placed. `line_xy` (the embankment insert in DEM coordinates) is still not set from that file. The flood strip is straight down the valley at the breach (the dam segment nearest the breach, not the end-to-end chord, and not later bends in the stream). The log is on the Report step.
 
 ### Linux
 `pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.
 
 ### For developers
-- After changing anything under `src/`, rebuild and commit the desktop bundle and the one-file desk:
-  `npm run build:desktop && npm run build:crest-html`. `npm test` fails while `crest-desktop/crest/web/` or
-  `Crest.html` is older than the sources.
+- After changing anything under `src/`, rebuild and commit the desktop bundle:
+  `npm run build:desktop`. `npm test` fails while `crest-desktop/crest/web/` is older than the sources.
 - The Save dialog opens in the folder of the last export (remembered in `crest-settings.json` in the app's data folder).
 - `npm run test:desktop` is a headless smoke test: it serves the bundle the way the app does and checks the
   served engine on DWR-2801 (H 27.50 ft, V 1,615.5 ac-ft, SA 154.5 ac: 28,671 cfs) and that nothing loads from a CDN.
@@ -396,7 +387,6 @@ The Report step can hand the open dam to the QGIS plugins already installed on t
 | `npm run build` | Production build of the web app (`vite build`, Nitro's Vercel preset). This is what Vercel runs (`buildCommand` in `vercel.json`); there is no database and no migration step. |
 | `npm test`, `npm run typecheck`, `npm run lint` | Tests (`scripts/**/*.test.mjs` and `src/lib/crest/*.test.ts`), `tsc --noEmit`, ESLint |
 | `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see above). |
-| `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
 | `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |

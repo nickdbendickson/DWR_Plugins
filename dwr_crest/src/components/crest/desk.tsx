@@ -2,6 +2,7 @@ import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef
 import { ChevronLeft, ChevronRight, Plus, RotateCcw } from "lucide-react";
 import { DamitMark } from "./DamitMark";
 import { analyze, crestNavdLabel, INPUT_RANGE, inputRangeWarning, STEPS } from "@/lib/crest/engine";
+import { crestToken } from "@/lib/crest/crest-token";
 import { datumFlags, floodFlags, warningKey, type Warning } from "@/lib/crest/warnings";
 import { locationProblem } from "@/lib/crest/guided";
 import { lookupPads, padPoints, padsToRetry, resetFailedPads } from "@/lib/crest/nd911-pads";
@@ -1472,13 +1473,11 @@ let handoffTimer = 0;
 
 type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers";
 
-/** The desktop server puts a per-launch token in <meta name="crest-token"> of the page it serves; every /api/ call
- * must send it back (crest-desktop/crest/__main__.py). */
-function crestApiHeaders(json = false): Record<string, string> {
-  const token =
-    typeof document === "undefined"
-      ? ""
-      : (document.querySelector('meta[name="crest-token"]')?.getAttribute("content") ?? "");
+/** The desktop server hands out a per-launch token at /api/token; every /api/ call must send it back in the
+ * X-Crest-Token header (crest-desktop/crest/__main__.py). crestToken() fetches it once and caches it; the token
+ * is never in the page markup. */
+async function crestApiHeaders(json = false): Promise<Record<string, string>> {
+  const token = await crestToken();
   return { ...(json ? { "Content-Type": "application/json" } : {}), "X-Crest-Token": token };
 }
 
@@ -1527,7 +1526,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       try {
         response = await fetch(path, {
           method: "POST",
-          headers: crestApiHeaders(true),
+          headers: await crestApiHeaders(true),
           body: JSON.stringify({
             dam,
             // With what this record used of the shared defaults, for the dam.json the hand-off writes.
@@ -1554,7 +1553,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         handoff.job = job.id;
         handoffTimer = window.setInterval(async () => {
           try {
-            const found = await (await fetch(`/api/job?id=${job.id}`, { headers: crestApiHeaders() })).json();
+            const found = await (await fetch(`/api/job?id=${job.id}`, { headers: await crestApiHeaders() })).json();
             handoff.log = String(found.log || "");
             if (found.done) {
               window.clearInterval(handoffTimer);
@@ -1585,7 +1584,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
   const cancel = useCallback(async () => {
     if (!handoff.job) return;
     try {
-      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST", headers: crestApiHeaders() });
+      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST", headers: await crestApiHeaders() });
     } catch {
       /* the job log shows whether the run stopped */
     }

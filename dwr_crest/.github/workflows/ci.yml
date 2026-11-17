@@ -26,11 +26,11 @@ jobs:
       - name: Lint
         run: npm run lint
       # Runs the unit tests and the scripts/*.test.mjs suite, which includes the
-      # crest-html bundle-hash check (Crest.html and the desktop bundle match their source).
+      # desktop-bundle freshness check (the committed bundle matches its source).
       - name: Test
         run: npm test
 
-  # Browser click-through (e2e/): Chromium opens Crest.html, the desktop bundle behind its Python server and the built
+  # Browser click-through (e2e/): Chromium opens the desktop bundle behind its Python server and the built
   # web app, and walks the eight steps on the first sample dam with every public service stubbed. Fails on an uncaught
   # error, a console error, or anything the Content-Security-Policy blocks.
   e2e:

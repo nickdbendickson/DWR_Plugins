@@ -1,6 +1,7 @@
 {
   "name": "crest",
   "version": "0.1.1",
+  "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -28,7 +29,6 @@
     "data:nd-dams-dwr": "node scripts/build-nd-dams-dwr.mjs",
     "data:nd-structures": "node scripts/build-nd-structures.mjs",
     "batch:dams": "node --experimental-strip-types scripts/batch-dams.mjs",
-    "build:crest-html": "node node_modules/vite/bin/vite.js build -c vite.desktop.config.ts --mode singlefile",
     "test:desktop": "python3 crest-desktop/tests/test_smoke.py",
     "validate:crest": "node --experimental-strip-types scripts/validate-crest.mjs",
     "check:engine-sync": "node scripts/check-engine-sync.mjs",

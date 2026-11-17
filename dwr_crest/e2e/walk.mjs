@@ -2,7 +2,7 @@
  * The click-through: open the desk on its first sample dam and walk the eight steps (Guided setup, Record, Breach,
  * Flood, Results, Dashboard, Screen, Report), doing on each what a user does there, and fail on anything a user would
  * see as broken: an uncaught error, a console error, a request the Content-Security-Policy blocked, a request to a
- * host the desk is not supposed to call. The same walk runs against Crest.html, the desktop bundle and the web app.
+ * host the desk is not supposed to call. The same walk runs against the desktop bundle and the web app.
  */
 import assert from "node:assert/strict";
 
@@ -38,7 +38,7 @@ export async function watch(page, ownOrigin, network = {}) {
 const step = (page, name) => page.getByRole("button", { name, exact: true }).first();
 
 /**
- * Walk the desk. `url` is where it is served (or a file: URL for Crest.html). Returns what was seen, for the caller's
+ * Walk the desk. `url` is where it is served. Returns what was seen, for the caller's
  * own assertions (e.g. that the policy header was present).
  */
 export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = {}) {

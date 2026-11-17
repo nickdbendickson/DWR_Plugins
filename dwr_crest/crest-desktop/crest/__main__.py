@@ -34,9 +34,44 @@ PREFERRED_PORT = 47231
 
 TITLE = "Crest — Dam Breach Desk"
 
-#: Random per-launch secret. The served index.html carries it in <meta name="crest-token">; every /api/ call must
-#: send it back in the X-Crest-Token header. A custom header also forces a CORS preflight, which this server never
-#: answers, so other web origins cannot reach the API from a browser.
+#: Injected into the desk after every page load (evaluate_js runs outside the page CSP, so script-src 'self' does not
+#: block it). It keeps the window on its own 127.0.0.1 origin: a click on an off-origin http(s) link, or a window.open
+#: to one, is cancelled and handed to the OS browser via window.pywebview.api.open_external. Same-origin links and
+#: non-web schemes (blob:, data:, about:, mailto:) are left to the page, so nothing legitimate changes.
+NAV_GUARD_JS = r"""
+(function () {
+  if (window.__crestNavGuard) return;
+  window.__crestNavGuard = true;
+  var ORIGIN = window.location.origin;
+  function external(url) {
+    try {
+      var u = new URL(url, window.location.href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      return u.origin === ORIGIN ? null : u.href;
+    } catch (e) { return null; }
+  }
+  document.addEventListener("click", function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+    if (!a) return;
+    var href = external(a.getAttribute("href"));
+    if (!href) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    try { window.pywebview.api.open_external(href); } catch (e) {}
+  }, true);
+  var nativeOpen = window.open;
+  window.open = function (url) {
+    var href = url ? external(String(url)) : null;
+    if (href) { try { window.pywebview.api.open_external(href); } catch (e) {} return null; }
+    return nativeOpen.apply(window, arguments);
+  };
+})();
+"""
+
+#: Random per-launch secret. The page fetches it once from GET /api/token (guarded by the Host/Origin checks) and
+#: sends it back in the X-Crest-Token header on every /api/ call. The token is never written into the page markup,
+#: so a saved copy of the HTML (e.g. the browser's "Save Page As") cannot carry a live credential. The custom header
+#: also forces a CORS preflight, which this server never answers, so other web origins cannot reach the API.
 TOKEN_HEADER = "X-Crest-Token"
 API_TOKEN = secrets.token_urlsafe(32)
 _LOCAL_HOSTS = ("127.0.0.1", "localhost")
@@ -236,11 +271,19 @@ class _Handler(SimpleHTTPRequestHandler):
         return True
 
     def _serve_index(self) -> None:
+        # The token is NOT injected into the page. The desk fetches it from /api/token instead, so a saved copy of
+        # the HTML (e.g. the browser's "Save Page As") can never carry a live credential.
         index = Path(self.directory) / "index.html"
         html = index.read_text(encoding="utf-8")
-        meta = f'<meta name="crest-token" content="{API_TOKEN}">'
-        html = html.replace("<head>", "<head>" + meta, 1) if "<head>" in html else meta + html
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _send_token(self) -> None:
+        """Hand the page its per-launch API token. Guarded by the Host and Origin checks (not the token itself,
+        which the page does not have yet); the response is the only place the token appears, never page markup."""
+        if not (self._host_ok() and self._origin_ok()):
+            self._send(403, b'{"error":"forbidden"}', "application/json")
+            return
+        self._send(200, json.dumps({"token": API_TOKEN}).encode(), "application/json")
 
     def do_GET(self):
         if not self._host_ok():
@@ -249,6 +292,9 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             self._serve_index()
+            return
+        if parsed.path == "/api/token":
+            self._send_token()
             return
         if parsed.path.startswith("/api/") and not self._api_allowed():
             return
@@ -533,6 +579,19 @@ class Api:
         self._remember_dir(Path(path).resolve().parent)
         return {"saved": str(path)}
 
+    def open_external(self, url: str) -> dict:
+        """Open an http/https link in the system browser. The desk window itself never leaves its own local origin:
+        the page nav guard (NAV_GUARD_JS) routes every off-origin link here, so a link can never drive the app to
+        another site. Any non-web scheme is refused rather than handed to the OS."""
+        try:
+            parsed = urlparse(str(url))
+        except Exception:
+            return {"error": "bad url"}
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return {"error": "only http/https links open in the browser"}
+        webbrowser.open(url)
+        return {"opened": url}
+
 
 #: Largest binary export accepted from the page (a view PDF is a few MB).
 MAX_BINARY_BYTES = 100 * 1024 * 1024
@@ -615,6 +674,8 @@ def main() -> None:
 
         try:
             webview.settings["ALLOW_DOWNLOADS"] = True  # belt and braces; exports use the Save dialog bridge
+            # A target=_blank / window.open link goes to the OS browser, never a new in-app window on another origin.
+            webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         except Exception:
             pass
         # pywebview's JS API binder uses new Function / eval; rewrite it so the CSP can stay
@@ -627,6 +688,8 @@ def main() -> None:
         SETTINGS_FILE = store / "crest-settings.json"
         api = Api(settings_file=SETTINGS_FILE)
         api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(760, 560))
+        # Re-arm the nav guard after every in-page load (the loaded event re-fires on each navigation).
+        api._window.events.loaded += lambda *a: api._window.evaluate_js(NAV_GUARD_JS)
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)
         print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.")

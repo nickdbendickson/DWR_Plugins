@@ -6,6 +6,7 @@ import "leaflet/dist/leaflet.css";
 import { basemaps } from "@/lib/crest/basemap";
 import type { FloodStrip } from "@/lib/crest/floodstrip";
 import { ND_CENTER } from "@/lib/crest/mapview";
+import { escHtml } from "@/lib/crest/esc-html";
 
 const LAYERS = basemaps(import.meta.env);
 
@@ -69,7 +70,7 @@ function Layers({ overlays, strip, points }: Omit<Props, "fit">) {
         fillColor: p.color,
         fillOpacity: p.kind === "run-dam" ? 0.2 : 0.95,
       });
-      m.bindTooltip(`${p.name}${p.note ? ` (${p.note})` : ""}`, { direction: "top", permanent: false });
+      m.bindTooltip(`${escHtml(p.name)}${p.note ? ` (${escHtml(p.note)})` : ""}`, { direction: "top", permanent: false });
       group.addLayer(m);
     }
     group.addTo(map);

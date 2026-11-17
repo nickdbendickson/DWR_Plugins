@@ -6,6 +6,13 @@
 - **The drawn dam line is sent to ndbreach:rundam as DAM_LINES.** The Report flood button used to skip it because the line is still longitude and latitude, so the Runner fell back to the lowest ground within 150 m and skipped the toe band (5 m out to H×(slope+1), 3:1 when the slope is unknown, 150 m cap, with the side check). The line is now passed as `dam_line.geojson`; the Runner reprojects it to the DEM. A dam with no drawn line is unchanged. Tests: `tests/test_handoff.py`.
 - **Screening settings from the pack also set larger clips to the local DEM.** `crest_settings.json` already pointed terrain at the pack mosaic, but `larger_clips` was left at the screening default (a fresh 3DEP download). It is now 2 (local DEM folder) whenever a pack or local DEM is used.
 - **The Runner now takes the crest from the drawn line.** With DAM_LINES, ndbreach:rundam places the crest at the middle of the drawn dam line when that is within 500 m of the dam point, not at the dam point.
+- **Security hardening.** Map tooltips now escape HTML, so a dam or receptor name from an opened file can no longer
+  run script (XSS) on the Results or Dashboard map. The desktop app's per-launch API token is handed to the page from
+  a `GET /api/token` fetch (guarded by the same Host/Origin checks) instead of a `<meta>` tag, so a saved copy of the
+  page can never carry the token; the `X-Crest-Token` header auth is otherwise unchanged. Added a `LICENSE` (PolyForm
+  Noncommercial 1.0.0, matching how the DamIT repo licenses the Crest app) and a `SECURITY.md`.
+- **Removed the one-file `Crest.html` build.** The desktop app and the web app are unchanged; only the single-file
+  `npm run build:crest-html` output and its build plumbing are gone. No engineering numbers change.
 
 ## 2026-11-13
 
