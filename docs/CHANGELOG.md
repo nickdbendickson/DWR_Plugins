@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Runner 3.20.9: area-based rule for when a flood is still spreading (CHANGES RESULTS).** Nick chose the area-based rule on 2026-11-16 after the first batch-44 run: DWR-4031 needed 9 LISFLOOD-FP runs and a 93.7 h latest arrival because one late-wetted cell in the last 10% of the run was enough to lengthen the clock 1.5x, with no limit.
+  - **The rule:** lengthen the clock only when the ground first flooded in the last 10% of the run is at least 1% of the flooded area and at least 0.25 ac, or at least 25 ac whatever its share. From the second pass on the flooded area must also have grown at least 1% (or 25 ac) since the previous comparable pass. Cells wet at the start (the pond) are not counted.
+  - **A limit:** at most 4 extensions per domain run (5.1x the first clock); a run still spreading then warns ("Flood still spreading after 4 clock extensions ...").
+  - **Latest arrival as a lower bound:** when the clock was cut (still spreading, the extension limit, the wall-clock budget or a fixed run length) `run_report.json` has `latest_arrival_lower_bound` and `latest_arrival_note`, and the report says so. `spread_rule` and a per-pass `spread` record are in `run_report.json`.
+  - **What changes:** runs with a thin late sheet stop sooner, so shorter clocks, earlier latest arrival times and shorter HEC-RAS windows; flooded areas and depths can be slightly smaller. Runs whose flood stopped spreading in time are unchanged.
+
 - **Runner 3.20.8 and Hazard 2.25.5: fixes from the first batch-44 two-dam run (NO number changes).**
   - **Runner: CHECK THE INFLOW DEPTH.** With no dam line the Runner takes the lowest ground within 90 m (or 8 times the dam height) on the downstream side as the breach inflow, with no limit on how deep it is. On DWR-3034 it was 53 ft below the top of a 30.7 ft dam. The run now warns when the automatic inflow is more than 1.3 times the dam height below the top of dam, and records `depth_below_top_h` in `run_report.json`. The cell is chosen as before.
   - **Runner: the Model one dam wizard fills crest width, slopes and crest length from a DWR dam record** (it filled only height, storage and area). DWR elevations are still never filled: they are on NGVD 29 or a local datum.

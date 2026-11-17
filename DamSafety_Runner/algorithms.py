@@ -849,7 +849,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                       "x the per-run limit."))
         self._num("DURATION_HR", "Simulation duration (hr), 0 = automatic", 0.0, minimum=0.0)
         self._num("DURATION_MAX_HR", "Longest simulated time (hr): the clock is lengthened "
-                  "up to this while the flood is still moving", 96.0, minimum=1.0)
+                  "up to this while the flood is still spreading (v3.20.9: by area, at most 4 "
+                  "times per domain run)", 96.0, minimum=1.0)
         self.addParameter(set_advanced(QgsProcessingParameterCrs(
             "WORK_CRS", "Model CRS (metric; empty = NAD83 UTM zone of the dam)", optional=True)))
         self._bool("ANUGA_KEEP_FINE_MAXIMA", "ANUGA: keep native triangle maxima and fine GeoTIFFs", False,

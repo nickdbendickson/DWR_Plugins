@@ -2140,6 +2140,22 @@ def simulation_hours(hydro_end_hr, arrival_hr, formation_hr=0.0, cap=SIM_CAP_HR,
     return sim, how
 
 
+def window_arrival_hr(summary):
+    """v3.20.9 (Runner review): (hours, note) - the arrival the simulation window is sized from.
+    The run's latest arrival, or, when the Runner marked it a lower bound (area still first wet
+    in the last 10% of the LISFLOOD-FP clock: summary latest_arrival_lower_bound /
+    lisflood_clock_hr, both from breach initiation), that clock when it is later; note says so
+    ('' otherwise)."""
+    s = summary or {}
+    arr = float(s.get("latest_arrival_hr") or 0.0)
+    clock = s.get("lisflood_clock_hr") if s.get("latest_arrival_lower_bound") else None
+    if clock is not None and float(clock) > arr:
+        return float(clock), ("; the run's latest arrival ({:g} h) is a lower bound, so the "
+                              "LISFLOOD-FP clock ({:.1f} h) stands in for it".format(
+                                  arr, float(clock)))
+    return arr, ""
+
+
 def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=None,
                        z_top=None, t_min=0.0):
     """Lowers the terrain GeoTIFF (never raises it) to z_cut in the rectangle from the dam line
@@ -3985,7 +4001,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     # --- simulation timing ---------------------------------------------------------
     summ = report.get("summary") or {}
-    arr = summ.get("latest_arrival_hr") or 0.0
+    # v3.20.9 (Runner review): a lower-bound latest arrival gives way to the LISFLOOD-FP clock
+    arr, arr_note = window_arrival_hr(summ)
     # v3.10.17: from the end of the breach hydrograph and the latest arrival, plus a drain
     # allowance, capped (was 1.25 x the longer of the record and arrival + formation + 2 h)
     t_end = hydrograph_end_hr(hy.t_s, hy.q_cms, hy.t_ref_s) if len(hy.t_s) else 6.0
@@ -3994,6 +4011,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     else:
         sim, sim_how = simulation_hours(t_end, float(arr), bvals["formation_hr"],
                                         cap=float(o.get("sim_cap_hr") or SIM_CAP_HR))
+        sim_how += arr_note
     vmax_fps = float(summ.get("max_velocity_fps") or 10.0)
     hmax_ft = float(summ.get("max_depth_ft") or dmax or 10.0)
     cour = o["courant"] or (1.0 if o["equation"] == EQ_SWE else 2.0)

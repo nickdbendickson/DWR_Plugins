@@ -2194,7 +2194,10 @@ class _Report(object):
             add("Flooded area, water bodies masked", s.get("flooded_acres_masked"), "ac")
             add("Flooded area at or above 1 ft, water bodies masked",
                 s.get("flooded_acres_ge_1ft_masked"), "ac")
-        add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation")
+        add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation" + (
+            # v3.20.9 (Runner review): a lower bound when area was still first wet late
+            " ({})".format(s["latest_arrival_note"]) if s.get("latest_arrival_lower_bound")
+            and s.get("latest_arrival_note") else ""))
         if s.get("domain_mi"):
             add("Model domain", "{} x {} mi after {} run(s) of {}".format(
                 s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs"),
@@ -2486,7 +2489,9 @@ class _Report(object):
             rows = [(k, v) for k, v in (
                 ("Maximum depth (ft)", s.get("max_depth_ft")),
                 ("Maximum velocity (ft/s)", s.get("max_velocity_fps")),
-                ("Latest arrival (h after breach initiation)", s.get("latest_arrival_hr")),
+                ("Latest arrival (h after breach initiation{})".format(   # v3.20.9
+                    "; a lower bound" if s.get("latest_arrival_lower_bound") else ""),
+                 s.get("latest_arrival_hr")),
                 ("Flooded area (ac)", s.get("flooded_acres")),
                 ("Flooded area at or above the arrival depth (ac)",
                  s.get("flooded_acres_over_arrival_depth")),
