@@ -2395,8 +2395,23 @@ def _dam_axis_rows(ax, L):
                                            ax.get("downstream_bearing_deg") or 0.0))]
 
 
+# 3.20.11: the label of a dam line the Runner's dam point check found on the DEM (it is used
+# as a given line, but never called "your dam line": core/dam_point_check.FOUND_LINE_SOURCE)
+FOUND_LINE_SOURCE = "dam line found on the DEM (dam point check)"
+USER_LINE_SOURCES = ("your dam line", FOUND_LINE_SOURCE)
+
+
+def report_line_source(report):
+    """The label of the run report's crest_line_xy in the HEC-RAS model: the found line's own
+    label (report crest_line_source, 3.20.11), else "your dam line"."""
+    if (report or {}).get("crest_line_source") == FOUND_LINE_SOURCE:
+        return FOUND_LINE_SOURCE
+    return "your dam line"
+
+
 def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tcell, o,
-                   user_line=None, inflow_m=None, dam_folder=None, wet_xy=None, wet_cell=None):
+                   user_line=None, inflow_m=None, dam_folder=None, wet_xy=None, wet_cell=None,
+                   user_line_source="your dam line"):
     """v3.10.22: the dam line along the embankment crest (model units, from A, the left end
     looking downstream, to B), the breach centre along it and how both were found. A user's
     dam line (user_line, model CRS) wins over the trace. Raises hecras_crest.CrestTraceError
@@ -2447,7 +2462,7 @@ def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tc
         if (line[-1] - line[0]) @ axis < 0:
             line = line[::-1]
         line = hc.min_spacing(line, 0.5 * cell)
-        rec.update(source="your dam line", raw_points=int(len(user_line)))
+        rec.update(source=user_line_source or "your dam line", raw_points=int(len(user_line)))
         p0 = line[int(np.argmin(np.hypot(*(line - P).T)))]
     else:
         try:
@@ -3017,12 +3032,14 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         tcell_c = float(o["terrain_cell"] or 0.0) or abs(dem_gt[1]) * (
             dsrs_c.GetLinearUnits() if dsrs_c.IsProjected() else 111320.0) / units.L
         user_line = None
+        user_src = "your dam line"
         if o.get("dam_line_xy"):
             user_line = np.asarray(o["dam_line_xy"], float).reshape(-1, 2)
             if o.get("dam_line_crs"):
                 user_line = transformer(srs_from(o["dam_line_crs"]), srs)(user_line)
         elif report.get("crest_line_xy") and to_model is not None:
             user_line = to_model(report["crest_line_xy"])
+            user_src = report_line_source(report)                       # 3.20.11
         # 3.10.87: the dam point and the flow frame as they were, for the straight fallback
         # (notes about the dam line are added only after the last step that can give it up)
         P_in, d_in, n_left_in = P.copy(), d.copy(), n_left.copy()
@@ -3030,9 +3047,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             crest_line, crest_sc, crest_rec = crest_dam_line(
                 dem_path, srs, zf_c, units, dam, params, P, d, n_left, cell, tcell_c, o,
                 user_line=user_line, inflow_m=inflow_m, dam_folder=dam_folder,
-                wet_xy=np.column_stack([wx, wy]), wet_cell=acell)
+                wet_xy=np.column_stack([wx, wy]), wet_cell=acell, user_line_source=user_src)
             off_rule = crest_rec.get("off_rule")
-            if off_rule or crest_rec.get("source") == "your dam line":
+            if off_rule or crest_rec.get("source") in USER_LINE_SOURCES:
                 # 3.10.87: a dam line off the old rule (the old rule found no crest at the dam
                 # point), or your own: the cut, the pool, the storage check and the breach
                 # frame follow that line - the dam point moves onto it (its nearest point),

@@ -289,6 +289,23 @@ class NDBreachRunnerDialog(QDialog):
             "is. Auto: only when the DEM's pool holds far less than the storage curve. The "
             "source DEM is never changed.")
         self.carve_combo.currentIndexChanged.connect(self._changed)
+        # 3.20.11: the dam point checked on the DEM (core/dam_point_check.py, DAM_POINT_CHECK)
+        self.dpc_combo = QComboBox()
+        for key, label in zip(pl.DAM_POINT_CHECK_CHOICES,
+                              ("Off (use the point as given)", "Warn only (never move)",
+                               "Move clear cases (otherwise warn)")):
+            self.dpc_combo.addItem(label, key)
+        self.dpc_combo.setCurrentIndex(
+            pl.DAM_POINT_CHECK_CHOICES.index(pl.DAM_POINT_CHECK_DEFAULT))
+        self.dpc_combo.setToolTip(
+            "Check the dam point on the DEM when there is no dam line, crest line, breach inflow "
+            "point or top of dam. Move: when the point is clearly off the dam and the embankment "
+            "is unambiguous, use the embankment found as the dam line (the run says so first in "
+            "its warnings); otherwise keep the point and add a REVIEW warning. Warn only (the "
+            "default) never moves: its REVIEW warning says where the embankment is and whether "
+            "Move would use it. Off is as before 3.20.11. NDBREACH_DAM_POINT_CHECK wins over "
+            "this.")
+        self.dpc_combo.currentIndexChanged.connect(self._changed)
         self.datum_combo = QComboBox()                       # 3.12.0: ELEV_DATUM
         for key, label in zip(pl.ELEV_DATUM_CHOICES, ("Auto (as stated; else NGVD29)",
                                                       "NAVD88 (use as given)",
@@ -353,6 +370,8 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(self.datum_label, 5, 2, 1, 3)
         grid2.addWidget(self.crest_burn, 6, 0, 1, 4)
         grid2.addWidget(self.grid_refine, 7, 0, 1, 4)
+        grid2.addWidget(QLabel("Dam point check:"), 8, 0)
+        grid2.addWidget(self.dpc_combo, 8, 1, 1, 2)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
         body.addWidget(self.adv_section)
@@ -472,6 +491,9 @@ class NDBreachRunnerDialog(QDialog):
         carve = self.carve_combo.currentData() if hasattr(self, "carve_combo") else None
         if carve and carve != "off":
             parts.append("reservoir carve " + str(carve))
+        dpc = self.dpc_combo.currentData() if hasattr(self, "dpc_combo") else None
+        if dpc and dpc != pl.DAM_POINT_CHECK_DEFAULT:
+            parts.append("dam point check " + str(dpc))
         if getattr(self, "hecras_gmsh", None) is not None and self.hecras_gmsh.isChecked():
             parts.append("HEC-RAS gmsh points")
         if getattr(self, "hecras_crest", None) is not None and not self.hecras_crest.isChecked():
@@ -838,6 +860,9 @@ class NDBreachRunnerDialog(QDialog):
             out["crest_burn"] = False
         if not self.grid_refine.isChecked():    # on (the default) leaves the saved state as before
             out["grid_refine"] = False
+        dpc = self.dpc_combo.currentData() if hasattr(self, "dpc_combo") else None
+        if dpc and dpc != pl.DAM_POINT_CHECK_DEFAULT:    # the default leaves it as before
+            out["dam_point_check"] = dpc
         return out
 
     def _apply(self, s):
@@ -865,6 +890,8 @@ class NDBreachRunnerDialog(QDialog):
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
         self.crest_burn.setChecked(bool(s.get("crest_burn", True)))
         self.grid_refine.setChecked(bool(s.get("grid_refine", True)))
+        dpc = pl.dam_point_check_choice(s.get("dam_point_check"))
+        self.dpc_combo.setCurrentIndex(pl.DAM_POINT_CHECK_CHOICES.index(dpc))
         carve = str(s.get("reservoir_carve") or "off").lower()
         self.carve_combo.setCurrentIndex(pl.CARVE_CHOICES.index(carve)
                                          if carve in pl.CARVE_CHOICES else 0)
