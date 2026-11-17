@@ -1973,6 +1973,30 @@ class EvidenceSources(unittest.TestCase):
         self.assertEqual(evd.review_order([None, 0.05, float("nan"), 0.6, None], [99.0, 0.0, 120.0, 0.0, 99.0]),
                          [4, 2, 3, 1, 5])
 
+    def test_review_order_water_years_break_ties_inside_a_band(self):
+        #         0     1     2     3     4     5
+        score = [0.58, 0.55, 0.52, 0.95, 0.41, 0.48]
+        wet   = [0,    3,    None, 0,    9,    2]
+        # band 0.9: fill 3 alone. Band 0.5: water in 2+ years first (fill 1), then the dry ones by
+        # score (0 before 2; a blank water history counts as dry). Band 0.4: both are wet (9 and 2
+        # years) - water is a yes / no, not a count - so the score decides: 5 (0.48) before 4
+        self.assertEqual(evd.review_order(score, wet_years=wet), [3, 2, 4, 1, 6, 5])
+        # water never lifts a fill over one in a higher band, however many years
+        self.assertEqual(evd.review_order([0.61, 0.59], wet_years=[0, 10]), [1, 2])
+        # one year is not water enough (wet_min 2); the threshold is the caller's
+        self.assertEqual(evd.review_order([0.58, 0.55], wet_years=[0, 1]), [1, 2])
+        self.assertEqual(evd.review_order([0.58, 0.55], wet_years=[0, 1], wet_min=1), [2, 1])
+        # water comes before what is below; what is below orders each side of it
+        self.assertEqual(evd.review_order([0.55, 0.52, 0.51, 0.53], [9.0, 0.0, 4.0, 1.0], wet_years=[0, 2, 5, 0]),
+                         [3, 2, 1, 4])
+        # no water history at all: as before (by what is below, then the score)
+        self.assertEqual(evd.review_order([0.55, 0.52], [0.0, 3.0]), evd.review_order([0.55, 0.52], [0.0, 3.0], wet_years=[None, None]))
+        self.assertEqual(evd.review_order([0.55, 0.52], wet_years=["", float("nan")]), [1, 2])
+        # a fill with no score still comes after every scored fill, wet or not
+        self.assertEqual(evd.review_order([None, 0.05], wet_years=[10, 0]), [2, 1])
+        with self.assertRaises(ValueError):
+            evd.review_order([0.5, 0.6], wet_years=[1])
+
     def test_bare_ground_and_class_share(self):
         m = evd.disk((100, 100), self.GT1, 50.0, 50.0, 30.0)
         red = np.where(m, 200.0, 60.0)

@@ -20,7 +20,18 @@ writes into one folder, `~/ND_Finder_Statewide`, and nowhere else. It downloads 
   Finder it found. Do the whole state with **one** Finder version: tiles made by another
   version are kept but are neither run again nor merged (see "If something goes wrong").
 * The SSD is plugged in: `/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt`.
-* The data pack is in your suite data folder (`~/ND_Suite_Data/ND_Dam_Suite_Pack`).
+* The data pack is in your suite data folder (`~/ND_Suite_Data/ND_Dam_Suite_Pack`). From script 1.3
+  it also looks in the suite data folder and pack location set in QGIS (DamSafety Core / the ND
+  Data Updater, `damsafety` profile) and in `~/ND_Suite_Data`. It reads the format-2 pack
+  `ND_Dam_Suite_Pack` (folders `hydro/`, `dwr/`, `roads/` ...: the three
+  `ND_Dam_Suite_Pack_part*.zip` downloads, or what Build offline pack writes). It finds each
+  layer the way the plugins do, through the pack's `manifest.json`, and under either name: the
+  downloaded pack calls the streams `3DHP_flowlines` and the barrier dams `SARP_dams`, a pack made
+  by Build offline pack `NHD_flowlines` and `ABI_dams`. It cannot read the
+  older `nd_offline_pack` (one SQLite file); when that is all it finds, it says so. It also says
+  when a pack is still being built, when not all three parts were unzipped into one folder, and
+  when there is a pack in `~/Downloads`. To look yourself:
+  `find ~ -maxdepth 5 -name "*_flowlines.gpkg"`, then give `--data` the folder above `hydro`.
 * The Mac is on power. The script keeps it awake while it runs.
 * About 3 GB free on the Mac's own disk.
 
@@ -133,7 +144,10 @@ ranked lists:
 
 Expect roughly 450,000 fills in all, most of them low-scoring, and about 300,000 rows in the
 full ranked list (a CSV of about 160 MB: it opens slowly in Excel or Numbers, which is why the
-short list is there). The summary says how many candidates score 0.5 or more. In QGIS the
+short list is there). The summary says how many candidates score 0.5 or more: **work down the
+list to about there.** On the review sheets of 2026-11-16 (Finder 0.7.0 fills), 55 of the 60
+top-scored candidates were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75. If
+more score 0.5 or more than the short list holds, `--top N` makes it longer. In QGIS the
 `candidates` layer is the full ranked list as points; filter it on `rank` for the top ones.
 
 **The ids.** `find_id` is made from the crest point of a fill.
@@ -289,7 +303,7 @@ Not the `tiles` folder.
 | it says | do this |
 |---|---|
 | `the terrain file was not found ... The drive ... is not connected` | plug the SSD in; or give `--dem` |
-| `the ND data pack was not found` | give `--data` with your suite data folder |
+| `the ND data pack was not found` | read the lines under it (older pack, still being built, parts not unzipped, a pack in Downloads); else run `find ~ -maxdepth 5 -name "*_flowlines.gpkg"` and give `--data` the folder above `hydro` |
 | `the DamSafety_Finder plugin was not found` | install the suite, or give `--plugins` with the folder that holds `DamSafety_Finder` |
 | `DamSafety_Finder ... is version 0.5.0; 0.6.0 or later is needed` | update the plugin |
 | `another run (process N ...) is using ...` | one is already running. If you are sure none is, delete `run.lock` in the output folder |
