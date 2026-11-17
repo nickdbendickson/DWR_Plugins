@@ -45,7 +45,8 @@ class Preflight(UnitAlgorithm):
         work = self.parameterAsString(params, "WORK", context)
         if not work:
             raise QgsProcessingException("Work folder: none given")
-        settings = rc.load_settings(self.parameterAsString(params, "SETTINGS", context))
+        settings = rc.load_settings(self.parameterAsString(params, "SETTINGS", context), work=work,
+                                    log=feedback.pushInfo)
         settings["work"] = work
         inc = self.parameterAsEnums(params, "INCLUDE", context) or []
         settings["chain"] = [rc.OPTIONAL_KEYS[i] for i in inc if 0 <= i < len(rc.OPTIONAL_KEYS)]

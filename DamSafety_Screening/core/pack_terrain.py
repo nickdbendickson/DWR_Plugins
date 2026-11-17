@@ -1,10 +1,24 @@
 """Prefer the configured offline pack DEM for screening terrain and larger clips.
 
 The window / chain default used to be USGS 3DEP (terrain_source 0, larger_clips 1), so a
-headless run downloaded fresh clips even when NDSUITE_DATA / NDSUITE_PACK / ~/.ndsuite already
-named a pack that covers the dam. This module reads those existing settings (never a hard-coded
-path), and only falls back to a 3DEP download when the pack is missing or does not cover the
-area. It never writes into the pack or ND_Dam_Suite_Pack.
+headless run downloaded fresh clips even when the suite data folder (QGIS setting
+ndsuite/data_folder, NDSUITE_DATA / NDSUITE_PACK, ~/.ndsuite/config.json) already held a DEM.
+This module reads those existing settings (never a hard-coded path), and only falls back to a
+3DEP download when there is no pack DEM, when it does not cover the dam, or when the settings
+chose 3DEP on purpose.
+
+0.20.3 review fixes (2026-11-17):
+  * the suite helpers are imported from the plugin's own damsuite copy first, so the data
+    folder set in QGIS is found (the absolute import only works outside QGIS);
+  * only <folder>/dem holds the DEM (the convention of damsuite.suitedata.local_dem); a raster at
+    the top of the data folder (NLCD, water counts) is never taken for terrain;
+  * local_dem is a folder in the WORK folder (terrain_pack/) holding one VRT that points at the
+    pack DEM. Tool 2 mosaics every raster under local_dem recursively, so pointing it at
+    <pack>/dem would also mosaic lidar_1m tiles or other rasters kept there;
+  * settings that set terrain_source = 0 (USGS 3DEP) are kept as they are, and
+    offline_pack_terrain = false turns this module off;
+  * the notes are returned in the settings under _terrain_source_notes so the chain can log them.
+It never writes into the pack or ND_Dam_Suite_Pack.
 """
 from __future__ import annotations
 
@@ -12,7 +26,23 @@ import json
 import os
 
 RASTER_EXT = (".tif", ".tiff", ".vrt", ".img")
-TILE_CACHES = ("lidar_1m",)
+DEM_DIR = "dem"
+WRAP_DIR = "terrain_pack"
+WRAP_NAME = "pack_dem.vrt"
+OPT_OUT_KEY = "offline_pack_terrain"       # settings key; false = never switch to the pack
+
+
+def _suitedata():
+    try:
+        from ..damsuite import suitedata as SD        # the plugin's own copy (QGIS)
+        return SD
+    except Exception:                                 # noqa
+        pass
+    try:
+        from damsuite import suitedata as SD          # a script with the plugin folder on sys.path
+        return SD
+    except Exception:                                 # noqa
+        return None
 
 
 def _existing_dir(raw):
@@ -45,18 +75,19 @@ def configured_pack_folders():
         v = _existing_dir(os.environ.get(env, ""))
         if v:
             found.append(v)
-    found.extend(_config_values(
-        (os.path.join("~", ".ndsuite", "config.json"),
-         ("ndsuite/pack_path", "ndsuite/data_folder")),
-    ))
-    try:
-        from damsuite import suitedata as SD
-        for cand in (SD.pack_location(), SD.data_folder(), SD.active_pack()):
-            v = _existing_dir(cand)
+    SD = _suitedata()
+    if SD is not None:
+        for name in ("data_folder", "pack_location", "active_pack"):
+            try:
+                v = _existing_dir(getattr(SD, name)())
+            except Exception:                         # noqa
+                v = ""
             if v:
                 found.append(v)
-    except Exception:
-        pass
+    found.extend(_config_values(
+        (os.path.join("~", ".ndsuite", "config.json"),
+         ("ndsuite/data_folder", "ndsuite/pack_path")),
+    ))
     out, seen = [], set()
     for p in found:
         key = os.path.normcase(os.path.realpath(p))
@@ -67,31 +98,23 @@ def configured_pack_folders():
 
 
 def pack_dem(folder):
-    """A DEM mosaic in <folder>/dem or <folder> itself; lidar_1m tiles are not one DEM."""
+    """The DEM in <folder>/dem: a .vrt first (a mosaic), else the only raster, else ''.
+    Same rule as damsuite.suitedata.local_dem; files directly in <folder> are never used."""
     folder = _existing_dir(folder)
     if not folder:
         return ""
-    candidates = []
-    dem_dir = os.path.join(folder, "dem")
-    if os.path.isdir(dem_dir):
-        candidates.append(dem_dir)
-    candidates.append(folder)
-    files = []
-    for root in candidates:
-        try:
-            names = os.listdir(root)
-        except OSError:
-            continue
-        for name in names:
-            if name.startswith(".") or name.lower() in TILE_CACHES:
-                continue
-            path = os.path.join(root, name)
-            if os.path.isfile(path) and os.path.splitext(name)[1].lower() in RASTER_EXT:
-                files.append(path)
-    if not files:
+    dem_dir = os.path.join(folder, DEM_DIR)
+    try:
+        names = sorted(os.listdir(dem_dir))
+    except OSError:
         return ""
+    files = [os.path.join(dem_dir, n) for n in names
+             if not n.startswith(".") and os.path.splitext(n)[1].lower() in RASTER_EXT
+             and os.path.isfile(os.path.join(dem_dir, n))]
     vrts = [p for p in files if p.lower().endswith(".vrt")]
-    return sorted(vrts or files)[0]
+    if vrts:
+        return vrts[0]
+    return files[0] if len(files) == 1 else ""
 
 
 def find_pack_dem():
@@ -167,13 +190,54 @@ def pack_covers(dem, xy=None, xy_epsg=4326):
     return _point_in_bounds(bounds, xy, xy_epsg)
 
 
-def apply_offline_pack_terrain(settings, xy=None, xy_epsg=4326, log=None):
+def wrap_pack_dem(dem, work):
+    """<work>/terrain_pack/pack_dem.vrt, one VRT that points at the pack DEM, so tool 2 and tool 7
+    mosaic exactly that DEM. Returns the folder, or '' when it cannot be written (no GDAL)."""
+    if not work:
+        return ""
+    folder = os.path.join(work, WRAP_DIR)
+    vrt = os.path.join(folder, WRAP_NAME)
+    src_txt = vrt + ".source"
+    want = os.path.abspath(dem)
+    try:
+        with open(src_txt, encoding="utf-8") as fh:
+            if fh.read().strip() == want and os.path.isfile(vrt):
+                return folder
+    except OSError:
+        pass
+    try:
+        from osgeo import gdal
+    except ImportError:
+        return ""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        ds = gdal.BuildVRT(vrt, [want])
+        if ds is None:
+            return ""
+        ds = None
+        with open(src_txt, "w", encoding="utf-8") as fh:
+            fh.write(want + "\n")
+    except Exception:                                 # noqa
+        return ""
+    return folder
+
+
+def _off(v):
+    return v is False or str(v).strip().lower() in ("false", "no", "0", "off")
+
+
+def apply_offline_pack_terrain(settings, xy=None, xy_epsg=4326, log=None, work=None, explicit=()):
     """Switch 3DEP screening defaults to the configured pack when it exists and covers `xy`.
 
-    If the settings already name a local_dem, larger_clips is set to 2 (local) so growing clips
-    do not download 3DEP. Returns the (same) settings dict and a short source string for logs.
+    `explicit` holds the settings keys the user's settings file / JSON set. terrain_source = 0
+    set there is a choice of USGS 3DEP and is kept; larger_clips set there is kept too.
+    `work` is the work folder, where terrain_pack/pack_dem.vrt is written; without it the
+    settings are left on 3DEP. Returns the same settings dict; the notes are in
+    _terrain_source_notes and the source in _terrain_source_used.
     """
     S = settings if isinstance(settings, dict) else {}
+    explicit = set(explicit or ())
+    work = work or S.get("work") or ""
     notes = []
 
     def _log(msg):
@@ -181,34 +245,57 @@ def apply_offline_pack_terrain(settings, xy=None, xy_epsg=4326, log=None):
         if log:
             log(msg)
 
-    local = (S.get("local_dem") or "").strip()
-    dem, folder = find_pack_dem()
-    if local:
-        if int(S.get("larger_clips") or 0) != 2:
-            S["larger_clips"] = 2
-            _log("terrain: local DEM already set ({}); larger clips use that folder, not a 3DEP download".format(local))
-        else:
-            _log("terrain: local DEM ({})".format(local))
-        S["_terrain_source_used"] = "local_dem:{}".format(local)
+    def _done(used):
+        S["_terrain_source_used"] = used
         S["_terrain_source_notes"] = notes
         return S
 
+    if _off(S.get(OPT_OUT_KEY, True)):
+        _log("terrain: offline pack default is turned off ({} = false); the settings are used as they are"
+             .format(OPT_OUT_KEY))
+        return _done("settings:pack_default_off")
+
+    local = (S.get("local_dem") or "").strip()
+    if local:
+        if int(S.get("larger_clips") or 0) == 1 and "larger_clips" not in explicit:
+            S["larger_clips"] = 2
+            _log("terrain: local DEM already set ({}); larger clips use it too, not a 3DEP download".format(local))
+        else:
+            _log("terrain: local DEM ({}); larger clips {}".format(local, S.get("larger_clips")))
+        return _done("local_dem:{}".format(local))
+
+    if "terrain_source" in explicit and int(S.get("terrain_source") or 0) == 0:
+        _log("terrain: USGS 3DEP download (chosen in the settings: terrain_source = 0)")
+        return _done("3dep:chosen")
+
+    dem, folder = find_pack_dem()
     if not dem:
-        _log("terrain: USGS 3DEP download (no configured offline pack DEM; set NDSUITE_DATA / NDSUITE_PACK or ~/.ndsuite)")
-        S["_terrain_source_used"] = "3dep:no_pack"
-        S["_terrain_source_notes"] = notes
-        return S
+        _log("terrain: USGS 3DEP download (no DEM in <data folder>/dem of a configured offline pack; "
+             "set the suite data folder, NDSUITE_DATA / NDSUITE_PACK or ~/.ndsuite)")
+        return _done("3dep:no_pack")
 
     if not pack_covers(dem, xy, xy_epsg):
-        _log("terrain: USGS 3DEP download (offline pack does not cover the area): {}".format(dem))
-        S["_terrain_source_used"] = "3dep:pack_does_not_cover:{}".format(dem)
-        S["_terrain_source_notes"] = notes
-        return S
+        _log("terrain: USGS 3DEP download (offline pack does not cover the dam): {}".format(dem))
+        return _done("3dep:pack_does_not_cover:{}".format(dem))
 
-    S["local_dem"] = os.path.dirname(os.path.abspath(dem))
+    wrap = wrap_pack_dem(dem, work)
+    if not wrap:
+        _log("terrain: USGS 3DEP download (pack DEM {} found, but {} could not be written in the work "
+             "folder)".format(dem, os.path.join(WRAP_DIR, WRAP_NAME)))
+        return _done("3dep:no_wrapper:{}".format(dem))
+
+    S["local_dem"] = wrap
     S["terrain_source"] = 1
-    S["larger_clips"] = 2
-    _log("terrain: offline pack ({}); larger clips from {}".format(folder, dem))
-    S["_terrain_source_used"] = "offline_pack:{}".format(dem)
-    S["_terrain_source_notes"] = notes
-    return S
+    if "larger_clips" not in explicit:
+        S["larger_clips"] = 2
+    _log("terrain: offline pack DEM {} (from {}), through {}; larger clips {}".format(
+        dem, folder, os.path.join(wrap, WRAP_NAME), S.get("larger_clips")))
+    return _done("offline_pack:{}".format(dem))
+
+
+def pop_notes(settings):
+    """The notes apply_offline_pack_terrain left in `settings`, removed from it."""
+    if not isinstance(settings, dict):
+        return []
+    settings.pop("_terrain_source_used", None)
+    return list(settings.pop("_terrain_source_notes", None) or [])
