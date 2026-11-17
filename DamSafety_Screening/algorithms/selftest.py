@@ -3,7 +3,7 @@ import os
 import platform
 import tempfile
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterBoolean, QgsProcessingParameterNumber,
+from qgis.core import (QgsProcessingParameterBoolean, QgsProcessingParameterNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination,
                        QgsProcessingParameterFile,
                        QgsProcessingParameterFolderDestination, QgsProcessingException)

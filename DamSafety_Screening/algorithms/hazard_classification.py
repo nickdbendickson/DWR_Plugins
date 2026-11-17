@@ -4,7 +4,7 @@ The rules are core/nd_hazard.py (shared, byte-identical, with ND Dam Breach Runn
 samples the rasters, converts m and m/s to ft and ft/s (core/hazard.py adapter) and writes
 the result per dam."""
 import numpy as np
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterField, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterFeatureSink,
                        QgsProcessingParameterEnum, QgsProcessingParameterString,

@@ -2,7 +2,7 @@
 import os
 
 from osgeo import gdal, osr
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterEnum, QgsProcessingParameterNumber,
                        QgsProcessingParameterFolderDestination,
                        QgsProcessingParameterFile, QgsProcessingException,
