@@ -184,7 +184,7 @@ jobs:
           ls -la "$RUNNER_TEMP/work.tar.zst"
       - name: Keep it
         if: steps.run.outputs.done == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lake-delhi-2010-anuga-work
           path: ${{ runner.temp }}/work.tar.zst
@@ -200,7 +200,7 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Keep the score, the report and the logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lake-delhi-2010-anuga-leg${{ inputs.leg }}
           if-no-files-found: warn
