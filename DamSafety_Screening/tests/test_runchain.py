@@ -6,7 +6,6 @@ sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, HERE)
 from qgis.core import QgsProcessingContext, QgsProcessingFeedback, QgsProcessingException, QgsGeometry, QgsPointXY, make_layer  # noqa: E402
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from qgis import processing  # noqa: E402
 import nd_dam_screening as pkg  # noqa: E402
 from nd_dam_screening.core import workflow as wf  # noqa: E402

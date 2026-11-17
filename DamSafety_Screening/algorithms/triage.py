@@ -3,7 +3,7 @@ import os
 import random
 
 import numpy as np
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterNumber,
                        QgsProcessingParameterField, QgsProcessingParameterString,
                        QgsProcessingParameterFeatureSink, QgsProcessingParameterFolderDestination,

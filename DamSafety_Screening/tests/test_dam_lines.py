@@ -2,7 +2,7 @@
 
 Set DAM_LINES_GPKG and DAMS_DBF; skipped if either is missing.  Uses only sqlite3.
 """
-import os, re, sqlite3, sys
+import os, sqlite3, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.insert(0, os.path.dirname(__file__))
 

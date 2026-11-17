@@ -214,3 +214,58 @@ def grid_of(fn, bounds, cell):
     nx, ny = int(round((xmax - xmin) / cell)), int(round((ymax - ymin) / cell))
     X, Y = np.meshgrid(xmin + (np.arange(nx) + 0.5) * cell, ymax - (np.arange(ny) + 0.5) * cell)
     return Grid(fn(X, Y), xmin, ymax, cell)
+
+
+# ---- 3.20.12: the downstream side of a dam line (tests/test_inflow_side.py) ----------------
+SIDE_LINE = [(0.0, -100.0), (0.0, 100.0)]  # the dam line along x = 0; its chord normal (left of
+                                          # A -> B) points west, upstream; downstream is east
+
+
+def inflow_side_dam(X, Y, pool_drop_h=0.45, floor_drop_h=1.0, berm_drop_h=None, pit=False,
+                    ds_pond=None, ds_water=False, wall=0.03, road=None, berm_half_m=110.0,
+                    tail_water=None):
+    """A dam along x = 0 (crest CW wide, 3:1 faces) across a wide coulee (side slopes `wall`)
+    running east, its floor floor_drop_h x H below the top, level upstream (a full reservoir
+    drains at its own level, as a hydro-flattened one does through its hydro-enforced outlet: no
+    fill, so pool_mask does not see it) and falling DOWN below the dam. The reservoir reaches
+    both ends of SIDE_LINE.
+      pool_drop_h: the reservoir's flat water, this x H below the top (None: a dry reservoir,
+          the bed rising UP upstream, a closed basin up to the crest);
+      berm_drop_h: a wide downstream berm this x H below the top out to x = 70 m, then 2:1 down
+          to the floor (the downstream ground 20-80 m out higher than the reservoir water),
+          across |y| < berm_half_m;
+      pit: a closed borrow pit 2.5 m deep, 24 m across, at (45, 0) (a pool below the dam);
+      ds_pond: (drop_h, x, r): a hydro-flattened pond this x H below the top, a disc of radius
+          r at (x, 0);
+      ds_water: flat water at the reservoir's level below the dam too (a causeway, DWR-3161);
+      road: (x, drop_h): a road embankment across the coulee at x, its top this x H below the
+          top of dam, 8 m wide with 2:1 sides: a dry closed low between the dam and the road
+          (DWR-2791), which pool_mask takes as a pool;
+      tail_water: drop_h: the low between the dam and the road filled with flat water this x H
+          below the top (a tailwater pond held by the road)."""
+    bed0 = TOP - floor_drop_h * H
+    up = 0.0 if pool_drop_h is not None else UP
+    bed = bed0 - np.where(X > 0, DOWN * X, up * X)
+    ch = np.where(np.abs(Y) < 6.0, 0.4 * (1 - np.abs(Y) / 6.0), 0.0)
+    g = bed + wall * np.abs(Y) - ch + texture(X, Y)
+    if berm_drop_h is not None:
+        top_b = TOP - berm_drop_h * H
+        b = np.where(X <= 70.0, top_b, top_b - (X - 70.0) / 2.0) + texture(X, Y)
+        g = np.where((X > 0) & (np.abs(Y) < berm_half_m), np.maximum(g, b), g)
+    if pit:
+        g = np.where(np.hypot(X - 45.0, Y) < 12.0, g - 2.5, g)
+    if ds_pond is not None:
+        d, px, pr = ds_pond
+        g = np.where(np.hypot(X - px, Y) < pr, TOP - d * H, g)
+    if road is not None:
+        rx, rd = road
+        g = np.maximum(g, TOP - rd * H - 2.0 * np.maximum(np.abs(X - rx) - 4.0, 0.0))
+        if tail_water is not None:
+            lvl = TOP - tail_water * H
+            g = np.where((X > 0) & (X < rx) & (g < lvl) & (embankment(X, Y) < lvl), lvl, g)
+    if pool_drop_h is not None:
+        level = TOP - pool_drop_h * H
+        wet = (X < 0) | ds_water
+        g = np.where(wet & (g < level), level, g)
+    emb = embankment(X, Y)
+    return np.where(np.abs(Y) <= floor_drop_h * H / wall + 20.0, np.maximum(g, emb), g)

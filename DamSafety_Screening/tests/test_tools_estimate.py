@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
                        make_layer)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from osgeo import gdal  # noqa: E402
 from nd_dam_screening.core import estimate as est, domain as dm, runner as rn  # noqa: E402
 from nd_dam_screening.core.fv_engine import Engine  # noqa: E402

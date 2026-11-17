@@ -764,8 +764,10 @@ class AddEvidence(_Base):
                 "<tt>YEAR | file or ImageServer address | green=G nir=N [red=R blue=B]</tt>. "
                 + brand.EVIDENCE_IMAGES_HELP + "<br><br>" + getattr(brand, "BELOW_HELP", "")
                 + " When the fills carry a score, each gets <tt>review_order</tt> (1 = look at this "
-                "first): by score in bands 0.1 wide, then by what is below (<tt>conseq</tt>), then by "
-                "the score. The CSV is written in that order; the layer keeps the fills' own order.")
+                "first): by score in bands 0.1 wide, then water in 2 or more image years first, then by what "
+                "is below (<tt>conseq</tt>), then by the score. The CSV is written in that order; the layer "
+                "keeps the fills' own order. Work down the list to a score of about 0.5: on the North Dakota "
+                "review sheets the dams with no pool in the LiDAR scored 0.5 to 0.75.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterVectorLayer(

@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 from osgeo import gdal
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterEnum,
                        QgsProcessingParameterNumber, QgsProcessingParameterString,
                        QgsProcessingParameterRasterLayer, QgsProcessingParameterFolderDestination,

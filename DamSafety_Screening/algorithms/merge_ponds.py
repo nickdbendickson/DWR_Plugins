@@ -2,7 +2,7 @@
 set of layers for steps 5-10 (core/merge.py). The Simple tab's "Both" runs it after 4 and 16."""
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsProcessingException)
+from qgis.core import (QgsProcessingParameterFile, QgsProcessingException)
 
 from ..core import merge as mg
 from ..compat import FILE_FOLDER

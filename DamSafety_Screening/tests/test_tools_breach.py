@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
                        make_layer)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from nd_dam_screening.core import breach_hydro as bh  # noqa: E402
 from nd_dam_screening.algorithms.breach_hydrograph import BreachHydrograph, PARAM_SOURCES  # noqa: E402
 from nd_dam_screening.algorithms.sensitivity import VARIANTS  # noqa: E402

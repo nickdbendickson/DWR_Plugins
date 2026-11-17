@@ -10,7 +10,7 @@ type.
 import json
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterEnum,
+from qgis.core import (QgsProcessingParameterEnum,
                        QgsProcessingParameterString, QgsProcessingParameterNumber,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterBoolean,
                        QgsProcessingException, QgsProcessingOutputFile, QgsProcessingParameterFile)

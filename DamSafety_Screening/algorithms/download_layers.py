@@ -1,6 +1,6 @@
 """Download every vector layer the three plugins need, plus the raster server list."""
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingException,
+from qgis.core import (QgsProcessingException,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination)
 
 from ..core import offline

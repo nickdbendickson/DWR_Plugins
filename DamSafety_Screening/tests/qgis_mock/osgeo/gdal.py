@@ -1,6 +1,5 @@
 """Test double for the small part of GDAL the plugin uses (single-band float rasters,
 one CRS).  Rasters are stored as .npz files at the given path."""
-import os
 
 import numpy as np
 

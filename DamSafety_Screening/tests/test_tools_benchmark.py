@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcessingFeedback,  # noqa: E402
                        QgsProcessingException, make_layer)
-from qgis.PyQt.QtCore import QVariant  # noqa: E402
 from nd_dam_screening.core import benchmark as bm, gridutil as gu  # noqa: E402
 from nd_dam_screening.algorithms import _common as cm  # noqa: E402
 from nd_dam_screening.algorithms.compare_reference import CompareReference  # noqa: E402

@@ -3,7 +3,7 @@ import csv
 import datetime
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination,
                        QgsProcessingParameterFeatureSink, QgsFields, QgsField,

@@ -3,7 +3,7 @@
 the same list."""
 import os
 
-from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsProcessingParameterString,
+from qgis.core import (QgsProcessingParameterFile, QgsProcessingParameterString,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination,
                        QgsProcessingException)
 

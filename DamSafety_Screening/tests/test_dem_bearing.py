@@ -2,7 +2,6 @@
 a bearing shifts the same-size box downstream so the dam sits near the upstream edge, with the
 rest reaching the way the flood goes. Run: python3 tests/test_dem_bearing.py (uses the real osr
 when present, else the qgis_mock stand-in - the directional shift is the same either way)."""
-import math
 import os
 import sys
 
