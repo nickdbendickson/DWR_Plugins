@@ -724,6 +724,33 @@ def installer_script_parses_and_documents_itself():
 
 
 @test
+def installer_default_ini_is_the_one_qgis_reads_on_macos():
+    """3.20.7: QGIS on macOS keeps a profile's settings in qgis.org/QGIS3.ini (Qt's organisation-
+    domain folder). Without --ini the installer wrote QGIS/QGIS3.ini, which QGIS on a Mac never
+    reads. A stand-in `uname` says Darwin; elsewhere the folder stays QGIS/."""
+    if not bash_available():
+        print("   (skipped: no bash)")
+        return
+    for system, sub in (("Darwin", "qgis.org"), ("Linux", "QGIS")):
+        with Tmp() as d:
+            home = os.path.join(d, "home")
+            prof = os.path.join(home, "Library", "Application Support", "QGIS", "QGIS3", "profiles",
+                                "default", sub)
+            os.makedirs(prof)
+            bindir = os.path.join(d, "fakebin")
+            make_exe(os.path.join(bindir, "uname"), "#!/bin/sh\necho %s\n" % system)
+            lf = make_exe(os.path.join(d, "bin", "lisflood"))
+            an = make_exe(os.path.join(d, "env", "bin", "python"))
+            code, out, err = sh(["--write-settings-only", "--lisflood-exe", lf, "--anuga-python", an,
+                                 "--prefix", os.path.join(d, "prefix")],
+                                env={"HOME": home}, path_prepend=bindir)
+            assert code == 0, (system, out, err)
+            ini = os.path.join(prof, "QGIS3.ini")
+            text = open(ini).read()
+            assert KEY_LF + "=" + lf in text and KEY_AN + "=" + an in text, (system, text)
+
+
+@test
 def installer_writes_settings_idempotently():
     if not bash_available():
         print("   (skipped: no bash)")

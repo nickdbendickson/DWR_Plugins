@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-# rag_query.py v2.4 — query the RAG store, streaming output (stdlib only; numpy if present)
+# rag_query.py v2.5 — query the RAG store, streaming output (stdlib only; numpy if present)
 #
 #   rag_query.py "question"            one question, answered from the indexed documents
 #   rag_query.py -c standards "..."    from one collection
 #   rag_query.py --chat                a conversation: every question is looked up first
+#   rag_query.py runs ...              the run results database (run_results.py: heim runs)
 #
+# v2.5: dam-breach run results. `heim runs add FOLDER` reads runs into ~/local-ai/runs.db
+#   (run_results.py) and `heim runs ...` is passed to it. A question that names a dam in that
+#   database and asks for a result (depth, velocity, arrival, peak flow, a structure, ...) is
+#   answered from its tables, not from passages: a passage search can hand the model the
+#   neighbour's row or a rounded number, a SELECT cannot. `heim add <run folder>` and a run
+#   folder dragged into heim-chat go to the run database too.
 # v2.4: `heim doctor`, `heim add FILE ...` and `heim chat` do what `heim-doctor`, `heim-add`
 #   and `heim-chat` do. Vor takes its commands as words (`vor doctor`), Heim took them only
 #   as separate hyphenated commands, so `heim doctor` put the one word "doctor" to the model
@@ -276,6 +283,16 @@ def chat(coll, top_k, ask=input):
         if not q:
             break
         drop = dropped_paths(q)
+        mod = runs_module() if drop else None
+        if drop and mod is not None and all(mod.has_runs(p) for p in drop):
+            try:
+                n = mod.add(drop)
+            except Exception as e:
+                print("not added: %s" % e)
+                n = 0
+            if n:
+                print("Ready: ask about it (name the dam, e.g. 'peak flow at DWR-2801').")
+            continue
         if drop:
             n = add_dropped(drop)
             store.load()
@@ -287,6 +304,12 @@ def chat(coll, top_k, ask=input):
             continue
         if store.changed():                 # heim-add or heim-index ran in another window
             store.load()
+        dams = run_question(q)
+        if dams:
+            ans = answer_from_runs(q, dams)
+            if ans:
+                earlier = (q, ans)
+            continue
         try:
             hits = store.search([q] + ([earlier[0] + "\n" + q] if earlier else []), top_k)
         except Exception as e:
@@ -309,6 +332,52 @@ def chat(coll, top_k, ask=input):
             earlier = (q, ans.strip())
 
 
+RUN_WORDS = ("depth", "deep", "velocity", "fast", "arrival", "arrive", "peak", "discharge", "flow", "cfs",
+             "wse", "water surface", "elevation", "structure", "house", "home", "building", "address",
+             "road", "rail", "bridge", "culvert", "flooded", "inundat", "breach", "hydrograph", "storage",
+             "volume", "hazard class", "how long", "when does", "time to")
+_RUNS = []
+
+
+def runs_module():
+    """run_results.py beside this file (None when it is not there: an older install)."""
+    if _RUNS:
+        return _RUNS[0]
+    import importlib.util
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_results.py")
+    mod = None
+    if os.path.isfile(src):
+        spec = importlib.util.spec_from_file_location("run_results_for_heim", src)
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            mod = None
+    _RUNS.append(mod)
+    return mod
+
+
+def run_question(q):
+    """The dams of the run database a question names, when it also asks for a result; else []."""
+    low = q.lower()
+    if not any(w in low for w in RUN_WORDS):
+        return []
+    mod = runs_module()
+    if mod is None:
+        return []
+    try:
+        return mod.dams_named_in(q)
+    except Exception:
+        return []
+
+
+def answer_from_runs(q, dams):
+    print("Answered from the run results (%s), not from documents: the numbers are the database's."
+          % ", ".join(dams))
+    print("-" * 70)
+    return runs_module().ask(q)
+
+
 def command_word(argv):
     """`heim doctor`, `heim add FILE ...`, `heim chat`: the arguments to run instead, or None
     when argv is a question.
@@ -318,9 +387,11 @@ def command_word(argv):
     flags, `chat` only alone, and `add` only when every word after it is a file or folder that
     exists (or there is none, which gets the usage line). "add a culvert to the run?" is a
     question; "doctor" on its own is not one."""
-    if not argv or argv[0] not in ("doctor", "add", "chat"):
+    if not argv or argv[0] not in ("doctor", "add", "chat", "runs"):
         return None
     word, rest = argv[0], argv[1:]
+    if word == "runs":
+        return ("runs", rest)
     if word == "doctor" and all(r.startswith("-") for r in rest):
         return ("index", ["--doctor"] + rest)
     if word == "chat" and not rest:
@@ -329,14 +400,18 @@ def command_word(argv):
         if not rest:
             sys.exit("usage: heim add FILE ...   (a file dragged into the Terminal window gives its path)")
         if all(os.path.exists(os.path.expanduser(r)) for r in rest):
+            mod = runs_module()
+            if mod is not None and all(mod.has_runs(os.path.expanduser(r)) for r in rest):
+                return ("runs", ["add"] + rest)      # run folders: numbers into the run database
             return ("index", ["--add"] + rest)
     return None
 
 
 def main():
     word = command_word(sys.argv[1:])
-    if word and word[0] == "index":
-        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rag_index.py")
+    if word and word[0] in ("index", "runs"):
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "rag_index.py" if word[0] == "index" else "run_results.py")
         if not os.path.exists(tool):
             sys.exit("ERROR: %s is missing; re-run the Heim installer" % tool)
         sys.stdout.flush()
@@ -345,7 +420,8 @@ def main():
         sys.argv[1:] = word[1]
     ap = argparse.ArgumentParser(description="Ask Heim a question, answered from the indexed documents.",
                                  epilog="Also: heim doctor (is Heim reading what you think it is), "
-                                        "heim add FILE ... (index a file), heim chat (a conversation).")
+                                        "heim add FILE ... (index a file), heim chat (a conversation), "
+                                        "heim runs ... (dam-breach run results: heim runs --help).")
     ap.add_argument("-c", "--collection", default="all",
                     help="read one collection only (default: all of them)")
     ap.add_argument("-k", "--top-k", type=int, default=TOP_K, help="passages handed to the model per question")
@@ -361,6 +437,10 @@ def main():
     q = " ".join(args.question).strip()
     if not q:
         sys.exit("no question given")
+    dams = run_question(q)
+    if dams:
+        answer_from_runs(q, dams)
+        return
     hits = retrieve(q, args.collection, args.top_k)
     print("Top %d context hits:" % len(hits))
     for s, c, p, i, _ in hits:

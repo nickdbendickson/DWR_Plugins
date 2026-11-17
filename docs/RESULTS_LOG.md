@@ -2,11 +2,19 @@
 
 Absaraka = DWR-2801. Unless noted, these runs used the old trusted baseline settings with NDBREACH_DEM_RESAMPLE=average. Source: `/workspace/dwr_test/pr12_15_progress.md` on the shared box.
 
+## Dam point check: Runner 3.20.11 can move the dam point (added 2026-11-16)
+From Runner 3.20.11 a dam with no dam line, crest line, breach inflow point or top of dam is checked on the DEM first. By default (Warn only) the point is kept and a REVIEW warning may be added. With DAM_POINT_CHECK = Move clear cases, when the point is clearly off the dam and every gate passes, the run uses the embankment found on the DEM as the dam line and the dam point moves to its mid-crest (`dam_point_check.outcome` = `moved` in `run_report.json`, `Dam_Point_Check` in the batch summary). The top of dam, the inflow, the breach and the flood of such a dam can differ from an earlier run. A dam with a dam line, crest line or top of dam is unchanged. To compare with a result in this log, run with DAM_POINT_CHECK = Off (or `NDBREACH_DAM_POINT_CHECK=off`), and turn skip-done off so a dam that finished before is run again.
+
+Validation on 2026-11-17 (mode Move, 3DEP 2 m tiles, 10 m model cell):
+- **Batch-44:** 13 moved, 18 review, 13 kept, 0 skipped. Every moved point is within 3.6 m of the dam's DWR line (DWR-3034 1.5 m; DWR-2865, whose DWR point is on the water 38 m off the line, 1.4 m). None of the 6 dams the screen kept moved; DWR-3161 (road fill over backwater) is a note only. 12 of the screen's 35 "move" dams moved.
+- **Hold-out** (81 Intact DWR dams outside the batch, 27 per height band; 242 cases: A = the DWR point, Bi = on the pond 60-150 m out, Bii = 40-80 m past a line end, Biii = 60-120 m downstream; neighbours = DWR points within 3 km with heights): 43 moves, 41 within 7.1 m of the dam's own DWR line and none onto a neighbour's line; 2 (DWR-2713 Bi and Biii) 30 m past the end of its line, onto a side dike of the same pond. Correct moves by band (<15 / 15-30 / >30 ft): A 0/0/2, Bi 2/6/9, Bii 2/6/5, Biii 1/4/4. Correctly placed points with a REVIEW warning: 14 of 64 (was 17 before the review changes). Without neighbours: the same.
+- Hence the default **Warn only**. Not yet run on the 1 m statewide DEM.
+
 ## Arrival depth: 1 ft before #131, 0.1 ft after (added 2026-10-21)
 #131 (merged as 732f597; Runner 3.10.53, Hazard 2.18.52) changed the Runner's default arrival depth (`ARRIVAL_FT`, `settings.arrival_depth_ft` in `run_report.json`) from 1 ft to 0.1 ft. See USER_GUIDE.md, "Arrival depth". Since then:
 - `Arrival Time.tif` starts the clock at 0.1 ft;
 - `flooded_acres_over_arrival_depth`, `receptors_flooded`, the receptor velocities and the in-run LISFLOOD-FP vs ANUGA `comparison` are counted at 0.1 ft;
-- with an automatic run length, LISFLOOD-FP is lengthened more often (the "still moving" test uses the latest arrival).
+- with an automatic run length, LISFLOOD-FP is lengthened more often (the "still moving" test uses the latest arrival). Since Runner 3.20.9 the test is area-based (late-flooded area at least 1% of the flooded area and 0.25 ac, or 25 ac; at most 4 extensions), so the clock is lengthened less often than in 3.20.0-3.20.8.
 
 **Before (1 ft): every result in this log, and every result in the open docs PRs.** Checked `settings.arrival_depth_ft` = 1.0 in the run reports of:
 - the 10-15 runs;

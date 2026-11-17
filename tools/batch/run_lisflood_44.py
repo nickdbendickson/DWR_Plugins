@@ -25,6 +25,12 @@ Usage (in Terminal, after install_all.zsh; any Python 3 works):
   python3 run_lisflood_44.py --only DWR-2801,DWR-3034
   python3 run_lisflood_44.py --dry-run            # print the commands, run nothing
 A dam that finished before is skipped (damchain keeps a state file); --redo runs it again.
+
+When the data folder has no offline pack, one is built first for the area of the dams about
+to run (get_offline_pack.py: no QGIS window; minutes for a few dams, hours for all 44, which
+take in the whole State). --no-get-pack leaves that out. Without a pack Get data downloads
+most layers from the servers, but Screening then stops at its check: the DWR dam lines come
+only from the pack or from your own DWR files in the data folder's dwr/.
 """
 import argparse
 import csv
@@ -38,6 +44,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from batch_common import chain_status, find_damchain, say, start_watcher     # noqa: E402
+from get_offline_pack import ensure_pack                                     # noqa: E402
 
 SEED_COLS = ["dam_id", "name", "lat", "lon", "height_ft", "storage_acft", "dam_length_ft",
              "dwr_structure_id", "nid_id", "existing_hazard_class"]
@@ -143,6 +150,9 @@ def main():
                          "with OVERWRITE=true so an earlier dam folder re-cuts its terrain. NOTE: "
                          "the model grid becomes the DEM's CRS. use_local_terrain.sh checks the "
                          "VRT first and explains the consequences.")
+    ap.add_argument("--no-get-pack", action="store_true",
+                    help="when there is no offline pack, do not build one first (Screening then "
+                         "stops at its check unless your DWR files are in the data folder's dwr/)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     args.dams_folder = os.path.abspath(os.path.expanduser(args.dams_folder))
@@ -152,11 +162,9 @@ def main():
         if not os.path.exists(args.dem):
             sys.exit("--dem %s does not exist (is the drive mounted?)" % args.dem)
         say("DEM: %s (keep the drive mounted for the whole run)" % args.dem)
-    if not args.dry_run and not os.path.isdir(os.path.join(args.data_folder, "ND_Dam_Suite_Pack")):
-        say("WARNING: no offline pack at %s/ND_Dam_Suite_Pack. Screening needs it (damchain pack "
-            "--set nd shows how to build it)." % args.data_folder)
     py, tool = find_damchain()
     rows = read_dams(args.csv, args.only)
+    ensure_pack(args.data_folder, rows, say=say, get=not args.no_get_pack, dry_run=args.dry_run)
     logdir = os.path.join(args.dams_folder, "_batch44_logs", time.strftime("%Y%m%d_%H%M%S"))
     if not args.dry_run:                    # a dry run prints; it creates nothing
         os.makedirs(logdir, exist_ok=True)

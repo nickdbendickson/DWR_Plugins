@@ -100,3 +100,71 @@ def test_match_count_text():
     assert "only the first 400" in SD.match_count_text(rows, "Cass")
     assert SD.match_count_text([{"name": "a"}], "", "lake") == '1 dam matches ("lake")'
     assert SD.match_count_text([{"name": "x", "error": True}]).startswith("No dam matches")
+
+
+def test_dwr_record_fills_the_embankment_but_not_its_elevations(tmp_path):
+    """3.20.8 (Nick, 2026-11-16): a DWR record's crest width, slopes and crest length fill the
+    page; its elevations (NGVD 29 or a local datum) never do, so the top of dam and the breach
+    bottom stay blank and come from the DEM. A text such as "2.5;3" (two slopes) is left blank."""
+    folder = tmp_path / "suite"
+    folder.mkdir()
+    path = str(folder / "dwr_dams.gpkg")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT)")
+    con.execute("CREATE TABLE gpkg_geometry_columns (table_name TEXT, column_name TEXT, "
+                "geometry_type_name TEXT)")
+    con.execute("INSERT INTO gpkg_contents VALUES ('dwr_dams', 'features')")
+    con.execute("INSERT INTO gpkg_geometry_columns VALUES ('dwr_dams', 'geom', 'POINT')")
+    con.execute("CREATE TABLE dwr_dams (fid INTEGER PRIMARY KEY, geom BLOB, dam_name TEXT, "
+                "structure_id TEXT, county TEXT, max_dam_height REAL, max_pool_vol REAL, "
+                "max_pool_area REAL, max_pool_elev REAL, streambed_elev REAL, top_width REAL, "
+                "upstream_slope TEXT, downstream_slope TEXT, dam_length REAL, "
+                "vertical_datum TEXT, longitude REAL, latitude REAL)")
+    con.executemany(
+        "INSERT INTO dwr_dams (dam_name, structure_id, county, max_dam_height, max_pool_vol, "
+        "max_pool_area, max_pool_elev, streambed_elev, top_width, upstream_slope, "
+        "downstream_slope, dam_length, vertical_datum, longitude, latitude) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [("Swan Buffalo Detention Dam 12", "2801", "Cass", 27.5, 1615.5, 154.5, 1070.0, 1042.5,
+          12.0, "3.5", "2.5", 1700.0, "NGVD 29", -97.39113, 46.98337),
+         ("Two Slopes", "2802", "Cass", 20.0, 100.0, 10.0, 130.0, 100.0, 0.0, "2.5;3", "",
+          0.0, "Local", -97.4, 46.9)])
+    con.commit()
+    con.close()
+    rows = {r["id"]: r for r in SD.dams(path + "|layername=dwr_dams", county="Cass")}
+    r = rows["2801"]
+    assert (r["crest_width"], r["us_slope"], r["ds_slope"], r["crest_length"]) == \
+        (12.0, 3.5, 2.5, 1700.0)
+    r = rows["2802"]
+    assert (r["crest_width"], r["us_slope"], r["ds_slope"], r["crest_length"]) == \
+        (None, None, None, None)
+
+    w = WZ._classes()["Wizard"](None)
+    w.answers["dams_folder"] = str(tmp_path / "Dams")
+    w.found = {"dwr": path + "|layername=dwr_dams"}
+    w.show()
+    _pump()
+    try:
+        page = w.currentPage()
+        page.county.setCurrentIndex(page.county.findData("Cass"))
+        _pump()
+        page.feature.setCurrentIndex([page.feature.itemText(i) for i in
+                                      range(page.feature.count())].index(
+                                          "Swan Buffalo Detention Dam 12 (2801)"))
+        _pump()
+        got = dict((p, page.value_edit[p].text()) for p in page.value_edit)
+        assert (got["CREST_WIDTH"], got["US_SLOPE"], got["DS_SLOPE"], got["CREST_LENGTH"]) == \
+            ("12", "3.5", "2.5", "1700")
+        assert (got["HEIGHT_FT"], got["STORAGE_ACFT"], got["AREA_AC"]) == ("27.5", "1615.5", "154.5")
+        assert got["TOP_FT"] == "" and got["BOTTOM_FT"] == "" and got["PMF_FT"] == ""
+        assert page.mark["CREST_WIDTH"].text() == page.mark["HEIGHT_FT"].text()   # both "ok"
+        assert page.validatePage()
+        # another dam: nothing of the first dam's embankment is left behind
+        page.feature.setCurrentIndex([page.feature.itemText(i) for i in
+                                      range(page.feature.count())].index("Two Slopes (2802)"))
+        _pump()
+        assert page.value_edit["CREST_WIDTH"].text() == "" and page.value_edit["US_SLOPE"].text() == ""
+    finally:
+        w.hide()
+        w.deleteLater()
+        _pump()

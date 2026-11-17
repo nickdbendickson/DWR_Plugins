@@ -550,6 +550,15 @@ class GdalTerrain:
         # a GdalTerrain whose resample or unit is changed after a read never gets an old window
         return self.cache.read(bounds, cell, self.resample, float(self.z_to_m), self.src_nodata)
 
+    def read_average(self, bounds, cell):
+        """3.20.11 (the dam point check, core/dam_point_check.read_grids): the DEM window with
+        GDAL average resampling whatever the run's resample method, so a bilinear, cubic or
+        lanczos choice never changes the flat-water test or the crest heights. Not kept in the
+        run's window cache (the check's 2.2 km windows would push the run's own out)."""
+        g = self._warp(self.dem_path, bounds, cell, "average", self.src_nodata)
+        g.data = g.data * self.z_to_m
+        return g
+
     def manning(self, bounds, cell):
         if not self.manning_path:
             return None

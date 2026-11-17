@@ -11,6 +11,7 @@ folder is now the copy to use, and `tools/mac/use_local_terrain.sh` looks here f
 | `run_settings_study_44.py` | The 44 dams through the whole DamSafety chain once per model setting (two cell sizes, two engines), and one page that says for which dams the class depends on the setting. |
 | `run_county.py` | Every DWR dam or dugout in one county, several, or the State, in either of those two modes. |
 | `batch_watch.py` | Watches a run folder and writes findings as dams finish. Rules only unless you ask for the model. |
+| `get_offline_pack.py` | Gets the offline pack without opening QGIS: the whole State, the area of the dams you name, or a pack built before from its zip files. The run scripts call it when they find no pack. |
 | `collect_results_44.py` | Packs what a finished 44-dam batch left behind (four result rasters, `dam.json`, reports per dam) into small zip files to hand on. Reads only. |
 | `batch_common.py` | What the three share: finding `dam_chain.py`, reading a dam's state, the data files, the watcher. |
 | `dams_44.csv` | The 44 dams: DWR id, name, position, height, storage, length, NID id, hazard class (DWR Dams layer, 2026-11-06). |
@@ -40,8 +41,8 @@ directly. When one is missing the script stops and lists where it looked.
     python3 run_lisflood_44.py --watch
     python3 run_lisflood_44.py --parallel 4 --only DWR-2801,DWR-3034
 
-Dam folders go in `~/ND_Dams/DWR-xxxx`. It needs the offline pack in
-`~/ND_Suite_Data/ND_Dam_Suite_Pack`.
+Dam folders go in `~/ND_Dams/DWR-xxxx`. It reads the offline pack in
+`~/ND_Suite_Data/ND_Dam_Suite_Pack`, and builds one first when there is none (next section).
 
 | Setting | Value | Why |
 |---|---|---|
@@ -66,6 +67,44 @@ dams finishing together can each rewrite.
 the Runner's `DEM` parameter together with `OVERWRITE=true` for Get data, without which a dam
 folder from an earlier run keeps the terrain it recorded. The model grid takes the DEM's CRS.
 `tools/mac/use_local_terrain.sh` checks the VRT first.
+
+## The offline pack, without QGIS
+
+    python3 get_offline_pack.py --check
+    python3 get_offline_pack.py
+    python3 get_offline_pack.py --dams dams_44.csv --only DWR-3034,DWR-4031
+    python3 get_offline_pack.py --bbox=-101.2,46.8,-100.8,47.2
+    python3 get_offline_pack.py --zip part1.zip part2.zip part3.zip
+
+The plugins read their map layers from `<data folder>/ND_Dam_Suite_Pack`. The pack builder in
+DamSafety Data (and the one in the ND Data Updater) needs no QGIS; this script finds it, in
+this checkout or in a QGIS profile, and runs it with a Python that has GDAL (the `ndqgis` env).
+With no area it builds the whole State: hours and a few gigabytes. With `--dams` it builds one
+box that takes in 20 miles around each dam named, which is more than the 15 miles Get data
+reads; dams that take in most of the State are built as the whole State. A build that stops is
+picked up by the same command, and a layer whose server does not answer is listed and left
+out: `--update` fetches what is missing. The work folder beside the pack
+(`ND_Dam_Suite_Pack_build`) holds national downloads and is several hundred megabytes even for
+a small area; it can be deleted once the pack is built.
+
+`--zip` unpacks a pack that was built before, from files or https links, and only when every
+entry belongs to an `ND_Dam_Suite_Pack` folder and a manifest is among them.
+
+**A pack that is there is never replaced or written into by this script.** Asked for an area
+the pack does not take in, it says so and stops.
+
+`run_lisflood_44.py` and `run_county.py` (LISFLOOD-FP mode) call it before their first dam when
+the data folder has no pack, for the area of the dams about to run, and go on with the run
+whether or not the build worked. `--no-get-pack`, or `BATCH_GET_PACK=0` in the environment,
+leaves that out.
+
+**What a run without a pack comes to** (tried in QGIS 3.34 with the ND 1.30 plugins on DWR-3034,
+2026-11-13): Get data wrote twelve layers around the dam from the servers, terrain and land
+cover among them, and Screening then stopped at its check on "DWR dam lines" and "Water
+bodies". The DWR dam lines have no server to come from: they are in the pack, or in your own
+DWR files in the data folder's `dwr/`. The NSI structure points and the lifeline facilities
+also come only from the pack. So the pack is not optional for the full chain, which is why the
+run scripts build it.
 
 ## Handing on the results
 

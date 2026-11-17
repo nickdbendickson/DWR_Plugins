@@ -98,6 +98,22 @@ DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file":
 CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
 # 3.12.0: the ELEV_DATUM enum (algorithms.ELEV_DATUMS): the source datum of the dam elevations
 ELEV_DATUM_CHOICES = ("auto", "NAVD88", "NGVD29", "local")
+# 3.20.11: the DAM_POINT_CHECK enum (algorithms.DAM_POINT_CHECK_MODES)
+DAM_POINT_CHECK_CHOICES = ("off", "warn", "move")
+DAM_POINT_CHECK_DEFAULT = "warn"        # core/dam_point_check.DEFAULT_MODE
+
+
+def dam_point_check_choice(value):
+    """A saved dam_point_check value (a mode, or False / True from a checkbox) as a choice;
+    missing or unknown is the tool's default (warn); True (a checkbox on) is move."""
+    if value is False:
+        return "off"
+    if value is True:
+        return "move"
+    v = str(value if value is not None else DAM_POINT_CHECK_DEFAULT).strip().lower()
+    if v in ("0", "false", "no", "none"):
+        return "off"
+    return v if v in DAM_POINT_CHECK_CHOICES else DAM_POINT_CHECK_DEFAULT
 ELEV_DATUM_TIP = ("The datum of the dam elevations (top of dam, normal / PMF pool, spillway "
                   "rating, breach bottom). The DEM is NAVD88. Auto: the datum dam.json or the "
                   "inventory states; NGVD29 when none is stated (converted to NAVD88 with "
@@ -600,6 +616,9 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         dm = str(S.get("elev_datum") or "auto").strip()
         if dm in ELEV_DATUM_CHOICES and dm != "auto":
             p["ELEV_DATUM"] = ELEV_DATUM_CHOICES.index(dm)
+        dpc = dam_point_check_choice(S.get("dam_point_check"))           # 3.20.11
+        if dpc != DAM_POINT_CHECK_DEFAULT:   # the window only passes a changed setting
+            p["DAM_POINT_CHECK"] = DAM_POINT_CHECK_CHOICES.index(dpc)
     return p
 
 
