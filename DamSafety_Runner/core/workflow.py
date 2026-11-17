@@ -55,6 +55,7 @@ from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
+from . import dam_point_check as dpc             # 3.20.11
 from ..damsuite import midcrest as mcmod
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
@@ -405,6 +406,16 @@ class RunSettings:
         # 3.12.5: the dam (crest) line a batch run picked from CREST_LINE for the mid-crest dam
         # point (damsuite.midcrest) when the dam has no crest_line_xy. Not in as_dict
         self.midcrest_line = None
+        # 3.20.11: the dam point checked on the DEM before it is used (core/dam_point_check.py):
+        # "warn" (the default: never moves; a REVIEW warning says where the embankment is and
+        # whether "move" would use it), "move" (a clear misplacement uses the embankment found
+        # as the dam line, every gate must pass, else a warning) or "off" (as 3.20.10).
+        # NDBREACH_DAM_POINT_CHECK wins over this (_dam_point_mode). Never in the run key.
+        self.dam_point_check = dpc.DEFAULT_MODE
+        # the other inventory dams near this one [(id, (x, y)[, height ft])] and the other dams' crest lines
+        # (work CRS), so the check never moves a dam onto its neighbour. Not in as_dict
+        self.dam_point_others = None
+        self.dam_point_lines = None
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -460,8 +471,11 @@ class RunSettings:
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "dam_record":
                 d[k] = v is not None
-            elif k in ("vertical_datum", "elev_datum_stated", "midcrest_line"):
+            elif k in ("vertical_datum", "elev_datum_stated", "midcrest_line",
+                       "dam_point_others", "dam_point_lines"):
                 continue                 # 3.12.0: run_report["vertical_datum"] records them
+            elif k == "dam_point_check" and v in (dpc.DEFAULT_MODE, None, ""):
+                continue                 # 3.20.11 default: the report stays as before
             elif k == "elev_datum" and v in ("auto", None, ""):
                 continue                 # 3.12.0: the default - the report stays as before
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
@@ -559,6 +573,10 @@ def key_settings(st):
                                                             "water_mask",
                                                             "anuga_dt_diag")}
     d.pop("near_dam_fv1", None)
+    # 3.20.11: the dam point check reaches the key only through the dam point it gives
+    # (dam_xy) and the dam's top (dam_to_dict), as DAM_LINES does
+    for k in ("dam_point_check", "dam_point_others", "dam_point_lines"):
+        d.pop(k, None)
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -619,6 +637,34 @@ def _env_flag(name):
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_off(name):
+    """3.20.11 (critique 13): NDBREACH_<name> (or <name>) as a switch that can also say off:
+    True for off / 0 / no / false, False for on / 1 / yes / true, None when unset (or another
+    word). _env_flag cannot tell "off" from "unset"."""
+    v = (os.environ.get("NDBREACH_" + name) or os.environ.get(name) or "").strip().lower()
+    if v in ("off", "0", "no", "false"):
+        return True
+    if v in ("on", "1", "yes", "true"):
+        return False
+    return None
+
+
+def _dam_point_mode(st):
+    """(mode, source) of the dam point check: NDBREACH_DAM_POINT_CHECK (off / 0 / no / false,
+    warn, move / on / 1 / yes / true) wins over the run setting (a headless kill switch)."""
+    off = _env_off("DAM_POINT_CHECK")
+    if off is True:
+        return "off", "environment"
+    env = dpc.env_mode()
+    if env is not None:
+        return env, "environment"
+    try:
+        return dpc.normalize_mode(getattr(st, "dam_point_check", dpc.DEFAULT_MODE)), "setting"
+    except ValueError:
+        return dpc.DEFAULT_MODE, "setting (not understood: {!r})".format(
+            getattr(st, "dam_point_check", None))
+
+
 class RunResult:
     def __init__(self):
         self.dam_id = ""
@@ -643,6 +689,8 @@ class RunResult:
         self.receptor_csv = ""
         self.eap_map = ""
         self.flood = None         # flood.FloodResult
+        self.dam_point_check = None   # 3.20.11: the run_report "dam_point_check" block
+        self.modelled_dam_xy = None   # 3.20.11: the mid-crest point when the check moved it
         self.t_ref_hr = 0.0       # breach initiation within the record (flood scenario)
         self.cascade_offset_h = 0.0
         self.animation = None     # animation.AnimationResult when frames were rendered
@@ -1359,6 +1407,402 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
     return (float(rec["_xy"][0]), float(rec["_xy"][1])), rec
 
 
+def _dem_crest_near_point(read, dam_xy, cs):
+    """The point-only top-of-dam read (as _run_dam_once): the 98th percentile of the DEM within
+    30 m of the point, read +-60 m at min(cs, 3) m. Metres, or None (no DEM data)."""
+    near = read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60), min(cs, 3.0))
+    z = near.masked()
+    X, Y = np.meshgrid(near.x_centers(), near.y_centers())
+    sel = np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= 30.0
+    fin_z = z[sel & np.isfinite(z)]
+    return float(np.nanpercentile(fin_z, 98)) if fin_z.size else None
+
+
+def _quiet(*_a):
+    return None
+
+
+def _dpc_replay(dam, st, dam_xy, terrain_src, cs):
+    """3.20.11: what the point-only path would do with the point as given (no line), on scratch
+    warnings: the top read (the 98th percentile of the DEM near the point, whatever top a
+    caller filled from the DEM: the preview, the single-dam tool and the cascade then replay
+    the same top and agree) and _auto_inflow. A dict for dam_point_check.decide."""
+    h_m = float(dam.dam_height_ft) * FT
+    top_m = _dem_crest_near_point(terrain_src.read, dam_xy, cs)
+    rp = {"top_m": float("nan") if top_m is None else top_m, "inflow_xy": None,
+          "inflow_why": "", "method": "failed", "failed": True, "direction": None}
+    if top_m is None:
+        rp["inflow_why"] = "no DEM data at the point"
+        return rp
+    rad = max(90.0, 8.0 * h_m)
+    search_rad = max(rad, 400.0)
+    search_cell = min(cs, 20.0)
+    local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
+                              dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
+                             search_cell)
+    d0 = copy.copy(dam)
+    d0.crest_line_xy = None
+    st0 = copy.copy(st)
+    st0.midcrest_line = None
+    ai = _auto_inflow(terrain_src, local, d0, dam_xy, h_m, top_m, rad, search_rad, search_cell,
+                      st0, [], _quiet)
+    why = str(ai["why"] or "")
+    method = ("toe band" if ai["toe_pick"] else "place_from_crest" if ai["from_crest"] else
+              "find_inflow_point")
+    if why.startswith(terrain.INFLOW_FAR):
+        method += " (INFLOW_FAR)"
+    elif why.startswith(terrain.NO_DOWNSTREAM):
+        method += " (NO_DOWNSTREAM)"
+    rp.update(inflow_xy=ai["xy"], inflow_why=why, direction=ai["ds_info"].get("direction"),
+              failed=ai["xy"] is None, method="failed" if ai["xy"] is None else method)
+    if ai["xy"] is not None:
+        r, c = local.rc(*ai["xy"])
+        if local.inside(r, c) and local.valid()[r, c]:
+            rp["drop_m"] = top_m - float(local.data[r, c])
+            rp["drop_h"] = rp["drop_m"] / h_m
+    return rp
+
+
+def _dpc_verify(dam, st, sv, terrain_src, cs, h_m):
+    """3.20.11 V: the found line as a dam line on a copy of the dam: its mid-crest point and
+    top (place_midcrest) and the toe-band inflow below it (_downstream_inflow). A dict with
+    ok, the mid-crest point / top and the inflow."""
+    line = sv["emb"]["line"]
+    d2 = copy.copy(dam)
+    d2.crest_line_xy = [tuple(p) for p in line]
+    d2._point_original = None
+    d2._crest_line_source = dpc.FOUND_LINE_SOURCE
+    d2._dpc_ds_dir = _dpc_ds(sv)              # the run's downstream side, as after a move
+    st2 = copy.copy(st)
+    st2.breach_xy = None
+    st2.midcrest_line = None
+    L = mcmod.line_length(line)
+    mid = mcmod.point_at(line, 0.5 * L)[0]
+    xy, mc = place_midcrest(d2, st2, mid, terrain_src.read, min(cs, 1.0))
+    out = {"ok": False}
+    if "_z_m" not in mc:
+        out["why"] = mc.get("warning", "no mid-crest")
+        return out
+    z_mc = float(mc["_z_m"])
+    out.update(midcrest_xy=[round(xy[0], 2), round(xy[1], 2)], midcrest_ft=round(z_mc / FT, 2),
+               _xy=(float(xy[0]), float(xy[1])), _z_m=z_mc)
+    rad = max(90.0, 8.0 * h_m)
+    search_rad = max(rad, 400.0)
+    search_cell = min(cs, 20.0)
+    local = terrain_src.read((xy[0] - search_rad - 30, xy[1] - search_rad - 30,
+                              xy[0] + search_rad + 30, xy[1] + search_rad + 30), search_cell)
+    ds = {}
+    ixy, why = _downstream_inflow(terrain_src, local, d2, xy, h_m, z_mc, rad, search_cell, [],
+                                  _quiet, out=ds,
+                                  max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None),
+                                  **_toe_kwargs(d2, st2))
+    out["inflow_how"] = why
+    if ixy is None:
+        out["why"] = "no inflow below the line"
+        return out
+    out["inflow_xy"] = [round(float(ixy[0]), 2), round(float(ixy[1]), 2)]
+    out["toe_band"] = "toe" not in ds
+    g2 = sv["g2"]
+    zi = float(g2.sample_bilinear(np.array([ixy[0]]), np.array([ixy[1]]))[0])
+    f = dpc.inflow_facts(sv, ixy)
+    ok, dh = dpc.verify_ok(z_mc, zi, h_m, bool(f.get("on_pool_water") or f.get("in_pool")))
+    out.update(ok=bool(ok and out["toe_band"]), drop_x_h=None if dh is None else round(dh, 2))
+    if not out["toe_band"]:
+        out["why"] = "the toe band along the line found no inflow"
+    elif not ok:
+        out["why"] = ("the inflow below it is {:.2f} x H below the mid-crest".format(dh)
+                      if dh is not None else "no DEM at the inflow") + \
+            (" and on the pond" if f.get("on_pool_water") or f.get("in_pool") else "")
+    return out
+
+
+def _dpc_ds(sv):
+    """The found embankment's downstream side (pond to low ground), the mean over its crest
+    cells, or None. A run on the found line takes this side for the toe-band inflow instead of
+    terrain.downstream_direction, which can turn round on a full hydro-flattened reservoir or a
+    closed low below the dam (validation 2026-11-17: DWR-2635, 2662, 2760)."""
+    emb = sv.get("emb") or {}
+    md = emb.get("mid_ds")
+    if md is not None and len(md):
+        m = np.asarray(md, float)
+        m = m[np.all(np.isfinite(m), axis=1)]
+        if len(m):
+            v = m.mean(axis=0)
+            n = math.hypot(v[0], v[1])
+            if n > 0.2:
+                return (float(v[0] / n), float(v[1] / n))
+    d = emb.get("ds_dir")
+    return (float(d[0]), float(d[1])) if d else None
+
+
+def _dpc_converted_pool_ft(dam, st, dam_xy, crs):
+    """The flood's normal pool (ft) as the run's datum conversion will make it, on copies: the
+    run converts the dam elevations (vdatum_run.apply) only after the dam point check, and the
+    batch tools and the CLI not before run_dam (review 2026-11-17: G7e never ran there). The
+    same conversion as the run's (the record from the dam's lon / lat, its stated datum and the
+    run's elevations); nothing on the dam or the settings changes. None when not converted."""
+    fl = getattr(st, "flood", None)
+    try:
+        fl2 = copy.copy(fl)
+        for k, v in (("spillway", None), ("outlets", [])):      # not read for the pool
+            if hasattr(fl2, k):
+                setattr(fl2, k, v)
+        st2 = copy.copy(st)
+        st2.flood = fl2
+        st2.vertical_datum = None
+        d2 = copy.copy(dam)
+        ll = vdrun.lonlat_of(st, dam_xy, crs)
+        vdrun.apply(d2, st2, ll[0] if ll else None, ll[1] if ll else None,
+                    top_is_dem=dam.top_of_dam_ft is None, log=_quiet)
+        v = getattr(fl2, "normal_pool_ft", None)
+        return None if v is None else float(v)
+    except Exception:                                   # noqa: BLE001 - no G7e, no stop
+        return None
+
+
+def _dpc_normal_pool_m(dam, st, dam_xy=None, crs=None):
+    """G7e's normal pool (m, DEM datum) or None: after the datum conversion (the run's, or the
+    same conversion on copies when it has not run yet: _dpc_converted_pool_ft), never a local
+    datum (under 500 ft)."""
+    fl = getattr(st, "flood", None)
+    npft = getattr(fl, "normal_pool_ft", None) if fl is not None else None
+    done = getattr(dam, "_vdatum_done", False) or \
+        getattr(st, "vertical_datum", None) is not None
+    if npft is not None and not done and not getattr(fl, "_vdatum_done", False):
+        npft = _dpc_converted_pool_ft(dam, st, dam_xy, crs)
+        done = True
+    elif npft is not None and getattr(fl, "_vdatum_done", False):
+        done = True
+    if npft is None:
+        npft = getattr(dam, "normal_pool_ft", None)
+    try:
+        if npft is not None and done and float(npft) > 500.0:
+            return float(npft) * FT
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _dpc_parts(sv, h_m):
+    """The on-crest parts of the found line for the crest raise (critique 6: a spillway notch or
+    a low saddle on the line is not raised to the top of dam)."""
+    emb = sv["emb"]
+    g2 = sv["g2"]
+    return dpc.on_crest_parts(
+        emb["line"], lambda x, y: g2.sample_bilinear(np.asarray(x), np.asarray(y)),
+        emb["crest_z_m"], dpc.end_tol_m(h_m))
+
+
+_UNSET = object()
+
+
+def _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native, npool=_UNSET):
+    """The check itself (reads, survey, replay, decision, V): the record with its private
+    parts (_line, _parts, _moved_xy, _mid_xy). `npool`: G7e's normal pool (m) as the caller
+    worked it out (_dpc_normal_pool_m), else worked out here. V runs on a move and, in warn
+    mode, on an embankment that passed every gate (it would move only when V passes)."""
+    t0 = time.time()
+    h_m = float(dam.dam_height_ft) * FT
+    sa = getattr(dam, "surface_area_top_ac", None)
+    g2, g4, how = dpc.read_grids(terrain_src, dam_xy)
+    sv = dpc.survey(g2, g4, dam_xy, h_m, sa)
+    rp = _dpc_replay(dam, st, dam_xy, terrain_src, cs)
+    sv["inflow"] = dpc.inflow_facts(sv, rp.get("inflow_xy"))
+    cl = getattr(dam, "crest_length_ft", None)
+    if npool is _UNSET:
+        npool = _dpc_normal_pool_m(dam, st, dam_xy)
+    dec = dpc.decide(sv, rp, h_m, sa_ac=sa, crest_length_m=(float(cl) * FT if cl else None),
+                     normal_pool_m=npool, others=getattr(st, "dam_point_others", None),
+                     other_lines=getattr(st, "dam_point_lines", None), mode=mode)
+    ver = None
+    moved_xy = None
+    outcome = dec["outcome"]
+    if outcome == "move" or dec.get("would_move"):
+        # warn mode (review 2026-11-17): "would move" only when V passes as well
+        ver = _dpc_verify(dam, st, sv, terrain_src, cs, h_m)
+        if ver.get("ok"):
+            if outcome == "move":
+                outcome = "moved"
+                moved_xy = ver["_xy"]
+        else:
+            outcome = "review"
+            dec["warn"] = True
+            dec["would_move"] = False
+            dec["gates_failed"].append(("V", "{}: {}".format(dpc.GATE_TEXT["V"],
+                                                             ver.get("why", ""))))
+    rec = dpc.record(outcome, mode, dam_xy, sv=sv, rp=rp, dec=dec,
+                     verify=None if ver is None else {k: v for k, v in ver.items()
+                                                      if not k.startswith("_")},
+                     moved_xy=moved_xy, seconds=time.time() - t0, native_cell=native,
+                     resampling=how, sa_ac=sa)
+    rec["_warn"] = bool(dec.get("warn"))
+    emb = sv.get("emb")
+    if emb is not None and emb.get("line"):
+        rec["_line"] = [tuple(p) for p in emb["line"]]
+        if outcome == "moved":
+            rec["_parts"] = _dpc_parts(sv, h_m)
+            L = mcmod.line_length(emb["line"])
+            rec["_mid_xy"] = tuple(mcmod.point_at(emb["line"], 0.5 * L)[0])
+            rec["_moved_xy"] = moved_xy
+            rec["_midcrest_ft"] = ver["midcrest_ft"]
+            rec["_ds_dir"] = _dpc_ds(sv)
+    return rec
+
+
+def _write_found_line(rec, out_folder, crs, log):
+    """inputs/dam_line_found.geojson in the dam folder (critique 17), or ""."""
+    feat = dpc.found_line_geojson(rec)
+    if feat is None or not out_folder:
+        return ""
+    try:
+        from . import products
+        from .nd_data import INPUT_SUBFOLDER
+        d = os.path.join(out_folder, INPUT_SUBFOLDER)
+        os.makedirs(d, exist_ok=True)
+        return products.write_geojson(os.path.join(d, dpc.FOUND_LINE_FILE), [feat], crs=crs)
+    except Exception as e:                                   # noqa: BLE001 - an extra
+        log("Dam point check: the found line was not written: {}: {}".format(
+            type(e).__name__, e))
+        return ""
+
+
+def _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, cs, report, warnings, log,
+                     out_folder=None, crs=None):
+    """3.20.11: the dam point checked on the run's DEM (core/dam_point_check.py) before it is
+    used. `terrain_src` is the source before the DEM edits (the run's raw_terrain; preview's
+    unedited source). On a move: dam.crest_line_xy is the found line (the run then follows the
+    dam-line path exactly as for a user dam line), dam._point_original the point given, a DEM
+    top of dam (dam._top_from_dem) is cleared for the mid-crest top, and the line's midpoint is
+    returned (place_midcrest then puts the point at mid-crest). Otherwise the point is returned
+    as given. The result is kept on the dam (reruns of the same dam reuse it, no reads) and in a
+    cache by dam, point and DEM stamp (preview and the run agree). Never stops a run: an error
+    is recorded and the point is used as given."""
+    mode, msrc = _dam_point_mode(st)
+    prev = getattr(dam, "_point_check", None)
+    if prev is not None:
+        rec = prev
+        log("Dam point check: the result for this dam is reused ({})".format(rec.get("outcome")))
+    else:
+        native = terrain_native_cell(terrain_src)
+        ok, why = dpc.should_check(dam, st, inflow_xy, native, mode=mode)
+        if not ok:
+            rec = dpc.record("skipped", mode, dam_xy, skipped_because=why)
+            rec["mode_source"] = msrc
+            report["dam_point_check"] = dpc.public(rec)
+            log(dpc.log_line(rec))
+            return dam_xy
+        key = rec = None
+        npool = _UNSET
+        try:
+            # everything the decision reads besides the DEM (review 2026-11-17): the normal
+            # pool of G7e, the other dams and crest lines of G7c, the toe band settings of V
+            npool = _dpc_normal_pool_m(dam, st, dam_xy,
+                                       crs or getattr(terrain_src, "work_srs", None))
+            key = dpc.cache_key(dam, dam_xy, terrain_src, extra=(
+                mode, round(float(cs), 3),
+                None if npool is None else round(npool, 3),
+                getattr(st, "inflow_max_from_dam_m", None),
+                repr(getattr(st, "inflow_toe_band_m", None)),
+                getattr(st, "inflow_toe_cell_m", None),
+                getattr(st, "inflow_toe_min_outer_m", None),
+                getattr(st, "inflow_toe_ds_slope_h", None), getattr(dam, "ds_slope_h", None),
+                getattr(dam, "dwr_ds_slope_h", None),
+                repr(getattr(st, "dam_point_others", None)),
+                repr(getattr(st, "dam_point_lines", None))))
+            rec = dpc.cache_get(key)
+        except Exception as e:                           # noqa: BLE001 - no cache, no stop
+            log("Dam point check: no cache ({}: {})".format(type(e).__name__, e))
+            key = rec = None
+        if rec is not None:
+            rec = copy.deepcopy(rec)
+            log("Dam point check: the result of this dam's earlier check (same point and DEM) "
+                "is used")
+        else:
+            try:
+                rec = _dpc_compute(dam, st, dam_xy, terrain_src, cs, mode, native,
+                                   npool=npool)
+                if rec.get("outcome") != "error":
+                    dpc.cache_put(key, copy.deepcopy(rec))
+            except Exception as e:                       # noqa: BLE001 - never stop the run
+                rec = dpc.record("error", mode, dam_xy,
+                                 error="{}: {}".format(type(e).__name__, e))
+        rec["mode_source"] = msrc
+        if rec.get("outcome") == "moved":
+            if not getattr(dam, "_point_original", None):
+                dam._point_original = (float(dam_xy[0]), float(dam_xy[1]))
+            dam.crest_line_xy = list(rec["_line"])
+            dam._crest_line_source = dpc.FOUND_LINE_SOURCE
+            dam._crest_raise_parts = [list(p) for p in rec.get("_parts") or []]
+            dam._dpc_ds_dir = rec.get("_ds_dir")
+            if getattr(dam, "_top_from_dem", False):
+                dam.top_of_dam_ft = None         # the mid-crest top, not the fill at the point
+        dam._point_check = rec
+        if out_folder and rec.get("outcome") in ("moved", "review") and rec.get("_line"):
+            p = _write_found_line(rec, out_folder, crs, log)
+            if p:
+                rec["found_line_file"] = os.path.join("inputs", dpc.FOUND_LINE_FILE)
+    report["dam_point_check"] = dpc.public(rec)
+    log(dpc.log_line(rec))
+    o = rec.get("outcome")
+    if o == "moved":
+        msg = dpc.warning_text(rec)
+        if msg not in warnings:
+            warnings.insert(0, msg)
+        return rec["_mid_xy"]
+    if o == "review" and rec.get("_warn"):
+        msg = dpc.review_text(rec)
+        if msg not in warnings:
+            warnings.append(msg)
+    return dam_xy
+
+
+def precheck_dam_point(dam, st, dam_xy, inflow_xy, terrain_src, out_folder=None, crs=None,
+                       log=None):
+    """3.20.11 (review 2026-11-17): the dam point check before a caller uses a top of dam it
+    filled from the DEM at the point (the single-dam tool's solve gate, the cascade's overtop
+    routing and WSE trigger, the preview). On a move the top becomes the mid-crest top of the
+    found line (still marked dam._top_from_dem), so the caller's decision and the run agree;
+    run_dam then reuses the result on the dam (no second read). `terrain_src` is the source
+    run_dam gets (unedited). The record, or None (a proposed dam). Never raises."""
+    if getattr(st, "proposed", None):
+        return None
+    try:
+        _dam_point_check(dam, st, dam_xy, inflow_xy, terrain_src, st.cell_size_m, {}, [],
+                         log or _quiet, out_folder=out_folder, crs=crs)
+    except Exception as e:                                   # noqa: BLE001 - never stop
+        (log or _quiet)("Dam point check: not done ({}: {})".format(type(e).__name__, e))
+        return None
+    rec = getattr(dam, "_point_check", None)
+    if rec is not None and rec.get("outcome") == "moved" and \
+            rec.get("_midcrest_ft") is not None and \
+            (dam.top_of_dam_ft is None or getattr(dam, "_top_from_dem", False)):
+        dam.top_of_dam_ft = float(rec["_midcrest_ft"])
+        dam._top_from_dem = True
+    return rec
+
+
+def _crest_raise_lines(dam, half_m=0.0):
+    """The line(s) lisflood.raise_crest burns to the top of dam: the dam line, or (3.20.11,
+    critique 6) only the on-crest parts of a line the dam point check found, each cut back by
+    half_m (the burn's half-width) where it meets a gap, so a spillway notch or a low saddle on
+    it stays open; [None] without a line (the point fallback)."""
+    parts = getattr(dam, "_crest_raise_parts", None)
+    if parts and getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE:
+        parts = [p for p in parts if p and len(p) >= 2]
+        if half_m and getattr(dam, "crest_line_xy", None):
+            parts = dpc.trim_parts(parts, dam.crest_line_xy, half_m)
+        return parts                       # [] (nothing on the crest): nothing is raised
+    return [getattr(dam, "crest_line_xy", None)]
+
+
+def hecras_dam_xy(res, given_xy):
+    """3.20.11 (critique 7): the dam point for the HEC-RAS stage and the final products of a
+    finished run: the modelled (mid-crest) point when the dam point check moved it, else the
+    point the caller gave (unchanged for every other dam)."""
+    m = getattr(res, "modelled_dam_xy", None)
+    return (float(m[0]), float(m[1])) if m is not None else given_xy
+
+
 def _bridge_points(st):
     """(x, y, half span m) of the bridges the crest burn leaves open: the run's bridge
     structures (the middle of each line) and any inventory crossings of kind bridge."""
@@ -1738,6 +2182,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     mc_rec = None
     mc_why = "no mid-crest (proposed dam)"
     if not getattr(st, "proposed", None):
+        # 3.20.11: the dam point checked on the DEM first (a clear misplacement gives the dam
+        # line the rest of this block and the run follow, as a DAM_LINES line)
+        dam_xy = _dam_point_check(dam, st, dam_xy, inflow_xy, raw_terrain, cs, report,
+                                  warnings, log, out_folder=out_folder,
+                                  crs=getattr(writer, "work_srs", None)
+                                  or report.get("work_crs"))
         dam_xy, mc_rec = place_midcrest(dam, st, dam_xy, raw_terrain.read, min(cs, 1.0))
         report["dam_point"] = mcmod.public(mc_rec)
         report["dam_xy"] = [float(dam_xy[0]), float(dam_xy[1])]
@@ -1753,6 +2203,15 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             # the pick is kept (method unchanged) but flagged
             warnings.append("REVIEW: Dam point: " + mc_rec["review"] + ".")
             report["crest_pick_review"] = mc_rec["review"]
+        dpc_rec = getattr(dam, "_point_check", None)
+        if dpc_rec is not None:
+            res.dam_point_check = report.get("dam_point_check")
+            if dpc_rec.get("outcome") == "moved" and mc_rec is not None and "z_m" in mc_rec:
+                res.modelled_dam_xy = (float(dam_xy[0]), float(dam_xy[1]))
+                report["dam_point_check"]["modelled_xy"] = [round(float(dam_xy[0]), 2),
+                                                            round(float(dam_xy[1]), 2)]
+        elif report.get("dam_point_check"):
+            res.dam_point_check = report["dam_point_check"]
 
     # --- 3.12.0: dam elevations NGVD29 -> NAVD88 (core/vdatum_run.py) ------------------
     # the rundam / batch tools convert in prepare() (before their DEM checks); this covers the
@@ -1800,6 +2259,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # 3.12.5: the DEM at mid-crest (place_midcrest), not the 98th percentile near the point
         crest_dem_ft = float(mc_rec["_z_m"]) / FT
         report["dem_crest_from"] = MIDCREST_FROM
+        if getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE:
+            report["dem_crest_from"] = MIDCREST_FROM + "; the dam line found by the dam point check"
     else:
         # the 98th percentile of the DEM within 30 m, not the single highest cell (nanmax):
         # nanmax can latch onto a nearby hill, road embankment or spike and read the crest
@@ -1910,6 +2371,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if hy is None:
             report["summary"] = {"dam_id": dam.dam_id, "final_model": "none",
                                  "breach_occurs": False, "flooded_acres": 0}
+            if report.get("dam_point_check"):                     # 3.20.11
+                report["summary"]["dam_point_check"] = dpc.batch_text(report["dam_point_check"])
             warnings += fr.notes
             if st.dam_record is not None and st.write_final:
                 report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder,
@@ -1979,20 +2442,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                  search_cell)
         qa_ctx["local"], qa_ctx["radius_m"] = local, rad
         if inflow_xy is None:
-            ds_info = {}
-            toe_kw = _toe_kwargs(dam, st)
-            inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                                search_cell, warnings, log, out=ds_info,
-                                                max_from_dam_m=getattr(
-                                                    st, "inflow_max_from_dam_m", None),
-                                                **toe_kw)
-            # out["toe"] is set only when the toe band did not place it
-            toe_pick = inflow_xy is not None and "toe" not in ds_info
-            ds_dir = ds_info.get("direction")
-            qa_ctx["downstream"] = ds_dir
-            if inflow_xy is None:
-                inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m,
-                                                                 search_rad, downstream=ds_dir)
+            # 3.20.11: the automatic placement is _auto_inflow, shared with preview() and the
+            # dam point check's replay (behaviour unchanged)
+            ai = _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad,
+                              search_cell, st, warnings, log)
+            inflow_xy, why, toe_kw, toe_pick = ai["xy"], ai["why"], ai["toe_kw"], ai["toe_pick"]
+            qa_ctx["downstream"] = ai["ds_info"].get("direction")
+            if ai["from_crest"]:
+                crest = ai["crest"]
                 if inflow_xy is None:
                     raise brmod.BreachInputError("{}: could not place the breach inflow: {}"
                                                  .format(dam.dam_id, why))
@@ -2280,10 +2737,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         pass
         top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
         if top_m and getattr(st, "raise_crest", True):
-            nraise = lfmod.raise_crest(
-                dem, dam_xy, inflow_xy, top_m,
-                length_m=(dam.crest_length_ft or 400.0) * FT,
-                line_xy=getattr(dam, "crest_line_xy", None))
+            nraise = 0
+            for _ln in _crest_raise_lines(dam, max(12.0, dem.dx) / 2.0):
+                nraise += lfmod.raise_crest(
+                    dem, dam_xy, inflow_xy, top_m,
+                    length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
             if nraise and "crest raised" not in " ".join(warnings):
                 how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
                 warnings.append("Crest raised to the top of dam in the model grid "
@@ -3195,6 +3653,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if fetched is not None:
             cbr["tiles_downloaded"] = fetched
             cbr["tiles_cached"] = getattr(burner.fine, "cached", 0)
+    if report.get("dam_point_check"):                      # 3.20.11: the batch column
+        summary["dam_point_check"] = dpc.batch_text(report["dam_point_check"])
+    dpc.pin_first(warnings)            # 3.20.11 (critique 18): the move stays the first warning
     report["summary"] = summary
     report["warnings"] = warnings
     report["outputs"] = {"final": res.final, "baseline": res.baseline,
@@ -3441,6 +3902,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         warnings.append(msg)
     if fallback and fallback not in warnings:
         warnings.insert(0, fallback)
+    dpc.pin_first(warnings)                  # 3.20.11: the dam point move stays first
     report["warnings"] = warnings
     vec = {k: v for k, v in old_vectors.items() if os.path.basename(str(v)) not in
            FINAL_VECTOR_NAMES}
@@ -3494,8 +3956,20 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         attach_proposed(st, out_folder, dam, warnings, lambda _m: None)
     if st.breach_xy is not None:
         dam_xy = (float(st.breach_xy[0]), float(st.breach_xy[1]))
+    src0 = terrain_src                     # 3.20.11: the dam point check reads it unedited
     if st.edits is not None and not st.edits.empty():
         terrain_src = cond.ConditionedTerrain(terrain_src, st.edits)
+    # 3.20.11 (critique 9): the dam point check as the run does it, on the unedited source;
+    # its result is cached by dam, point and DEM, so the run that follows gets the same answer
+    pc = {}
+    if not getattr(st, "proposed", None):
+        _dam_point_check(dam, st, dam_xy, inflow_xy, src0, cs, pc, warnings, _quiet)
+        rec = getattr(dam, "_point_check", None)
+        if rec is not None and rec.get("outcome") == "moved":
+            dam_xy = tuple(rec.get("_moved_xy") or rec["_mid_xy"])
+            if rec.get("_midcrest_ft") is not None and (
+                    dam.top_of_dam_ft is None or getattr(dam, "_top_from_dem", False)):
+                dam.top_of_dam_ft = float(rec["_midcrest_ft"])
     near = terrain_src.read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60),
                             min(cs, 3.0))
     z = near.masked()
@@ -3527,15 +4001,11 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
-        ds_info = {}
-        inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                            search_cell, warnings, lambda *_a: None, out=ds_info,
-                                            max_from_dam_m=getattr(
-                                                st, "inflow_max_from_dam_m", None),
-                                            **_toe_kwargs(dam, st))
-        if inflow_xy is None:
-            inflow_xy, crest, why = terrain.place_from_crest(
-                local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
+        ai = _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad,
+                          search_cell, st, warnings, lambda *_a: None)
+        inflow_xy, why = ai["xy"], ai["why"]
+        if ai["from_crest"]:
+            crest = ai["crest"]
             if inflow_xy is None:
                 raise brmod.BreachInputError("{}: could not place the breach inflow: {}".format(
                     dam.dam_id, why))
@@ -3563,7 +4033,8 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
             "baseline": bool((flood_mode or (st.ambient_cfs or 0) > 0) and st.baseline
                              and (hy_nb is not None or not flood_mode)),
             "trace_mi": plen / MILE, "warnings": warnings, "path": path, "bounds": bounds,
-            "direction": terrain.flow_direction(path)}
+            "direction": terrain.flow_direction(path), "dam_xy": tuple(dam_xy),
+            "dam_point_check": pc.get("dam_point_check")}
 
 
 def _shift(h, spin_s):
@@ -3637,6 +4108,7 @@ def _flood_hydrographs(dam, st, warnings):
 
 
 def _write_no_breach(res, report, warnings, model_dir, hy_nb):
+    dpc.pin_first(warnings)                  # 3.20.11: the dam point move stays first
     report["warnings"] = warnings
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     res.summary = report["summary"]
@@ -3829,15 +4301,20 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     ld = terrain.nearest_line_distance(dam_xy, [line]) if line else None
     report["dam_point_checks"] = {"road_m": None if rd is None else round(rd, 1),
                                   "dam_line_m": None if ld is None else round(ld, 1)}
+    found = getattr(dam, "_crest_line_source", None) == dpc.FOUND_LINE_SOURCE
+    what = "the dam line found on the DEM" if found else "the DWR dam line"
     if line:
         # v3.10.22: the DWR dam line (run CRS), for the HEC-RAS dam line along the crest
         report["crest_line_xy"] = [[round(float(x), 3), round(float(y), 3)] for x, y in line]
+        if found:                       # 3.20.11: HEC-RAS labels it as found, not "yours"
+            report["crest_line_source"] = dpc.FOUND_LINE_SOURCE
     if rd is not None and rd <= ROAD_NEAR_M:
         if line:
             # v3.10.22: say "on the dam line" only when the dam point is (it may not be)
-            where = ("which is on the DWR dam line" if ld is not None and ld <= ROAD_NEAR_M else
-                     "{:.0f} m from the DWR dam line".format(ld) if ld is not None else
-                     "with a DWR dam line given")
+            where = ("which is on {}".format(what) if ld is not None and ld <= ROAD_NEAR_M else
+                     "{:.0f} m from {}".format(ld, what) if ld is not None else
+                     ("with a dam line found on the DEM" if found else
+                      "with a DWR dam line given"))
             msg = ("A road runs {:.0f} m from the dam point, {}: the road is on (or beside) "
                    "this embankment; the crest comes from the dam line.".format(rd, where))
         else:
@@ -3848,6 +4325,31 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
         report["dam_point_checks"]["note"] = msg
         warnings.append(msg)
         log(msg)
+
+
+def _auto_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, search_rad, search_cell, st,
+                 warnings, log):
+    """3.20.11: the automatic breach inflow, as _run_dam_once placed it before (lines taken out
+    unchanged so preview() and the dam point check's replay use the same sequence):
+    _downstream_inflow (the toe band along a dam line, else find_inflow_point), then
+    terrain.place_from_crest when that found nothing. Returns {"xy", "why", "crest" (the crest
+    place_from_crest moved to, or None), "from_crest" (it ran), "ds_info", "toe_kw",
+    "toe_pick" (the toe band placed it)}; "xy" is None when both failed (the callers raise)."""
+    ds_info = {}
+    toe_kw = _toe_kwargs(dam, st)
+    xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
+                                 search_cell, warnings, log, out=ds_info,
+                                 max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None),
+                                 **toe_kw)
+    # out["toe"] is set only when the toe band did not place it
+    toe_pick = xy is not None and "toe" not in ds_info
+    crest, from_crest = None, False
+    if xy is None:
+        from_crest = True
+        xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad,
+                                                  downstream=ds_info.get("direction"))
+    return {"xy": xy, "why": why, "crest": crest, "from_crest": from_crest,
+            "ds_info": ds_info, "toe_kw": toe_kw, "toe_pick": toe_pick}
 
 
 def _toe_kwargs(dam, st):
@@ -3966,15 +4468,20 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
+    found = dpc.found_line_side(dam)
     try:
-        crest_xy = None
-        if pool_grid is not None:
-            # v3.10.16: the crest of this dam (ground at the top of dam), not the highest
-            # ground in the circle (a hill)
-            crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
-        direction, how = terrain.downstream_direction(
-            pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
+        if found is not None:
+            direction, how = found
+        else:
+            crest_xy = None
+            if pool_grid is not None:
+                # v3.10.16: the crest of this dam (ground at the top of dam), not the highest
+                # ground in the circle (a hill)
+                crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m,
+                                                    max(rad, 400.0))[0]
+            direction, how = terrain.downstream_direction(
+                pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
+                crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
@@ -4094,7 +4601,8 @@ def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, 
             model_grid=dem, depth_m=depth, metrics=report.get("summary"),
             water_mask=water_mask, basemap=getattr(st, "qa_basemap", None) or "auto",
             basemap_labels=bool(getattr(st, "qa_basemap_labels", True)),
-            avoid=_qa_cache_avoid(st, out_folder))
+            avoid=_qa_cache_avoid(st, out_folder),
+            point_check=report.get("dam_point_check"))       # 3.20.11
         report["qa_maps"] = info
         for p in problems:
             warnings.append(p)
@@ -4240,6 +4748,9 @@ def render_report(r):
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
+    _dl = dpc.report_line(r.get("dam_point_check"))      # 3.20.11 (critique 17)
+    if _dl:
+        lines.append("| Dam location | {} |".format(_dl))
     if r.get("boundary_outflow_pct") is not None:      # Grok audit 3.1 (3.16.8)
         lines.append("| Breach volume that left the model | {:.0f}% ({:,.0f} ac-ft) |".format(
             r["boundary_outflow_pct"], r.get("boundary_outflow_acft") or 0.0))

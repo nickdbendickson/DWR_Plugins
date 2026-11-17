@@ -93,6 +93,9 @@ def run_cascade(chain, st, terrain_src, writer, out_root, fail_rule="overtop", p
                 raise brmod.BreachInputError("{}: no DEM data at the dam point".format(
                     cd.dam.dam_id))
             cd.dam.top_of_dam_ft = float(np.nanmax(z[sel])) / FT
+            # 3.20.11 (critique 8): a DEM fill, not a top given, so run_dam still checks the
+            # dam point on the DEM (and clears this fill for the mid-crest top on a move)
+            cd.dam._top_from_dem = True
     out = CascadeResult()
     out.folder = os.path.join(out_root, "Cascade_" + workflow._safe(chain[0].dam.dam_id))
     os.makedirs(out.folder, exist_ok=True)
@@ -108,6 +111,11 @@ def run_cascade(chain, st, terrain_src, writer, out_root, fail_rule="overtop", p
         folder = os.path.join(out_root, workflow._safe(cd.dam.dam_id))
         nxt = chain[i + 1] if i + 1 < n else None
         cst = copy.copy(st)
+        # 3.20.11: the cascade's other dams, so the dam point check never moves this dam onto
+        # the next dam's embankment in the same coulee
+        cst.dam_point_others = [(str(o.dam.dam_id), (float(o.xy[0]), float(o.xy[1])),
+                                 getattr(o.dam, "dam_height_ft", None))
+                                for o in chain if o is not cd] or None
         cst.keep_arrays = True
         cst.write_final = True
         cst.gauges = list(st.gauges)
@@ -119,6 +127,13 @@ def run_cascade(chain, st, terrain_src, writer, out_root, fail_rule="overtop", p
             if cst.receptors is None:
                 cst.receptors = impmod.Receptors()
             cst.receptors.add_points([nxt.xy], ids=["dam " + str(nxt.dam.dam_id)])
+        # 3.20.11 (review 2026-11-17): the dam point check before the top filled above is used
+        # for the overtop routing and the WSE trigger: on a move they take the mid-crest top of
+        # the embankment found (run_dam reuses this result)
+        if getattr(cd.dam, "_top_from_dem", False):
+            workflow.precheck_dam_point(cd.dam, cst, cd.xy, cd.inflow_xy, terrain_src,
+                                        out_folder=folder,
+                                        crs=getattr(writer, "work_srs", None), log=log)
         for later in chain[i + 1:]:                 # downstream reservoirs start full
             if later.pool is not None:
                 cst.edits.ponds.append(copy.deepcopy(later.pool))

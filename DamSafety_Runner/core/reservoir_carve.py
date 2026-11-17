@@ -577,7 +577,11 @@ def downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy, cell, log=No
     (terrain.downstream_direction on the pool grid, as workflow._downstream_inflow), else the
     direction from the dam point to the inflow point."""
     from . import terrain
+    from . import dam_point_check as dpc
     log = log or (lambda m: None)
+    found = dpc.found_line_side(dam)                 # 3.20.11: as _downstream_inflow
+    if found is not None:
+        return found
     half = terrain.POOL_HALF_M
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,

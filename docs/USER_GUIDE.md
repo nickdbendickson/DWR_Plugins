@@ -699,6 +699,43 @@ The run log shows the strip it used and how it worked it out. For example, DWR-4
 
 You can still choose an inflow point yourself (INFLOW_POINT); that overrides the search.
 
+## Dam point check: the point is checked on the DEM (Runner 3.20.11)
+
+Inventory dam points are sometimes not on the dam: on the pond, on a knoll beside it, or on the upstream face. With no dam line the Runner used to take the top of dam and the breach inflow from around that point. From 3.20.11 it first checks the point on the run's own DEM.
+
+**When it runs:** only when the dam has no dam line (DAM_LINES), crest line (CREST_LINE), breach position, breach inflow point (INFLOW_POINT) or top of dam, the DEM is LiDAR (5 m or finer, cell size known) and the dam height is known. A top of dam the tool read from the DEM itself does not count as given.
+
+**What it looks for:** hydro-flattened water (or a closed basin) within 400 m, and the embankment between it and the lower ground. The DEM is read at 2 m with average resampling, whatever resample method the run uses.
+
+**What it does:**
+
+- **The point is on the embankment, or nothing points to a problem:** the point is used as given.
+- **The point is clearly off the dam, every check on the embankment passes, and the setting is *Move clear cases*:** the embankment is used as the dam line, exactly as if you had given it. The dam point moves to mid-crest, the top of dam is read there, and the inflow goes in at the toe on the side the embankment falls away from its pond. The first warning says `DAM POINT MOVED` and how far. With *Warn only* (the default) the point is kept and the REVIEW warning says the embankment would be used with *Move clear cases*.
+  - "Clearly off" means the point is on the pond's water more than 30 m from the embankment, or it is more than 30 m from the embankment and the top read there is off by more than max(3 ft, a quarter of the dam height), or the inflow would land on the pond side of the embankment, or no inflow could be placed.
+  - The checks are: flat water and a confirmed embankment whose low side is open ground (not another dam's dry reservoir), the right height (0.8-1.25 x the dam height), within 400 m, a clean crest line, not a ring, one pond at that level (tailwater does not count), the pond area, at most 3 x the inventory crest length, the normal pool, not another dam's embankment (another inventory point on the line, or nearer it and of its height), the point not on another ridge, not on the downstream side unless on the low ground there, the pond not between the point and the embankment, and an inflow 0.5-1.3 x the dam height below the crest.
+- **Anything less:** the point is used as given. When it looks wrong, a `REVIEW: Dam point check` warning says why and where the embankment it found is. A point 50 m or more from a clean embankment of the dam's height gets that warning too.
+
+**Where to look:**
+
+- **The inflow QA map** shows the DWR point, the line found and the arrow between them.
+- **The report** has a "Dam location" line in `run_report.md` and the docx, and a `dam_point_check` block in `run_report.json`.
+- **The batch summary** has a `Dam_Point_Check` column (`moved 121 m`, `kept`, `review`, `off`, `skipped: ...`).
+- **The found line** is in the dam folder as `inputs/dam_line_found.geojson`. If it is right, add it to your DAM_LINES (or use it as CREST_LINE): later runs then use it as given and do not depend on the check.
+
+**Turning it off or down:**
+
+- In **Model one dam** or the **batch tool**, set *Check the dam point on the DEM* (Advanced) to *Off* (as before 3.20.11), *Warn only* (check and warn, never move; the default) or *Move clear cases*.
+- In the **Runner window**, use Advanced > *Dam point check*.
+- In the **CLI**, set `model.dam_point_check: off`, `warn` (the default) or `move`.
+- **Anywhere**, the environment variable `NDBREACH_DAM_POINT_CHECK=off` (or `warn`, `move`) wins over the setting.
+
+**Limits:**
+
+- Water that is not hydro-flattened, a pond smaller than about a quarter acre, two flat levels (a seam between LiDAR projects), a ring dike or a lagoon, and a dam next to another dam's pond all go to review, never to a move.
+- Batches and cascades pass the other dams nearby (with their height when the batch has a height field), so a point is not moved onto a neighbour's embankment. A single dam has no neighbours passed; the report then says the neighbour check was not made.
+- The check adds about 3 s per dam it runs on.
+- Validated on 2026-11-17 on the batch-44 dams and on 81 other DWR dams (2 m 3DEP). With *Move clear cases*, one hold-out dam (DWR-2713) moved 30 m past the end of its dam line onto a side dike of the same pond; that is why the default is *Warn only*. Not yet checked on the 1 m statewide DEM.
+
 ## A house in the judgment zone makes the dam MEDIUM (Hazard 2.22.0, Runner 3.13.0, Screening 0.18.0; #241)
 
 Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **medium hazard**, in every plugin set and in Crest.

@@ -63,6 +63,28 @@ STATUS_SHADES = {"yes": "E2EFDA", "check": "FFF2CC", "no": "F8CBAD", "n/a": "EDE
 _BAD_XML = re.compile(u"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
 
+def dam_location_text(rec):
+    """3.20.11 (critique 17): the "Dam location" line of run_report.md and the docx from the
+    run_report "dam_point_check" block (core/dam_point_check.py), or None (no check block, or
+    the check was skipped)."""
+    if not isinstance(rec, dict) or rec.get("outcome") in (None, "skipped", "error"):
+        return None
+    o = rec.get("original_xy") or [0.0, 0.0]
+    if rec.get("outcome") == "moved" and rec.get("modelled_xy"):
+        m = rec["modelled_xy"]
+        return ("DWR point {:,.1f}, {:,.1f}; modelled point {:,.1f}, {:,.1f} (moved {:,.0f} m to "
+                "the embankment found on the DEM by the dam point check)".format(
+                    o[0], o[1], m[0], m[1], rec.get("moved_m") or 0.0))
+    if rec.get("outcome") == "review":
+        return ("DWR point {:,.1f}, {:,.1f}, used as given (dam point check: review; see the "
+                "warnings)".format(o[0], o[1]))
+    return "DWR point {:,.1f}, {:,.1f}, used as given (dam point check: {})".format(
+        o[0], o[1], rec.get("kept_because") or "kept")
+
+
+_dam_location = dam_location_text
+
+
 def clean_text(s):
     """Text with the characters XML 1.0 cannot carry removed."""
     if s is None:
@@ -2247,6 +2269,9 @@ class _Report(object):
         if self.rep.get("dam_xy"):
             rows.append(["Dam point (working CRS, m)", ", ".join(
                 "{:,.1f}".format(v) for v in self.rep["dam_xy"][:2])])
+        dl = _dam_location(self.rep.get("dam_point_check"))      # 3.20.11 (critique 17)
+        if dl:
+            rows.append(["Dam location", dl])
         ip = self.rep.get("inflow_point")
         if ip:
             rows.append(["Breach inflow point (working CRS, m)", "{} ({})".format(
