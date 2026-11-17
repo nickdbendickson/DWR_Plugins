@@ -1,0 +1,42 @@
+name: Edenville probe (temporary)
+on:
+  push:
+    branches: [edenville-2020-case]
+    paths: [".github/workflows/edenville-probe.yml"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: NWIS sites near the Tittabawassee (Edenville to Saginaw)
+        run: |
+          curl -fsS "https://waterservices.usgs.gov/nwis/site/?format=rdb&bBox=-84.6,43.5,-83.9,44.1&siteType=ST&hasDataTypeCd=iv&siteStatus=all" | grep -v "^#" | cut -f2,3,5,6 | head -60 || echo FAIL
+      - name: Midland 04156000 IV May 2020 (every 4th row)
+        run: |
+          curl -fsS "https://waterservices.usgs.gov/nwis/iv/?format=rdb&sites=04156000&startDT=2020-05-17&endDT=2020-05-24&parameterCd=00060,00065" | grep -v "^#" | awk 'NR<=2 || NR%4==0' | head -220 || echo FAIL
+      - name: Midland peaks and datum
+        run: |
+          curl -fsS "https://nwis.waterdata.usgs.gov/nwis/peak?site_no=04156000&agency_cd=USGS&format=rdb" | grep -v "^#" | tail -8 || echo FAIL
+          curl -fsS "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=04156000,04155500,04155000,04156500,04157005&siteOutput=expanded" | grep -v "^#" | cut -f2,3,5,6,7,20-24 || echo FAIL
+      - name: STN events and Michigan 2020 HWMs
+        run: |
+          curl -fsS "https://stn.wim.usgs.gov/STNServices/Events.json" -o ev.json && python3 -c "
+          import json;e=json.load(open('ev.json'))
+          for x in e:
+              s=json.dumps(x)
+              if '2020' in str(x.get('event_start_date','')) or 'Michigan' in s or 'Midland' in s: print(x.get('event_id'),x.get('event_name'),x.get('event_start_date'))
+          " || echo FAIL
+          for st in MI; do curl -fsS "https://stn.wim.usgs.gov/STNServices/HWMs/FilteredHWMs.json?States=$st" -o hwm.json && python3 -c "
+          import json;h=json.load(open('hwm.json'));print(len(h))
+          from collections import Counter;print(Counter(x.get('eventName') for x in h).most_common(20))
+          " || echo FAIL; done
+      - name: USACE / RMC pages
+        run: |
+          curl -fsSL -o /dev/null -w "%{http_code} rmc\n" "https://usace-rmc.github.io/RMC-Software-Documentation/docs/desktop-applications/lifesim/validation-studies/v1.0/midland-dams" || true
+          curl -fsSL "https://usace-rmc.github.io/RMC-Software-Documentation/docs/desktop-applications/lifesim/validation-studies/v1.0/midland-dams" | python3 -c "import sys,re,html;t=re.sub('<[^>]+>',' ',sys.stdin.read());t=html.unescape(re.sub(r'\s+',' ',t));i=t.find('Midland');print(t[i:i+12000])" || true
+      - name: 3DEP sources over the valley
+        run: |
+          curl -fsS "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/identify?geometry=%7B%22x%22:-84.38,%22y%22:43.70%7D&geometryType=esriGeometryPoint&sr=4326&returnCatalogItems=true&f=json" | head -c 3000 || echo FAIL
+          curl -fsS "https://tnmaccess.nationalmap.gov/api/v1/products?datasets=Lidar%20Point%20Cloud%20(LPC)&bbox=-84.5,43.6,-84.2,43.9&max=20" | python3 -c "import json,sys;[print(i['title'],i.get('publicationDate')) for i in json.load(sys.stdin)['items']]" || echo FAIL
