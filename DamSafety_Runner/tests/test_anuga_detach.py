@@ -442,6 +442,20 @@ def anuga_detach_run_params_round_trip():
         shutil.rmtree(d)
 
 
+def _script_token_in_our_cmdline():
+    """A basename that really appears in THIS process's /proc cmdline (e.g. 'python3' or the
+    test module), so a `script` value that /proc will confirm - however the suite was launched
+    (python3 -m ..., or the file run directly). None when /proc is unavailable."""
+    cmd = D._cmdline(os.getpid())
+    if not cmd:
+        return None
+    for part in cmd.replace("\x00", " ").split():
+        base = os.path.basename(part)
+        if base and base in cmd:
+            return base
+    return None
+
+
 @test
 def anuga_detach_signalable_gates_cross_host_and_recycled_pid():
     # Security: the strict pre-signal check. A pid from another host, a dead pid, or (where /proc
@@ -455,8 +469,10 @@ def anuga_detach_signalable_gates_cross_host_and_recycled_pid():
     if D._cmdline(os.getpid()) is not None:                          # /proc available (Linux)
         assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
                              "script": "no_such_worker_xyz.py"}) is False   # recycled pid: /proc denies
-        assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
-                             "script": os.path.basename(__file__)}) is True  # /proc confirms our script
+        here = _script_token_in_our_cmdline()
+        if here:
+            assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
+                                 "script": here}) is True              # /proc confirms it is us
 
 
 @test
@@ -477,9 +493,10 @@ def anuga_detach_signal_refuses_a_pid_it_cannot_confirm():
         cross = D.Attached({"pid": os.getpid(), "host": "some-other-host", "state": D.RUNNING}, no_status)
         cross.terminate()
         assert signals == [], "a cross-host pid must not be signalled: {}".format(signals)
-        if D._cmdline(os.getpid()) is not None:   # /proc confirms this process runs the named script
+        here = _script_token_in_our_cmdline()
+        if here:   # /proc confirms this process runs `here`
             ours = D.Attached({"pid": os.getpid(), "host": _socket.gethostname(),
-                               "script": os.path.basename(__file__), "state": D.RUNNING}, no_status)
+                               "script": here, "state": D.RUNNING}, no_status)
             ours.terminate()
             assert signals == [(os.getpid(), signal.SIGTERM)], signals   # genuine cancel still fires
     finally:

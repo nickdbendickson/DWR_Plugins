@@ -31,6 +31,11 @@ class FakeProject:
 
 
 def main():
+    # Resolve only from the passed project + env here: ignore any ambient QgsSettings / open project
+    # (plugin-suites runs under a real QGIS), so the executable-key assertions are deterministic.
+    sc._settings = lambda: None
+    sc._project = lambda: None
+
     evil = FakeProject({
         "lisflood_exe": "/tmp/evil_payload",
         "anuga_python": "/tmp/evil_python",
