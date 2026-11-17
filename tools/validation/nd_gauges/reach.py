@@ -278,9 +278,9 @@ def nlcd_codes(box, year, shape, origin):
 
 
 # ------------------------------------------------------------------------------ build
-def build(gid, out, say=print):
+def build(gid, out, say=print, gauge=None):
     from DamSafety_Runner.core.grid import Grid
-    g = gauges()[gid]
+    g = gauge if gauge is not None else gauges()[gid]
     os.makedirs(out, exist_ok=True)
     gxy = to_utm(g["lon"], g["lat"])
     line = chain(nhd_parts(g, say=say), gxy)
