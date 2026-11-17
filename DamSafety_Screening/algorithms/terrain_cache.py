@@ -96,6 +96,31 @@ def _cell_m(wkt, gt):
         return None
 
 
+def _no_ground_at_centre(gdal, path, half=1):
+    """True when the clip has no elevation in the 3 x 3 cells at its centre (the dam point)."""
+    try:
+        ds = gdal.Open(path)
+        if ds is None:
+            return False
+        b = ds.GetRasterBand(1)
+        nd = b.GetNoDataValue()
+        a = b.ReadAsArray()                  # one dam's clip: small
+        ds = None
+        if a is None:
+            return False
+        ny, nx = a.shape[:2]
+        cy, cx = ny // 2, nx // 2
+        a = a[max(0, cy - half):cy + half + 1, max(0, cx - half):cx + half + 1]
+        import numpy as np
+        a = np.asarray(a, dtype=float)
+        bad = ~np.isfinite(a)
+        if nd is not None:
+            bad |= a == nd
+        return bool(bad.all())
+    except Exception:                                            # noqa
+        return False
+
+
 def local_mosaic(tiles, vrt, log=None):
     """One VRT in metres (EPSG:5070 when the tiles' CRSs differ) over a local DEM folder.
 
@@ -257,6 +282,22 @@ class TerrainCache(UnitAlgorithm):
                         dstSRS="EPSG:5070", outputBounds=ext, xRes=cell, yRes=cell,
                         resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
                         creationOptions=["COMPRESS=DEFLATE"]))), "clipping the DEM")
+                    # 0.20.3: the local DEM (the offline pack's statewide mosaic) has no ground at the
+                    # dam (outside it, or a hole such as Fort Berthold): NoData would read as high
+                    # ground, so this dam's clip comes from USGS 3DEP instead, and the log says so
+                    if _no_ground_at_centre(gdal, dst):
+                        feedback.pushWarning("Dam {}: the local DEM has no ground at the dam; this dam's "
+                                             "terrain is downloaded from USGS 3DEP instead".format(dam_id))
+                        try:
+                            tiles = terrain.fetch_3dep(ext, cell, os.path.join(out, "_tmp"), f"d{dam_id}",
+                                                       log=feedback.pushInfo)
+                            os.remove(dst)
+                            GS.checked(gdal.Warp(dst, tiles, dstNodata=-9999,
+                                                 creationOptions=["COMPRESS=DEFLATE"]), "mosaicking the 3DEP tiles")
+                            for t in tiles: os.remove(t)
+                        except Exception as e2:                          # noqa
+                            feedback.reportError("dam {}: USGS 3DEP download for the hole failed ({}); "
+                                                 "the local clip is kept".format(dam_id, e2))
                 else:
                     tiles = terrain.fetch_3dep(ext, cell, os.path.join(out, "_tmp"), f"d{dam_id}",
                                                log=feedback.pushInfo)
