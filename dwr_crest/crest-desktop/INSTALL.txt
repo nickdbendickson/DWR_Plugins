@@ -60,8 +60,8 @@ Run the flood model
 The flood strip is a straight valley from the dam segment nearest the breach.
 It does not follow later bends in the stream.
 
-The drawn dam line is longitude and latitude. Crest does not send it as
-DAM_LINES and does not set line_xy.
+The drawn dam line is longitude and latitude GeoJSON; it is sent as
+DAM_LINES and the Runner reprojects it to the DEM. line_xy is not set.
 
 A blank work folder means ~/CrestDams.
 This desk screen is not an official ND Dam Safety or ACER class.

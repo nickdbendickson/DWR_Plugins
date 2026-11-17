@@ -134,6 +134,13 @@ def work_dir(requested: str | None) -> Path:
     return path.resolve()
 
 
+
+def _dam_line_layer(folder: Path) -> Path | None:
+    """The drawn dam line write_dam_folder wrote (longitude / latitude GeoJSON), or None."""
+    path = Path(folder) / "dam_line.geojson"
+    return path if path.is_file() else None
+
+
 def dem_path(work: Path, dam: dict, source: str = "pack") -> str | None:
     for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), work / "dem.tif", work / "dem.vrt"):
         if not raw:
@@ -608,6 +615,9 @@ def run_model(
             "model": {"tier": cli_tier, **({"lisflood_exe": "builtin"} if builtin else {})},
             "output": {"folder": str(dams)},
         }
+        line = _dam_line_layer(folder)
+        if line:
+            config["dam"]["dam_line"] = str(line)
         path = folder / "runner_config.json"
         path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         log("ndbreach:batch was not started. It needs a point layer of many dams.")
@@ -640,7 +650,14 @@ def run_model(
     _opt_num(cmd, "TOP_FT", datum.get("crestNavdFt"))
     _opt_num(cmd, "AREA_AC", dam.get("surfaceAreaAc"))
     log("ndbreach:batch was not started. It needs a point layer of many dams. This button runs ndbreach:rundam for one dam.")
-    log("The drawn dam line was not sent as DAM_LINES. That argument is in the DEM's coordinates, and the line is still longitude and latitude.")
+    line = _dam_line_layer(folder)
+    if line:
+        cmd.append(f"--DAM_LINES={line}")
+        log("Dam line sent as DAM_LINES (" + line.name + "). It is longitude and latitude; "
+            "ndbreach:rundam reprojects it to the DEM so the toe band can be placed "
+            "(5 m out to H×(slope+1), 3:1 when the slope is unknown, 150 m cap, with the side check).")
+    else:
+        log("No drawn dam line was written, so DAM_LINES was not sent. The Runner will fall back to the lowest ground within 150 m of the dam point.")
     code, text = _run(cmd, timeout=None, cancel=cancel)
     log(text.rstrip())
     log("Runner finished." if code == 0 else "The Runner failed.")

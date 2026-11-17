@@ -76,6 +76,8 @@ def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids
     if dem_file:
         data["terrain_source"] = 1
         data["local_dem"] = str(Path(dem_file).resolve().parent)
+        # Growing clips must use the same local / pack DEM; the screening default (1) is a fresh 3DEP download.
+        data["larger_clips"] = 2
     path = work / "crest_settings.json"
     # Atomic write: a crash mid-write must not leave a truncated settings file for the next run to read.
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")

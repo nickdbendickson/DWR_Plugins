@@ -617,6 +617,10 @@ def main() -> None:
             webview.settings["ALLOW_DOWNLOADS"] = True  # belt and braces; exports use the Save dialog bridge
         except Exception:
             pass
+        # pywebview's JS API binder uses new Function / eval; rewrite it so the CSP can stay
+        # script-src 'self' (no unsafe-eval). See webview_csp.py.
+        from .webview_csp import install_pywebview_csp_patches
+        install_pywebview_csp_patches(webview)
         store = storage_dir()
         store.mkdir(parents=True, exist_ok=True)
         global SETTINGS_FILE

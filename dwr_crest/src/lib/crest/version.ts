@@ -14,7 +14,7 @@
 declare const __CREST_VERSION__: string | undefined;
 
 /** Keep equal to package.json "version" (version.test.ts checks it); the build string starts with it. */
-export const PACKAGE_VERSION = "0.1.0";
+export const PACKAGE_VERSION = "0.1.1";
 
 export const CREST_VERSION: string =
   typeof __CREST_VERSION__ === "string" && __CREST_VERSION__ ? __CREST_VERSION__ : `${PACKAGE_VERSION}+local`;

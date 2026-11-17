@@ -409,10 +409,25 @@ class GateTests(unittest.TestCase):
         text = self.calls_text()
         self.assertIn("ndbreach:rundam", text)
         self.assertNotIn("ndbreach:batch", text)
-        self.assertNotIn("DAM_LINES", text)
+        self.assertIn("DAM_LINES=", text)
+        self.assertTrue(any(line.startswith("--DAM_LINES=") and line.endswith("dam_line.geojson") for line in text.splitlines()), text)
+        self.assertTrue((Path(result["folder"]) / "dam_line.geojson").is_file())
+        self.assertTrue(any("Dam line sent as DAM_LINES" in line for line in self.lines))
         self.assertNotIn("CLI ", text)
         self.assertIn("Froehlich (2008)", text)
         self.assertTrue(any("ndbreach_cli.py needs the dam point" in line for line in self.lines))
+
+    def test_model_omits_dam_lines_when_none_was_drawn(self):
+        os.environ["QGIS_MODE"] = "pass"
+        work = self.root / "work"
+        work.mkdir()
+        (work / "dem.tif").write_bytes(b"not a real dem")
+        dam = {**DAM, "geometry": {k: v for k, v in DAM["geometry"].items() if k != "damLine"}}
+        result = run_model(dam, ANALYSIS, str(work), self.log())
+        self.assertTrue(result["ok"])
+        self.assertNotIn("DAM_LINES", self.calls_text())
+        self.assertFalse((Path(result["folder"]) / "dam_line.geojson").exists())
+        self.assertTrue(any("No drawn dam line was written" in line for line in self.lines))
 
     def test_model_uses_cli_only_with_a_dem_point(self):
         os.environ["QGIS_MODE"] = "pass"
@@ -480,6 +495,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
         self.assertEqual(settings["terrain_source"], 1)
         self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertEqual(settings["larger_clips"], 2)
         self.assertEqual(settings["only_ids"], "ND00199")
         self.assertIn("--SETTINGS=", self.calls_text())
 

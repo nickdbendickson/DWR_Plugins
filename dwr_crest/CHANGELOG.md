@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-17
+
+- **Desktop CSP: no more Uncaught EvalError at startup.** pywebview binds `window.pywebview.api` with `new Function` and wraps return values in `eval(...)`, which the desktop Content-Security-Policy (`script-src 'self'`, no `unsafe-eval`) refused. The desk now rewrites that binder to a closure and runs evaluate_js without eval (`crest/webview_csp.py`) so the policy is not weakened. Crest.html and the web app are unchanged. Tests: `tests/test_webview_csp.py`.
+- **The drawn dam line is sent to ndbreach:rundam as DAM_LINES.** The Report flood button used to skip it because the line is still longitude and latitude, so the Runner fell back to the lowest ground within 150 m and skipped the toe band (5 m out to H×(slope+1), 3:1 when the slope is unknown, 150 m cap, with the side check). The line is now passed as `dam_line.geojson`; the Runner reprojects it to the DEM. A dam with no drawn line is unchanged. Tests: `tests/test_handoff.py`.
+- **Screening settings from the pack also set larger clips to the local DEM.** `crest_settings.json` already pointed terrain at the pack mosaic, but `larger_clips` was left at the screening default (a fresh 3DEP download). It is now 2 (local DEM folder) whenever a pack or local DEM is used.
+- **The Runner now takes the crest from the drawn line.** With DAM_LINES, ndbreach:rundam places the crest at the middle of the drawn dam line when that is within 500 m of the dam point, not at the dam point.
+
 ## 2026-11-13
 
 - **Starting pool and roughness can be changed; Settings reads the suite's shared defaults.** The breach still
