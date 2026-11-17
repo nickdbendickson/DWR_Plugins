@@ -442,6 +442,67 @@ def anuga_detach_run_params_round_trip():
         shutil.rmtree(d)
 
 
+def _script_token_in_our_cmdline():
+    """A basename that really appears in THIS process's /proc cmdline (e.g. 'python3' or the
+    test module), so a `script` value that /proc will confirm - however the suite was launched
+    (python3 -m ..., or the file run directly). None when /proc is unavailable."""
+    cmd = D._cmdline(os.getpid())
+    if not cmd:
+        return None
+    for part in cmd.replace("\x00", " ").split():
+        base = os.path.basename(part)
+        if base and base in cmd:
+            return base
+    return None
+
+
+@test
+def anuga_detach_signalable_gates_cross_host_and_recycled_pid():
+    # Security: the strict pre-signal check. A pid from another host, a dead pid, or (where /proc
+    # can tell) a pid no longer running the worker script is never signalable - so a stale status
+    # file can never make a cancel SIGTERM/SIGKILL an unrelated local process.
+    import socket as _socket
+    assert D.signalable(None) is False
+    assert D.signalable({"pid": 2 ** 31 - 1}) is False               # a pid that is not alive
+    assert D.signalable({"pid": os.getpid(), "host": "some-other-host"}) is False  # another machine
+    assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname()}) is True  # alive, our host
+    if D._cmdline(os.getpid()) is not None:                          # /proc available (Linux)
+        assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
+                             "script": "no_such_worker_xyz.py"}) is False   # recycled pid: /proc denies
+        here = _script_token_in_our_cmdline()
+        if here:
+            assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
+                                 "script": here}) is True              # /proc confirms it is us
+
+
+@test
+def anuga_detach_signal_refuses_a_pid_it_cannot_confirm():
+    # Attached._signal must not os.kill a pid it cannot confirm is our worker on this host.
+    import socket as _socket
+    signals = []                        # real signals only; sig 0 is pid_alive()'s liveness probe
+    real_kill = os.kill
+
+    def fake_kill(pid, sig):
+        if sig == 0:
+            return real_kill(pid, sig)  # let pid_alive() probe for real
+        signals.append((pid, sig))      # record (and swallow) a real signal
+
+    os.kill = fake_kill
+    try:
+        no_status = os.path.join(tempfile.gettempdir(), "anudet_no_such_status.json")
+        cross = D.Attached({"pid": os.getpid(), "host": "some-other-host", "state": D.RUNNING}, no_status)
+        cross.terminate()
+        assert signals == [], "a cross-host pid must not be signalled: {}".format(signals)
+        here = _script_token_in_our_cmdline()
+        if here:   # /proc confirms this process runs `here`
+            ours = D.Attached({"pid": os.getpid(), "host": _socket.gethostname(),
+                               "script": here, "state": D.RUNNING}, no_status)
+            ours.terminate()
+            assert signals == [(os.getpid(), signal.SIGTERM)], signals   # genuine cancel still fires
+    finally:
+        os.kill = real_kill
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("anuga_detach_")]:
         fn()

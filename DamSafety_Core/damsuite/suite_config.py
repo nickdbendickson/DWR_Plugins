@@ -12,6 +12,12 @@ KEYS = (
     "unit_system",                  # 1.1.0: 'us' (default) or 'si' - display_units.py
     "defaults_file",                # 1.2.0: your shared defaults file - shared_defaults.py
 )
+# Keys that name a program the suite will EXECUTE: the flood solver binary and the ANUGA Python
+# interpreter. A saved project (.qgs/.qgz) is untrusted data at rest, so it must never choose which
+# program runs - opening a shared project would otherwise run an attacker-named binary. These keys
+# resolve only from the per-computer setting or the environment variable; the project scope is
+# skipped. A project may still override data locations (data_folder, dams_folder, ...).
+EXECUTABLE_KEYS = frozenset({"lisflood_exe", "anuga_python"})
 ENV = {
     "data_folder": "NDSUITE_DATA_FOLDER",
     "dams_folder": "NDSUITE_DAMS_FOLDER",
@@ -52,14 +58,15 @@ def _project():
 
 
 def get(key, project=None):
-    project = project or _project()
-    if project is not None:
-        try:
-            val, ok = project.readEntry("NDDamSuite", key)
-            if ok and str(val).strip():
-                return str(val)
-        except Exception:
-            pass
+    if key not in EXECUTABLE_KEYS:
+        project = project or _project()
+        if project is not None:
+            try:
+                val, ok = project.readEntry("NDDamSuite", key)
+                if ok and str(val).strip():
+                    return str(val)
+            except Exception:
+                pass
     s = _settings()
     if s is not None:
         val = s.value(PREFIX + key, "")
@@ -81,14 +88,15 @@ def set(key, value, scope="computer", project=None):
 
 
 def source(key, project=None):
-    project = project or _project()
-    if project is not None:
-        try:
-            val, ok = project.readEntry("NDDamSuite", key)
-            if ok and str(val).strip():
-                return "project"
-        except Exception:
-            pass
+    if key not in EXECUTABLE_KEYS:
+        project = project or _project()
+        if project is not None:
+            try:
+                val, ok = project.readEntry("NDDamSuite", key)
+                if ok and str(val).strip():
+                    return "project"
+            except Exception:
+                pass
     s = _settings()
     if s is not None and s.value(PREFIX + key, "") not in (None, ""):
         return "computer"

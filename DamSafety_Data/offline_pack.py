@@ -996,6 +996,18 @@ def _unzip_v1_rasters(z, names, src, rasters, target):
         os.replace(dst + ".part", dst)
 
 
+def _check_pack_size(z, target):
+    """Refuse a pack zip that unpacks to more than zipsafe.MAX_PACKAGE_BYTES, holds too many entries,
+    is compressed harder than any real pack, or would not fit on the disk - a decompression bomb.
+    zipsafe.check also rejects any member that would land outside `target` (path traversal). Sizes
+    come from the zip directory; nothing is decompressed to check."""
+    from .damsuite import zipsafe
+    try:
+        zipsafe.check(z, target, zipsafe.MAX_PACKAGE_BYTES)
+    except zipsafe.ZipRefused as e:
+        raise PackError(str(e)) from e
+
+
 def _unzip(zip_path, log):
     manifest = read_manifest(zip_path)
     if manifest is None or manifest.get("format") != PACK_FORMAT:
@@ -1019,6 +1031,7 @@ def _unzip(zip_path, log):
             os.path.basename(zip_path), target))
         tmp = db + ".part"
         with zipfile.ZipFile(zip_path) as z:
+            _check_pack_size(z, target)
             names = z.namelist()
             src = next((n for n in names if n.rsplit("/", 1)[-1] == DB_NAME
                         and ".." not in n.split("/")), None)
