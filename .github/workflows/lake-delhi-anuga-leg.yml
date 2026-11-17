@@ -64,7 +64,7 @@ jobs:
           # refused leg 1's checkpoints. The key goes with the case folder instead: made by the
           # first leg's ANUGA, then carried leg to leg with the checkpoints it signed.
           echo "NDBREACH_CKPT_KEY_FILE=$RUNNER_TEMP/ckpt_key/anuga_checkpoint.key" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:
