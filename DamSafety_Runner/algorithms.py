@@ -34,6 +34,7 @@ from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
 from .core import vdatum_run as vdrun
 from .core import dwr_slope
+from .core import dwr_lines                        # 3.20.13
 from .core import batch_workers as bworkers           # 3.20.0: several dams at a time
 
 PROVIDER_ID = "ndbreach"
@@ -217,6 +218,8 @@ def _crest_line_near(lines, xy, max_m=500.0):
 
 
 CREST_SNAP_M = 500.0      # a crest line farther than this from the dam point is not its line
+# 3.20.13: a CREST_LINE matched by structure id that fails the DWR line guard
+CREST_REFUSED = "Crest line (CREST_LINE) of structure {} not used: {}"
 
 
 def _nearest_on_line(line, xy):
@@ -259,9 +262,20 @@ def _pick_crest_line(lines_attrs, center_xy, ids, id_field):
                if str(at.get(id_field) if at.get(id_field) is not None else "").strip()
                .split(".")[0].lstrip("0") in ids]
         if hit:
-            ln = min((h[0] for h in hit), key=lambda l: _nearest_on_line(l, center_xy)[0])
-            return ln, _nearest_on_line(ln, center_xy)[0], "DWR structure {}".format(
-                sorted(ids)[0])
+            # 3.20.13: held to the DWR line guard (core/dwr_lines.guard: nearest point within
+            # 500 m, centre within 1000 m, not degenerate); a refused match is never replaced
+            # by the nearest line (a neighbour's)
+            refused = None
+            for ln in sorted((h[0] for h in hit),
+                             key=lambda l: _nearest_on_line(l, center_xy)[0]):
+                why, _gi = dwr_lines.guard([tuple(map(float, q)) for q in np.asarray(ln)],
+                                           center_xy)
+                if why is None:
+                    return ln, _nearest_on_line(ln, center_xy)[0], "DWR structure {}".format(
+                        sorted(ids)[0])
+                refused = refused or why
+            return None, _nearest_on_line(hit[0][0], center_xy)[0], \
+                CREST_REFUSED.format(sorted(ids)[0], refused)
     ln = min((x[0] for x in lines_attrs), key=lambda l: _nearest_on_line(l, center_xy)[0])
     d = _nearest_on_line(ln, center_xy)[0]
     if d > CREST_SNAP_M:
@@ -315,8 +329,8 @@ def qa_maps_param(alg, parameters, context):
 DAM_POINT_CHECK_MODES = ("off", "warn", "move")
 DAM_POINT_CHECK_LABELS = (
     "Off (use the dam point as given, as before 3.20.11)",
-    "Warn only (check it; never move it) - the default",
-    "Move clear cases (use the embankment found; otherwise warn)")
+    "Warn only (check it; never move it)",
+    "Move clear cases (use the embankment found; otherwise warn) - the default")
 DAM_POINT_CHECK_TIP = (
     "When there is no dam line, crest line, breach inflow point or top of dam, the dam point is "
     "checked against the reservoir and embankment on the DEM (LiDAR, 5 m or finer). When the "
@@ -324,11 +338,14 @@ DAM_POINT_CHECK_TIP = (
     "would land in the pond) and the embankment is unambiguous (flat water, one pond, the "
     "right height and length, no neighbouring dam), the embankment is used as the dam line and "
     "the run says so first in its warnings; otherwise the point is kept and a REVIEW warning "
-    "says why. The other dams of a batch (or a cascade) are its neighbours; a single dam has "
-    "none, and the report says the neighbour check was not made. Warn only (the default) never "
-    "moves: its REVIEW warning says where the embankment is and whether Move would use it. Off "
-    "is as before 3.20.11. The environment variable NDBREACH_DAM_POINT_CHECK (off / warn / "
-    "move) wins over this.")
+    "says why. A point on the embankment but 10 m or more from the centre of the line found "
+    "moves along to that centre under the same checks (3.20.13). The other dams of a batch (or "
+    "a cascade) are its neighbours; a single dam has none, and the report says the neighbour "
+    "check was not made. Move is the default (3.20.13; the hold-out of 43 dams had 2 wrong "
+    "moves, both DWR-2713, a side dike of the same pond); a batch dam with a DWR dam line uses "
+    "that line instead (USE_DWR_LINES). Warn only never moves: its REVIEW warning says where "
+    "the embankment is and whether Move would use it. Off is as before 3.20.11. The "
+    "environment variable NDBREACH_DAM_POINT_CHECK (off / warn / move) wins over this.")
 
 
 def _batch_points(feats, id_field, to_dem, height_field=None):
@@ -1649,6 +1666,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         st.breach_xy = None
         st.midcrest_line = None
         st.dam_point_lines = None
+        self._crest_refused = None
         src = self.parameterAsSource(parameters, "CREST_LINE", context)
         if src is not None:
             a, b = tf(src)
@@ -1662,6 +1680,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             clines = qio.lines(src, a, b, center_xy, radius,
                                fields=[id_field] if id_field else ())
             crest, _dist, how = _pick_crest_line(clines, center_xy, ids, id_field)
+            if crest is None and how.startswith(CREST_REFUSED.split("{")[0]):
+                self._crest_refused = how            # 3.20.13: the run warns (workflow)
+                notes.append(how + ". The dam point is used as given.")
             # 3.20.11: the other dams' crest lines, so the dam point check never moves this dam
             # onto one of them
             st.dam_point_lines = [[(float(p[0]), float(p[1])) for p in np.asarray(ln)]
@@ -2022,6 +2043,8 @@ class RunDamAlgorithm(_Base):
             feedback.pushInfo(n)
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
             feedback.pushInfo(n)
+        if getattr(self, "_crest_refused", None):                     # 3.20.13
+            dam._crest_line_refused = self._crest_refused
         try:
             if st.scenario in workflow.FLOOD_SCENARIOS:
                 st.flood = self.flood_inputs(parameters, context, dam,
@@ -2277,7 +2300,9 @@ BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Brea
                 "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
                 "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac",
                 # 3.20.11: appended, so the columns above keep their places
-                "Dam_Point_Check")
+                "Dam_Point_Check",
+                # 3.20.13: appended - the dam's DWR dam line (core/dwr_lines.py)
+                "Dam_Line")
 
 
 def _batch_metrics(s):
@@ -2350,6 +2375,22 @@ def batch_flag(dam_id, feat=None):
             if e:
                 return e
     return None
+
+
+def _feature_attrs(feat):
+    """3.20.13: {field: value} of a feature (NULL as None)."""
+    out = {}
+    try:
+        names = feat.fields().names()
+    except Exception:                                     # noqa: BLE001
+        return out
+    for n in names:
+        try:
+            v = feat[n]
+        except Exception:                                 # noqa: BLE001
+            continue
+        out[n] = None if v is None or (hasattr(v, "isNull") and v.isNull()) else v
+    return out
 
 
 WORKER_FILE_PROVIDERS = ("ogr", "gdal")
@@ -2451,6 +2492,21 @@ class BatchAlgorithm(_Base):
         for key, desc, num in BATCH_FIELD_KEYS:
             self._field(key, desc + " (empty = match by name)", "DAMS", numeric=num,
                         optional=True)
+        # 3.20.13 (Nick 2026-11-17): each dam's DWR dam line, its point at the line's centre
+        self._bool("USE_DWR_LINES", "Use each dam's DWR dam line (from the DWR dam lines "
+                   "layer, else the offline pack) and put the dam point at its centre", True,
+                   help="The dam's line is found by its DWR structure id (the structure id "
+                   "field, a DWR-NNNN dam ID, dam.json, or its NID in the DWR dams) and used "
+                   "as the dam line, exactly as DAM_LINES in the single-dam tool. A crest line "
+                   "(CREST_LINE) wins; a line more than 500 m from the dam point (its centre "
+                   "1000 m) or degenerate is not used, with a warning. A Use_DWR_Line field of "
+                   "0 turns it off for one dam.")
+        self.addParameter(QgsProcessingParameterFeatureSource(
+            "DAM_LINES", "DWR dam lines (empty = the offline pack's DWR_dam_lines)",
+            [SOURCE_LINE], optional=True))
+        self._field("F_STRUCTURE", "DWR structure id field (empty = structure_id, a DWR-NNNN "
+                    "dam ID, dam.json, or the NID in the DWR dams)", "DAMS", numeric=False,
+                    optional=True, advanced=True)
         self.addParameter(QgsProcessingParameterEnum(
             "METHOD", "Breach (ND 5.1.1(d))", [m[1] for m in METHODS], defaultValue=0))
         self.addParameter(QgsProcessingParameterEnum(
@@ -2622,6 +2678,98 @@ class BatchAlgorithm(_Base):
                 feedback.reportError("{}: {}".format(dam_id, w), fatalError=False)
         return "in worker processes, " + text
 
+    def _dwr_line_sources(self, parameters, context, feedback):
+        """3.20.13: where the batch's DWR dam lines come from (core/dwr_lines.py): the
+        DAM_LINES layer, else the offline pack's DWR_dam_lines (through its manifest)."""
+        out = {"on": True, "layer": None, "layer_id": "", "index": None, "why": "",
+               "field": "", "nid": None}
+        if self.parameterDefinition("USE_DWR_LINES") is not None and \
+                parameters.get("USE_DWR_LINES") not in (None, ""):
+            out["on"] = self.parameterAsBool(parameters, "USE_DWR_LINES", context)
+        if self.parameterDefinition("F_STRUCTURE") is not None:
+            out["field"] = self._str(parameters, "F_STRUCTURE", context)
+        out["off_why"] = "off (USE_DWR_LINES)"
+        if out["on"] and dwr_lines.env_off():
+            out["on"], out["off_why"] = False, "off ({})".format(dwr_lines.ENV)
+        if not out["on"]:
+            feedback.pushInfo("DWR dam lines: not used ({})".format(out["off_why"]))
+            return out
+        if self.parameterDefinition("DAM_LINES") is not None and parameters.get("DAM_LINES"):
+            lay = self.parameterAsSource(parameters, "DAM_LINES", context)
+            if lay is not None:
+                out["layer"] = lay
+                out["layer_id"] = next((n for n in qio.field_names(lay)
+                                        if n.lower() in dwr_lines.SID_FIELDS), "")
+                feedback.pushInfo("DWR dam lines: the DWR dam lines layer ({})".format(
+                    "matched by {}".format(out["layer_id"]) if out["layer_id"] else
+                    "no structure id field: the nearest line within {:.0f} m".format(
+                        dwr_lines.NEAR_M)))
+        if out["layer"] is None:
+            idx, path, label = dwr_lines.open_lines()      # never raises
+            if idx is not None:
+                out["index"] = idx
+                feedback.pushInfo("DWR dam lines: {} lines from {} ({})".format(
+                    idx.count, label, path))
+            else:
+                out["why"] = label
+                feedback.pushInfo("DWR dam lines: none ({}); the dam points are used as "
+                                  "given".format(out["why"]))
+        cache = {}
+
+        def nid(v):
+            if "f" not in cache:
+                cache["f"] = dwr_lines.nid_lookup_for(dwr_lines.dams_source())
+            return cache["f"](v) if cache["f"] else ""
+        out["nid"] = nid
+        return out
+
+    def _dwr_line(self, dam, st, dwr, attrs, ids, work, xy, context, dam_id, feedback):
+        """3.20.13: the dam's DWR dam line as its dam line (dwr_lines.resolve); the new dam
+        point (the line's centre) or None."""
+        if st.midcrest_line is not None:
+            if dwr["on"]:
+                dwr_lines.not_used(dam, "a crest line (CREST_LINE) is given")
+            return None
+        if not dwr["on"]:
+            dwr_lines.not_used(dam, dwr["off_why"])
+            return None
+        if dwr_lines.row_switch(attrs) is False:
+            dwr_lines.not_used(dam, "off (Use_DWR_Line = 0)")
+            feedback.pushInfo("{}: DWR dam line not used (Use_DWR_Line = 0)".format(dam_id))
+            return None
+        layer = to_work = None
+        if dwr["layer"] is not None:
+            lay = dwr["layer"]
+            try:
+                a = QgsCoordinateTransform(lay.sourceCrs(), work, context.transformContext())
+                b = QgsCoordinateTransform(work, lay.sourceCrs(), context.transformContext())
+                layer = (qio.lines(lay, a, b, xy, dwr_lines.LAYER_RADIUS_M,
+                                   fields=[dwr["layer_id"]] if dwr["layer_id"] else ()),
+                         dwr["layer_id"])
+            except Exception as e:                       # noqa: BLE001 - never fail the dam
+                why = "DWR dam lines layer not read ({}: {})".format(type(e).__name__, e)
+                dwr_lines.not_used(dam, why)
+                feedback.pushInfo("{}: {}".format(dam_id, why))
+                return None
+        elif dwr["index"] is not None:
+            ct = QgsCoordinateTransform(QgsCoordinateReferenceSystem(dwr["index"].crs), work,
+                                        context.transformContext())
+
+            def to_work(pts, ct=ct):
+                out = []
+                for x, y in pts:
+                    q = ct.transform(QgsPointXY(float(x), float(y)))
+                    out.append((q.x(), q.y()))
+                return out
+        new, info, warn = dwr_lines.resolve(dam, xy, ids, dwr["index"], to_work, layer,
+                                            dwr["why"])
+        if info and info.get("used"):
+            feedback.pushInfo("{}: {}".format(dam_id, info.get("text")))
+            return new
+        if warn:
+            feedback.pushInfo("{}: {}".format(dam_id, warn))
+        return None
+
     def processAlgorithm(self, parameters, context, feedback):
         src_layer = self.parameterAsSource(parameters, "DAMS", context)
         if src_layer is None:
@@ -2649,6 +2797,7 @@ class BatchAlgorithm(_Base):
         feats = list(src_layer.getFeatures())
         others_dem = _batch_points(feats, fld.get("F_ID"), to_dem,          # 3.20.11
                                    fld.get("F_HEIGHT"))
+        dwr = self._dwr_line_sources(parameters, context, feedback)         # 3.20.13
         n = max(1, len(feats))
         rows = []
         only = set(x.strip() for x in self._str(parameters, "ONLY_IDS", context).split(",")
@@ -2743,7 +2892,20 @@ class BatchAlgorithm(_Base):
                                  else "parameter",
                                  "point": self.point_info(p, dem.crs(), work, (xy.x(), xy.y()),
                                                           context)}
+                # 3.20.13: the dam's DWR structure id(s): CREST_LINE matches its line by them
+                # (it took the nearest line in a batch before) and so does the DWR dam line
+                attrs = _feature_attrs(feat)
+                ids = dwr_lines.structure_ids(dam_id, attrs, rec, field=dwr["field"],
+                                              nid_lookup=dwr["nid"])
+                self._crest_ids = set(s_ for s_, _h in ids)
                 self.apply_features(st, parameters, context, work, (xy.x(), xy.y()))
+                if getattr(self, "_crest_refused", None):                 # 3.20.13
+                    dam._crest_line_refused = self._crest_refused
+                    feedback.pushInfo("{}: {}".format(dam_id, self._crest_refused))
+                new_xy = self._dwr_line(dam, st, dwr, attrs, ids, work, (xy.x(), xy.y()),
+                                        context, dam_id, feedback)
+                if new_xy is not None:
+                    xy = QgsPointXY(new_xy[0], new_xy[1])
                 # 3.20.11: the other dams of this batch near this one, for the dam point check
                 # (it never moves a dam onto its neighbour's embankment)
                 st.dam_point_others = _other_dams_near(others_dem, i, p, to_work, dem.crs())
@@ -2769,6 +2931,7 @@ class BatchAlgorithm(_Base):
                         raise QgsProcessingException(str(e))
                 s = res.summary
                 row["Dam_Point_Check"] = s.get("dam_point_check", "")     # 3.20.11
+                row["Dam_Line"] = s.get("dam_line", "")                    # 3.20.13
                 if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
                     row.update({"Status": "no breach", "Message": "the dam does not fail in "
                                                                   "this flood"})

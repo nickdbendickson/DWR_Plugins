@@ -122,6 +122,7 @@ try:
     grid_mod = importlib.import_module(PKG + ".core.grid")
     units = importlib.import_module(PKG + ".core.units")
     bworkers = importlib.import_module(PKG + ".core.batch_workers")      # 3.20.0
+    dwr_lines = importlib.import_module(PKG + ".core.dwr_lines")         # 3.20.13
     sflags = importlib.import_module(PKG + ".damsuite.structure_flags")
 except Exception as _e:              # pragma: no cover
     _fail_import(_e)
@@ -139,7 +140,9 @@ BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Brea
                 "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
                 "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac",
                 # 3.20.11: appended, so the columns above keep their places
-                "Dam_Point_Check")
+                "Dam_Point_Check",
+                # 3.20.13: appended - the dam's DWR dam line (core/dwr_lines.py)
+                "Dam_Line")
 
 
 def _batch_metrics(s):
@@ -257,14 +260,15 @@ SECTIONS = {
                "channel_width_ft": ("num", 1.0, None), "channel_depth_ft": ("num", 0.0, None),
                "ponds": ("path",), "pond_depth_ft": ("num", 0.1, None),
                "refine_lines": ("path",), "gauges": ("path",), "gauge_name_field": ("str",),
-               "vector_crs": ("str",)},
+               "vector_crs": ("str",), "dam_lines": ("path",)},
     "manning": {"n": ("num", 0.005, 1.0), "raster": ("path",), "nlcd": ("path",),
                 "nlcd_n": ("any",)},
     "model": dict((k, v[1]) for k, v in MODEL_KEYS.items()),
     "output": {"folder": ("path",), "keep_model_files": ("bool",), "products": ("bool",),
                "resume": ("bool",)},
     "batch": {"x_field": ("str",), "y_field": ("str",), "crs": ("str",), "fields": ("dict",),
-              "skip_done": ("bool",)},
+              "skip_done": ("bool",), "use_dwr_lines": ("bool",),
+              "structure_id_field": ("str",)},
 }
 DAM_KEYS = tuple(f.name for f in dataclasses.fields(brmod.DamData))
 OVERRIDE_KEYS = tuple(f.name for f in dataclasses.fields(brmod.BreachOverrides))
@@ -474,7 +478,7 @@ TEMPLATE = {
         "structure_defaults": {"kind": "culvert", "width_ft": 4.0, "height_ft": 4.0},
         "channels": None, "channel_width_ft": 15.0, "channel_depth_ft": 1.0, "ponds": None,
         "pond_depth_ft": 5.0, "refine_lines": None, "gauges": None, "gauge_name_field": None,
-        "vector_crs": None},
+        "vector_crs": None, "dam_lines": None},
     "manning": {
         "_help": "n where there is no raster; raster of n values, or an NLCD class raster "
                  "(nlcd, with nlcd_n overrides like {\"82\": 0.05}).",
@@ -502,7 +506,7 @@ TEMPLATE = {
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
         "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
-        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M, "dam_point_check": "warn",
+        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M, "dam_point_check": workflow.dpc.DEFAULT_MODE,
         "max_wall_s": 0.0, "max_total_wall_s": 0.0, "lisflood_rate": None},
     "output": {
         "_help": "Each dam goes to <folder>/<Dam ID>/, as in the QGIS tools.",
@@ -513,8 +517,13 @@ TEMPLATE = {
                  "F_AREA, F_PMF, F_BOTTOM, F_CREST, F_US, F_DS, F_LENGTH, F_POOL to columns. "
                  "Point columns x_field/y_field (auto: x/y, easting/northing, lon/lat) are in "
                  "the DEM's CRS unless crs says otherwise (needs GDAL). Values in the table "
-                 "win over the 'dam' section.",
-        "x_field": None, "y_field": None, "crs": None, "fields": {}, "skip_done": True},
+                 "win over the 'dam' section. use_dwr_lines (3.20.13): each dam's DWR dam line "
+                 "(layers.dam_lines, else the offline pack's DWR_dam_lines; matched by the "
+                 "structure id column - structure_id_field, else structure_id, a DWR-NNNN dam "
+                 "ID or the NID in the DWR dams) is its dam line and the point goes to its "
+                 "centre (needs GDAL); a Use_DWR_Line column of 0 turns it off for one dam.",
+        "x_field": None, "y_field": None, "crs": None, "fields": {}, "skip_done": True,
+        "use_dwr_lines": True, "structure_id_field": None},
 }
 
 
@@ -1862,6 +1871,7 @@ def cmd_batch(args):
     skip_done = cfg.get("batch", "skip_done", True)
     cache, layers = {}, LayerCache()
     batch_crs = cfg.get("batch", "crs")
+    dwr = _dwr_sources(cfg, headers)                                    # 3.20.13
     results = []
     n = max(1, len(rows))
     base_opts = args
@@ -1903,6 +1913,8 @@ def cmd_batch(args):
             out["Scenario"] = p.st.scenario
             for note in p.notes:
                 say(note)
+            # 3.20.13: the dam's DWR dam line as its dam line, the point at its centre
+            _dwr_line_cli(cfg, p, row, dam_id, dwr, layers)
             # 3.20.11: the table's other dams near this one, for the dam point check
             p.st.dam_point_others = _batch_others(all_points, i, (x, y), p.setup.frame)
             res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
@@ -1910,6 +1922,7 @@ def cmd_batch(args):
             _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
             s = res.summary
             out["Dam_Point_Check"] = s.get("dam_point_check", "")       # 3.20.11
+            out["Dam_Line"] = s.get("dam_line", "")                     # 3.20.13
             if not s.get("breach_occurs", True) and not s.get("no_breach_scenario"):
                 out.update({"Status": "no breach",
                             "Message": "the dam does not fail in this flood"})
@@ -2050,6 +2063,132 @@ def _batch_queue(args, cfg, out_root, queue, workers, run_one):
         bworkers.fill_row(out, BATCH_FIELDS, results[i], *files[i])
         if out["Status"] == "failed":
             sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, out["Message"]))
+
+
+def _is_geojson(path):
+    return str(path).lower().endswith((".geojson", ".json"))
+
+
+def _dwr_sources(cfg, headers=()):
+    """3.20.13: where the batch's DWR dam lines come from (core/dwr_lines.py): layers.dam_lines
+    (GeoJSON as the other layers; a GeoPackage or another GDAL format through dwr_lines'
+    reader, as the offline pack), else the offline pack's DWR_dam_lines (through its manifest).
+    A file that cannot be read means no DWR lines, never a failed batch."""
+    out = {"on": cfg.get("batch", "use_dwr_lines", True) is not False, "index": None,
+           "why": "", "layer": cfg.path_of(cfg.section("layers").get("dam_lines")),
+           "field": cfg.get("batch", "structure_id_field") or "", "nid": None}
+    if out["field"] and headers and out["field"] not in headers:
+        raise CliError("batch.structure_id_field: the table has no column '{}' (it has: "
+                       "{})".format(out["field"], ", ".join(headers)))
+    out["off_why"] = "off (batch.use_dwr_lines)"
+    if out["on"] and dwr_lines.env_off():
+        out["on"], out["off_why"] = False, "off ({})".format(dwr_lines.ENV)
+    if not out["on"]:
+        say("DWR dam lines: not used ({})".format(out["off_why"]))
+        return out
+    if out["layer"] and not _is_geojson(out["layer"]):
+        # the plugin's DAM_LINES takes any OGR layer: a GeoPackage here too
+        idx = dwr_lines.line_index(out["layer"], dwr_lines.SOURCE_LAYER)
+        if idx is not None and idx.count:
+            out["index"] = idx
+            say("DWR dam lines: {} lines from layers.dam_lines ({})".format(idx.count,
+                                                                            out["layer"]))
+        else:
+            out["why"] = "no lines read from layers.dam_lines ({}{})".format(
+                out["layer"], ": {}".format(idx.error) if idx is not None and idx.error else
+                "" if idx is not None else ": not found")
+            say("DWR dam lines: none ({}); the dam points are used as given".format(out["why"]))
+        out["layer"] = None
+    elif out["layer"]:
+        say("DWR dam lines: layers.dam_lines ({})".format(out["layer"]))
+    else:
+        idx, path, label = dwr_lines.open_lines()          # never raises
+        if idx is not None:
+            out["index"] = idx
+            say("DWR dam lines: {} lines from {} ({})".format(idx.count, label, path))
+        else:
+            out["why"] = label
+            say("DWR dam lines: none ({}); the dam points are used as given".format(out["why"]))
+    cache = {}
+
+    def nid(v):
+        if "f" not in cache:
+            cache["f"] = dwr_lines.nid_lookup_for(dwr_lines.dams_source())
+        return cache["f"](v) if cache["f"] else ""
+    out["nid"] = nid
+    return out
+
+
+def _dam_record(folder):
+    """The dam folder's dam.json record (None when there is none or it cannot be read)."""
+    try:
+        return importlib.import_module(PKG + ".core.damjson").load(folder)[0]
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
+def _dwr_line_cli(cfg, p, row, dam_id, dwr, layers):
+    """3.20.13: the dam's DWR dam line as its dam line (dwr_lines.resolve): p.dam_xy becomes the
+    line's centre. As the QGIS batch's _dwr_line (the structure ids from the row and the dam
+    folder's dam.json). A layer that cannot be read leaves the point as given, with a note."""
+    dam = p.dam
+    if not dwr["on"]:
+        dwr_lines.not_used(dam, dwr["off_why"])
+        return
+    if getattr(dam, "crest_line_xy", None):
+        dwr_lines.not_used(dam, "a dam line is given")
+        return
+    if dwr_lines.row_switch(row) is False:
+        dwr_lines.not_used(dam, "off (Use_DWR_Line = 0)")
+        say("{}: DWR dam line not used (Use_DWR_Line = 0)".format(dam_id))
+        return
+    ids = dwr_lines.structure_ids(dam_id, row, _dam_record(p.folder), field=dwr["field"],
+                                  nid_lookup=dwr["nid"])
+    layer = to_work = None
+    try:
+        if dwr["layer"]:
+            feats = layers.in_work(dwr["layer"], p.setup,
+                                   cfg.section("layers").get("vector_crs"), True)
+            names = set()
+            for _k, _parts, props in feats:
+                names.update(props or {})
+            idf = next((n for n in names if str(n).lower() in dwr_lines.SID_FIELDS), "")
+            cx, cy = p.dam_xy
+            r = dwr_lines.LAYER_RADIUS_M
+            lines = [(np.asarray(part, dtype=float), props or {}) for k, parts, props in feats
+                     if k == "line" for part in parts
+                     if len(part) >= 2 and in_box(np.asarray(part, dtype=float), (cx, cy), r)]
+            layer = (lines, idf)
+        elif dwr["index"] is not None:
+            fr = p.setup.frame
+            crs = dwr["index"].crs
+            if fr.dem_epsg and str(fr.dem_epsg).upper() == crs.upper() and \
+                    (fr.identity or fr.work_srs is None):
+                def to_work(pts):                    # the lines are in the DEM's (= model) CRS
+                    return [(float(x), float(y)) for x, y in pts]
+            elif fr.osr is None or fr.work_srs is None:
+                dwr_lines.not_used(dam, "the DWR dam lines ({}) need GDAL to change coordinate "
+                                        "systems".format(crs))
+                say("{}: DWR dam line not used: no GDAL to convert its coordinates".format(
+                    dam_id))
+                return
+            else:
+                src = fr.srs(crs)
+
+                def to_work(pts):
+                    return [tuple(q) for q in fr.array(pts, src).tolist()]
+    except Exception as e:                               # noqa: BLE001 - never fail the dam
+        why = "DWR dam lines not read ({})".format(e)
+        dwr_lines.not_used(dam, why)
+        say("{}: {}; the dam point is used as given".format(dam_id, why))
+        return
+    new, info, warn = dwr_lines.resolve(dam, p.dam_xy, ids, dwr["index"], to_work, layer,
+                                        dwr["why"])
+    if info and info.get("used"):
+        p.dam_xy = (float(new[0]), float(new[1]))
+        say("{}: {}".format(dam_id, info.get("text")))
+    elif warn:
+        say("{}: {}".format(dam_id, warn))
 
 
 def _batch_point_to_dem(cfg, cache, crs_text, x, y):

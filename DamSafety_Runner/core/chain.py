@@ -355,6 +355,12 @@ def stage_inputs(stage, values, cv):
         # imports again when it changes - and once after 3.10.84, whose default is the cell
         # minimum (the import of 3.10.83 and earlier always used the terrain)
         out["depth_basis_env"] = str(os.environ.get(DEPTH_BASIS_ENV) or "").strip().lower()
+    if stage == "runner":
+        # 3.20.13: the dam point placement rules (each dam's DWR dam line, the dam point check
+        # moving by default). A dam finished by an earlier Runner is run again once on a
+        # resume, so Nick's kit picks up the DWR line without --redo
+        from . import dwr_lines
+        out["dam_line_rule"] = dwr_lines.rule_state()
     return out
 
 
