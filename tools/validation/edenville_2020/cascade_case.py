@@ -233,8 +233,8 @@ def _dam_data(d):
     # Edenville failed by static liquefaction (not overtopping) with the lake near its storm peak.
     # This run starts the sunny-day breach at NORMAL pool, not at the top of dam (the Runner's
     # default sunny-day start) and not at the higher storm pool: a reproducible lower-bound release
-    # (Vw = storage at normal pool, ~40,000 ac-ft). The storm-pool case is in the team storm
-    # harness (edenville-storm-2026-11-18), which also tests a record-based partial breach.
+    # (Vw = storage at normal pool, ~40,000 ac-ft), not the larger storm-pool volume and not a
+    # partial breach limited to the 30-32 ft section that actually failed.
     if d.get("scenario") == "sunny" and d.get("normal_pool_ft") is not None:
         dd.start_below_top_ft = round(d["top_of_dam_ft"] - d["normal_pool_ft"], 2)
     return dd
