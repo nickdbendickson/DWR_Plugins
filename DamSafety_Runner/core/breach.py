@@ -186,12 +186,21 @@ class Hydrograph:
         exactly instead of being clipped by the grid. Ends with a zero."""
         t_end = float(self.t_s[-1])
         grid = np.arange(0.0, t_end, dt_s)
-        orig = np.asarray(self.t_s, dtype=float)
+        orig = np.unique(np.asarray(self.t_s, dtype=float))
         # regular points too close to a breakpoint would print as the same time in the model
-        # files; the breakpoints themselves are kept exactly (they hold the peak)
-        far = np.abs(grid[:, None] - orig[None, :]).min(axis=1) > 0.002 if len(orig) < 5000 \
-            else np.ones(len(grid), bool)
-        t = np.unique(np.concatenate([orig, grid[far], [t_end]]))
+        # files (LISFLOOD-FP stops on "Time Series invalid time values"); the breakpoints
+        # themselves are kept exactly (they hold the peak). Nearest breakpoint by a sorted
+        # search, so long routed hydrographs (thousands of breakpoints) are checked too.
+        if len(orig) > 1:
+            k = np.clip(np.searchsorted(orig, grid), 1, len(orig) - 1)
+            near = np.minimum(np.abs(grid - orig[k - 1]), np.abs(grid - orig[k]))
+        else:
+            near = np.abs(grid - orig[0])
+        t = np.unique(np.concatenate([orig, grid[near > 0.002], [t_end]]))
+        # breakpoints closer than that to each other (a routed record) print as one time too
+        t = t[np.concatenate([[True], np.diff(t) > 0.002])]
+        if t[-1] != t_end:
+            t[-1] = t_end
         q = np.interp(t, self.t_s, self.q_cms, right=0.0)
         if q[-1] != 0.0:
             t = np.append(t, t[-1] + dt_s)
