@@ -1997,6 +1997,32 @@ class EvidenceSources(unittest.TestCase):
         with self.assertRaises(ValueError):
             evd.review_order([0.5, 0.6], wet_years=[1])
 
+    def test_review_order_pond_outlet_fills_drop_four_bands(self):
+        #         0     1     2     3
+        score = [0.85, 0.45, 0.62, 0.41]
+        out   = [True, False, False, False]
+        # the pond-outlet fill scoring 0.85 counts as band 0.4 and comes after the other fills
+        # there (0.45, 0.41), not before 0.62
+        self.assertEqual(evd.review_order(score, outlets=out), [4, 2, 1, 3])
+        self.assertEqual(evd.OUTLET_DROP_BANDS, 4)
+        # in the band it lands in it comes after the others even when they are dry and it is wet,
+        # or they have nothing below and it has a town
+        self.assertEqual(evd.review_order([0.45, 0.85], wet_years=[0, 5], outlets=[False, True]), [1, 2])
+        self.assertEqual(evd.review_order([0.45, 0.85], [0.0, 50.0], outlets=[False, True]), [1, 2])
+        # outlet_drop 0: same band, still after the other fills of it
+        self.assertEqual(evd.review_order([0.55, 0.52], outlets=[True, False], outlet_drop=0), [2, 1])
+        # two pond-outlet fills of one band: the usual order between them (the score here)
+        self.assertEqual(evd.review_order([0.81, 0.88], outlets=[True, True]), [2, 1])
+        # a pond-outlet fill pushed below band 0 is still before every unscored fill; unscored
+        # pond-outlet fills come last
+        self.assertEqual(evd.review_order([None, 0.3], outlets=[False, True]), [2, 1])
+        self.assertEqual(evd.review_order([None, None], outlets=[True, False]), [2, 1])
+        # no flags, or none true: the 0.7.1 order
+        self.assertEqual(evd.review_order(score, outlets=None), evd.review_order(score))
+        self.assertEqual(evd.review_order(score, outlets=[0, 0, 0, 0]), evd.review_order(score))
+        with self.assertRaises(ValueError):
+            evd.review_order([0.5, 0.6], outlets=[True])
+
     def test_bare_ground_and_class_share(self):
         m = evd.disk((100, 100), self.GT1, 50.0, 50.0, 30.0)
         red = np.where(m, 200.0, 60.0)
