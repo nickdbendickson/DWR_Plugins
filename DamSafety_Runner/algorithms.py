@@ -47,6 +47,20 @@ SET_SOLVER = "NDBREACH_LISFLOOD_SOLVER"           # 3.16.0: default LISFLOOD-FP 
 SET_CREST_DEM = "NDBREACH_CREST_BURN_DEM"         # 3.15.0: the 1 m DEM (VRT) the crest burn reads
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
+
+
+def _xz_overrides(alg, parameters, context):
+    """3.21.0: the Xu & Zhang (2009) dam type and erodibility, when the algorithm has them."""
+    out = {}
+    if alg.parameterDefinition("XZ_DAM_TYPE") is not None:
+        i = alg.parameterAsEnum(parameters, "XZ_DAM_TYPE", context)
+        out["xz_dam_type"] = brmod.XZ_DAM_TYPES[i] if 0 <= i < len(brmod.XZ_DAM_TYPES) \
+            else brmod.XZ_DAM_TYPES[0]
+    if alg.parameterDefinition("XZ_ERODIBILITY") is not None:
+        i = alg.parameterAsEnum(parameters, "XZ_ERODIBILITY", context)
+        out["xz_erodibility"] = brmod.XZ_ERODIBILITY[i] if 0 <= i < len(brmod.XZ_ERODIBILITY) \
+            else "medium"
+    return out
 from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
@@ -623,6 +637,15 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                       minimum=0.05, advanced=True)
             self._bool("VTG_ERODIBLE", "Von Thun & Gillette: erodible embankment (else "
                        "resistant)", True, advanced=True)
+            for pid, desc, opts in (
+                    ("XZ_DAM_TYPE", "Xu & Zhang: dam type",
+                     [brmod.XZ_DAM_TYPE_TEXT[k] for k in brmod.XZ_DAM_TYPES]),
+                    ("XZ_ERODIBILITY", "Xu & Zhang: embankment erodibility",
+                     list(brmod.XZ_ERODIBILITY))):
+                p = QgsProcessingParameterEnum(pid, desc, opts, defaultValue=(
+                    0 if pid == "XZ_DAM_TYPE" else 1))
+                set_advanced(p)
+                self.addParameter(p)
             self._num("PARTIAL_DEPTH", "Partial breach: breach depth as a share of the dam "
                       "height (0.1-1; empty = full depth)", optional=True, minimum=0.1,
                       maximum=1.0, advanced=True)
@@ -1161,7 +1184,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                 self._opt(parameters, "FORMATION_HR", context),
                 self._opt(parameters, "SIDE_SLOPE", context),
                 pipe_time_fraction=g("PIPE_FRACTION"), pipe_initial_dia_ft=g("PIPE_DIA_FT"),
-                vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
+                vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context),
+                **_xz_overrides(self, parameters, context))
         if self.parameterDefinition("BASELINE") is not None:
             st.baseline = self.parameterAsBool(parameters, "BASELINE", context)
             st.incr_thresholds_ft = _floats(self._str(parameters, "INCR_FT", context),
@@ -2247,7 +2271,7 @@ class SensitivityAlgorithm(RunDamAlgorithm):
         # 3.14.6 (GUI check 2026-11-04): short labels, the detail in the help (1270-1400 px wide)
         self._bool("SENS_METHODS", "Also run the other parameter methods", True,
                    help="Also run the other parameter methods: Froehlich 2008 overtopping, "
-                   "Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60.")
+                   "Froehlich 1995, MacDonald, Von Thun & Gillette, Xu & Zhang piping, TR-60.")
         self._bool("SENS_CELL", "Cell-size convergence check (half the cell size)", True,
                    help="Run the base case again at half the cell size on the same domain and "
                    "report the fit index between the two depth rasters and whether the Runner's "
@@ -3237,7 +3261,8 @@ class HydrographAlgorithm(_Base):
             o("BREACH_WIDTH"), o("FORMATION_HR"), o("SIDE_SLOPE"),
             pipe_time_fraction=self.parameterAsDouble(parameters, "PIPE_FRACTION", context),
             pipe_initial_dia_ft=self.parameterAsDouble(parameters, "PIPE_DIA_FT", context),
-            vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
+            vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context),
+            **_xz_overrides(self, parameters, context))
         method = METHODS[self.parameterAsEnum(parameters, "METHOD", context)][0]
         try:
             if o("START_WSE_FT") is not None:                # 3.19.0

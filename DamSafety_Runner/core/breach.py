@@ -32,6 +32,8 @@ METHOD_VTG = "vtg1990"
 METHOD_TR60 = "tr60"
 METHOD_TR60_CURVE = "tr60_curvilinear"
 METHOD_USER = "user"
+METHOD_XZ_PIPING = "xu_zhang2009_piping"
+METHOD_XZ_OVERTOPPING = "xu_zhang2009_overtopping"
 
 METHOD_LABELS = {
     METHOD_PIPING: "Piping failure, Froehlich (2008) parameters, routed",
@@ -45,10 +47,16 @@ METHOD_LABELS = {
     METHOD_TR60: "NRCS TR-60 peak breach discharge, triangular hydrograph",
     METHOD_TR60_CURVE: "NRCS TR-60 peak breach discharge, curvilinear hydrograph",
     METHOD_USER: "My own hydrograph (CSV: time hr, discharge cfs)",
+    # 3.21.0: appended after METHOD_USER so the Processing enum indices of the older methods
+    # (saved models, settings) do not move
+    METHOD_XZ_PIPING: "Piping failure, Xu & Zhang (2009) width and side slope, routed",
+    METHOD_XZ_OVERTOPPING: "Overtopping failure, Xu & Zhang (2009) width and side slope, routed",
 }
 METHODS = tuple(METHOD_LABELS)
 ROUTED_METHODS = (METHOD_PIPING, METHOD_PIPING_ORIFICE, METHOD_OVERTOPPING, METHOD_F95_PIPING,
-                  METHOD_F95_OVERTOPPING, METHOD_MLM, METHOD_VTG)
+                  METHOD_F95_OVERTOPPING, METHOD_MLM, METHOD_VTG, METHOD_XZ_PIPING,
+                  METHOD_XZ_OVERTOPPING)
+OVERTOPPING_METHODS = (METHOD_OVERTOPPING, METHOD_F95_OVERTOPPING, METHOD_XZ_OVERTOPPING)
 TR60_METHODS = (METHOD_TR60, METHOD_TR60_CURVE)
 
 # Broad-crested trapezoidal weir, as used by DAMBRK/BREACH (Fread):
@@ -79,6 +87,29 @@ FROEHLICH_2008 = {
 FROEHLICH_1995 = {
     "piping": {"ko": 1.0, "z": 0.9},
     "overtopping": {"ko": 1.4, "z": 1.4},
+}
+
+# 3.21.0: Xu, Y. & Zhang, L.M. (2009) Breaching parameters for earth and rockfill dams.
+# J. Geotech. Geoenviron. Eng. 135(12), 1957-1970; coefficients as tabulated in the HEC-RAS
+# Hydraulic Reference Manual, "Estimating Breach Parameters". Each regression is
+#   Y = a (hd/hr)^p (Vw^(1/3)/hw)^r exp(b3 + b4 + b5),  hr = 15 m,
+# b3 by dam type, b4 by failure mode, b5 by erodibility. Y is Bave/hb (average width), Bt/hb
+# (top width), Tf/(1 h) (failure time) and Qp/sqrt(g Vw^(5/3)) (peak outflow).
+XZ_HR_M = 15.0
+XZ_DAM_TYPES = ("homogeneous", "core_wall", "concrete_faced")
+XZ_DAM_TYPE_TEXT = {"homogeneous": "homogeneous / zoned fill", "core_wall": "core wall",
+                    "concrete_faced": "concrete faced"}
+XZ_ERODIBILITY = ("high", "medium", "low")
+XZ_MODES = ("overtopping", "piping")
+XZ_COEF = {
+    "avg_width": (0.787, 0.133, 0.652, (-0.226, -0.041, 0.026), (0.149, -0.389),
+                  (0.291, -0.14, -0.391)),
+    "top_width": (1.062, 0.092, 0.508, (-0.089, 0.061, 0.088), (0.299, -0.239),
+                  (0.411, -0.062, -0.289)),
+    "time": (0.304, 0.707, 1.228, (-0.189, -0.327, -0.674), (-0.579, -0.611),
+             (-1.205, -0.564, 0.579)),
+    "peak": (0.175, 0.199, -1.274, (-0.649, -0.503, -0.591), (-0.705, -1.039),
+             (-0.007, -0.375, -1.362)),
 }
 
 
@@ -140,6 +171,8 @@ class BreachOverrides:
     pipe_collapse_frac: float = 0.15       # pipe diameter at roof collapse / breach height
     pipe_cd: float = 0.6
     vtg_erodible: bool = True              # Von Thun & Gillette formation time
+    xz_dam_type: str = "homogeneous"       # Xu & Zhang (2009): homogeneous, core_wall, concrete_faced
+    xz_erodibility: str = "medium"         # Xu & Zhang (2009): high, medium, low
     depth_fraction: Optional[float] = None  # partial breach: breach depth / dam height (0.1-1)
 
 
@@ -403,6 +436,54 @@ def vtg_1990(vw_m3, hw_m, erodible=True):
     return b, tf_h * 3600.0, 0.5
 
 
+def _xz(what, vw_m3, hw_m, hd_m, dam_type, mode, erodibility):
+    """One Xu & Zhang (2009) regression, the dimensionless value Y (see XZ_COEF)."""
+    vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
+    hd_m = _positive("dam height hd", hd_m)
+    if dam_type not in XZ_DAM_TYPES:
+        raise BreachInputError("Xu & Zhang dam type must be one of {} (got {!r})".format(
+            ", ".join(XZ_DAM_TYPES), dam_type))
+    if mode not in XZ_MODES:
+        raise BreachInputError("Xu & Zhang failure mode must be one of {} (got {!r})".format(
+            ", ".join(XZ_MODES), mode))
+    if erodibility not in XZ_ERODIBILITY:
+        raise BreachInputError("Xu & Zhang erodibility must be one of {} (got {!r})".format(
+            ", ".join(XZ_ERODIBILITY), erodibility))
+    a, p, r, b3, b4, b5 = XZ_COEF[what]
+    e = (b3[XZ_DAM_TYPES.index(dam_type)] + b4[XZ_MODES.index(mode)]
+         + b5[XZ_ERODIBILITY.index(erodibility)])
+    return a * (hd_m / XZ_HR_M) ** p * (vw_m3 ** (1.0 / 3.0) / hw_m) ** r * math.exp(e)
+
+
+def xu_zhang_2009(vw_m3, hb_m, hw_m, hd_m, mode="piping", dam_type="homogeneous",
+                  erodibility="medium"):
+    """Xu & Zhang (2009): average breach width (m), side slope (H:1V) from the top-width
+    regression, z = (Bt - Bave) / hb for a trapezoid, and their failure time (s).
+    The failure time is reported, not routed: HEC (Hydraulic Reference Manual) notes it
+    includes initiation and post-erosion time and should not be used as the breach
+    formation time."""
+    hb_m = _positive("breach height hb", hb_m)
+    b_avg = hb_m * _xz("avg_width", vw_m3, hw_m, hd_m, dam_type, mode, erodibility)
+    b_top = hb_m * _xz("top_width", vw_m3, hw_m, hd_m, dam_type, mode, erodibility)
+    z = round((b_top - b_avg) / hb_m, 2)
+    tf = 3600.0 * _xz("time", vw_m3, hw_m, hd_m, dam_type, mode, erodibility)
+    return b_avg, z, tf
+
+
+def xu_zhang_2009_peak(vw_m3, hw_m, hd_m, mode="piping", dam_type="homogeneous",
+                       erodibility="medium"):
+    """Xu & Zhang (2009) regression for peak breach outflow, m3/s (a check)."""
+    y = _xz("peak", vw_m3, hw_m, hd_m, dam_type, mode, erodibility)
+    return y * math.sqrt(G * vw_m3 ** (5.0 / 3.0))
+
+
+def mlm_1984_peak(vw_m3, hw_m):
+    """MacDonald & Langridge-Monopolis (1984) best-fit peak breach outflow, m3/s (a check):
+    Q = 1.154 (Vw hw)^0.412 (HEC-RAS Hydraulic Reference Manual; their envelope is 3.85)."""
+    vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
+    return 1.154 * (vw_m3 * hw_m) ** 0.412
+
+
 def embankment_area_ft2(height_ft, crest_ft, us_h, ds_h):
     """Cross-section area of the embankment at the breach (ft2), trapezoid."""
     return height_ft * (crest_ft + 0.5 * (us_h + ds_h) * height_ft)
@@ -596,6 +677,27 @@ def breach_parameters(method, c, dam, ov):
                          "crest length - the eroded-volume regression is likely outside its "
                          "basis for this partial breach; verify.".format(
                              b / FT, dam.crest_length_ft))
+    elif method in (METHOD_XZ_PIPING, METHOD_XZ_OVERTOPPING):
+        mode = "overtopping" if method == METHOD_XZ_OVERTOPPING else "piping"
+        b, z, tf_xz = xu_zhang_2009(c.vw, hb, hw, dam.dam_height_ft * FT, mode,
+                                    ov.xz_dam_type, ov.xz_erodibility)
+        _, tf, _ = froehlich_2008(c.vw, hb, mode)
+        src = "Xu & Zhang (2009), {}, {} dam, {} erodibility; formation time Froehlich " \
+              "(2008)".format(mode, XZ_DAM_TYPE_TEXT[ov.xz_dam_type], ov.xz_erodibility)
+        c.params["xu_zhang_2009_failure_time_hr"] = round(tf_xz / 3600.0, 3)
+        notes.append("Xu & Zhang (2009) give the breach width and side slope. Their failure "
+                     "time ({:.2f} h) includes the breach initiation and the erosion after the "
+                     "peak, so, as HEC advises, the routed formation time is Froehlich (2008) "
+                     "{} ({:.2f} h). Override it if the dam's review gives another."
+                     .format(tf_xz / 3600.0, mode, tf / 3600.0))
+        if z < 0:
+            notes.append("Xu & Zhang top width came out narrower than their average width; "
+                         "side slope set to 0 (vertical).")
+            z = 0.0
+        if ov.xz_erodibility == "medium" and ov.xz_dam_type == "homogeneous":
+            notes.append("Xu & Zhang dam type and erodibility are the defaults (homogeneous / "
+                         "zoned fill, medium erodibility); set them from the embankment "
+                         "materials if known.")
     elif method == METHOD_VTG:
         b, tf, z = vtg_1990(c.vw, hw, ov.vtg_erodible)
         src = "Von Thun & Gillette (1990), {}".format("easily erodible" if ov.vtg_erodible
@@ -787,6 +889,7 @@ def routed_hydrograph(dam, method=METHOD_PIPING, overrides=None, dt_s=None, max_
     })
     hy = Hydrograph(np.asarray(ts), np.asarray(qs), method, params, notes)
     _add_tr60_check(dam, hy)
+    _add_peak_range(dam, hy, ov)
     return hy
 
 
@@ -880,7 +983,9 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
                                  "curvilinear shapes without publishing ordinates. The rise "
                                  "time is the Froehlich (2008) formation time. Use your own CSV "
                                  "if ND DWR expects another shape."})
-    return Hydrograph(t, q, METHOD_TR60_CURVE if curve is not None else METHOD_TR60, params, notes)
+    hy = Hydrograph(t, q, METHOD_TR60_CURVE if curve is not None else METHOD_TR60, params, notes)
+    _add_peak_range(dam, hy, ov)
+    return hy
 
 
 def _add_tr60_check(dam, hy):
@@ -892,6 +997,47 @@ def _add_tr60_check(dam, hy):
         if q is not None:
             hy.params["tr60_peak_cfs_check"] = round(q, 0)
             hy.params["tr60_rule_check"] = rule
+    except Exception:  # a check only
+        pass
+
+
+def _add_peak_range(dam, hy, ov=None):
+    """3.21.0: the peak breach outflow from each regression the run can evaluate, and their
+    range, next to the hydrograph's own peak. Peak-flow regressions carry a large scatter
+    (roughly a factor of 2 to 3 either way), so the range is reported, not a single value.
+    Checks only: nothing here changes the hydrograph."""
+    try:
+        p = hy.params
+        vw = float(p.get("vw_acft", p.get("storage_at_failure_acft"))) * ACFT
+        hw = float(p["hw_ft"]) * FT
+        hd = float(dam.dam_height_ft) * FT
+        if vw <= 0 or hw <= 0 or hd <= 0:
+            return
+        ov = ov or BreachOverrides()
+        mode = p.get("failure_mode") or (
+            "overtopping" if hy.method in OVERTOPPING_METHODS else "piping")
+        mode = mode if mode in XZ_MODES else "piping"
+        peaks = {"Froehlich (1995)": froehlich_1995_peak(vw, hw) / CFS,
+                 "MacDonald & Langridge-Monopolis (1984)": mlm_1984_peak(vw, hw) / CFS,
+                 "Xu & Zhang (2009), {}".format(mode): xu_zhang_2009_peak(
+                     vw, hw, hd, mode, ov.xz_dam_type, ov.xz_erodibility) / CFS}
+        tr60 = p.get("tr60_peak_cfs_check", p.get("tr60_peak_cfs"))
+        if tr60:
+            peaks["NRCS TR-60"] = float(tr60)
+        lo, hi = min(peaks.values()), max(peaks.values())
+        p["xu_zhang_2009_peak_cfs"] = round(peaks["Xu & Zhang (2009), {}".format(mode)], 0)
+        p["mlm_1984_peak_cfs"] = round(peaks["MacDonald & Langridge-Monopolis (1984)"], 0)
+        p["regression_peaks_cfs"] = {k: round(v, 0) for k, v in peaks.items()}
+        p["regression_peak_range_cfs"] = "{:,.0f} to {:,.0f} ({} equations)".format(
+            lo, hi, len(peaks))
+        q = hy.peak_cfs
+        if q > 0 and (q > 1.5 * hi or q < lo / 1.5):
+            hy.notes.append("The hydrograph peak {:,.0f} cfs is {} the range of the peak-flow "
+                            "regressions ({:,.0f} to {:,.0f} cfs: {}). The regressions scatter "
+                            "widely, so this is not an error by itself; review the breach width "
+                            "and formation time against the embankment.".format(
+                                q, "above" if q > hi else "below", lo, hi,
+                                ", ".join(sorted(peaks))))
     except Exception:  # a check only
         pass
 

@@ -1642,6 +1642,10 @@ LABELS = {"peak_inflow_input_cfs": "Peak inflow, breach hydrograph (cfs)",
     "base_time_hr": "Hydrograph base time (h)", "shape": "Hydrograph shape",
     "froehlich_1995_peak_cfs": "Check: Froehlich (1995) peak (cfs)",
     "tr60_peak_cfs_check": "Check: TR-60 peak (cfs)", "tr60_rule_check": "Check: TR-60 rule",
+    "mlm_1984_peak_cfs": "Check: MacDonald & Langridge-Monopolis (1984) peak (cfs)",
+    "xu_zhang_2009_peak_cfs": "Check: Xu & Zhang (2009) peak (cfs)",
+    "regression_peak_range_cfs": "Check: range of the peak-flow regressions (cfs)",
+    "xu_zhang_2009_failure_time_hr": "Xu & Zhang (2009) failure time, not routed (h)",
     "peak_cfs": "Peak breach outflow, routed (cfs)", "time_to_peak_hr": "Time to peak (h)",
     "duration_hr": "Hydrograph duration (h)", "volume_acft": "Hydrograph volume (ac-ft)",
     "source": "Source", "dv_ge_7_ft2s": u"Depth x velocity at least 7 ft²/s",
@@ -1660,7 +1664,9 @@ BREACH_KEYS = ("starting_wse_ft", "starting_wse_rule", "breach_bottom_ft", "hw_f
                "pipe_collapse_dia_ft", "pipe_phase_hr", "tr60_rule", "breach_factor_br_ac",
                "embankment_area_ft2", "rise_time_hr", "base_time_hr", "shape", "released_acft",
                "peak_cfs", "time_to_peak_hr", "duration_hr", "volume_acft",
-               "froehlich_1995_peak_cfs", "tr60_peak_cfs_check", "tr60_rule_check", "source")
+               "xu_zhang_2009_failure_time_hr", "froehlich_1995_peak_cfs", "mlm_1984_peak_cfs",
+               "xu_zhang_2009_peak_cfs", "tr60_peak_cfs_check", "tr60_rule_check",
+               "regression_peak_range_cfs", "source")
 SENS_LABELS = {"case": "Case", "group": "Varied", "method": "Method", "peak_cfs": "Peak (cfs)",
                "flooded_ac": "Flooded (ac)", "flooded_ac_over_arrival_depth":
                    "Flooded > arrival depth (ac)", "max_depth_ft": "Max depth (ft)",
@@ -2310,9 +2316,11 @@ class _Report(object):
                 self.sub("Values supplied by the user")
                 d.paragraph("These replace the computed breach parameters:", keep_next=True)
                 self.kv(given, head=("Parameter", "Value"))
-            d.paragraph("The Froehlich (1995) and TR-60 peaks are checks only. The routed peak "
-                        "can be well above the regression peaks; the breach width and formation "
-                        "time should be reviewed against the dam's embankment and materials.",
+            d.paragraph("The regression peaks (Froehlich 1995, MacDonald & Langridge-Monopolis "
+                        "1984, Xu & Zhang 2009, TR-60) are checks only, and their range shows "
+                        "how uncertain a breach peak is. The routed peak can fall outside it; "
+                        "the breach width and formation time should be reviewed against the "
+                        "dam's embankment and materials.",
                         italic=True, size=9, color="595959")
         if self.warnings:
             self.sub("Notes and warnings recorded by the run")

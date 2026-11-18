@@ -391,6 +391,10 @@ class Config(object):
                         k, _suggest(k, OVERRIDE_KEYS), ", ".join(OVERRIDE_KEYS)))
                 if k == "vtg_erodible":
                     _check_value("breach.overrides.vtg_erodible", v, ("bool",))
+                elif k in ("xz_dam_type", "xz_erodibility"):
+                    _check_value("breach.overrides." + k, v, ("enum", brmod.XZ_DAM_TYPES
+                                                              if k == "xz_dam_type"
+                                                              else brmod.XZ_ERODIBILITY))
                 else:
                     _check_value("breach.overrides." + k, v, ("num", None, None))
             out["overrides"] = {k: v for k, v in out["overrides"].items()
