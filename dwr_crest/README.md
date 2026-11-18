@@ -33,7 +33,8 @@ adds `trace_version` (`outline.ts TRACE_VERSION`).
 - **Results** — import a LISFLOOD-FP or DSS-WISE run for this dam and compare it with the desk's layers.
 - **Dashboard** — the one-screen summary of the flood and its receptors.
 - **Screen** — the ND screening level (ACER TM 11 rules), with every reason listed.
-- **Report** — the printable sheet, the exports (GeoJSON, KML, CSV, `dam.json`, LISFLOOD package) and the QGIS hand-off.
+- **Report** — the printable sheet, the exports (GeoJSON, KML, CSV, `dam.json`, LISFLOOD package) and the QGIS hand-off
+  (desktop app; *Check QGIS hand-off* tests the link without running a dam, see CHANGELOG 2026-11-18).
 
 **What needs the network.** The desk runs offline once opened; these go out:
 
@@ -41,9 +42,11 @@ adds `trace_version` (`outline.ts TRACE_VERSION`).
   the layers still draw.
 - **The terrain layer** (USGS 3DEP), **911 address points** (ND GIS Hub) and **PLSS sections** (BLM) — one request each,
   only when you press the button, and the answer is saved with the dam so it shows offline from then on. The batch
-  screen makes the same 3DEP and 911 requests for every structure it runs.
+  screen makes the same 3DEP and 911 requests for every structure it runs. With the terrain layer, the routed flood
+  also reads USGS 3DHP lake flowlines (`hydro.nationalmap.gov`) to carry the trace across lakes (#116; not in the
+  offline / local-DEM paths, and a failed read is only a note).
 
-Nothing else is loaded: no CDN, no web fonts, no analytics. A Content-Security-Policy enforces that list in all three
+Nothing else is loaded: no CDN, no web fonts, no analytics. A Content-Security-Policy enforces that list in both (web and desktop app)
 (see **Security** below).
 
 The NID / DWR dam lists and the DWR structure list are bundled and never fetched.
@@ -169,7 +172,8 @@ The desk runs under a Content-Security-Policy built in one place, `src/lib/crest
   `web/security-headers.json`.
   No `unsafe-inline` or `unsafe-eval` for scripts anywhere.
 - **Network** is limited to the services named under **Start here**: USGS basemap tiles and OpenStreetMap, USGS 3DEP,
-  the ND GIS Hub 911 points and the BLM PLSS service (plus a tile server set with `VITE_CREST_TILE_URL`). A new
+  USGS 3DHP lake flowlines (`hydro.nationalmap.gov`, from #116), the ND GIS Hub 911 points and the BLM PLSS service
+  (plus a tile server set with `VITE_CREST_TILE_URL`). A new
   service has to be added to `csp.ts`; `csp.test.ts` fails when the source names a host the policy does not.
 - **Subresource Integrity**: the desktop bundle's `index.html` carries a `sha384` hash for its script, preloads and
   stylesheet. Nothing is loaded from another origin, so there is no third-party file to pin. `.gitattributes` stops
@@ -180,9 +184,9 @@ The desk runs under a Content-Security-Policy built in one place, `src/lib/crest
 If a desktop webview ever needs something the policy blocks, start the app with `CREST_NO_CSP=1` to drop the policy
 (the other headers stay) and report what was blocked.
 
-`npm run test:e2e` opens all three in Chromium, walks the eight steps on the first sample dam with every service
+`npm run test:e2e` opens both (the desktop bundle and the web app) in Chromium, walks the eight steps on the first sample dam with every service
 stubbed, and fails on anything the policy blocks (`e2e/`; needs `npx playwright install chromium` once, and
-`npm run build` for the web app). It then runs a batch of nine structures on each of the three and does to it what a
+`npm run build` for the web app). It then runs a batch of nine structures on each of the two and does to it what a
 long batch meets: Stop part way, a reloaded page, Resume, the terrain service dropping (the batch pauses and retries),
 Stop retrying, Resume to the end, the CSV, and a row opened on the desk (`e2e/batch-walk.mjs`).
 

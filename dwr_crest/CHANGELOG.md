@@ -9,6 +9,26 @@
   the page moves it into `sessionStorage` and strips it from the address. The printed address has no token, so opening
   it in another browser shows the desk with its `/api/` buttons refused. Tests: `tests/test_local_api.py`,
   `src/lib/crest/crest-token.test.ts`.
+- **Accuracy (from the Edenville test; #116, paired with damit #120). The routed flood's numbers change.** Six changes,
+  Crest still a screening tool: (1) *Larger starting terrain*: `OUTLINE_MAX_PX` is a cell budget (3000² cells), not a
+  side cap; the first corridor is shortened rather than coarsened (it keeps 10 m cells), 3DEP is read in 2000 px tiles
+  (two at a time) pasted into one grid, reach growth fetches only the new bands (one retry), a box past the budget is
+  cropped back to the traced river before it coarsens, and growth stops at 12 rounds or 60 km. (2) *Edge-aware
+  containment*: a trace that runs off the terrain while at least half the release is still travelling is not
+  "contained", so the reach keeps growing. (3) *Lakes as level pools* (`pools.ts`, `routing.ts`): a flat, wide run of
+  section beds is routed by storage-indication with a broad-crested weir over the outlet section, clamped at the lake
+  surface; the note says when the rise would top the outlet's embankment (Crest does not breach it; use the Runner's
+  cascade). (4) *3DHP lake flowlines* (`flowlines.ts`): USGS 3DHP waterbody-connector lines are burned 5 cm into flat
+  water cells for the trace only, so it crosses a lake where the river runs; off in the offline / local-DEM paths and
+  with `batch-dams --no-flowlines`; a failed read is a note. The CSP adds `hydro.nationalmap.gov`. (5) *Taller
+  recuts*: sections that cannot carry the breach peak inside their lower bank are recut taller. (6) *Scoring harness*
+  `scripts/score-batch.mjs` (scores Crest against a folder of Runner runs, `--sweep`, `--wet-ft`; writes
+  `scores.jsonl`, `scores.csv`, `SUMMARY.md`). As reported in #116: Edenville to Sanford attenuation about 32 % (was
+  about 19 %), Sanford Lake found as an ~842 ac level pool; mean CSI on the four ND baselines 0.49 -> 0.48 at 0.1 ft
+  and 0.37 -> 0.40 at 1 ft; DWR-2801 now finishes contained. `TRACE_VERSION` stays 8 and
+  `docs/accuracy-envelope.md` was not re-scored in this change (see the docs audit of 2026-11-18).
+- **Security scans: two false positives cleared (#115, CI only).** The picomatch ReDoS advisory (`osv-scanner.toml`)
+  and the `build-info.json` hashes (`.gitleaks.toml`) no longer block the Security-scans job. No app change.
 - **Check QGIS hand-off.** A new button on the Report step's "Plugins already in QGIS" panel checks the link to the
   DamSafety plugins without running a dam: it says which `qgis_process` the desk found, which QGIS profile it reads
   (with the dam-suite launcher, the link in `~/dam-suite/qgis-process/damsafety`), and whether each tool the buttons call
