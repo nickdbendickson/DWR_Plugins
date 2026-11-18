@@ -664,16 +664,27 @@ def save_run(result: Dict[str, Any], out_dir: Path, name: str, cn: Optional[floa
 
 def check_pmf_run(rows: List[Dict[str, Any]], basin_json: Path, out_dir: Path,
                   area_mi2: Optional[float] = None) -> Tuple[List[Tuple[str, str]], Dict[str, Path]]:
-    """After an inflow-hydrograph run: compare the largest peak in `rows` (core.hydro.run_folder
+    """After an inflow-hydrograph run: compare the largest PMF peak in `rows` (core.hydro.run_folder
     rows, each with 'peak_cfs' and 'storm_id') with the StreamStats sanity values saved in
     `basin_json`, write streamstats_pmf_check.json and copy the basin + provenance JSON into
-    out_dir. -> ([(level, text)], written files). Never raises on a bad peak: a check, not a gate."""
+    out_dir. -> ([(level, text)], written files). Never raises on a bad peak: a check, not a gate.
+    Rows whose storm_type is 'atlas14' (NOAA Atlas 14 frequency storms from atlas14_hyetograph)
+    are not a PMF and are left out."""
     basin_json = Path(basin_json)
     out_dir = Path(out_dir)
     basin = json.loads(basin_json.read_text(encoding="utf-8"))
     msgs: List[Tuple[str, str]] = []
-    top = max(rows, key=lambda r: float(r.get("peak_cfs") or 0.0)) if rows else None
-    if top is None:
+    pmf_rows = [r for r in rows if str(r.get("storm_type") or "").strip().lower() != "atlas14"]
+    n_freq = len(rows) - len(pmf_rows)
+    if n_freq:
+        msgs.append(("INFO", "%d NOAA Atlas 14 frequency storm(s) left out of the PMF check: a "
+                             "frequency storm is not a PMF." % n_freq))
+    top = max(pmf_rows, key=lambda r: float(r.get("peak_cfs") or 0.0)) if pmf_rows else None
+    if top is None and n_freq:
+        msgs.append(("INFO", "No PMF hydrographs in this run (only NOAA Atlas 14 frequency storms), "
+                             "so there is no PMF to compare with the StreamStats values."))
+        peak = None
+    elif top is None:
         msgs.append(("WARNING", "No hydrographs were computed, so the PMF was not compared with "
                                 "the StreamStats values."))
         peak = None
@@ -695,6 +706,7 @@ def check_pmf_run(rows: List[Dict[str, Any]], basin_json: Path, out_dir: Path,
             written[src.name] = dst
     rep = {"checked_utc": _utc(), "pmf_peak_cfs": peak,
            "pmf_storm_id": top.get("storm_id") if top else None,
+           "atlas14_storms_left_out": n_freq,
            "area_mi2_used": area_mi2, "streamstats_area_mi2": ss_area,
            "streamstats_basin_json": str(basin_json),
            "basin_json_sha256": _sha256_file(basin_json),

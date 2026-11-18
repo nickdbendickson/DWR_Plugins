@@ -4,6 +4,7 @@ from .algorithm_hydro import InflowHydrographAlgorithm
 from .algorithm_pothole import PotholeStorageAlgorithm
 from .algorithm_spatial_snow import SpatialDistributionAlgorithm, SnowmeltAlgorithm
 from .algorithm_hms import ExportHMSAlgorithm
+from .algorithm_atlas14 import ALGORITHMS as ATLAS14_ALGORITHMS
 
 SETTING_DATA_HOME = "nd_pmp/data_home"   # QgsSettings key: path to the 'PMP_Evaluation_Tool' folder
 
@@ -25,3 +26,5 @@ class NDPMPProvider(QgsProcessingProvider):
         self.addAlgorithm(SpatialDistributionAlgorithm())
         self.addAlgorithm(SnowmeltAlgorithm())
         self.addAlgorithm(ExportHMSAlgorithm())
+        for alg in ATLAS14_ALGORITHMS:      # NOAA Atlas 14 group (0.6.0; shared core in noaa14/)
+            self.addAlgorithm(alg())
