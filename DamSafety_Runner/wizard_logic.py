@@ -438,7 +438,7 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
                 warnings.append("The breach starts {:g} ft below the top of dam. ND 5.1.1 has "
                                 "the sunny-day breach start at the top of dam; this run is "
                                 "not that case.".format(float(top) - float(wse)))
-            if a.get("method") in (brmod.METHOD_OVERTOPPING, brmod.METHOD_F95_OVERTOPPING) \
+            if a.get("method") in brmod.OVERTOPPING_METHODS \
                     and wse is not None and top not in (None, "") and float(wse) < float(top):
                 warnings.append("An overtopping breach with the pool below the crest: water "
                                 "cannot overtop from there. Use a flood scenario for an "
