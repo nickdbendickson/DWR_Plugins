@@ -65,7 +65,7 @@ def area_zip(path):
         ds = None
     with open(os.path.join(d, "Vol_8_Temporal_Regions.prj"), "w") as fh:
         fh.write(NAD83_PRJ)
-    with zipfile.ZipFile(path, "w") as z:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:     # as NOAA ships them
         for fn in os.listdir(d):
             z.write(os.path.join(d, fn), fn)
     shutil.rmtree(d)

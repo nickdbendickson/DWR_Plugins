@@ -86,9 +86,7 @@ class FakePFDS:
             return fh.read()
 
 
-# the .prj NOAA ships (full ESRI WKT). The two test scripts that wrote a cut-down
-# GEOGCS["GCS_North_American_1983"] were the two that stalled at their first grid read on GDAL 3.4
-# (QGIS 3.34 LTR image, CI 2026-11-18), so the fixtures use the real text.
+# the .prj NOAA ships (full ESRI WKT)
 NAD83_PRJ = ('GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137.0,'
              '298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
 
@@ -98,7 +96,9 @@ def noaa_zip(path, name, x0=-97.0, y0=46.6, n=60, cell=0.0083333, base=6000):
     rows = "\n".join(" ".join(str(base + c) for c in range(n)) for _ in range(n))
     body = "ncols {n}\nnrows {n}\nxllcorner {x}\nyllcorner {y}\ncellsize {c}\nNODATA_value -9\n{r}\n".format(
         n=n, x=x0, y=y0, c=cell, r=rows)
-    with zipfile.ZipFile(path, "w") as z:
+    # deflated, as NOAA ships them: GDAL 3.4 (QGIS 3.34 LTR image) spins forever opening an ASCII
+    # grid that is STORED in a zip (CI probe 2026-11-18, commit 45da7ef1); deflated opens at once
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(name + ".asc", body)
         z.writestr(name + ".prj", NAD83_PRJ)
         z.writestr(name + ".xml", "<metadata><title>test</title><pubdate>20130415</pubdate></metadata>")
