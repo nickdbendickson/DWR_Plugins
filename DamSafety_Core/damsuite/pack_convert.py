@@ -14,6 +14,7 @@ genuine spatial SQLite that is *not* an offline pack still goes straight through
 OGR, as before.
 """
 import os
+import sys
 import json
 import zlib
 import zipfile
@@ -26,11 +27,25 @@ _PACK_FORMAT = "nd-dam-hazard-offline-pack"
 _USABLE_STATUS = ("complete", "partial")
 
 
+def _zipsafe():
+    """zipsafe, as a package member or when this file is loaded as a standalone script
+    (Hazard's test_pack_convert_m4.py uses importlib.spec_from_file_location)."""
+    try:
+        from . import zipsafe
+        return zipsafe
+    except ImportError:                                  # outside the package
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import zipsafe                                   # noqa
+        return zipsafe
+
+
 def _safe_extract(zf, dest):
     """Extract a zip into dest, refusing any entry that leaves dest and an archive that is too
     large to be a pack (zipsafe: size, entry count, compression ratio, free disk space).
     Raises ValueError (zipsafe.ZipRefused)."""
-    from . import zipsafe
+    zipsafe = _zipsafe()
     zipsafe.extract(zf, dest, zipsafe.MAX_PACKAGE_BYTES)
 
 
@@ -78,7 +93,7 @@ def _decode_features(con, tbl):
     """GeoJSON features of one pack table - offline_pack.PackReader._decode()
     (zlib-decompress, then json-decode); unreadable rows are skipped, and so is a row that
     inflates past zipsafe.MAX_ROW_BYTES (zipsafe.TooLarge is a ValueError)."""
-    from . import zipsafe
+    zipsafe = _zipsafe()
     feats = []
     for (blob,) in con.execute('SELECT feat FROM "{}" ORDER BY fid'.format(tbl)):
         if blob is None:
