@@ -3015,6 +3015,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     tile = os.path.join(model_dir, "dem_refill.tif")
                     try:
                         dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
+                        dem_refill.check_tile(tile)      # 3.20.14: no 0 m pit from a tile of no ground
                         refill_paths.append(tile)
                         refilled = True
                         # v3.20.9: the next pass re-runs this domain run on the refilled DEM:

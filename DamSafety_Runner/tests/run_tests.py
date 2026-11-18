@@ -183,6 +183,24 @@ def short_hydrograph_keeps_its_peak_in_model_files():
 
 
 @test
+def long_routed_hydrograph_has_increasing_model_file_times():
+    # a routed cascade record: thousands of breakpoints at uneven times, some a hair off the
+    # 30 s grid and some a hair apart. LISFLOOD-FP stops on a repeated time in the .bdy file
+    # ("Time Series invalid time values"), which the files print to 0.0001 s.
+    rng = np.random.default_rng(7)
+    t = np.sort(np.concatenate([rng.uniform(0.0, 96 * 3600.0, 6000),
+                                30.0 * np.arange(1, 2000) + 3e-5,
+                                [1234.5, 1234.5 + 1e-6, 5000.0, 5000.0]]))
+    q = 1000.0 * np.exp(-((t - 40 * 3600.0) / (8 * 3600.0)) ** 2) + 50.0
+    h = br.Hydrograph(t_s=t, q_cms=q, method="routed")
+    tr, qr = h.resampled(30.0)
+    printed = np.array([float("{:.4f}".format(x)) for x in tr])
+    assert np.all(np.diff(printed) > 0), "repeated time in the model file"
+    close(qr.max(), q.max(), rel=1e-6)
+    assert qr[-1] == 0.0 and tr[-2] == t[-1]
+
+
+@test
 def volume_until():
     h = br.tr60_hydrograph(dam(crest_width_ft=12, us_slope_h=3, ds_slope_h=3))
     close(h.volume_until(1e9), h.volume_m3, rel=1e-9)
