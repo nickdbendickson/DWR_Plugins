@@ -123,16 +123,17 @@ def check_tile(path):
     """Raise IOError unless the refill tile holds ground: at least one cell above -1000 m that is not
     its no-data value, and not one flat value everywhere. 3.20.14: a tile asked for in the wrong CRS
     (an ASCII-grid DEM carries none, so the box went out in EPSG:5070) came back all 0 m and was
-    filled in as a 5 km2 pit at 0 m; the pit's rim then read as wet no-data and stopped the domain
-    from growing (Edenville-Sanford 2020 storm runs). Without GDAL there is nothing to check."""
+    filled in as a pit at 0 m, and the domain stopped growing below it (Edenville-Sanford 2020
+    storm runs). Without GDAL there is nothing to check. Opens through damsuite.gdalsafe: the
+    GDAL exception mode is QGIS's, never switched here (v341)."""
     try:
-        from osgeo import gdal
+        from osgeo import gdal  # noqa: F401  (only to know GDAL is there)
         import numpy as np
     except ImportError:
         return
-    gdal.UseExceptions()
+    from ..damsuite import gdalsafe as GS
     try:
-        ds = gdal.Open(path)
+        ds = GS.open_raster(path)
         band = ds.GetRasterBand(1)
         arr = band.ReadAsArray().astype("float64")
         nd = band.GetNoDataValue()
