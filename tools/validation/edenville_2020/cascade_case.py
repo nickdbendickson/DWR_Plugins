@@ -257,14 +257,21 @@ def run(folder, exe=None, threads=1, rule="overtop", sim_hr=None, say=print):
     st.lisflood_exe = exe
     st.manning_n = 0.06                       # the suite default; this case is the dam-break, not n
     st.max_extent_mi = 25.0                   # must reach ~18 km (11 mi) from Sanford to Midland
+    st.max_iterations = 12                     # enough domain-growth steps to walk to the gauge
+    st.impact_look_ahead_mi = 20.0             # see the Midland receptor from anywhere downstream
     st.grid_refine = False                    # one 30 m pass (keep the cascade within a CI job)
     if sim_hr:                                # cap the clock (the peak reaches Midland well inside
         st.sim_time_hr = float(sim_hr)        # a day; the long drain-down tail only slows the run)
     st.overrides = brmod.BreachOverrides()
     st.scenario = workflow.SCENARIO_SUNNY
+    # the dam elevations are already NAVD88 (converted in the dicts), so tell the engine not to
+    # convert them again -- otherwise a run with a VERTCON grid (e.g. CI) would shift them ~0.6 ft
+    st.elev_datum = "NAVD88"
     st.gauges = [{"name": "midland", "xy": midland_xy}]
+    # receptors spaced down the whole corridor keep the domain extending to the gauge (5.1.1(f))
     st.receptors = impmod.Receptors()
-    st.receptors.add_points([midland_xy], ids=["Midland gauge"])
+    rxy, rids = _corridor_receptors(meta)
+    st.receptors.add_points(rxy + [midland_xy], ids=rids + ["Midland gauge"])
 
     # Edenville: sunny-day piping breach (no inflow). Sanford: zero own-inflow + pool + spillway,
     # so the cascade adds the Edenville wave and Sanford fails when the wave overtops it.
@@ -326,6 +333,26 @@ def run(folder, exe=None, threads=1, rule="overtop", sim_hr=None, say=print):
 
 def midpoint(meta, name):
     return tuple(meta["dam_xy"][name])
+
+
+def _corridor_receptors(meta, step_m=2000.0, past_m=5000.0):
+    """Points every step_m down the Edenville -> Sanford -> Midland line (and past the gauge),
+    so the domain-growth loop always has a receptor within the look-ahead downstream and keeps
+    extending the model to the gauge. Without these the run stops at the first edge with nothing
+    mapped within 5 mi (ND 5.1.1(f)), far short of Midland."""
+    pts = [np.array(meta["dam_xy"][k], float) for k in ("Edenville", "Sanford", "Midland")]
+    # extend past Midland along the last leg so the gauge is not at the domain edge
+    v = pts[-1] - pts[-2]
+    pts.append(pts[-1] + v / (np.hypot(*v) or 1.0) * past_m)
+    out, ids = [], []
+    for a, b in zip(pts, pts[1:]):
+        seg = b - a
+        n = max(1, int(np.hypot(*seg) / step_m))
+        for i in range(n):
+            p = a + seg * (i / n)
+            out.append((float(p[0]), float(p[1])))
+            ids.append("corridor_{}".format(len(out)))
+    return out, ids
 
 
 def _read_stage(wse_grid, xy):

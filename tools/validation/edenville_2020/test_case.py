@@ -59,6 +59,17 @@ class Published(unittest.TestCase):
             self.assertAlmostEqual(v, d["storage_normal_acft"], delta=1500.0)
             self.assertLess(d["storage_normal_acft"], d["storage_top_acft"])   # pool below crest
 
+    def test_corridor_receptors_span_the_whole_route_past_the_gauge(self):
+        meta = {"dam_xy": {"Edenville": [0.0, 30000.0], "Sanford": [0.0, 15000.0],
+                           "Midland": [12000.0, 0.0]}}
+        xy, ids = C._corridor_receptors(meta, step_m=2000.0, past_m=5000.0)
+        self.assertEqual(len(xy), len(ids))
+        self.assertGreater(len(xy), 10)                    # points down the ~30 km route
+        self.assertEqual(xy[0], (0.0, 30000.0))            # starts at Edenville
+        # the last point is past Midland along the Sanford->Midland bearing (x keeps growing)
+        self.assertGreater(xy[-1][0], 12000.0)
+        self.assertLess(xy[-1][1], 0.0)
+
     def test_the_asce_benchmarks_are_the_paper_numbers(self):
         self.assertAlmostEqual(C.ASCE_EDENVILLE_BREACH_CFS * C.CFS, 4323.0, places=1)  # m3/s
         self.assertAlmostEqual(C.ASCE_WAVE_AT_SANFORD_CFS,
