@@ -1,4 +1,4 @@
-"""DamSafety GPU flood engine: runs the LISFLOOD-FP input files the Runner writes (.par,
+"""Boann: the GPU flood engine (ACC / local-inertial scheme). Runs the LISFLOOD-FP input files the Runner writes (.par,
 .dem.asc, .bci, .bdy, optional .n.asc / .start / .gauge) with the local-inertial scheme of
 LISFLOOD-FP's "acceleration" solver on the Apple GPU (Metal), and writes the result files the
 Runner reads (.max, .maxVc, .inittm, .maxtm, .mxe, .mass, .discharge, depth snapshots).
@@ -23,7 +23,7 @@ import numpy as np
 from . import deckio as bl
 from . import backends as be
 
-NAME = "DamSafety GPU flood engine (local inertial on Metal, LISFLOOD-FP compatible)"
+NAME = "Boann (ACC / local-inertial scheme, on the GPU via Metal; LISFLOOD-FP compatible)"
 VERSION = "0.1.0"
 G = bl.G
 ALPHA = bl.ALPHA
@@ -248,7 +248,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
 
 def _run(d, bk, progress, cancel, say):
     if d.solver == "fv1":
-        say("The GPU engine runs 'fv1' with its local-inertial scheme.")
+        say("Boann runs 'fv1' with its local-inertial (ACC) scheme.")
     eng = Engine(d, bk)
     a = eng.a
     ny, nx, dx = d.ny, d.nx, d.dx
@@ -353,7 +353,7 @@ def _run(d, bk, progress, cancel, say):
                 t = t_event
             else:
                 if not out["steps"] and out["t_local"] < (t_event - t) - 2e-3:
-                    raise EngineError("the GPU engine made no progress at t = {:.1f} s".format(t))
+                    raise EngineError("Boann made no progress at t = {:.1f} s".format(t))
                 t += out["t_local"]
                 if (t_event - t) <= 2e-3:      # float32 rounding just short of the event
                     t = max(t, t_event)
@@ -391,7 +391,7 @@ def _run(d, bk, progress, cancel, say):
              "steps": steps, "batches": batches, "sim_time_s": t, "wall_s": round(wall, 2),
              "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
              "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip}
-    say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
+    say("Boann ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))
     return stats

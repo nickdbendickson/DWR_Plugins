@@ -1,4 +1,4 @@
-"""DamSafety shock-capturing flood engine: the same LISFLOOD-FP input/output files as the
+"""Boann, shock-capturing: the HLLC finite-volume solver. The same LISFLOOD-FP input/output files as the
 local-inertial engine (engine.py), but run with the well-balanced HLLC finite-volume scheme of
 kernels_fv.metal. It resolves hydraulic jumps and dam-break fronts the diffusive ACC scheme
 smooths, at the cost of a shorter time step (CFL on |u|+c, not sqrt(g h)).
@@ -19,7 +19,7 @@ from . import deckio as bl
 from . import backends as be
 from .engine import Deck, _f, _setf
 
-NAME = "DamSafety shock-capturing flood engine (HLLC finite volume on Metal)"
+NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
 VERSION = "0.1.0"
 G = bl.G
 DRY_M = bl.DRY_M
@@ -242,7 +242,7 @@ def _run(d, bk, progress, cancel, say):
                 t = t_event
             else:
                 if not out["steps"] and out["t_local"] < (t_event - t) - 2e-3:
-                    raise EngineError("the FV engine made no progress at t = {:.1f} s".format(t))
+                    raise EngineError("Boann (shock-capturing) made no progress at t = {:.1f} s".format(t))
                 t += out["t_local"]
                 if (t_event - t) <= 2e-3:
                     t = max(t, t_event)
@@ -281,7 +281,7 @@ def _run(d, bk, progress, cancel, say):
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout),
              "clipped_m3": clip}
-    say("FV engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
+    say("Boann, shock-capturing ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                         stats["mass_error_m3"], vin))
     return stats

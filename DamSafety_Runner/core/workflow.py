@@ -2882,7 +2882,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             warnings.append(bmsg)
             log(bmsg)
     if lfmod.is_gpu(st.lisflood_exe):
-        gmsg = ("This run uses the GPU engine (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
+        gmsg = ("This run uses Boann (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
                 "kernels, on {}), not LISFLOOD-FP itself. It matched LISFLOOD-FP 8.3 within "
                 "millimetres on the test cases (DWR-2801 at 30 m, Lake Delhi 2010), but it is new: "
                 "confirm a final hazard classification with a LISFLOOD-FP run."
@@ -2891,7 +2891,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             warnings.append(gmsg)
             log(gmsg)
     if lfmod.is_gpu_fv(st.lisflood_exe):
-        fmsg = ("This run uses the shock-capturing GPU engine (an HLLC finite-volume solver of "
+        fmsg = ("This run uses Boann, shock-capturing (an HLLC finite-volume solver of "
                 "the 2-D shallow-water equations, on {}), not LISFLOOD-FP itself. It is well "
                 "balanced (lake at rest to machine precision) and reproduces the analytical "
                 "dam-break (Ritter) solution, but it is a different numerical scheme from "
@@ -3679,9 +3679,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     _builtin_run = lfmod.is_builtin(st.lisflood_exe)
     report["flood_engine"] = ("Built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
                               if _builtin_run else
-                              "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
+                              "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu(st.lisflood_exe) else
-                              "Shock-capturing GPU engine (HLLC finite volume; NOT LISFLOOD-FP)"
+                              "Boann, shock-capturing (HLLC finite volume; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_fv(st.lisflood_exe) else "LISFLOOD-FP (inertial solver)")
     report["flood_engine_short"] = lfmod.engine_name(st.lisflood_exe)
     summary["flood_engine_short"] = report["flood_engine_short"]

@@ -193,13 +193,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
-# 3.22.0: the GPU engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
+# 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (one
 # core, needs a C++ compiler). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
 GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
 GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
-# 3.23.0: the shock-capturing GPU engine (core/metalflood/engine_fv): a well-balanced,
+# 3.23.0: Boann's shock-capturing solver (core/metalflood/engine_fv): a well-balanced,
 # positivity-preserving HLLC finite-volume solver of the full 2-D shallow-water equations, run on
 # the same Metal/CPU kernel machinery. It resolves hydraulic jumps and dam-break fronts the ACC
 # scheme diffuses; like the others it is chosen only by name, never as a fallback.
@@ -275,7 +275,7 @@ def is_inprocess(exe):
 
 
 def gpu_backend_note():
-    """Which device the GPU engine will use here, in words (for logs and the self-test)."""
+    """Which device Boann will use here, in words (for logs and the self-test)."""
     try:
         from .metalflood import backends as mfb
         ok, why = mfb.metal_available()
@@ -309,9 +309,9 @@ def describe_exe(exe):
     if is_builtin(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
-        return "the GPU engine (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+        return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
     if is_gpu_fv(exe):
-        return ("the shock-capturing GPU engine (HLLC finite-volume shallow water on the GPU; "
+        return ("Boann, shock-capturing (HLLC finite-volume shallow water on the GPU; "
                 "NOT LISFLOOD-FP)")
     if exe and os.path.abspath(str(exe)).startswith(BUNDLED_DIR + os.sep):
         return "LISFLOOD-FP bundled with the plugin ({})".format(exe)
@@ -325,18 +325,18 @@ def engine_label(exe):
     if is_builtin(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
-        return "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
+        return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
     if is_gpu_fv(exe):
-        return "shock-capturing GPU engine (HLLC finite volume; NOT LISFLOOD-FP)"
+        return "Boann, shock-capturing (HLLC finite volume; NOT LISFLOOD-FP)"
     return "LISFLOOD-FP"
 
 
 def engine_name(exe):
     """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
     if is_gpu_fv(exe):
-        return "the shock-capturing GPU engine"
+        return "Boann (shock-capturing)"
     if is_gpu(exe):
-        return "the GPU engine"
+        return "Boann"
     return "the built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
 
 
@@ -867,7 +867,7 @@ def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None, fv=False):
     lines = []
     runner = mf.run_par_fv if fv else mf.run_par
     name, version = (mf.FV_NAME, mf.FV_VERSION) if fv else (mf.NAME, mf.VERSION)
-    tag = "FV engine" if fv else "GPU engine"
+    tag = "Boann (shock-capturing)" if fv else "Boann"
 
     def say(msg):
         lines.append(msg)
@@ -1235,17 +1235,17 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC):
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
     who = ("The built-in engine" if is_builtin(exe)
-           else "The shock-capturing GPU engine" if is_gpu_fv(exe)
-           else "The GPU engine" if is_gpu(exe) else "LISFLOOD-FP")
+           else "Boann (shock-capturing)" if is_gpu_fv(exe)
+           else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
     msg = ("{} ran: {} cells reached 0.3 m.".format(who, thr_wet))
     if is_builtin(exe):
         msg += (" This is the built-in numpy screening engine (local inertial), NOT LISFLOOD-FP; "
                 "its results are preliminary estimates.")
     if is_gpu(exe):
-        msg += (" This is the GPU engine (LISFLOOD-FP 8.3's ACC scheme on {}), NOT LISFLOOD-FP "
+        msg += (" This is Boann (LISFLOOD-FP 8.3's ACC scheme on {}), NOT LISFLOOD-FP "
                 "itself.".format(gpu_backend_note()))
     if is_gpu_fv(exe):
-        msg += (" This is the shock-capturing GPU engine (HLLC finite-volume shallow water on "
+        msg += (" This is Boann, shock-capturing (HLLC finite-volume shallow water on "
                 "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "

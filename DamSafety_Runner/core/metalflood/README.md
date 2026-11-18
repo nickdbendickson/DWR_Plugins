@@ -1,6 +1,10 @@
-# GPU flood engine (Metal)
+# Boann — GPU flood engine (Metal)
 
-Two flood solvers as GPU compute kernels for the Apple GPU, on one shared Metal/CPU machinery:
+**Boann** (the Irish river goddess) is the suite's own flood engine: two solvers as GPU compute
+kernels for the Apple GPU, on one shared Metal/CPU machinery. It is not LISFLOOD-FP — reports, the
+run manifest and the classification record name it and say so.
+
+The two solvers mirror LISFLOOD-FP's own pair:
 
 1. **ACC** (`engine.py`, `kernels.metal`) — LISFLOOD-FP's local-inertial ("acceleration") solver.
    LISFLOOD-FP runs on a GPU only through NVIDIA CUDA, so on a Mac it runs on the CPU; this runs

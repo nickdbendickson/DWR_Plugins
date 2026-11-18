@@ -214,12 +214,12 @@ def gpu_engine_is_a_runner_engine_choice():
     assert not lf.is_gpu(lf.BUILTIN_EXE) and lf.resolve_exe("builtin") == lf.BUILTIN_EXE
     assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_EXE)
     assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_EXE)
-    assert lf.engine_name(lf.GPU_EXE) == "the GPU engine"
+    assert lf.engine_name(lf.GPU_EXE) == "Boann"
     blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
-    assert blk["model"].startswith("GPU engine"), blk
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
     blk = record._engine_block(None, {"software": {"lisflood_exe": {
         "path": "C:\\x\\core\\metalflood\\engine.py"}}})
-    assert blk["model"].startswith("GPU engine"), blk
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
     try:                                                    # the Processing layer needs QGIS
         from nd_breach_runner import algorithms as algs     # (absent on the Metal-only CI)
     except ImportError:
@@ -232,7 +232,7 @@ def gpu_engine_is_a_runner_engine_choice():
     try:
         r = lf.check_lisflood(lf.GPU_EXE, os.path.join(d, "chk"))
         assert r["ok"] and r["patched"] and r["velocity"], r
-        assert "GPU engine" in r["message"], r
+        assert "Boann" in r["message"], r
         with open(os.path.join(d, "chk", "lisflood.log")) as f:
             assert f.readline().startswith(mf.NAME)
     finally:
@@ -353,7 +353,7 @@ def metalflood_fv_conserves_water():
 
 @test
 def fv_engine_is_a_runner_engine_choice():
-    """Runner 3.23.0: 'shock' (or 'gpu-fv') selects the shock-capturing GPU engine; it runs
+    """Runner 3.23.0: 'shock' (or 'gpu-fv') selects Boann's shock-capturing solver; it runs
     in-process, is labelled as not LISFLOOD-FP everywhere, and is a FLOOD_ENGINE choice of its
     own."""
     from nd_breach_runner.core import lisflood as lf
@@ -365,16 +365,16 @@ def fv_engine_is_a_runner_engine_choice():
     assert not lf.is_gpu(lf.GPU_FV_EXE) and not lf.is_gpu_fv(lf.GPU_EXE)
     assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_FV_EXE)
     assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_FV_EXE)
-    assert lf.engine_name(lf.GPU_FV_EXE) == "the shock-capturing GPU engine"
+    assert lf.engine_name(lf.GPU_FV_EXE) == "Boann (shock-capturing)"
     blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_FV_EXE}}})
-    assert blk["model"].startswith("shock-capturing GPU engine"), blk
+    assert blk["model"].startswith("Boann, shock-capturing"), blk
     assert not blk["built_in"]
     blk = record._engine_block(None, {"software": {"lisflood_exe": {
         "path": "C:\\x\\core\\metalflood\\engine_fv.py"}}})
-    assert blk["model"].startswith("shock-capturing GPU engine"), blk
-    # the ACC GPU engine must still label as the ACC engine, not the FV one
+    assert blk["model"].startswith("Boann, shock-capturing"), blk
+    # the ACC engine must still label as Boann ACC, not the shock-capturing one
     blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
-    assert blk["model"].startswith("GPU engine"), blk
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
     try:                                                    # the Processing layer needs QGIS
         from nd_breach_runner import algorithms as algs
     except ImportError:

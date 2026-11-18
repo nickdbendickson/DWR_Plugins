@@ -55,8 +55,8 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
 FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv")
-FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "GPU engine (LISFLOOD-FP's ACC scheme on the Apple GPU)",
-                      "GPU engine, shock-capturing (HLLC finite volume on the Apple GPU)"]
+FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
+                      "Boann, shock-capturing (HLLC finite volume on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1002,12 +1002,13 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         p = QgsProcessingParameterEnum("FLOOD_ENGINE", "Flood engine", FLOOD_ENGINES_TEXT,
                                        defaultValue=0, optional=True)
         _set_help(p, "LISFLOOD-FP: the executable below, else the provider setting, else an "
-                  "installed one. GPU engine: LISFLOOD-FP 8.3's ACC (local inertial) scheme "
+                  "installed one. Boann (GPU engine): LISFLOOD-FP 8.3's ACC (local inertial) scheme "
                   "rewritten as GPU kernels; it runs on the Apple GPU through Metal, and on other "
                   "computers on the CPU build of the same kernels (one core, needs a C++ "
                   "compiler). It matched LISFLOOD-FP 8.3 within millimetres on the test cases; "
-                  "the run report says which engine ran. ACC only (no FV2 / MWDG2, no near-dam "
-                  "FV1 refine). Typing 'gpu' in the LISFLOOD-FP field does the same.")
+                  "the run report says which engine ran. 'Boann, shock-capturing' is its HLLC "
+                  "finite-volume solver (the analogue of LISFLOOD-FP's FV1). Typing 'gpu' or "
+                  "'shock' in the LISFLOOD-FP field does the same.")
         self.addParameter(p)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
@@ -1054,7 +1055,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
         if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
             return lfmod.BUILTIN_EXE
-        # 3.22.0: the GPU engine, likewise only by name ("gpu" / "metal")
+        # 3.22.0: Boann (the GPU engine), likewise only by name ("gpu" / "metal")
         if exe and str(exe).strip().lower() in lfmod.GPU_FV_WORDS:
             return lfmod.GPU_FV_EXE
         if exe and str(exe).strip().lower() in lfmod.GPU_WORDS:
@@ -1107,9 +1108,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             if real and str(v).strip().lower() in lfmod.BUILTIN_WORDS:
                 return w + " (built-in engine)"
             if real and str(v).strip().lower() in lfmod.GPU_FV_WORDS:
-                return w + " (shock-capturing GPU engine)"
+                return w + " (Boann, shock-capturing)"
             if real and str(v).strip().lower() in lfmod.GPU_WORDS:
-                return w + " (GPU engine)"
+                return w + " (Boann)"
             ok = os.path.isfile(v if real else os.path.realpath(v))
             if ok:
                 return w

@@ -318,7 +318,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                 ok, why = _mf.available()
             except Exception as e:                               # noqa - a check result
                 ok, why = False, str(e)
-            out.append(check(OK if ok else FAIL, "Flood engine", "GPU engine: " + why,
+            out.append(check(OK if ok else FAIL, "Flood engine", "Boann (GPU engine): " + why,
                              "" if ok else "Choose LISFLOOD-FP or a built-in engine, or install a "
                              "C++ compiler (Xcode command line tools on a Mac)."))
         else:

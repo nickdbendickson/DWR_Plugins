@@ -121,7 +121,7 @@ def run_lisflood(exe, par, cwd, timeout_s, cancel=None, threads=1):
 
 
 def run_gpu(par, cwd, timeout_s, cancel=None):
-    """Run the GPU engine on `par` in `cwd` (in this process). Its log goes to <cwd>/lisflood.log;
+    """Run Boann (the GPU engine) on `par` in `cwd` (in this process). Its log goes to <cwd>/lisflood.log;
     a timeout stops it like LISFLOOD-FP's."""
     from . import metalflood as mf
     t0 = time.time()
@@ -131,7 +131,7 @@ def run_gpu(par, cwd, timeout_s, cancel=None):
         if cancel is not None and cancel():
             return True
         if time.time() - t0 > timeout_s:
-            raise TimeoutError(f"GPU engine exceeded {timeout_s / 60:.0f} min")
+            raise TimeoutError(f"Boann exceeded {timeout_s / 60:.0f} min")
         return False
     try:
         from ..damsuite.keepawake import keep_awake
@@ -141,13 +141,13 @@ def run_gpu(par, cwd, timeout_s, cancel=None):
         def keep_awake(*_a, **_k):
             return contextlib.nullcontext()
     try:
-        with keep_awake("the GPU flood engine", log=None):
+        with keep_awake("Boann, the GPU flood engine", log=None):
             mf.run_par(os.path.join(cwd, par), cancel=stop, log=lines.append,
                        backend=os.environ.get("DAMSAFETY_MF_BACKEND") or "auto")
     except mf.Cancelled:
         raise Cancelled("cancelled")
     except mf.EngineError as e:
-        raise RuntimeError(f"GPU engine: {e}")
+        raise RuntimeError(f"Boann: {e}")
     finally:
         with open(os.path.join(cwd, "lisflood.log"), "w", encoding="utf-8") as f:
             f.write(mf.NAME + " " + mf.VERSION + "\n" + "\n".join(lines) + "\n")
