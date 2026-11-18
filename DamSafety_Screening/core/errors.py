@@ -23,7 +23,7 @@ def plain(e, dam_id=None, step=None):
     if isinstance(e, KeyError):
         m = _FIELD.match(text)
         if m:
-            return "the layer has no field '{}': pick the right field in the tool's dialog (Inputs tab)".format(m.group(1))
+            return "the layer has no field '{}': pick the right field in the tool's dialog (Override inputs on the Run tab)".format(m.group(1))
         return "a value {} needs is missing ({})".format(who, text)
     if isinstance(e, MemoryError):
         return "out of memory for {}: use a coarser cell size, a narrower corridor or fewer dams at a time".format(who)
