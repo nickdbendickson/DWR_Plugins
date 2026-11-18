@@ -13,6 +13,12 @@ Nothing else can be loaded from it. Anything the writer does not know
 makes it refuse to write - the run is never affected, the session cache
 simply is not kept on disk.
 
+The state is inflated with a size cap, MAX_STATE_BYTES (security audit
+2026-11-18: the file sits in an outputs folder that may come from someone
+else, and a ~1 MB blob that inflates ~1000x would run QGIS out of memory
+before the restricted reader ever saw it). A state past the cap is a cache
+miss, never a crash: load() says why and the run evaluates in full.
+
 An evaluation is used again only when its key (pipeline.evaluation_key -
 the raster contents, the chosen layers, the download choices and the
 settings that shape the sampling), the plugin version and the age fit. Old
@@ -24,6 +30,7 @@ import io
 import json
 import os
 import pickle
+import sys
 import time
 import zlib
 
@@ -33,6 +40,12 @@ MAGIC = b"NDEVAL1\n"
 FILE_NAME = "_evaluation_cache.bin"
 FORMAT = 1
 MAX_AGE_DAYS = 7.0
+#: The largest pickled state load() inflates (and save() writes). The state is
+#: per-structure / per-road records (attributes, outline WKB, sampled values),
+#: per-scenario results and a few numpy arrays - no rasters. A record pickles to
+#: roughly 1-3 KB, so even 100,000 structures plus their roads come to a few
+#: hundred MB; 1 GiB leaves several times that, while a crafted file stops there.
+MAX_STATE_BYTES = 1024 ** 3
 
 _PLAIN = (type(None), bool, int, float, str, bytes, list, tuple, dict, set, frozenset,
           complex, bytearray)
@@ -43,6 +56,56 @@ _NUMPY_MODULES = {"numpy", "numpy.core.multiarray", "numpy._core.multiarray",
 
 class NotSaved(Exception):
     """The state holds something this module does not write."""
+
+
+class TooLarge(ValueError):
+    """The saved state inflates past MAX_STATE_BYTES (the same name and base as
+    damsuite.zipsafe.TooLarge, so either reads as a ValueError)."""
+
+
+def _zipsafe():
+    """damsuite.zipsafe (DamSafety Core), as a package member or when this file
+    is loaded as a standalone script (importlib.spec_from_file_location, as the
+    QGIS-free tests do); None when neither is importable or the Core is older
+    than zipsafe.inflate (then _inflate's own bounded inflate is used)."""
+    try:
+        from .damsuite import zipsafe
+    except ImportError:                                  # outside the package
+        try:
+            from DamSafety_Core.damsuite import zipsafe  # noqa
+        except ImportError:
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if not os.path.isfile(os.path.join(here, "DamSafety_Core", "damsuite", "zipsafe.py")):
+                return None
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            try:
+                from DamSafety_Core.damsuite import zipsafe  # noqa
+            except ImportError:
+                return None
+    return zipsafe if hasattr(zipsafe, "inflate") else None
+
+
+def _inflate(blob, max_bytes=MAX_STATE_BYTES):
+    """zlib.decompress(blob), refused with a ValueError (TooLarge) once the output
+    passes max_bytes; never allocates much more than max_bytes. A corrupt blob
+    raises zlib.error, as zlib.decompress does."""
+    zs = _zipsafe()
+    if zs is not None:
+        try:
+            return zs.inflate(blob, max_bytes=max_bytes, what="the saved evaluation")
+        except zs.TooLarge as e:
+            raise TooLarge(str(e)) from e
+    d = zlib.decompressobj()
+    out = d.decompress(blob, max_bytes + 1)
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise TooLarge("the saved evaluation unpacks to more than {} bytes; refused".format(
+            max_bytes))
+    out += d.flush()
+    if len(out) > max_bytes:
+        raise TooLarge("the saved evaluation unpacks to more than {} bytes; refused".format(
+            max_bytes))
+    return out
 
 
 def cache_path(out_folder):
@@ -162,6 +225,10 @@ def save(out_folder, key, state, when, version, note=None):
     try:
         buf = io.BytesIO()
         _Pickler(buf).dump({"format": FORMAT, "state": state})
+        if buf.tell() > MAX_STATE_BYTES:
+            # load() would refuse it: do not write a file that can never be re-used
+            return None, "the evaluation is {:.0f} MB, over the {:.0f} MB the cache reads back".format(
+                buf.tell() / 1048576.0, MAX_STATE_BYTES / 1048576.0)
         blob = zlib.compress(buf.getvalue(), 1)
         head = json.dumps({"format": FORMAT, "key": key, "version": version, "when": when,
                            "saved_at": time.time(), "size": len(blob),
@@ -218,7 +285,12 @@ def load(out_folder, key, version, max_age_days=MAX_AGE_DAYS, now=None):
             blob = fh.read()
             if len(blob) != head.get("size"):
                 return None, None, "incomplete file"
-        data = _Unpickler(io.BytesIO(zlib.decompress(blob))).load()
+        try:
+            raw = _inflate(blob, MAX_STATE_BYTES)
+        except TooLarge:
+            return None, None, "too large to read back (over {:.0f} MB unpacked)".format(
+                MAX_STATE_BYTES / 1048576.0)
+        data = _Unpickler(io.BytesIO(raw)).load()
         state = data["state"] if isinstance(data, dict) else None
         if not isinstance(state, dict):
             return None, None, "unreadable"
