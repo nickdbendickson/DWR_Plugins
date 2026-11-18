@@ -6,7 +6,9 @@
     <QGIS python> cascade_case.py score ROOT
 
 On 19 May 2020 the Edenville Dam (Wixom Lake, Tittabawassee River) failed by static liquefaction
-of its downstream slope at about its normal pool; the surge overtopped and breached the Sanford
+of its downstream slope with the lake near its storm peak (about 5.5 ft above normal pool, 1 to
+1.5 ft below the crest), in a 30 to 32 ft tall section of the left embankment; the surge
+overtopped and breached the Sanford
 Dam (Sanford Lake) ~18 km downstream, and the combined flood ran down the Tittabawassee through
 Midland. It was gauged at USGS 04156000 (Tittabawassee at Midland), which peaked at 35.14 ft gage
 height = 614.61 ft NAVD88, a rating-computed 51,800 cfs. There are no surveyed high-water marks
@@ -25,9 +27,11 @@ This drives the Runner's OWN cascade engine (core/cascade.py: the two-dam tool b
 It is a dam-break reconstruction, NOT a storm reconstruction: it carries the two reservoir
 releases but not the concurrent rainfall-runoff that was also in the river, so the Midland peak
 is a lower bound on the real flow. Three numbers are reported against outside references: the
-Edenville breach peak and the attenuated wave at Sanford against the peer-reviewed ASCE 2-D model
-(Journal of Hydraulic Engineering, 2024: 4,323 m3/s = ~152,600 cfs at the breach, ~35 % attenuated
-over the 18 km to Sanford), and the peak stage at Midland against the USGS gauge.
+Edenville breach peak and the attenuated wave at Sanford against a 2-D HEC-RAS reconstruction
+(Bista, Bhandari & Talchabhadel, J. Hydrologic Engineering, 2026, DOI 10.1061/JHYEFF.HEENG-6767:
+4,323 m3/s = ~152,700 cfs at the breach, ~35 % attenuated over the 18 km to Sanford), and the peak
+stage at Midland against the USGS gauge. That reconstruction assumes a breach shape; it is model
+output, not a measurement, so it brackets rather than verifies the breach.
 
 It is the companion to midland_reach.py: the reach isolates roughness at the gauge from the
 observed discharge, this isolates the cascade dam-break physics upstream of it."""
@@ -102,17 +106,17 @@ EDENVILLE = {
     "storage_normal_acft": 40000.0,           # IFT/EGLE normal-pool storage (the curve target)
     "crest_width_ft": 20.0, "us_slope_h": 3.0, "ds_slope_h": 2.5,
     "crest_length_ft": 1500.0,                # the Tittabawassee (east) embankment that failed
-    "scenario": "sunny",                      # static-liquefaction breach at normal pool
+    "scenario": "sunny",                      # breach started at normal pool: a reproducible bound
 }
 SANFORD = {
     "dam_id": "Sanford",
     "name": "Sanford Dam (Sanford Lake), Tittabawassee River",
     "lat": 43.6764, "lon": -84.3772,
     "dam_height_ft": 36.0,
-    "top_of_dam_ft": _navd(634.0),            # ~3 ft of freeboard above normal pool
+    "top_of_dam_ft": _navd(636.8),            # IFT embankment crest low point, NGVD29 636.8 -> NAVD88 (= 636.2)
     "normal_pool_ft": _navd(630.8),           # IFT normal pool
-    "storage_top_acft": 20000.0,              # curve gives ~15,000 ac-ft at normal pool
-    "surface_area_top_ac": 1600.0,
+    "storage_top_acft": 26400.0,              # storage to the 636.2 crest; curve gives ~15,000 at normal pool
+    "surface_area_top_ac": 2273.0,
     "storage_normal_acft": 15000.0,           # IFT/Four Lakes normal-pool storage (the curve target)
     "crest_width_ft": 20.0, "us_slope_h": 3.0, "ds_slope_h": 2.5,
     "crest_length_ft": 1580.0,
@@ -121,8 +125,8 @@ SANFORD = {
 }
 
 # Peer-reviewed cross-checks for the breach outflow (not a gate; the gauge is the field anchor).
-ASCE_EDENVILLE_BREACH_CFS = 4323.0 / CFS      # 4,323 m3/s -> cfs (ASCE JHE 2-D model)
-ASCE_WAVE_AT_SANFORD_CFS = ASCE_EDENVILLE_BREACH_CFS * 0.65   # ~35 % attenuated over 18 km
+BISTA_EDENVILLE_BREACH_CFS = 4323.0 / CFS      # 4,323 m3/s -> cfs (Bista et al. 2026, HEC-RAS 2-D)
+BISTA_WAVE_AT_SANFORD_CFS = BISTA_EDENVILLE_BREACH_CFS * 0.65   # ~35 % attenuated over 18 km
 
 
 # ------------------------------------------------------------------------------ terrain
@@ -204,8 +208,8 @@ def build(out, say=print):
             "dams": {"Edenville": EDENVILLE, "Sanford": SANFORD}, "gauge": MIDLAND,
             "dam_xy": {k: [float(p[0]), float(p[1])] for k, p in pts.items()},
             "ngvd29_to_navd88_ft": NGVD29_TO_NAVD88_FT,
-            "references": {"asce_edenville_breach_cfs": round(ASCE_EDENVILLE_BREACH_CFS, 0),
-                           "asce_wave_at_sanford_cfs": round(ASCE_WAVE_AT_SANFORD_CFS, 0)}}
+            "references": {"bista_edenville_breach_cfs": round(BISTA_EDENVILLE_BREACH_CFS, 0),
+                           "bista_wave_at_sanford_cfs": round(BISTA_WAVE_AT_SANFORD_CFS, 0)}}
     with open(os.path.join(out, "cascade.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)
     gz = dem.data[dem.data > -9000]
@@ -226,9 +230,11 @@ def _dam_data(d):
         surface_area_top_ac=d["surface_area_top_ac"], crest_width_ft=d["crest_width_ft"],
         us_slope_h=d["us_slope_h"], ds_slope_h=d["ds_slope_h"],
         crest_length_ft=d["crest_length_ft"])
-    # Edenville failed at ~normal pool (static liquefaction, not overtopping), so start its
-    # sunny-day breach there, not at the top of dam (the Runner's default sunny-day start). This
-    # also makes Vw = storage at that pool (~40,000 ac-ft), which is the real release.
+    # Edenville failed by static liquefaction (not overtopping) with the lake near its storm peak.
+    # This run starts the sunny-day breach at NORMAL pool, not at the top of dam (the Runner's
+    # default sunny-day start) and not at the higher storm pool: a reproducible lower-bound release
+    # (Vw = storage at normal pool, ~40,000 ac-ft). The storm-pool case is in the team storm
+    # harness (edenville-storm-2026-11-18), which also tests a record-based partial breach.
     if d.get("scenario") == "sunny" and d.get("normal_pool_ft") is not None:
         dd.start_below_top_ft = round(d["top_of_dam_ft"] - d["normal_pool_ft"], 2)
     return dd
@@ -300,7 +306,6 @@ def run(folder, exe=None, threads=1, rule="overtop", sim_hr=None, say=print):
         d = {"modelled": True, "peak_breach_cfs": round(s.get("peak_breach_cfs") or 0.0, 0),
              "flooded_acres": round(s.get("flooded_acres") or 0.0, 0),
              "max_depth_ft": s.get("max_depth_ft")}
-        g = r.gauges.get("to_Sanford") or r.gauges.get("midland")
         for gname in ("to_Sanford", "midland"):
             gg = r.gauges.get(gname)
             if gg is not None and len(gg[1]) and gg[1].max() > 0:
@@ -323,8 +328,8 @@ def run(folder, exe=None, threads=1, rule="overtop", sim_hr=None, say=print):
           if isinstance(d, dict) and "gauge_midland_peak_cfs" in d]
     res["midland_peak_cfs"] = max(qm) if qm else None
     res["midland_observed_cfs"] = MIDLAND["measured_q_cfs"]
-    res["references"] = {"asce_edenville_breach_cfs": round(ASCE_EDENVILLE_BREACH_CFS, 0),
-                         "asce_wave_at_sanford_cfs": round(ASCE_WAVE_AT_SANFORD_CFS, 0)}
+    res["references"] = {"bista_edenville_breach_cfs": round(BISTA_EDENVILLE_BREACH_CFS, 0),
+                         "bista_wave_at_sanford_cfs": round(BISTA_WAVE_AT_SANFORD_CFS, 0)}
     with open(os.path.join(folder, "result.json"), "w", encoding="utf-8") as f:
         json.dump(res, f, indent=1)
     _say_run(res, say)
@@ -378,8 +383,8 @@ def _say_run(res, say):
             say("{}: peak breach {:,.0f} cfs, {:,.0f} ac flooded".format(
                 name, d.get("peak_breach_cfs", 0), d.get("flooded_acres", 0)))
     if res.get("dams", {}).get("Edenville", {}).get("gauge_to_Sanford_peak_cfs"):
-        say("wave reaching Sanford: {:,.0f} cfs (ASCE 2-D model ~{:,.0f})".format(
-            res["dams"]["Edenville"]["gauge_to_Sanford_peak_cfs"], ASCE_WAVE_AT_SANFORD_CFS))
+        say("wave reaching Sanford: {:,.0f} cfs (Bista et al. 2026 2-D ~{:,.0f})".format(
+            res["dams"]["Edenville"]["gauge_to_Sanford_peak_cfs"], BISTA_WAVE_AT_SANFORD_CFS))
     s = res.get("midland_stage_ft")
     if s is not None:
         say("Midland: model {:.2f} ft, observed {:.2f} ft, difference {:+.2f} ft; "
@@ -403,21 +408,25 @@ def score(root, say=print):
             rows.append(json.load(f))
     lines = ["# The 2020 Edenville -> Sanford cascade at the Tittabawassee gauge at Midland", "",
              "The Runner's own cascade engine at 30 m on USGS 3DEP terrain (LISFLOOD-FP). Edenville "
-             "fails sunny-day at normal pool; the surge overtops and breaches Sanford; the combined "
-             "flood is routed to the USGS Midland gauge. Dam-break only (no concurrent storm "
-             "runoff), so the Midland peak is a lower bound.", "",
+             "fails sunny-day with the breach started at normal pool (a reproducible bound, not the "
+             "storm-pool failure); the surge overtops and breaches Sanford; the combined flood is "
+             "routed to the USGS Midland gauge. This is a bounding dam-break case, not a validation: "
+             "it carries no concurrent storm runoff (so the Midland peak is low on that count), and "
+             "a large share of the breach volume can leave the model edges before reaching the gauge "
+             "(see the run caveats below), so the Midland flow is a minimum. Read it against the "
+             "reference columns, not as a match.", "",
              "| Quantity | Model | Reference | Source |",
              "|---|---|---|---|"]
     for r in rows:
         eden = r["dams"].get("Edenville", {})
         san = r["dams"].get("Sanford", {})
-        asce = r.get("references", {})
+        ref = r.get("references", {})
         def q(v):
             return "{:,.0f} cfs".format(v) if v else "--"
-        lines.append("| Edenville breach peak | {} | {} | ASCE JHE 2-D model |".format(
-            q(eden.get("peak_breach_cfs")), q(asce.get("asce_edenville_breach_cfs"))))
-        lines.append("| Wave reaching Sanford | {} | {} | ASCE (~35 % attenuated) |".format(
-            q(eden.get("gauge_to_Sanford_peak_cfs")), q(asce.get("asce_wave_at_sanford_cfs"))))
+        lines.append("| Edenville breach peak | {} | {} | Bista et al. 2026, HEC-RAS 2-D |".format(
+            q(eden.get("peak_breach_cfs")), q(ref.get("bista_edenville_breach_cfs"))))
+        lines.append("| Wave reaching Sanford | {} | {} | Bista et al. 2026 (~35 % attenuated) |".format(
+            q(eden.get("gauge_to_Sanford_peak_cfs")), q(ref.get("bista_wave_at_sanford_cfs"))))
         lines.append("| Sanford breach peak | {} | -- | (overtopped by the surge) |".format(
             q(san.get("peak_breach_cfs"))))
         lines.append("| Peak flow at Midland | {} | {} | USGS 04156000 (rating) |".format(
@@ -429,6 +438,23 @@ def score(root, say=print):
         for d in r.get("decisions", []):
             lines.append("| _{}_ | {} | | |".format(
                 d.get("dam"), ("fails" if d.get("fails") else "holds") + ": " + d.get("reason", "")))
+    # Surface the run's own mass-balance / domain caveats so the table is not read as a clean match:
+    # how much breach volume left the model edges, where the gauge sat, and whether the clock was
+    # shorter than the breach hydrograph.
+    flags = []
+    for r in rows:
+        for w in r.get("warnings", []):
+            if any(k in w for k in ("left the model through its edges", "outside the model domain",
+                                    "simulation duration", "stops growing", "a minimum")):
+                flags.append(w)
+    if flags:
+        seen, uniq = set(), []
+        for w in flags:
+            if w not in seen:
+                seen.add(w); uniq.append(w)
+        lines += ["", "### Run caveats (from the model's own warnings)",
+                  "These are why the Midland numbers above are minimums, not a match:", ""]
+        lines += ["- " + w for w in uniq]
     text = "\n".join(lines) + "\n"
     with open(os.path.join(root, "Edenville_Sanford_2020_Score.md"), "w", encoding="utf-8") as f:
         f.write(text)

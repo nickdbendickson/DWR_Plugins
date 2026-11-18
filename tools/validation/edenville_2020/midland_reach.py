@@ -51,7 +51,7 @@ MIDLAND = {
     "measured": {
         "q_cfs": 51800.0,
         "gage_height_ft": 35.14,
-        "time_utc": "2020-05-20T00:00",
+        "time_utc": "2020-05-20T16:30",        # peak 11:30 EST May 20 = 16:30 UTC (USGS 04156000)
         "control": "2020 Edenville/Sanford dam-break flood peak (open water)",
         "source": "USGS 04156000, water-year 2020 annual peak",
     },

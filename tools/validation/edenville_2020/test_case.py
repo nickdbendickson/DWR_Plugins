@@ -70,11 +70,11 @@ class Published(unittest.TestCase):
         self.assertGreater(xy[-1][0], 12000.0)
         self.assertLess(xy[-1][1], 0.0)
 
-    def test_the_asce_benchmarks_are_the_paper_numbers(self):
-        self.assertAlmostEqual(C.ASCE_EDENVILLE_BREACH_CFS * C.CFS, 4323.0, places=1)  # m3/s
-        self.assertAlmostEqual(C.ASCE_WAVE_AT_SANFORD_CFS,
-                               C.ASCE_EDENVILLE_BREACH_CFS * 0.65, places=1)
-        self.assertTrue(150000 < C.ASCE_EDENVILLE_BREACH_CFS < 155000)
+    def test_the_reference_benchmarks_are_the_paper_numbers(self):
+        self.assertAlmostEqual(C.BISTA_EDENVILLE_BREACH_CFS * C.CFS, 4323.0, places=1)  # m3/s
+        self.assertAlmostEqual(C.BISTA_WAVE_AT_SANFORD_CFS,
+                               C.BISTA_EDENVILLE_BREACH_CFS * 0.65, places=1)
+        self.assertTrue(150000 < C.BISTA_EDENVILLE_BREACH_CFS < 155000)
 
 
 class RunnerReadsIt(unittest.TestCase):
@@ -96,9 +96,10 @@ class RunnerReadsIt(unittest.TestCase):
         s = hy.summary()
         self.assertIn("Froehlich", s["breach_parameters"])
         self.assertAlmostEqual(s["starting_wse_ft"], C.EDENVILLE["normal_pool_ft"], delta=0.5)
-        # tens of thousands to a few hundred thousand cfs: the right order for a 54 ft, 40,000
-        # ac-ft dam-break, bracketing the ASCE 2-D model (~152,600 cfs)
-        self.assertTrue(80000 < hy.peak_cfs < 400000, hy.peak_cfs)
+        # the sunny-day, normal-pool Edenville breach peaks near 221,000 cfs; a band tight enough
+        # to catch a real regression, above the Bista et al. 2026 2-D reconstruction (~152,700 cfs)
+        # because the Runner routes a free weir with no tailwater
+        self.assertTrue(190000 < hy.peak_cfs < 260000, hy.peak_cfs)
 
     def test_sanford_overtops_under_the_wave_and_holds_without_it(self):
         from DamSafety_Runner.core import breach as brmod, flood as floodmod
@@ -158,8 +159,8 @@ class Scoring(unittest.TestCase):
                                "max_depth_ft": 25.0, "gauge_midland_peak_cfs": 60000.0}},
                "midland_stage_ft": 616.1, "midland_observed_ft": 614.61, "midland_diff_ft": 1.49,
                "midland_peak_cfs": 60000.0, "midland_observed_cfs": 51800.0,
-               "references": {"asce_edenville_breach_cfs": 152665.0,
-                              "asce_wave_at_sanford_cfs": 99232.0}}
+               "references": {"bista_edenville_breach_cfs": 152665.0,
+                              "bista_wave_at_sanford_cfs": 99232.0}}
         with tempfile.TemporaryDirectory() as d:
             case = os.path.join(d, "Edenville")
             os.makedirs(case)
@@ -171,7 +172,7 @@ class Scoring(unittest.TestCase):
             with open(os.path.join(d, "Edenville_Sanford_2020_Score.md"), encoding="utf-8") as f:
                 text = f.read()
         self.assertIn("221,000 cfs", text)
-        self.assertIn("152,665 cfs", text)                 # ASCE breach reference
+        self.assertIn("152,665 cfs", text)                 # Bista et al. 2026 breach reference
         self.assertIn("**616.10 ft** (+1.49)", text)       # modelled stage and difference
         self.assertIn("614.61 ft NAVD88", text)            # the observed anchor
         self.assertIn("fails", text)
