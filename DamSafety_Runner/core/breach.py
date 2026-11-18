@@ -484,6 +484,15 @@ def mlm_1984_peak(vw_m3, hw_m):
     return 1.154 * (vw_m3 * hw_m) ** 0.412
 
 
+def usbr_1982_peak(hw_m):
+    """USBR (1982) peak breach outflow, m3/s (a check): Q = 19.1 hw^1.85. This is an ENVELOPE
+    (upper-bound) relation over the case data, not a best fit, so it is reported as a conservative
+    ceiling, not mixed into the best-fit range (USBR, Guidelines for Defining Inundation Areas,
+    1982; as tabulated in HR Wallingford HRPP770 and the HEC-RAS Hydraulic Reference Manual)."""
+    hw_m = _positive("water height hw", hw_m)
+    return 19.1 * hw_m ** 1.85
+
+
 def embankment_area_ft2(height_ft, crest_ft, us_h, ds_h):
     """Cross-section area of the embankment at the breach (ft2), trapezoid."""
     return height_ft * (crest_ft + 0.5 * (us_h + ds_h) * height_ft)
@@ -1028,8 +1037,10 @@ def _add_peak_range(dam, hy, ov=None):
         p["xu_zhang_2009_peak_cfs"] = round(peaks["Xu & Zhang (2009), {}".format(mode)], 0)
         p["mlm_1984_peak_cfs"] = round(peaks["MacDonald & Langridge-Monopolis (1984)"], 0)
         p["regression_peaks_cfs"] = {k: round(v, 0) for k, v in peaks.items()}
-        p["regression_peak_range_cfs"] = "{:,.0f} to {:,.0f} ({} equations)".format(
-            lo, hi, len(peaks))
+        envelope = usbr_1982_peak(hw) / CFS
+        p["usbr_1982_envelope_peak_cfs"] = round(envelope, 0)
+        p["regression_peak_range_cfs"] = "{:,.0f} to {:,.0f} ({} equations); USBR (1982) " \
+            "envelope (upper-bound screen): {:,.0f} cfs".format(lo, hi, len(peaks), envelope)
         q = hy.peak_cfs
         if q > 0 and (q > 1.5 * hi or q < lo / 1.5):
             hy.notes.append("The hydrograph peak {:,.0f} cfs is {} the range of the peak-flow "

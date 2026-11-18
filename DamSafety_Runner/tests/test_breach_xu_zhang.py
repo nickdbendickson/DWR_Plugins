@@ -79,6 +79,12 @@ def regression_peak_range_is_reported_for_every_method():
     vw, hw = 500.0 * ACFT, 25.0 * 0.3048
     assert abs(br.mlm_1984_peak(vw, hw) - 1.154 * (vw * hw) ** 0.412) < 1e-9
     assert hy.params["mlm_1984_peak_cfs"] == round(br.mlm_1984_peak(vw, hw) / CFS, 0)
+    # USBR (1982) envelope is reported as a separate upper-bound ceiling, Q = 19.1 hw^1.85
+    assert abs(br.usbr_1982_peak(hw) - 19.1 * hw ** 1.85) < 1e-9
+    assert hy.params["usbr_1982_envelope_peak_cfs"] == round(br.usbr_1982_peak(hw) / CFS, 0)
+    assert "USBR (1982) envelope" in hy.params["regression_peak_range_cfs"]
+    # the envelope is a ceiling, not part of the best-fit range it is reported beside
+    assert hy.params["usbr_1982_envelope_peak_cfs"] >= min(peaks.values())
 
 
 @test
