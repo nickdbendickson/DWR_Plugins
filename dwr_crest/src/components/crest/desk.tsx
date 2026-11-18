@@ -1473,9 +1473,9 @@ let handoffTimer = 0;
 
 type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers" | "/api/check";
 
-/** The desktop server hands out a per-launch token at /api/token; every /api/ call must send it back in the
- * X-Crest-Token header (crest-desktop/crest/__main__.py). crestToken() fetches it once and caches it; the token
- * is never in the page markup. */
+/** The desktop server opens the desk with its per-launch token in the URL fragment (never sent over HTTP, never in
+ * the page markup, no endpoint hands it out); every /api/ call must send it back in the X-Crest-Token header
+ * (crest-desktop/crest/__main__.py). crestToken() reads it once (see crest-token.ts). */
 async function crestApiHeaders(json = false): Promise<Record<string, string>> {
   const token = await crestToken();
   return { ...(json ? { "Content-Type": "application/json" } : {}), "X-Crest-Token": token };

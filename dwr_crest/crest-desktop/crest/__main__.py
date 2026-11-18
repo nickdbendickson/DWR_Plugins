@@ -68,9 +68,11 @@ NAV_GUARD_JS = r"""
 })();
 """
 
-#: Random per-launch secret. The page fetches it once from GET /api/token (guarded by the Host/Origin checks) and
-#: sends it back in the X-Crest-Token header on every /api/ call. The token is never written into the page markup,
-#: so a saved copy of the HTML (e.g. the browser's "Save Page As") cannot carry a live credential. The custom header
+#: Random per-launch secret. main() opens the desk at index.html#crest-token=<token>: a URL fragment is never sent
+#: over HTTP, so no request to this server - from another local process or another OS user on a shared host -
+#: can obtain it (security audit 2026-11-18: GET /api/token handed it to any loopback peer that sent no Origin).
+#: The page keeps it in sessionStorage and sends it back in the X-Crest-Token header on every /api/ call. It is
+#: never written into the page markup and no endpoint returns it. The custom header
 #: also forces a CORS preflight, which this server never answers, so other web origins cannot reach the API.
 TOKEN_HEADER = "X-Crest-Token"
 API_TOKEN = secrets.token_urlsafe(32)
@@ -275,19 +277,11 @@ class _Handler(SimpleHTTPRequestHandler):
         return True
 
     def _serve_index(self) -> None:
-        # The token is NOT injected into the page. The desk fetches it from /api/token instead, so a saved copy of
-        # the HTML (e.g. the browser's "Save Page As") can never carry a live credential.
+        # The token is NOT injected into the page and no endpoint hands it out: the desk gets it from the URL
+        # fragment main() opens (see API_TOKEN), so neither a local peer nor a saved copy of the HTML can carry it.
         index = Path(self.directory) / "index.html"
         html = index.read_text(encoding="utf-8")
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
-
-    def _send_token(self) -> None:
-        """Hand the page its per-launch API token. Guarded by the Host and Origin checks (not the token itself,
-        which the page does not have yet); the response is the only place the token appears, never page markup."""
-        if not (self._host_ok() and self._origin_ok()):
-            self._send(403, b'{"error":"forbidden"}', "application/json")
-            return
-        self._send(200, json.dumps({"token": API_TOKEN}).encode(), "application/json")
 
     def do_GET(self):
         if not self._host_ok():
@@ -296,9 +290,6 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             self._serve_index()
-            return
-        if parsed.path == "/api/token":
-            self._send_token()
             return
         if parsed.path.startswith("/api/") and not self._api_allowed():
             return
@@ -671,9 +662,16 @@ def write_text(path: Path, text: str) -> None:
         raise
 
 
+def desk_url(port: int) -> str:
+    """The address the desk window opens: the API token rides in the fragment, which is never sent over HTTP."""
+    return f"http://127.0.0.1:{port}/index.html#crest-token={API_TOKEN}"
+
+
 def main() -> None:
     server = serve()
+    # printed without the token: opening this plain address elsewhere shows the desk, but its /api/ calls are refused
     url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+    open_url = desk_url(server.server_address[1])
     # install test 2026-11-18: the address is printed at start (flushed: the launcher's output may be a pipe),
     # so it can be opened in a browser and the port is visible whichever window opens.
     print(f"Crest desktop: {url}", flush=True)
@@ -695,13 +693,15 @@ def main() -> None:
         global SETTINGS_FILE
         SETTINGS_FILE = store / "crest-settings.json"
         api = Api(settings_file=SETTINGS_FILE)
-        api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(760, 560))
+        api._window = webview.create_window(TITLE, open_url, js_api=api, width=1280, height=860, min_size=(760, 560))
         # Re-arm the nav guard after every in-page load (the loaded event re-fires on each navigation).
         api._window.events.loaded += lambda *a: api._window.evaluate_js(NAV_GUARD_JS)
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)
         print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.", flush=True)
-        webbrowser.open(url)
+        # The token is in the fragment. On this fallback the OS passes the address to the browser on its command
+        # line, which other local users may be able to list; the pywebview window above has no such exposure.
+        webbrowser.open(open_url)
         try:
             threading.Event().wait()
         except KeyboardInterrupt:

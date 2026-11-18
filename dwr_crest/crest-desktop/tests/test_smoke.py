@@ -241,8 +241,8 @@ class ServedEngineTests(unittest.TestCase):
 
     def test_serves_the_bundle(self):
         body, ctype = self.get("/index.html")
-        # the token is NOT written into the page; the desk fetches it from /api/token (see test_local_api.py), so a
-        # saved copy of the HTML can never carry it
+        # the token is NOT written into the page; the desk gets it from the URL fragment (see test_local_api.py), so
+        # a saved copy of the HTML can never carry it
         self.assertNotIn(b"crest-token", body)
         self.assertEqual(body, (WEB / "index.html").read_bytes())
         self.assertIn("text/html", ctype)

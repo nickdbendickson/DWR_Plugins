@@ -2,6 +2,13 @@
 
 ## 2026-11-18
 
+- **Security: the desktop API token is no longer handed out over HTTP.** `GET /api/token` (added 2026-11-17) answered
+  any loopback client that sent no `Origin` header, so another process or another OS account on a shared machine
+  could still fetch the token and drive the local API as the Crest user (security audit 2026-11-18, F1). The endpoint
+  is gone. The desk window now opens at `index.html#crest-token=<token>`: a URL fragment is never sent to the server,
+  the page moves it into `sessionStorage` and strips it from the address. The printed address has no token, so opening
+  it in another browser shows the desk with its `/api/` buttons refused. Tests: `tests/test_local_api.py`,
+  `src/lib/crest/crest-token.test.ts`.
 - **Check QGIS hand-off.** A new button on the Report step's "Plugins already in QGIS" panel checks the link to the
   DamSafety plugins without running a dam: it says which `qgis_process` the desk found, which QGIS profile it reads
   (with the dam-suite launcher, the link in `~/dam-suite/qgis-process/damsafety`), and whether each tool the buttons call

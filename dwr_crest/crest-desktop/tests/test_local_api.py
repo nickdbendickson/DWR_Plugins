@@ -62,20 +62,21 @@ class LocalApiTests(unittest.TestCase):
         self.assertNotIn(b"crest-token", data)
         self.assertNotIn(m.API_TOKEN.encode(), data)
 
-    def test_token_endpoint_hands_out_token(self):
-        # The page fetches the token from /api/token, which is guarded by the Host/Origin checks but not the
-        # token itself (the page does not have it yet).
-        status, data = self.req("GET", "/api/token", token=False)
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(data).get("token"), m.API_TOKEN)
+    def test_no_endpoint_hands_out_the_token(self):
+        # Security audit 2026-11-18: GET /api/token gave the token to any loopback peer that sent no Origin header
+        # (another process or OS user). No path answers with the token now; the desk gets it from the URL fragment.
+        for path in ("/api/token", "/", "/index.html", "/api/job?id=x", "/api/nope"):
+            for headers in ({}, {"Origin": f"http://127.0.0.1:{self.port}"}):
+                status, data = self.req("GET", path, token=False, headers=headers)
+                self.assertNotIn(m.API_TOKEN.encode(), data, path)
+                if path.startswith("/api/"):
+                    self.assertEqual(status, 403, path)
 
-    def test_token_endpoint_foreign_origin_rejected(self):
-        status, _ = self.req("GET", "/api/token", token=False, headers={"Origin": "https://evil.example"})
-        self.assertEqual(status, 403)
-
-    def test_token_endpoint_rebinding_host_rejected(self):
-        status, _ = self.req("GET", "/api/token", token=False, host=f"evil.example:{self.port}")
-        self.assertEqual(status, 403)
+    def test_desk_url_carries_token_in_fragment_only(self):
+        url = m.desk_url(self.port)
+        base, _, frag = url.partition("#")
+        self.assertEqual(base, f"http://127.0.0.1:{self.port}/index.html")
+        self.assertEqual(frag, f"crest-token={m.API_TOKEN}")
 
     def test_token_is_random_and_long(self):
         self.assertGreaterEqual(len(m.API_TOKEN), 32)
