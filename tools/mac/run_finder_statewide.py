@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run_finder_statewide.py 1.2 - the DamSafety Finder's "fills across streams and draws" over all of
+"""run_finder_statewide.py 1.4 - the DamSafety Finder's "fills across streams and draws" over all of
 North Dakota, from the statewide 1 m terrain VRT, tile by tile, resumable.
 
     bash run_finder_statewide.sh --dry-run        # what would run, how long, how much disk; writes nothing
@@ -164,6 +164,19 @@ CROWDED GROUND: A NOTE, NOT A TEST (script 1.2)
     It does not catch mine spoil (1 of 8 cards): for mined ground use --exclude-polygons with an
     outline of the mine.
 
+THE ORDER (script 1.4)
+
+  * The ranked lists are in the order to look at the fills, the Finder's review order without
+    the imagery (finder core/evidence.py review_order, 0.7.2): the score in bands 0.1 wide, the
+    highest first, and a fill on a pond-outlet line (line_source "DEM pool outlet") counted
+    --outlet-drop (4) bands lower than its score and after the other fills of the band it lands
+    in; inside a band by score, then height. On Nick's statewide review sheet of 2026-11-18 (90
+    cards picked at random inside score bands) the pond-outlet fills were dams 3 of 8 at 0.73 and
+    up, 2 of 10 at 0.5 to 0.73 and 0 of 8 at 0.3 to 0.5; the other fills 10 of 10, 13 of 16 at 0.6
+    to 0.73, 11 of 16 at 0.5 to 0.6 and 6 of 12 at 0.4 to 0.5. The score itself is not changed.
+    --outlet-drop 0 ranks by the score alone, as script 1.3 did. The order is made in the merge,
+    so --merge-only redoes it without running a tile.
+
 WHAT IT WRITES (all in --out)
 
   tiles/<tile>/                    one folder per finished tile: the engine's GeoPackage and CSVs,
@@ -171,11 +184,13 @@ WHAT IT WRITES (all in --out)
                                    not finished and runs again)
   ND_finder_fills.gpkg             every fill ('embankments', scored), the ranked candidates
                                    ('candidates'), the spill points, the channel-side dikes, run_info
-  ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates, highest score first
-                                   (every one: about 300,000 rows for the state)
-  ND_finder_candidates_top.csv     the short list a person can open: the top 2,000 of them (--top N)
+  ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates in the order to look
+                                   at them (every one: about 240,000 rows for the state; see THE
+                                   ORDER below)
+  ND_finder_candidates_top.csv     the short list a person can open: the first 2,000 of them (--top N)
                                    with lat, lon, score, kind, height, storage, tile, a link to
-                                   the satellite picture, and the crowded-ground note
+                                   the satellite picture, the crowded-ground note, and line_source
+                                   and pool (script 1.4)
   ND_finder_summary.txt            counts (also: how many candidates score 0.5 or more), the Finder
                                    version, tiles run / skipped / failed, settings, checksums
   ND_finder_review_batch.gpkg/.csv only with --review-batch N: a review batch drawn from the candidates
@@ -207,7 +222,7 @@ import xml.etree.ElementTree as ET
 sys.dont_write_bytecode = True          # never leave .pyc files in the plugins folder
 warnings.filterwarnings("ignore", category=FutureWarning)   # GDAL's note about its exception mode (not switched)
 
-SCRIPT_VERSION = "1.3"
+SCRIPT_VERSION = "1.4"
 DEFAULT_DEM = "/Volumes/Extreme SSD/ND_DEM_1m/ND_1m_26914.vrt"
 DEFAULT_OUT = os.path.join("~", "ND_Finder_Statewide")
 ENGINE = "DamSafety_Finder"
@@ -302,7 +317,9 @@ EXTRA_FIELDS = [("tile", "str"), ("edge_ft", "float"), ("at_data_edge", "str"), 
                 ("excluded", "str"), ("id_clash", "str")] + CROWD_FIELDS
 TOP_DEFAULT = 2000                      # rows of the short list (--top)
 TOP_COLUMNS = ["rank", "score", "kind", "status", "height_ft", "storage_af", "lat", "lon", "tile", "find_id",
-               "link"] + [name for name, _t in CROWD_FIELDS]
+               "link", "line_source", "pool"] + [name for name, _t in CROWD_FIELDS]
+OUTLET_DROP_DEFAULT = 4                 # --outlet-drop: a pond-outlet fill ranks this many 0.1 score bands lower
+SCORE_BAND = 0.1                        # the bands of the order (finder core/evidence.py SCORE_BAND)
 CROWD_RADIUS_M = 1000.0                 # crowded ground: the other pond fills are counted this far from a fill
 CROWD_KM2_DEFAULT = 8.0                 # --crowd-km2: so many of them per km2, or more, is "crowded"
 CROWD_MIN_SHARE = 0.25                  # the density is never worked out over less of the circle than this
@@ -1954,6 +1971,30 @@ def finished_tiles(out, key):
     return good, other
 
 
+def outlet_drop(a):
+    """--outlet-drop as a whole number of bands, 0 or more (an old namespace without it: the default)."""
+    n = getattr(a, "outlet_drop", OUTLET_DROP_DEFAULT)
+    n = OUTLET_DROP_DEFAULT if n is None else int(n)
+    if n < 0:
+        raise UserError("--outlet-drop must be 0 or more (0 = rank by the score alone)")
+    return n
+
+
+def rank_order_sql(drop, line_pool):
+    """The ORDER BY of the ranked candidates (script 1.4; SQLite, the GeoPackage's own SQL): the
+    review order of finder core/evidence.py review_order without the imagery - the score band
+    (0.1 wide; a score of exactly 1 is in the top band, 0.9 to 1), a fill whose line_source is the
+    pond-outlet line `drop` bands lower, then pond-outlet fills after the others of a band, then
+    score, height, find_id, tile. A fill with no score comes last. The 1e-9 is the engine's: 0.3 is
+    in band 3."""
+    lp = str(line_pool).replace("'", "''")
+    is_out = "(CASE WHEN line_source = '{}' THEN 1 ELSE 0 END)".format(lp)
+    top = int(round(1.0 / SCORE_BAND)) - 1
+    band = "MIN(CAST(score / {!r} + 1e-9 AS INTEGER), {})".format(SCORE_BAND, top)
+    return ("(score IS NULL), ({} - {} * {}) DESC, {}, score DESC, height_ft DESC, find_id, tile".format(
+        band, int(drop), is_out, is_out))
+
+
 def map_link(lat, lon):
     """A Google Maps link that opens the satellite picture centred on the point (the documented
     'Maps URLs' form; nothing is sent anywhere until a person clicks it)."""
@@ -2570,6 +2611,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     # by height.)
     kd = finder.em
     order = "score DESC, height_ft DESC, find_id, tile" if model is not None else "height_ft DESC, find_id, tile"
+    o_drop = outlet_drop(a) if model is not None else 0
+    if o_drop:
+        order = rank_order_sql(o_drop, finder.LINE_POOL)
     sql = ("SELECT fid FROM embankments WHERE status <> 'listed' AND kind IN ('{}', '{}') AND in_state = 'yes' "
            "AND at_data_edge = 'no' AND excluded = 'no' ORDER BY {}".format(kd.K_DAM, kd.K_DRY, order))
     res = ds.ExecuteSQL(sql)
@@ -2592,6 +2636,7 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     top_part = os.path.join(out, "work", "top_{}.csv".format(os.getpid()))
     n_top = max(0, int(getattr(a, "top", TOP_DEFAULT) or 0))
     top, n_cut, n_short, n_crowd, n_crowd_top = [], 0, 0, 0, 0
+    n_outlet, n_cut_outlet = 0, 0
     with open(csv_part, "w", newline="", encoding="utf-8") as fh, \
             open(top_part, "w", newline="", encoding="utf-8") as th:
         w = csv.writer(fh)
@@ -2608,8 +2653,11 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
             vals = as_dict(f, emb_names)
             vals["rank"] = rank
             w.writerow(["" if vals.get(c) is None else vals.get(c) for c in cols])
+            is_outlet = vals.get("line_source") == finder.LINE_POOL
+            n_outlet += is_outlet
             if vals.get("score") is not None and vals["score"] >= SCORE_CUT:
                 n_cut += 1
+                n_cut_outlet += is_outlet
             if vals.get("crowded") == "yes":
                 n_crowd += 1
                 n_crowd_top += rank <= n_top
@@ -2629,6 +2677,9 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     info["made"] = now()
     info["script"] = "run_finder_statewide.py {}".format(SCRIPT_VERSION)
     info["finder_version"] = finder.VERSION
+    info["order"] = ("score in bands of {:g}, a fill with line_source '{}' {} band(s) lower and after the others of "
+                     "its band, then score, height".format(SCORE_BAND, finder.LINE_POOL, o_drop) if o_drop else
+                     "score, height" if model is not None else "height (--no-score)")
     info["find_ids"] = ("stable: this Finder gives a fill the same id in every run over the same terrain and "
                         "settings, whatever the area of the run; ids do not carry over between Finder versions"
                         if ids_are_stable(finder) else
@@ -2765,9 +2816,20 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
     L.append("  ranked by {}".format("the score of {}".format(os.path.basename(model_path)) if model is not None
                                      else "height (--no-score)"))
     if model is not None:
-        L.append("  with a score of {} or more: {:,}".format(SCORE_CUT, n_cut))
-        L.append("    work down the list to about here: on the review sheets of 2026-11-16, 55 of the 60")
-        L.append("    top-scored fills were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75")
+        if o_drop:
+            L.append("  in the order to look at them: the score in bands of {:g}, a fill on a pond-outlet line ({})".format(
+                SCORE_BAND, n_outlet))
+            L.append("    counted {} band(s) lower and after the other fills of that band (--outlet-drop {}; 0 = by the"
+                     .format(o_drop, o_drop))
+            L.append("    score alone). On the statewide review sheet of 2026-11-18 pond-outlet fills were dams 3 of 8")
+            L.append("    at 0.73 and up and 2 of 10 at 0.5 to 0.73; the other fills 10 of 10, 13 of 16 at 0.6 to 0.73,")
+            L.append("    11 of 16 at 0.5 to 0.6 and 6 of 12 at 0.4 to 0.5. The score itself is unchanged.")
+        else:
+            L.append("  highest score first (--outlet-drop 0)")
+        L.append("  with a score of {} or more: {:,} ({:,} of them on a pond-outlet line)".format(
+            SCORE_CUT, n_cut, n_cut_outlet))
+        L.append("    work down the list to about a score of 0.5, or 0.4 if one dam in two cards is worth the time")
+        L.append("    (the yields above). Pond-outlet fills come later in the list, at their lower place.")
     if n_top:
         L.append("  the short list ({}): the top {:,} of them, each with a link to the satellite picture".format(
             OUT_TOP, n_short))
@@ -2871,6 +2933,9 @@ def parser():
                     help="the crowded-ground note: crowded = yes for a pond-line dam or dry embankment with N or "
                          "more other such fills per km2 within 1 km. A note only: nothing is left out or reordered "
                          "[{:g}; 0 = off]".format(CROWD_KM2_DEFAULT))
+    ap.add_argument("--outlet-drop", type=int, default=OUTLET_DROP_DEFAULT, metavar="N",
+                    help="rank a fill on a pond-outlet line N score bands (0.1 each) lower, after the other fills "
+                         "of that band; 0 = by the score alone [%(default)s]")
     ap.add_argument("--model", default="", help="the score model JSON [the plugin's models/{}]".format(MODEL_NAME))
     ap.add_argument("--state-outline", default="", help="a polygon file of North Dakota; 'none' = no test "
                                                         "[the pack's counties, else the built-in simple outline]")
