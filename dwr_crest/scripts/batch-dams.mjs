@@ -7,11 +7,14 @@
  *   node --experimental-strip-types scripts/batch-dams.mjs --out <dir> (--state | --county Cass[,Barnes] | --watershed "Maple" | --ids ND00199,DWR-4031)
  *        [--kinds nid,dam,dugout,unknown] [--statuses NID,Intact,Dugout,...] [--concurrency 2] [--limit N] [--list]
  *        [--dem /path/ND_1m_EPSG26914.vrt [--dem-feet] [--gdalwarp <path>]]
- *        [--defaults ~/DamSafety/defaults.json]
+ *        [--defaults ~/DamSafety/defaults.json] [--no-flowlines]
  *
  * --dem reads the terrain from a local raster (the statewide 1 m mosaic) through gdalwarp instead of the 3DEP service
  * (scripts/local-dem.mjs): no per-dam download, and the crest is read on a 2 m grid. The VRT must be in metres
  * (--dem-feet for a feet DEM). 911 address points still come from the ND GIS Hub.
+ *
+ * The trace crosses lakes along the USGS 3DHP mapped flowline (hydro.nationalmap.gov) on 3DEP terrain; --no-flowlines
+ * (and --dem, a local terrain that may be used offline) leave it to the terrain alone.
  *
  * --defaults starts every structure from a shared defaults file (the one the QGIS plugins and the desk's Settings
  * read: starting pool, failure mode, breach equation, Manning's n) instead of Crest's built-in values.
@@ -25,6 +28,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { localDemFetcher } from "./local-dem.mjs";
+import { fetchFlowlines } from "../src/lib/crest/flowlines.ts";
 import { applyDefaults, mergeDefaults, readDefaultsFile, recordDefaults } from "../src/lib/crest/settings.ts";
 import { DEFAULT_STATUSES, batchCsv, batchCsvMeta, estimateSeconds, loadStructures, runBatch, selectStructures } from "../src/lib/crest/batch.ts";
 
@@ -88,6 +92,7 @@ export function parseArgs(argv) {
     else if (a === "--dem-feet") o.demFeet = true;
     else if (a === "--gdalwarp") o.gdalwarp = argv[++i];
     else if (a === "--defaults") o.defaults = argv[++i];
+    else if (a === "--no-flowlines") o.noFlowlines = true;
     else throw new Error(`unexpected ${a}`);
   }
   if (!o.by) throw new Error("pick one of --state, --county, --watershed, --ids");
@@ -143,6 +148,7 @@ export async function main(argv, log = console.log) {
     nd,
     ...(shared ? { prepare: (d) => applyDefaults(d, shared) } : {}),
     ...(local ? { fetchDem: local, nearCellM: 2, demLabel: "local DEM" } : {}),
+    flowlines: local || o.noFlowlines ? null : (b) => fetchFlowlines(b),
     concurrency: o.concurrency,
     skip,
     onRow: (row, _dam, done, total) => {

@@ -27,7 +27,7 @@ import { loadBundle } from "./data-bundle.ts";
 import { bundleAgeLine, deskBundles } from "./data-provenance.ts";
 import { analyze, ENGINE_VERSION } from "./engine.ts";
 import { floodStrip } from "./floodstrip.ts";
-import { buildInundationReach, type InundationResult } from "./inundation.ts";
+import { buildInundationReach, type InundationReachOptions, type InundationResult } from "./inundation.ts";
 import { makeInundationPool, type InundationPool } from "./inundation-client.ts";
 import { fetchNd911, nd911AutoPatch, nd911State } from "./nd911.ts";
 import { lookupPads } from "./nd911-pads.ts";
@@ -507,6 +507,8 @@ export type BatchDeps = {
    * on the desk. Absent = Crest's built-in values.
    */
   prepare?: (dam: DamRecord) => DamRecord;
+  /** Mapped flowlines through lakes for the trace (flowlines.ts); undefined = the build's own default. */
+  flowlines?: InundationReachOptions["flowlines"];
   onStatus?: (text: string) => void;
   yieldFn?: () => Promise<void>;
   /**
@@ -578,7 +580,7 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
     const onStatus = (t: string) => deps.onStatus?.(`${s.id}: ${t}`);
     const built = deps.build
       ? await deps.build(dam, result, { onStatus })
-      : await buildInundationReach(dam, result, { fetch: dem, yieldFn: deps.yieldFn, onStatus });
+      : await buildInundationReach(dam, result, { fetch: dem, yieldFn: deps.yieldFn, onStatus, ...(deps.flowlines !== undefined ? { flowlines: deps.flowlines } : {}) });
     if (built.ok) dam = { ...dam, outline: built.cache };
 
     // 911 points inside the layer (or the strip when no layer could be built), added as receptors like a picked dam.

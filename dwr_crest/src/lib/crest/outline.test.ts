@@ -13,6 +13,7 @@ import {
   DEM_SERVICE,
   type DemGrid,
   demRequest,
+  demTiles,
   demUrl,
   fetchDem,
   lookupArea,
@@ -24,6 +25,7 @@ import {
   extentOf,
   outlineState,
   parseBsq,
+  pasteTile,
   pitsExcludedNote,
   TRACE_VERSION,
   traceStartNote,
@@ -98,10 +100,13 @@ describe("3DEP request", () => {
     for (const [k, v] of Object.entries({ format: "bsq", pixelType: "F32", bboxSR: "4326", imageSR: "4326", noData: "-9999", f: "image", size: "1090,996", adjustAspectRatio: "false" }))
       assert.equal(u.searchParams.get(k), v, k);
   });
-  it("caps very long reaches at 3000 cells a side (coarser cells)", () => {
+  it("keeps a long reach within the cell budget (coarser cells), or shortens it to keep the cell size", () => {
     const r = demRequest(INP, 10, 300);
-    assert.ok(Math.max(r.width, r.height) <= 300);
-    assert.ok(r.cellM > 30);
+    assert.ok(r.width * r.height <= 300 * 300 * 1.05, `${r.width}x${r.height}`);
+    assert.ok(r.cellM > 10);
+    const s = demRequest(INP, 10, 300, { shorten: true });
+    assert.ok(Math.abs(s.cellM - 10) < 1e-6 || s.cellM <= r.cellM);
+    assert.ok(s.width * s.height <= 300 * 300 * 1.05);
   });
   it("corridor: three half-widths, at least 300 m, at most 2 km", () => {
     assert.deepEqual([corridorHalfM(20), corridorHalfM(200), corridorHalfM(900)], [300, 600, 2000]);
@@ -148,6 +153,46 @@ describe("reading and fetching the raster (fetch is faked)", () => {
     };
     await assert.rejects(fetchDem(req, missing, [0, 0]), /answered 404/);
     assert.equal(calls, 1, "a 4xx is not retried");
+  });
+});
+
+describe("tiled terrain reads", () => {
+  it("demTiles covers the box exactly, edge to edge, on its own lattice", () => {
+    const req = { bbox: [-100, 46, -99.9, 46.05] as [number, number, number, number], width: 4500, height: 2100, cellM: 2 };
+    const tiles = demTiles(req, 2000);
+    assert.equal(tiles.length, 3 * 2);
+    let cells = 0;
+    const dlon = (req.bbox[2] - req.bbox[0]) / req.width;
+    for (const t of tiles) {
+      cells += t.req.width * t.req.height;
+      assert.ok(t.req.width <= 2000 && t.req.height <= 2000);
+      assert.ok(Math.abs(t.req.bbox[0] - (req.bbox[0] + t.i0 * dlon)) < 1e-7);
+    }
+    assert.equal(cells, req.width * req.height);
+    assert.deepEqual(demTiles({ ...req, width: 1500, height: 900 }, 2000).map((t) => [t.i0, t.j0]), [[0, 0]]);
+  });
+  it("pasteTile puts a tile's rows at its offset", () => {
+    const z = new Float32Array(4 * 3);
+    pasteTile(z, 4, Float32Array.from([1, 2, 3, 4]), 2, 2, 2, 1);
+    assert.deepEqual([...z], [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4]);
+  });
+  it("a box larger than one tile is read tile by tile and pasted back into one grid", async () => {
+    const req = { bbox: [-100, 46, -99.9, 46.05] as [number, number, number, number], width: 2500, height: 30, cellM: 5 };
+    const urls: string[] = [];
+    const g = await fetchDem(req, async (url: string) => {
+      urls.push(url);
+      const q = new URL(url).searchParams;
+      const [w, h] = (q.get("size") ?? "0,0").split(",").map(Number);
+      const west = Number((q.get("bbox") ?? "").split(",")[0]);
+      // Each cell holds its own column number, read from where the tile sits.
+      const i0 = Math.round((west - req.bbox[0]) / ((req.bbox[2] - req.bbox[0]) / req.width));
+      const z = new Float32Array(w * h);
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) z[j * w + i] = i0 + i;
+      return { ok: true, status: 200, arrayBuffer: async () => z.buffer };
+    });
+    assert.equal(urls.length, 2);
+    assert.equal(g.z.length, req.width * req.height);
+    for (const i of [0, 1999, 2000, 2499]) assert.equal(g.z[7 * req.width + i], i);
   });
 });
 

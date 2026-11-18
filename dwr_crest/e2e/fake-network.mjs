@@ -113,7 +113,7 @@ export function batchTerrain(rule = () => "ok") {
  */
 export async function fakeNetwork(target, ownOrigin, { dem } = {}) {
   const unexpected = [];
-  const served = { tiles: 0, dem: 0, nd911: 0, plss: 0 };
+  const served = { tiles: 0, dem: 0, nd911: 0, plss: 0, flowlines: 0 };
   await target.route(
     (url) => /^https?:$/.test(url.protocol) && url.origin !== ownOrigin,
     async (route) => {
@@ -138,6 +138,11 @@ export async function fakeNetwork(target, ownOrigin, { dem } = {}) {
           headers: CORS,
           body: demResponse(url, how.shift),
         });
+      }
+      if (host === "hydro.nationalmap.gov") {
+        // 3DHP flowlines through lakes (flowlines.ts): none, so the trace follows the fake terrain alone.
+        served.flowlines++;
+        return route.fulfill({ status: 200, contentType: "application/json", headers: CORS, body: JSON.stringify({ type: "FeatureCollection", features: [] }) });
       }
       if (host === "services1.arcgis.com") {
         served.nd911++;

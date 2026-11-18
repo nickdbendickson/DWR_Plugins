@@ -20,7 +20,8 @@ import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
 import { breachPath, SETTLE_SWEEPS, settlePools, spreadVolume, spreadVolumeAsync } from "./spread.ts";
 import { type OutlineInputs, outlineInputs, traceChannel } from "./outline.ts";
-import { DEFAULT_ROUGHNESS, roughnessOf, type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
+import { DEFAULT_ROUGHNESS, normalDepth, reachSlopes, roughnessOf, type RoughnessOptions, type RoutedSection, routeMuskingumCunge, type Section, sectionTable, type SectionTable, type TableOptions } from "./routing.ts";
+import { findPools, POOL_WIDE_HALF_M, type Pool } from "./pools.ts";
 import { type Centerline, cutSections } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
@@ -75,6 +76,10 @@ export type RoutedFloodOptions = {
   ridgeTolM?: number;
   /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
   yieldFn?: () => Promise<void>;
+  /** Flat water cells to burn for the trace (flowlines.ts burnMask): the trace crosses lakes along the mapped line. */
+  burn?: Uint8Array | null;
+  /** Route lakes on the channel as level pools (pools.ts). Default true; false routes them as Muskingum-Cunge reaches. */
+  pools?: boolean;
   /**
    * The outline inputs to trace with instead of outlineInputs(dam, result): the demand-driven reach (reach.ts) passes
    * them with lastX pushed downstream so the trace may run past the schematic's last station.
@@ -148,11 +153,97 @@ export type RoutedFloodResult = {
    * Spread only: the unrounded demand signal for the downstream reach (reach.ts). The wave still reaches the end of the
    * traced channel (wetEndM against channelEndM), has this much water still travelling, and was not stopped in a basin.
    */
-  demand?: { reachedEdge: boolean; travellingM3: number; wetEndM: number; channelEndM: number; stoppedInBasin: boolean };
+  demand?: { reachedEdge: boolean; travellingM3: number; wetEndM: number; channelEndM: number; stoppedInBasin: boolean; traceAtEdge?: boolean };
   notes: string[];
 };
 
 export type RoutedFloodFail = { ok: false; reason: string };
+
+/** The stage slope a section is checked at before routing (routing.ts slopeFloorStage). */
+const RECUT_SLOPE_FLOOR = 0.0005;
+
+export type RecutResult = { taller: number; still: number; note: string | null };
+
+/**
+ * Recut the sections that cannot carry the breach peak (Nick, 2026-11-18). A section's table stops at its lower bank:
+ * above it the water would spill into the ground beyond. When the peak needs a stage above that bank the section was
+ * routed "capped", its storage and conveyance cut off at the bank (Edenville: 574 of 706 sections). Each such section
+ * is cut taller (spillBanks: its table rises past the lower bank to the higher one, the water spilling over into the
+ * ground beyond, which the table's walk then counts). A section that carries the peak is never touched, so a dam whose
+ * valley holds its flood builds exactly as before. Cutting wider as well was tried and dropped: on the four ND
+ * baseline dams it lowered CSI (DWR-4031 0.40 → 0.37) without helping Edenville, where the lake (pools.ts) was the
+ * missing storage. Tables are replaced in place.
+ */
+export function recutCapped(sections: Section[], tables: SectionTable[], qPeakCms: number, o: { rough: RoughnessOptions; tableOpts: TableOptions }): RecutResult {
+  if (!(qPeakCms > 0) || tables.length < 2) return { taller: 0, still: 0, note: null };
+  const { slopes } = reachSlopes(tables, RECUT_SLOPE_FLOOR);
+  const slopeAt = (j: number) => {
+    const up = j > 0 ? slopes[j - 1] : null;
+    const down = j < slopes.length ? slopes[j] : null;
+    return Math.max(RECUT_SLOPE_FLOOR, up != null && down != null ? 0.5 * (up + down) : (up ?? down ?? RECUT_SLOPE_FLOOR));
+  };
+  const carries = (t: SectionTable, j: number) => !normalDepth(t, qPeakCms, slopeAt(j)).capped;
+  const topK = (t: SectionTable) => t.conveyance[t.conveyance.length - 1];
+  const spill = { ...o.tableOpts, spillBanks: true };
+  let taller = 0;
+  let still = 0;
+  for (let j = 0; j < tables.length; j++) {
+    if (carries(tables[j], j)) continue;
+    const t = sectionTable(sections[j], o.rough, undefined, undefined, spill);
+    if (!(topK(t) > topK(tables[j]))) {
+      still++;
+      continue;
+    }
+    tables[j] = t;
+    taller++;
+    if (!carries(t, j)) still++;
+  }
+  const note = taller
+    ? `${taller} section${taller === 1 ? "" : "s"} could not carry the breach peak inside the lower bank and were cut taller, the water spilling over that bank${still ? `; ${still} still cannot carry it` : ""}.`
+    : still
+      ? `${still} section${still === 1 ? "" : "s"} cannot carry the breach peak and could not be cut taller to hold more.`
+      : null;
+  return { taller, still, note };
+}
+
+/** One lake's line in the routed flood's notes: where, how much it rose, what it let through, and the outlet. */
+export function poolNote(p: Pool, r: { peakInCms: number; peakOutCms: number; peakRiseM: number } | undefined, sections: Section[]): string {
+  const km = (m: number) => (m / 1000).toFixed(1);
+  const ft = (m: number) => (m / FT).toFixed(1);
+  const cfs = (q: number) => Math.round(q / CFS).toLocaleString("en-US");
+  const head = `Lake from ${km(sections[p.from].x)} to ${km(sections[p.outlet].x)} km down the channel (about ${Math.round(p.surfaceAc).toLocaleString("en-US")} ac at its ${ft(p.surfaceM)} ft surface on 3DEP) routed as a level pool`;
+  if (!r) return `${head}.`;
+  const fell = r.peakInCms > 0 ? Math.round((1 - r.peakOutCms / r.peakInCms) * 100) : 0;
+  const level = p.surfaceM + r.peakRiseM;
+  let outlet = "";
+  if (p.embankmentM != null) {
+    const over = level - p.embankmentM;
+    outlet =
+      over > 0
+        ? ` Its level tops the ground at the outlet (about ${ft(p.embankmentM)} ft) by ${ft(over)} ft: a dam there would be overtopped. Crest does not breach it; run the Runner's cascade to see whether it fails.`
+        : ` Its level stays ${ft(-over)} ft below the ground at the outlet (about ${ft(p.embankmentM)} ft).`;
+  }
+  return `${head}: the wave raises it ${ft(r.peakRiseM)} ft to ${ft(level)} ft; ${cfs(r.peakInCms)} cfs in, ${cfs(r.peakOutCms)} cfs out over the outlet (${fell} % lower).${outlet}`;
+}
+
+/** Cells from the grid's border the traced channel's end may be and still count as running off the terrain. */
+export const TRACE_EDGE_CELLS = 3;
+
+/**
+ * Does the traced channel run off the terrain (its end within TRACE_EDGE_CELLS of the grid's border)? The reach reads
+ * this with the spread's own edge test: a wave that is still travelling where the channel leaves the box is not
+ * contained, even when the last stretch's pool stops a cell or two short of the border.
+ */
+export function traceEndsAtEdge(g: Pick<DemGrid, "bbox" | "width" | "height">, line: Centerline): boolean {
+  if (!line.pts.length) return false;
+  const p = line.pts[line.pts.length - 1];
+  const kx = 111320 * Math.cos((line.loc.lat * Math.PI) / 180);
+  const lon = line.loc.lon + p.e / kx;
+  const lat = line.loc.lat + p.n / 110574;
+  const i = ((lon - g.bbox[0]) / (g.bbox[2] - g.bbox[0])) * g.width;
+  const j = ((g.bbox[3] - lat) / (g.bbox[3] - g.bbox[1])) * g.height;
+  return Math.min(i, j, g.width - i, g.height - j) <= TRACE_EDGE_CELLS;
+}
 
 /** Build the routed flood on a DEM. Uses traceChannel for the DEM drainage trace (its centreline) only. */
 export async function buildRoutedFlood(
@@ -165,7 +256,7 @@ export async function buildRoutedFlood(
   if (!series || series.length < 2)
     return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
 
-  const built = await traceChannel(dam, result, g, { yieldFn: opts.yieldFn, inputs: opts.inputs });
+  const built = await traceChannel(dam, result, g, { yieldFn: opts.yieldFn, inputs: opts.inputs, burn: opts.burn });
   if (!built.ok)
     return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   let centerline = built.centerline;
@@ -205,6 +296,25 @@ export async function buildRoutedFlood(
   // The record's own Manning's n where it sets one (Breach step, Advanced), the built-in values otherwise.
   const rough = roughnessOf(dam.roughness);
   const tables = sections.map((s) => sectionTable(s, rough, undefined, undefined, tableOpts));
+  // A section that cannot carry the breach peak inside its lower bank is recut taller (spilling over that bank), then
+  // wider; every section that carries it keeps its table exactly (recutCapped).
+  const qPeakCms = Math.max(...series.map((p) => p.qCfs)) * CFS;
+  const stationM = opts.stationM ?? 50;
+  const wideCuts = new Map<number, Map<number, Section>>();
+  const cutWide = (w: number) => {
+    if (!wideCuts.has(w)) wideCuts.set(w, new Map(cutSections(g, centerline, { stationM, halfWidthM: w }).map((s) => [s.x, s])));
+    return wideCuts.get(w)!;
+  };
+  const recut = recutCapped(sections, tables, qPeakCms, { rough, tableOpts });
+  // Lakes on the channel (lidar shows them flat at their surface) are routed as level pools; their storage is read
+  // from the sections cut POOL_WIDE_HALF_M a side, spilling over the banks (a reservoir is wider than a river's cut).
+  const pools: Pool[] =
+    (opts.pools ?? true)
+      ? findPools(sections, tables, (j) => {
+          const s = cutWide(POOL_WIDE_HALF_M).get(sections[j].x);
+          return s ? sectionTable(s, rough, undefined, undefined, { ...tableOpts, spillBanks: true }) : null;
+        })
+      : [];
   // The breach outflow hydrograph (SI) is the routing inflow at the first section.
   const inflow = {
     tS: series.map((p) => p.tHr * 3600),
@@ -218,12 +328,15 @@ export async function buildRoutedFlood(
     maxHours: opts.maxHours ?? 72,
     router: opts.router ?? "auto",
     rough,
+    pools,
   });
 
   const releasedAcFt = result.breach.volumeAcFt;
   const N = g.width * g.height;
   const depthFt = new Float32Array(N);
   const notes = [...routed.notes];
+  if (recut.note) notes.push(recut.note);
+  pools.forEach((p, i) => notes.push(poolNote(p, routed.pools[i], sections)));
   if (rough !== DEFAULT_ROUGHNESS)
     notes.push(
       `Manning's n set on this record: channel ${rough.nChannel}, floodplain ${rough.nFloodplain} (built-in ${DEFAULT_ROUGHNESS.nChannel} and ${DEFAULT_ROUGHNESS.nFloodplain}).`,
@@ -263,6 +376,7 @@ export async function buildRoutedFlood(
       wetEndM: sp.wetEndM,
       channelEndM: centerline.pts[centerline.pts.length - 1].x,
       stoppedInBasin: sp.stoppedIn != null,
+      traceAtEdge: traceEndsAtEdge(g, centerline),
     };
     for (let k = 0; k < N; k++) depthFt[k] = sp.depthM[k] > 0 ? sp.depthM[k] / FT : 0;
     velocityFps = new Float32Array(N).fill(NaN);

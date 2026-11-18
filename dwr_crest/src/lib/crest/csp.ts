@@ -7,7 +7,8 @@
  * The desk loads no third-party script, style or font: everything is bundled (which is why there is nothing to put a
  * Subresource Integrity hash on from another origin; the desktop index.html carries `integrity` on its own entry
  * script and stylesheet). The policy therefore allows scripts from the page's own origin only, and names the few
- * public services the desk reads: basemap tiles, 3DEP terrain, the ND 911 address points and the BLM PLSS sections.
+ * public services the desk reads: basemap tiles, 3DEP terrain, 3DHP flowlines, the ND 911 address points and the BLM
+ * PLSS sections.
  * A new service must be added here or the browser blocks it; csp.test.ts fails when a host in the source is missing.
  */
 
@@ -17,9 +18,10 @@ export const TILE_HOSTS = [
   "https://tile.openstreetmap.org",
 ] as const;
 
-/** Lookups the desk makes on a button: 3DEP terrain, ND NG911 address points, BLM PLSS sections. */
+/** Lookups the desk makes on a button: 3DEP terrain, 3DHP flowlines, ND NG911 address points, BLM PLSS sections. */
 export const DATA_HOSTS = [
   "https://elevation.nationalmap.gov",
+  "https://hydro.nationalmap.gov",
   "https://services1.arcgis.com",
   "https://gis.blm.gov",
 ] as const;

@@ -146,6 +146,13 @@ export type TableOptions = {
   ridgeTolM?: number;
   /** Look for the thalweg only within this distance (m) of the traced channel; default anywhere. */
   thalwegWindowM?: number;
+  /**
+   * Let the table rise past the lower bank, up to the higher one (still within capM): above the lower bank the water
+   * spills over it into the ground beyond, which wetAt's walk then counts, so the region stays the connected one.
+   * Used only to recut a section that cannot carry the breach peak inside its lower bank (routed-flood.ts
+   * recutCapped); every other section keeps the lower bank as its top.
+   */
+  spillBanks?: boolean;
 };
 
 /**
@@ -179,7 +186,9 @@ export function sectionTable(
     }
     return best;
   };
-  const maxDepth = Math.max(stepM, Math.min(capM, Math.min(crest(-1), crest(1)) - bed));
+  const banks = [crest(-1), crest(1)];
+  const top = topts.spillBanks ? Math.max(banks[0], banks[1]) : Math.min(banks[0], banks[1]);
+  const maxDepth = Math.max(stepM, Math.min(capM, top - bed));
   const rows = Math.max(2, Math.floor(maxDepth / stepM) + 1);
   const depth = new Float64Array(rows);
   const area = new Float64Array(rows);
@@ -200,7 +209,7 @@ export function sectionTable(
 }
 
 /** Linear interpolation of a table column at a depth (clamped to the table). */
-function atDepth(t: SectionTable, col: Float64Array, h: number) {
+export function atDepth(t: SectionTable, col: Float64Array, h: number) {
   const n = t.depth.length;
   if (h <= 0) return 0;
   if (h >= t.depth[n - 1]) return col[n - 1];
@@ -309,7 +318,39 @@ export type RoutingOptions = {
   router?: "mc" | "mct" | "auto";
   /** "auto" routes a reach with MCT when its bed slope (before the floor) is at least this; default 0.0015. */
   confineSlopeTrigger?: number;
+  /**
+   * Lakes routed as level pools (pools.ts findPools): the reaches from `from` to `outlet` are one reservoir, stepped by
+   * storage-indication on its rise/volume/outflow tables, instead of Muskingum-Cunge cells. Absent or empty: every
+   * reach is Muskingum-Cunge, as before.
+   */
+  pools?: LevelPool[];
 };
+
+/** A lake on the channel for the routing: sections `from`..`outlet` are one level pool (see pools.ts). */
+export type LevelPool = {
+  from: number;
+  outlet: number;
+  surfaceM: number;
+  rise: ArrayLike<number>;
+  volume: ArrayLike<number>;
+  outflow: ArrayLike<number>;
+};
+
+/** Interpolate column `col` against ascending column `key` at v (clamped to the ends). */
+function interpCol(key: ArrayLike<number>, col: ArrayLike<number>, v: number): number {
+  const n = key.length;
+  if (v <= key[0]) return col[0];
+  if (v >= key[n - 1]) return col[n - 1];
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const m = (lo + hi) >> 1;
+    if (key[m] <= v) lo = m;
+    else hi = m;
+  }
+  const f = (v - key[lo]) / (key[hi] - key[lo]);
+  return col[lo] + f * (col[hi] - col[lo]);
+}
 
 export type RoutedSection = {
   x: number;
@@ -340,6 +381,8 @@ export type RoutedSection = {
   /** Thinned hydrograph (s, m³/s), when kept. */
   t?: number[];
   q?: number[];
+  /** The section lies in a lake routed as a level pool (its index in RoutingOptions.pools); the stage is the pool's. */
+  pool?: number;
 };
 
 export type RoutingResult = {
@@ -351,6 +394,8 @@ export type RoutingResult = {
   steps: number;
   /** Sub-reaches per reach, for the Courant condition. */
   subReaches: number[];
+  /** Per level pool (RoutingOptions.pools, same order): peak inflow and outflow (m³/s), peak rise (m) and its time (s). */
+  pools: { peakInCms: number; peakOutCms: number; peakRiseM: number; tPeakRiseS: number }[];
   notes: string[];
 };
 
@@ -448,7 +493,20 @@ export function routeMuskingumCunge(
   // step. A null C0 marks an MCT cell.
   const cells: { C0: number; C1: number; C2: number; mct: boolean; dx: number; slope: number; ta: SectionTable; tb: SectionTable }[] = [];
   let mctReaches = 0;
+  // Reach j belongs to level pool poolOf[j] (-1: Muskingum-Cunge). Pools are taken in order and never overlap.
+  const pools = (opts.pools ?? []).filter((p) => p.from >= 0 && p.outlet > p.from && p.outlet < tables.length);
+  const poolOf = new Int32Array(Math.max(0, tables.length - 1)).fill(-1);
+  for (let p = 0; p < pools.length; p++) {
+    if (p > 0 && pools[p].from < pools[p - 1].outlet) throw new Error("Level pools overlap.");
+    for (let j = pools[p].from; j < pools[p].outlet; j++) poolOf[j] = p;
+  }
   for (let j = 0; j + 1 < tables.length; j++) {
+    if (poolOf[j] >= 0) {
+      // A pool reach is one placeholder cell: the pool step fills its boundary discharges directly.
+      subReaches.push(1);
+      cells.push({ C0: 0, C1: 0, C2: 1, mct: false, dx: tables[j + 1].x - tables[j].x, slope: slopes[j], ta: tables[j], tb: tables[j + 1] });
+      continue;
+    }
     const L = tables[j + 1].x - tables[j].x;
     const pa = propsAtQ(tables[j], qPeakIn, slopes[j]);
     const pb = propsAtQ(tables[j + 1], qPeakIn, slopes[j]);
@@ -482,6 +540,12 @@ export function routeMuskingumCunge(
   // Boundary index of each section: section j starts at cell sum(subReaches[0..j-1]).
   const bIdx: number[] = [0];
   for (const k of subReaches) bIdx.push(bIdx[bIdx.length - 1] + k);
+  // Level pools: storage-indication tables (2S/Δt + O against O), the storage carried, and the cell each starts at.
+  const poolAtCell = new Map<number, number>();
+  for (let p = 0; p < pools.length; p++) poolAtCell.set(bIdx[pools[p].from], p);
+  const poolSi = pools.map((p) => Float64Array.from(p.volume, (v, r) => (2 * v) / dt + p.outflow[r]));
+  const poolS = new Float64Array(pools.length);
+  const poolStats = pools.map(() => ({ peakInCms: 0, peakOutCms: 0, peakRiseM: 0, tPeakRiseS: 0 }));
   const keep = opts.keepPoints ?? 0;
   const series: { t: number[]; q: number[] }[] = tables.map(() => ({ t: [], q: [] }));
   // Storage in each stretch (section j to j+1), integrated from continuity with the same rectangle rule as volIn and
@@ -499,6 +563,34 @@ export function routeMuskingumCunge(
     Qp.set(Q);
     Q[0] = qin;
     for (let i = 0; i < nc; i++) {
+      const pi = poolAtCell.get(i);
+      if (pi !== undefined) {
+        // Level pool, storage-indication: 2S₂/Δt + O₂ = I₁ + I₂ + 2S₁/Δt − O₁, then O₂ from the pool's table.
+        const P = pools[pi];
+        const iA = bIdx[P.from];
+        const iB = bIdx[P.outlet];
+        const I1 = Qp[iA];
+        const I2 = Q[iA];
+        const O1 = Qp[iB];
+        const rhs = Math.max(0, I1 + I2 + (2 * poolS[pi]) / dt - O1);
+        const O2 = Math.max(0, interpCol(poolSi[pi], P.outflow, rhs));
+        poolS[pi] = Math.max(0, ((rhs - O2) * dt) / 2);
+        // Inside the lake the discharge falls linearly from the inflow to the outflow down the reach.
+        const x0 = tables[P.from].x;
+        const L = tables[P.outlet].x - x0;
+        for (let j = P.from + 1; j < P.outlet; j++) Q[bIdx[j]] = I2 + ((O2 - I2) * (tables[j].x - x0)) / L;
+        Q[iB] = O2;
+        const st = poolStats[pi];
+        if (I2 > st.peakInCms) st.peakInCms = I2;
+        if (O2 > st.peakOutCms) st.peakOutCms = O2;
+        const r = interpCol(P.volume, P.rise, poolS[pi]);
+        if (r > st.peakRiseM) {
+          st.peakRiseM = r;
+          st.tPeakRiseS = time;
+        }
+        i = iB - 1;
+        continue;
+      }
       const cell = cells[i];
       const I1 = Qp[i];
       const I2 = Q[i];
@@ -574,8 +666,34 @@ export function routeMuskingumCunge(
     const down = j + 1 < tables.length ? slopes[j] : null;
     const raw = up != null && down != null ? 0.5 * (up + down) : (up ?? down ?? floorS);
     const sStage = Math.max(raw, floorS);
-    const nd = normalDepth(t, peak[j], sStage);
     const s = keep ? thinTo(series[j].t, series[j].q) : null;
+    // A section in a lake (not its outlet) stands at the pool's peak level, not at Manning normal depth.
+    const pj = pools.findIndex((p) => j >= p.from && j < p.outlet);
+    if (pj >= 0) {
+      const level = pools[pj].surfaceM + poolStats[pj].peakRiseM;
+      const h = Math.max(0, level - t.bedM);
+      const a = atDepth(t, t.area, h);
+      return {
+        x: t.x,
+        bedM: t.bedM,
+        slopeStage: sStage,
+        slopeRouting: down ?? up ?? floorR,
+        peakCms: peak[j],
+        tPeakS: tPeak[j],
+        tArrivalS: Number.isNaN(tArr[j]) ? null : tArr[j],
+        stageM: h,
+        wseM: t.bedM + h,
+        areaM2: a,
+        topWidthM: atDepth(t, t.topWidth, h),
+        velocityMps: a > 0 ? peak[j] / a : 0,
+        capped: false,
+        storeMaxM3: storeMax[j],
+        tStoreMaxS: tStoreMax[j],
+        pool: pj,
+        ...(s ? { t: s.t, q: s.q } : {}),
+      };
+    }
+    const nd = normalDepth(t, peak[j], sStage);
     return {
       x: t.x,
       bedM: t.bedM,
@@ -597,5 +715,5 @@ export function routeMuskingumCunge(
   });
   const capped = sections.filter((s) => s.capped).length;
   if (capped) notes.push(`${capped} section${capped === 1 ? "" : "s"} cannot carry the routed peak within the cut height: cut taller or wider sections there.`);
-  return { sections, volumeInM3: volIn, volumeOutM3: volOut, dtS: dt, steps: step, subReaches, notes };
+  return { sections, volumeInM3: volIn, volumeOutM3: volOut, dtS: dt, steps: step, subReaches, pools: poolStats, notes };
 }

@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import type { DemGrid } from "./outline.ts";
 import { routeMuskingumCunge, type RoutedSection, sectionTable } from "./routing.ts";
 import type { Centerline } from "./sections.ts";
-import { breachPath, settlePools, spreadVolume } from "./spread.ts";
+import { breachPath, settlePools, smoothSlices, spreadVolume } from "./spread.ts";
 
 const M_PER_DEG_LAT = 110574;
 const kxOf = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
@@ -116,7 +116,7 @@ describe("spreadVolume: no down-valley leak", () => {
   const dem = synthDem(200, 10, (e, n) => 100 + 0.02 * n + 0.05 * Math.abs(e));
   const line = straight(800, -800);
   const secs = sections(33, (j) => (j === 2 ? 200_000 : 0));
-  const r = spreadVolume(dem, line, secs, { minDepthM: 0.03 });
+  const r = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.03 });
   const at = idxOf(dem);
 
   it("wets only the ground nearest stretch 2 (100–150 m down the channel)", () => {
@@ -134,9 +134,9 @@ describe("spreadVolume: spill order", () => {
   const at = idxOf(dem);
 
   it("leaves the pit dry until the pool tops the ridge", () => {
-    const small = spreadVolume(dem, line, sections(21, () => 2_000), { minDepthM: 0.01 });
+    const small = spreadVolume(dem, line, sections(21, () => 2_000), { sliceSmoothM: 0, minDepthM: 0.01 });
     assert.equal(small.depthM[at(120, 0)], 0, "pit behind the ridge stays dry for a small slice");
-    const big = spreadVolume(dem, line, sections(21, () => 400_000), { minDepthM: 0.01 });
+    const big = spreadVolume(dem, line, sections(21, () => 400_000), { sliceSmoothM: 0, minDepthM: 0.01 });
     assert.ok(big.depthM[at(120, 0)] > 0, "a big slice spills over the ridge into the pit");
   });
 });
@@ -151,7 +151,7 @@ describe("spreadVolume: a slice is never smeared across an untopped saddle (M13)
   const dem = synthDem(160, 10, (e) => ground(e));
   const line = straight(400, -400);
   const at = idxOf(dem);
-  const r = spreadVolume(dem, line, sections(17, () => 40_000), { minDepthM: 0.01 });
+  const r = spreadVolume(dem, line, sections(17, () => 40_000), { sliceSmoothM: 0, minDepthM: 0.01 });
 
   it("pins the channel at the ridge crest when the pit beyond it is wet", () => {
     assert.ok(r.depthM[at(120, 0)] > 0, "the pit beyond the ridge takes the overflow");
@@ -172,8 +172,8 @@ describe("spreadVolume: water left in depressions leaves the wave", () => {
   });
   const line = straight(800, -800);
   const secs = sections(33, () => 20_000);
-  const withLoss = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: 60_000 });
-  const noLoss = spreadVolume(dem, line, secs, { minDepthM: 0.01 });
+  const withLoss = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: 60_000 });
+  const noLoss = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01 });
 
   it("retains water in the pit and pours less downstream", () => {
     assert.ok(withLoss.retainedM3 > 0);
@@ -192,8 +192,8 @@ describe("spreadVolume: a closed basin that holds the flood ends it", () => {
   const secs = sections(33, () => 20_000);
   const released = 30_000;
   const at = idxOf(dem);
-  const stopped = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: released });
-  const through = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: released, basins: false });
+  const stopped = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: released });
+  const through = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: released, basins: false });
 
   it("stops at the fill as one level pool and leaves the valley below it dry", () => {
     assert.ok(stopped.stoppedIn, "the flood ends in the basin");
@@ -225,7 +225,7 @@ describe("spreadVolume: a closed basin that holds the flood ends it", () => {
 describe("spreadVolume: a smaller basin fills to its spill level and the rest goes on", () => {
   const dem = synthDem(200, 10, (e, n) => 100 + 0.01 * n + 0.02 * Math.abs(e) + (Math.abs(n) <= 20 ? 1.5 : 0));
   const line = straight(800, -800);
-  const r = spreadVolume(dem, line, sections(33, () => 20_000), { minDepthM: 0.01, releasedM3: 60_000 });
+  const r = spreadVolume(dem, line, sections(33, () => 20_000), { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: 60_000 });
   const at = idxOf(dem);
 
   it("fills the basin to its spill and still floods below the fill", () => {
@@ -292,7 +292,7 @@ describe("spreadVolume: a stretch that runs out of ground is held at the cap, no
   const H = 8; // dam height (m): the hard cap is 2 H = 16 m
   const RELEASED = 5_000_000;
   const secs = sections(11, (j) => (j === 4 ? RELEASED : 0)); // stretch 4 is x = 200..250 m (n = 50..0)
-  const r = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
+  const r = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
   const maxDepth = (d: Float32Array) => {
     let m = 0;
     for (const v of d) if (v > m) m = v;
@@ -317,7 +317,7 @@ describe("spreadVolume: a stretch that runs out of ground is held at the cap, no
   });
 
   it("never stands deeper than the hard cap, and the ground above it stays dry", () => {
-    const low = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 3 });
+    const low = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 3 });
     const m = maxDepth(low.depthM);
     assert.ok(m <= 3 + 1e-6 && m > 2.9, `max depth ${m} m`);
     assert.equal(low.depthM[at(290, 25)], 0, "ground 5.8 m above the bed stays dry under a 3 m cap");
@@ -329,7 +329,7 @@ describe("spreadVolume: a stretch that runs out of ground is held at the cap, no
   it("the routed stage + 1 ft is the floor of the cap when the reachable ground is lower", () => {
     // Flat ground: every cell is reachable at ~0 m above the bed, so the cap is the stage (1 m) + 0.3048 m.
     const flat = synthDem(60, 10, (e, n) => 100 + 0.002 * n + 0.0001 * Math.abs(e));
-    const f = spreadVolume(flat, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
+    const f = spreadVolume(flat, line, secs, { sliceSmoothM: 0, minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
     const m = maxDepth(f.depthM);
     assert.equal(f.cappedStretches, 1);
     assert.ok(Math.abs(m - 1.3048) < 0.05, `max depth ${m} m`);
@@ -340,8 +340,8 @@ describe("spreadVolume: the cap leaves a pool the terrain contains untouched", (
   const dem = synthDem(200, 10, (e, n) => 100 + 0.002 * n + 0.02 * Math.abs(e));
   const line = straight(800, -800);
   const secs = sections(33, () => 20_000);
-  const a = spreadVolume(dem, line, secs, { minDepthM: 0.001, releasedM3: 100_000 });
-  const b = spreadVolume(dem, line, secs, { minDepthM: 0.001, releasedM3: 100_000, maxLevelM: 0.5 });
+  const a = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.001, releasedM3: 100_000 });
+  const b = spreadVolume(dem, line, secs, { sliceSmoothM: 0, minDepthM: 0.001, releasedM3: 100_000, maxLevelM: 0.5 });
 
   it("is bit-identical with a cap far below the pools when no stretch runs out of ground", () => {
     assert.equal(a.exhaustedStretches, 0);
@@ -502,5 +502,49 @@ describe("settlePools: the poured pools find one surface (patchy layer, 2026-11-
     const copy = Float32Array.from(depth);
     await settlePools(g, new Uint8Array(400).fill(1), { depth }, { sweeps: 0, minDepth: 0.03 });
     assert.deepEqual(depth, copy);
+  });
+});
+
+describe("smoothSlices", () => {
+  const x = Array.from({ length: 21 }, (_, j) => j * 100);
+  it("evens a zig-zag out along the channel and keeps the total", () => {
+    const v = Array.from({ length: 20 }, (_, j) => (j % 2 ? 1000 : 9000));
+    const s = smoothSlices(v, x, 1000);
+    const sum = (a: ArrayLike<number>) => Array.from(a).reduce((p, q) => p + q, 0);
+    assert.ok(Math.abs(sum(s) - sum(v)) < 1e-6);
+    for (let j = 3; j < 17; j++) assert.ok(s[j] > 3000 && s[j] < 7000, `${j}: ${s[j]}`);
+  });
+  it("0 leaves the slices as they are; lake stretches are left alone and split the runs", () => {
+    const v = Array.from({ length: 20 }, (_, j) => (j < 10 ? 100 : 5000));
+    assert.deepEqual(Array.from(smoothSlices(v, x, 0)), v);
+    const inPool = (j: number) => j >= 8 && j <= 11;
+    const s = smoothSlices(v, x, 2000, inPool);
+    for (let j = 8; j <= 11; j++) assert.equal(s[j], v[j]);
+    const runA = Array.from(s).slice(0, 8).reduce((p, q) => p + q, 0);
+    assert.ok(Math.abs(runA - 800) < 1e-6, "no water crosses the lake");
+  });
+});
+
+describe("spreadVolume: a lake routed as a level pool is poured at its own level", () => {
+  // A dead-flat lake bed (hydro-flattened) 1 km wide with banks rising beyond, the whole channel inside the lake.
+  const dem = synthDem(150, 10, (e) => (Math.abs(e) < 500 ? 100 : 100 + 0.05 * (Math.abs(e) - 500)));
+  const line = straight(700, -700);
+  const secs = sections(29, (j) => 1000 * (1 + (j % 3)), 0.0001).map((s, j) => (j >= 4 && j <= 24 ? { ...s, pool: 0, wseM: 101.5, stageM: 1.5 } : s));
+  const r = spreadVolume(dem, line, secs, { minDepthM: 0.01 });
+  const at = idxOf(dem);
+  it("stands as one flat surface at the lake level across the lake's ground", () => {
+    for (const [e, n] of [
+      [0, 400],
+      [-400, 200],
+      [450, -100],
+      [0, -500],
+    ]) {
+      const k = at(e, n);
+      assert.ok(Math.abs(r.wseM[k] - 101.5) < 1e-4, `(${e}, ${n}): ${r.wseM[k]}`);
+      assert.ok(Math.abs(r.depthM[k] - 1.5) < 1e-4);
+    }
+    // The banks wet up to 1.5 m above the lake bed: 30 m up the 5 % slope, and dry beyond.
+    assert.ok(r.depthM[at(520, 0)] > 0);
+    assert.equal(r.depthM[at(560, 0)], 0);
   });
 });

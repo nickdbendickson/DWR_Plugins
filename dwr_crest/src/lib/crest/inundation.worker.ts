@@ -41,7 +41,8 @@ scope.onmessage = async (e: MessageEvent<InundationIn>) => {
     const out = await buildInundationReach(req.dam, req.result, {
       maxRounds: req.maxRounds,
       onStatus: (text) => scope.postMessage({ id, progress: text } satisfies InundationOut),
-      ...(req.fetchOnMain ? { fetch: fetchOnMain } : {}),
+      // The page fetches the DEM when it is a local one (the desktop, perhaps offline): no 3DHP flowlines then.
+      ...(req.fetchOnMain ? { fetch: fetchOnMain, flowlines: null } : {}),
     });
     scope.postMessage({ id, ok: true, out: lightResult(out) } satisfies InundationOut);
   } catch (err) {

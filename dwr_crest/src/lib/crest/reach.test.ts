@@ -165,14 +165,31 @@ describe("extendRequest: the terrain grows on the same lattice", () => {
     assert.equal(grewCells, 0);
     assert.deepEqual(req, prev);
   });
-  it("a box that would need more cells on a side than allowed is laid out afresh, coarser", () => {
+  it("a box that would need more cells than the budget is laid out afresh, coarser", () => {
     const e0 = (prev.bbox[2] - LOC.lon) * kx;
     const n0 = ((prev.bbox[1] + prev.bbox[3]) / 2 - LOC.lat) * M_PER_DEG_LAT;
-    const { req, grew, coarsened } = extendRequest(prev, LOC, { e: e0, n: n0, dir: [1, 0], lengthM: 4000, halfM: 1000 }, null, prev.width + 100);
+    const maxPx = Math.ceil(Math.sqrt(prev.width * prev.height)) + 5;
+    const { req, grew, coarsened, cropped } = extendRequest(prev, LOC, { e: e0, n: n0, dir: [1, 0], lengthM: 4000, halfM: 1000 }, null, maxPx);
     assert.ok(coarsened);
+    assert.ok(!cropped, "with no channel to keep, nothing is cropped");
     assert.ok(grew, "the box grew even though the coarser cells may be fewer");
     assert.ok(req.cellM > prev.cellM);
-    assert.ok(Math.max(req.width, req.height) <= prev.width + 100);
+    assert.ok(req.width * req.height <= maxPx * maxPx * 1.05);
+  });
+  it("over the budget with a channel to keep, the box is cropped to the river on the same lattice", () => {
+    const e0 = (prev.bbox[2] - LOC.lon) * kx;
+    const n0 = ((prev.bbox[1] + prev.bbox[3]) / 2 - LOC.lat) * M_PER_DEG_LAT;
+    const maxPx = Math.ceil(Math.sqrt(prev.width * prev.height)) + 5;
+    const keep = { pts: [{ e: e0 - 500, n: n0 }, { e: e0, n: n0 }], halfM: 300 };
+    const { req, grew, coarsened, cropped } = extendRequest(prev, LOC, { e: e0, n: n0, dir: [1, 0], lengthM: 4000, halfM: 300 }, null, maxPx, keep);
+    assert.ok(cropped);
+    assert.ok(!coarsened);
+    assert.ok(grew);
+    assert.equal(req.cellM, prev.cellM);
+    assert.ok(req.width * req.height <= maxPx * maxPx);
+    const cellLon = (prev.bbox[2] - prev.bbox[0]) / prev.width;
+    const off = (req.bbox[0] - prev.bbox[0]) / cellLon;
+    assert.ok(Math.abs(off - Math.round(off)) < 1e-4, "on the previous lattice");
   });
 });
 
@@ -192,7 +209,7 @@ describe("buildRoutedFloodReach: the loop and its guards (stand-in fetch and bui
   type Round = Partial<NonNullable<RoutedFloodResult["demand"]>> & { channelEndM?: number; fail?: boolean };
   /** A builder that answers each round from a script and records the inputs it was given. */
   const scripted = (rounds: Round[]) => {
-    const calls: { lastX: number; width: number }[] = [];
+    const calls: { lastX: number; width: number; bbox: DemRequest["bbox"]; cellM: number }[] = [];
     const fetched: DemRequest[] = [];
     const fetch = async (req: DemRequest) => {
       fetched.push(req);
@@ -201,7 +218,7 @@ describe("buildRoutedFloodReach: the loop and its guards (stand-in fetch and bui
     const build: typeof buildRoutedFlood = async (_dam, _result, g, opts = {}) => {
       const r = rounds[Math.min(calls.length, rounds.length - 1)];
       const lastX = opts.inputs?.lastX ?? INP.lastX;
-      calls.push({ lastX, width: g.width });
+      calls.push({ lastX, width: g.width, bbox: g.bbox, cellM: g.cellM });
       if (r.fail) return { ok: false, reason: "No routed flood: scripted failure." };
       return fakeRouted({ ...r, channelEndM: r.channelEndM ?? lastX });
     };
@@ -235,23 +252,27 @@ describe("buildRoutedFloodReach: the loop and its guards (stand-in fetch and bui
     const step1 = reachStepM(INP.lastX);
     assert.ok(Math.abs(s.calls[1].lastX - (INP.lastX + step1)) < 1e-6);
     assert.ok(Math.abs(rb.reach.extendedKm - (step1 + reachStepM(INP.lastX + step1)) / 1000) < 0.06);
-    for (let i = 1; i < s.fetched.length; i++) {
-      const a = s.fetched[i - 1].bbox;
-      const b = s.fetched[i].bbox;
+    // The terrain each round built on takes in the last (only the new bands are fetched), at the same cell.
+    for (let i = 1; i < s.calls.length; i++) {
+      const a = s.calls[i - 1].bbox;
+      const b = s.calls[i].bbox;
       assert.ok(b[0] <= a[0] + 1e-9 && b[1] <= a[1] + 1e-9 && b[2] >= a[2] - 1e-9 && b[3] >= a[3] - 1e-9, "the grown box takes in the previous");
-      assert.equal(s.fetched[i].cellM, s.fetched[0].cellM);
+      assert.equal(s.calls[i].cellM, s.calls[0].cellM);
     }
+    const last = s.fetched[0].width;
+    for (const f of s.fetched.slice(1)) assert.ok(f.width < s.calls[2].width || f.height < last * 10, "bands, not whole boxes");
+    assert.ok(s.fetched.slice(1).every((f) => f.cellM === s.fetched[0].cellM));
     assert.ok(rb.routed.ok && rb.routed.notes.some((n) => /grown 2 times downstream/.test(n)));
   });
 
   it("the round cap flags the layer incomplete with the water still at the edge", async () => {
     const s = scripted([{ travellingM3: 1468 * ACFT }]);
-    const rb = await buildRoutedFloodReach(ND, RESULT, { inputs: INP, fetch: s.fetch, build: s.build });
-    assert.equal(rb.reach.rounds, REACH_MAX_ROUNDS);
+    const rb = await buildRoutedFloodReach(ND, RESULT, { inputs: INP, fetch: s.fetch, build: s.build, maxRounds: 3 });
+    assert.equal(rb.reach.rounds, 3);
     assert.equal(rb.reach.stoppedBecause, "round-cap");
     assert.ok(rb.reach.incomplete);
     assert.equal(rb.reach.strandedAcFt, 1468);
-    assert.ok(rb.routed.ok && rb.routed.notes.some((n) => /1468 ac-ft still reaches the edge .*round cap/.test(n)));
+    assert.ok(rb.routed.ok && rb.routed.notes.some((n) => /1468 ac-ft still reaches the edge .*limit of \d+ rounds/.test(n)));
     assert.ok(rb.routed.ok && /incomplete/.test(reachNote(rb.reach)));
   });
 
@@ -297,8 +318,9 @@ describe("buildRoutedFloodReach: the loop and its guards (stand-in fetch and bui
   it("a terrain service failure on a grown box keeps the previous round's layer", async () => {
     const s = scripted([{}, {}]);
     let n = 0;
+    // Every read after the first fails, so the one retry fails too.
     const fetch = async (req: DemRequest) => {
-      if (++n === 2) throw new Error("The 3DEP terrain service answered 504.");
+      if (++n >= 2) throw new Error("The 3DEP terrain service answered 504.");
       return s.fetch(req);
     };
     const rb = await buildRoutedFloodReach(ND, RESULT, { inputs: INP, fetch, build: s.build });
@@ -363,7 +385,7 @@ describe("buildRoutedFloodReach end to end on a synthetic valley (ND00199's brea
     assert.ok(rb.routed.ok, rb.routed.ok ? "" : rb.routed.reason);
     if (!rb.routed.ok) return;
     assert.equal(rb.reach.rounds, 1, `stopped: ${rb.reach.stoppedBecause}`);
-    assert.equal(fetched.length, 2);
+    assert.ok(fetched.length >= 2 && fetched.length <= 5, "the first box, then only the bands the grown box adds");
     const single = await buildRoutedFlood(ND, RESULT, await fetch(demRequest(INP)), { method: "spread" });
     assert.ok(single.ok);
     if (!single.ok) return;
@@ -372,7 +394,7 @@ describe("buildRoutedFloodReach end to end on a synthetic valley (ND00199's brea
     assert.ok(rb.routed.width * rb.routed.height > single.width * single.height);
     // The grown box is on the first box's lattice: the first box's cells are the same ground, cell for cell.
     const a = fetched[0];
-    const b = fetched[1];
+    const b = rb.request;
     const di = Math.round((a.bbox[0] - b.bbox[0]) / ((b.bbox[2] - b.bbox[0]) / b.width));
     const dj = Math.round((b.bbox[3] - a.bbox[3]) / ((b.bbox[3] - b.bbox[1]) / b.height));
     const ga = await fetch(a);

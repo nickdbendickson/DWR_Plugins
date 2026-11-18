@@ -6,7 +6,8 @@ import { gunzipSync } from "node:zlib";
 
 import { analyze } from "./engine.ts";
 import type { DemGrid } from "./outline.ts";
-import { buildRoutedFlood } from "./routed-flood.ts";
+import { buildRoutedFlood, recutCapped, TRACE_EDGE_CELLS, traceEndsAtEdge } from "./routed-flood.ts";
+import { DEFAULT_ROUGHNESS, type Section, sectionTable } from "./routing.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 
 const ND = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
@@ -133,5 +134,41 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     if (!RF.ok) return;
     assert.equal(RF.method, "stage");
     assert.equal(RF.velocityFps, undefined);
+  });
+});
+
+describe("traceEndsAtEdge", () => {
+  const loc = { lon: -100, lat: 46 };
+  const kx = 111320 * Math.cos((46 * Math.PI) / 180);
+  // 100 × 100 cells of 10 m around the start.
+  const g = { bbox: [-100 - 500 / kx, 46 - 500 / 110574, -100 + 500 / kx, 46 + 500 / 110574] as [number, number, number, number], width: 100, height: 100 };
+  const line = (e: number) => ({ loc, pts: [{ e: 0, n: 0, x: 0 }, { e, n: 0, x: e }] });
+  it("is true when the channel ends within TRACE_EDGE_CELLS of the border, false inside", () => {
+    assert.ok(traceEndsAtEdge(g, line(500 - (TRACE_EDGE_CELLS - 1) * 10)));
+    assert.ok(!traceEndsAtEdge(g, line(300)));
+    assert.ok(!traceEndsAtEdge(g, { loc, pts: [] }));
+  });
+});
+
+describe("recutCapped", () => {
+  /** A channel 20 m wide and 1 m deep, its left bank low (1 m) and its right bank a 6 m bluff, floodplain beyond the left. */
+  const sec = (x: number, bed: number): Section => ({
+    x,
+    offsets: [-400, -30, -11, -10, 10, 11, 60],
+    z: [bed + 0.5, bed + 0.5, bed + 1, bed, bed, bed + 6, bed + 6],
+  });
+  it("cuts taller only the sections that cannot carry the peak; a carrying valley is untouched", () => {
+    const secs = Array.from({ length: 6 }, (_, k) => sec(k * 500, 100 - k * 0.5));
+    const opts = { rough: DEFAULT_ROUGHNESS, tableOpts: {} };
+    const small = secs.map((q) => sectionTable(q));
+    const before = small.map((t) => t.maxDepthM);
+    const none = recutCapped(secs, small, 1, opts);
+    assert.deepEqual(none, { taller: 0, still: 0, note: null });
+    assert.deepEqual(small.map((t) => t.maxDepthM), before);
+    const big = secs.map((q) => sectionTable(q));
+    const r = recutCapped(secs, big, 2000, opts);
+    assert.equal(r.taller, secs.length);
+    assert.ok(big.every((t, j) => t.maxDepthM > before[j]), "the tables rise past the lower bank");
+    assert.match(r.note ?? "", /cut taller/);
   });
 });
