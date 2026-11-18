@@ -19,7 +19,8 @@ asks of a candidate, from a source the DEM cannot see:
   beside it low enough to flood (Montana's small-dam screen: flood depth 75 % of the dam height,
   little damage past 5 miles) and the roads it crosses, in distance bands. A second sort for
   the review list, not a dam probability: review_order puts the fills in bands of score 0.1
-  wide and lets water (2 or more image years) and then what is below decide only inside a band.
+  wide, a fill on a pond-outlet line OUTLET_DROP_BANDS bands lower than its score (0.7.2), and
+  lets water (2 or more image years) and then what is below decide only inside a band.
 
 Nothing here is a determination; each is a field on the candidate for the reviewer and the score.
 """
@@ -33,6 +34,14 @@ CONSEQ_BINS_M = (1.0 * MILE, 3.0 * MILE, 5.0 * MILE)      # 0-1, 1-3, 3-5 miles
 PERMIT_AF = 12.5            # ND: a water permit is needed to store more than 12.5 acre-feet
 SCORE_BAND = 0.1            # review_order: scores within one band this wide count as tied
 WET_MIN_YEARS = 2           # review_order: water in this many image years or more puts a fill first in its band
+# review_order (0.7.2): a fill on a pond-outlet line (finder.LINE_POOL, "DEM pool outlet") is
+# looked at as if its score were this many bands lower. North Dakota review sheets of 2026-11-16
+# and 2026-11-18 (statewide run, cards at random inside score bands): pond-outlet fills were
+# dams 3 of 8 at 0.73 and up, 2 of 10 at 0.5 to 0.73, 0 of 8 at 0.3 to 0.5 and 0 of 19 picked at
+# random lower down; the other fills 10 of 10, 13 of 16 at 0.6 to 0.73, 11 of 16 at 0.5 to 0.6,
+# 6 of 12 at 0.4 to 0.5 and 2 of 10 at 0.3 to 0.4. Four bands down puts a pond-outlet fill among
+# the other fills that were dams about as often. The score itself is not changed.
+OUTLET_DROP_BANDS = 4
 
 
 def disk(shape, gt, x, y, r):
@@ -253,11 +262,15 @@ def _number(v):
     return v if math.isfinite(v) else None
 
 
-def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=WET_MIN_YEARS):
+def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=WET_MIN_YEARS, outlets=None,
+                 outlet_drop=OUTLET_DROP_BANDS):
     """The order to look at scored fills in: one whole number per fill, 1 = look at this first.
 
     Sorted by score band first (bands `band` wide, the highest first: 0.9 to 1.0, then 0.8 to
-    0.9 ...; a score of exactly 1 is in the top band), then inside a band by water: a fill with
+    0.9 ...; a score of exactly 1 is in the top band; a fill whose `outlets` entry is true, one
+    on a pond-outlet line, counts `outlet_drop` bands lower than its score: a pond-outlet fill
+    scoring 0.85 is looked at with the other fills of 0.4 to 0.5, after them, as it falls lower in
+    a tie), then inside a band by water: a fill with
     open water in the pool in `wet_min` or more image years (`wet_years`) before one with less,
     then by `conseq` (what is below the fill, the highest first), then by the score itself, then
     by the order the fills came in. So water and what is downstream only reorder fills the score
@@ -266,7 +279,7 @@ def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=
     of it. A fill whose water history or consequence was not read (blank) counts as dry / as 0
     there, the same as a fill with none found, so the score decides between them. A fill with no
     score comes after every scored fill (by water, by consequence, then as it came). conseqs /
-    wet_years None: not computed, so they do not reorder anything.
+    wet_years / outlets None: not computed, so they do not reorder anything.
     Why water: on a review sheet of 90 fills picked at random among the dry ones (no pool in the
     LiDAR; North Dakota 2026-11-16) 6 of the 22 with water in 2 or more of the 10 image years
     were dams, 2 of the other 68 (a dug pond holds water too: water says pond, not dam).
@@ -278,18 +291,23 @@ def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=
     wets = [None] * len(scores) if wet_years is None else list(wet_years)
     if len(wets) != len(scores):
         raise ValueError("review_order needs one water history (wet_years) for each score")
+    outs = [False] * len(scores) if outlets is None else [bool(o) for o in outlets]
+    if len(outs) != len(scores):
+        raise ValueError("review_order needs one pond-outlet flag (outlets) for each score")
     top = int(math.ceil(1.0 / band - 1e-9)) - 1         # the band a score of exactly 1 falls in
     keys = []
-    for i, (s, c, w) in enumerate(zip(scores, conseqs, wets)):
+    for i, (s, c, w, o) in enumerate(zip(scores, conseqs, wets, outs)):
         s, c, w = _number(s), _number(c) or 0.0, _number(w)
         dry = 0 if (w is not None and w >= wet_min) else 1
         if s is None:
-            keys.append((1, 0, dry, -c, 0.0, i))
+            keys.append((1, 0, int(o), dry, -c, 0.0, i))
             continue
         b = int(math.floor(s / band + 1e-9))            # 0.3 / 0.1 is 2.9999...: still band 3
         if s == 1.0:
             b = top
-        keys.append((0, -b, dry, -c, -s, i))
+        if o:
+            b -= int(outlet_drop)           # a pond-outlet fill: after the others of its own band too
+        keys.append((0, -b, int(o), dry, -c, -s, i))
     order = [0] * len(scores)
     for n, i in enumerate(sorted(range(len(scores)), key=keys.__getitem__)):
         order[i] = n + 1
