@@ -249,6 +249,11 @@ jobs:
           env -u OPENBLAS_CORETYPE python3 tools/blas_selfcheck.py --report-only \
             || echo "::warning::blas_selfcheck could not finish with this runner's own OpenBLAS kernels (see the lines above)"
           python3 tools/blas_selfcheck.py
+      - name: TEMPORARY GDAL /vsizip/ probe (why the PMP Atlas 14 grid tests hang on GDAL 3.4; never fails)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python3 tools/diag_gdal_vsizip.py
       - name: Screening suite (mock-QGIS)
         run: python3 DamSafety_Screening/tests/run_all.py
       - name: Runner fast suite
