@@ -61,7 +61,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS (newest conda-forge, Qt6) + scipy
         id: provision
         uses: mamba-org/setup-micromamba@v3

@@ -37,9 +37,11 @@ VERSION = 1
 MODES = ("off", "warn", "move")
 # Nick 2026-11-16 chose "move" (auto-move clear cases, warn); the hold-out validation of
 # 2026-11-17 left one move 30 m off the dam line (DWR-2713, a side dike of the same pond) that
-# no principled gate removes, so the default is "warn" (the REVIEW warning says where the
-# embankment is and that it would be used with "move"); "move" is one setting away
-DEFAULT_MODE = "warn"
+# no principled gate removes, so 3.20.11 shipped "warn". 3.20.13 (Nick 2026-11-17: "dam point
+# should be at the center of the embankment in most all cases"): "move" is the default again
+# (the hold-out's 2 wrong moves of 43 were both DWR-2713), and a batch dam with a DWR dam line
+# uses that line instead (core/dwr_lines.py: the check is then skipped, "dam line given")
+DEFAULT_MODE = "move"
 ENV = "NDBREACH_DAM_POINT_CHECK"
 
 # --- the search (screen_points.py) -------------------------------------------------------
@@ -55,6 +57,9 @@ MAX_NATIVE_CELL_M = 5.0   # coarser DEMs are not checked
 
 # --- the decision ------------------------------------------------------------------------
 KEEP_M = 15.0             # the point this close to the embankment is on it
+CENTRE_MIN_M = 10.0       # C1 (3.20.13): a point on the embankment this far or more from the
+#                           found line's centre (its length midpoint) moves to it ("move" mode,
+#                           every gate and V passing); closer, it is the centre already
 NEAR_M = 30.0             # A1 / A2: the embankment is more than this away
 MAX_MOVE_M = 400.0        # G3
 HR_MIN, HR_MAX = 0.8, 1.25            # G2: embankment height / H
@@ -1340,6 +1345,7 @@ GATE_TEXT = {
     "G7c": "the embankment found is nearer another dam",
     "G7d": "the line found does not match the inventory crest length",
     "G7e": "the pond level does not match the normal pool",
+    "C1": "the point is on the embankment but off its centre",
     "V": "the embankment was found but the inflow below it did not check out",
 }
 
@@ -1390,6 +1396,8 @@ def decide(sv, rp, h_m, sa_ac=None, crest_length_m=None, normal_pool_m=None, oth
     near = dpc <= KEEP_M
     g1 = _gate_g1(sv, emb)
     hr = emb["height_ratio"]
+    gate_kw = dict(sa_ac=sa_ac, crest_length_m=crest_length_m, normal_pool_m=normal_pool_m,
+                   others=others, other_lines=other_lines)
     if not trig:
         out["outcome"] = "review" if flag == "LIKELY MISPLACED" else "kept"
         out["warn"] = flag == "LIKELY MISPLACED"
@@ -1402,11 +1410,78 @@ def decide(sv, rp, h_m, sa_ac=None, crest_length_m=None, normal_pool_m=None, oth
             out["kept_why"] = None
             out["reasons"].insert(0, "the point is {:.0f} m from a clean embankment of the dam's "
                                      "height on the DEM (its pond is flat water)".format(dpc))
+        if near and out["outcome"] == "kept":
+            return _centre_snap(out, sv, emb, h_m, dpc, g1, hr, mode, gate_kw)
         return out
     if near and not codes & {"A3", "A4"}:
         out["outcome"] = "kept"
         out["kept_why"] = "on the embankment ({:.0f} m)".format(dpc)
+        return _centre_snap(out, sv, emb, h_m, dpc, g1, hr, mode, gate_kw)
+    g = _gates(sv, emb, h_m, dpc, codes, g1, hr, **gate_kw)
+    out["gates_failed"] = g
+    out["neighbours"] = (None if others is None else len(others))
+    if g:
+        out["outcome"] = "review"
+        out["warn"] = True
+        if g1 is not None and dpc > DOUBTFUL_FAR_M and codes <= {"A2", "A3"} and \
+                flag != "LIKELY MISPLACED":
+            # validation 2026-11-17: an embankment that fails G1 this far away is mostly another
+            # structure (a road fill, a dam 100-700 m off), and A2 / A3 are measured against it
+            out["warn"] = False
+            out["outcome"] = "kept"
+            out["kept_why"] = ("the embankment found is {:.0f} m away and not clean ({}): a note "
+                               "only".format(dpc, g1))
         return out
+    if normalize_mode(mode) == "warn":
+        out["outcome"] = "review"
+        out["warn"] = True
+        out["would_move"] = True
+        return out
+    out["outcome"] = "move"
+    return out
+
+
+def _centre_snap(out, sv, emb, h_m, dpc, g1, hr, mode, gate_kw):
+    """3.20.13 C1: a point kept because it is on the embankment (within KEEP_M of the found
+    line) but at least CENTRE_MIN_M from the line's centre moves to the centre in "move" mode
+    when every gate passes (the caller's V too). Warn mode: a note in kept_because only (no
+    REVIEW warning). Returns `out`."""
+    line = emb.get("line")
+    if not line or len(line) < 2:
+        return out
+    lp = np.asarray(line, float)
+    seg = np.hypot(*np.diff(lp, axis=0).T)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    half = 0.5 * cum[-1]
+    k = int(np.clip(np.searchsorted(cum, half, side="right") - 1, 0, len(seg) - 1))
+    t = (half - cum[k]) / seg[k] if seg[k] > 0 else 0.0
+    mid = lp[k] + t * (lp[k + 1] - lp[k])
+    dmid = float(math.hypot(sv["dam_xy"][0] - mid[0], sv["dam_xy"][1] - mid[1]))
+    out["centre_m"] = round(dmid, 1)
+    if dmid < CENTRE_MIN_M:
+        return out
+    g = _gates(sv, emb, h_m, dpc, set(), g1, hr, **gate_kw)
+    others = gate_kw.get("others")
+    out["neighbours"] = (None if others is None else len(others))
+    if g:
+        out["gates_failed"] = g
+        out["kept_why"] += ", {:.0f} m from its centre (not moved there: {})".format(
+            dmid, g[0][1])
+        return out
+    if normalize_mode(mode) != "move":
+        out["kept_why"] += ", {:.0f} m from its centre (\"move\" would put it there)".format(dmid)
+        return out
+    out["triggers"] = [("C1", "the point is on the embankment, {:.0f} m from its centre"
+                        .format(dmid))]
+    out["centre_snap"] = True
+    out["kept_why"] = None
+    out["outcome"] = "move"
+    return out
+
+
+def _gates(sv, emb, h_m, dpc, codes, g1, hr, sa_ac=None, crest_length_m=None,
+           normal_pool_m=None, others=None, other_lines=None):
+    """The gates G1-G7e of a move to the found embankment: [(code, why)] of those that fail."""
     g = []
     lq = sv.get("line_q") or {}
     if g1 is not None:
@@ -1511,27 +1586,7 @@ def decide(sv, rp, h_m, sa_ac=None, crest_length_m=None, normal_pool_m=None, oth
         if not (lo <= sv["level_m"] <= hi):
             g.append(("G7e", "the pond level {:.1f} ft is not near the normal pool {:.1f} ft"
                       .format(sv["level_m"] / FT, normal_pool_m / FT)))
-    out["gates_failed"] = g
-    out["neighbours"] = (None if others is None else len(others))
-    if g:
-        out["outcome"] = "review"
-        out["warn"] = True
-        if g1 is not None and dpc > DOUBTFUL_FAR_M and codes <= {"A2", "A3"} and \
-                flag != "LIKELY MISPLACED":
-            # validation 2026-11-17: an embankment that fails G1 this far away is mostly another
-            # structure (a road fill, a dam 100-700 m off), and A2 / A3 are measured against it
-            out["warn"] = False
-            out["outcome"] = "kept"
-            out["kept_why"] = ("the embankment found is {:.0f} m away and not clean ({}): a note "
-                               "only".format(dpc, g1))
-        return out
-    if normalize_mode(mode) == "warn":
-        out["outcome"] = "review"
-        out["warn"] = True
-        out["would_move"] = True
-        return out
-    out["outcome"] = "move"
-    return out
+    return g
 
 
 def _wse(sv, wid):
@@ -1663,6 +1718,10 @@ def record(outcome, mode, dam_xy, skipped_because=None, sv=None, rp=None, dec=No
             rec["neighbours_checked"] = dec["neighbours"]
         if dec.get("kept_why"):
             rec["kept_because"] = dec["kept_why"]
+        if dec.get("centre_m") is not None:
+            rec["centre_m"] = dec["centre_m"]          # 3.20.13: point to the found line's centre
+        if dec.get("centre_snap") and outcome == "moved":
+            rec["centre_snap"] = True                  # 3.20.13 C1
     if verify is not None:
         rec["verify"] = verify
     if moved_xy is not None:
@@ -1743,7 +1802,8 @@ def batch_text(rec):
         return ""
     o = rec.get("outcome")
     if o == "moved":
-        return "moved {:.0f} m".format(rec.get("moved_m") or 0.0)
+        return "moved {:.0f} m{}".format(rec.get("moved_m") or 0.0, " (to the embankment's "
+                                         "centre)" if rec.get("centre_snap") else "")
     if o == "skipped":
         return "off" if rec.get("skipped_because") == "off" else \
             "skipped: {}".format(rec.get("skipped_because"))

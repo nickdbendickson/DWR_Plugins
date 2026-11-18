@@ -1,7 +1,8 @@
 """Fail if detect-secrets finds a secret in a plugin folder that its .secrets.baseline doesn't already list.
 
 Matches on (file, secret type, hashed_secret) so moved lines don't fail CI; only genuinely new hits do.
-FILES.json release manifests (SHA-256 file hashes, regenerated every release) are skipped.
+FILES.json release manifests (SHA-256 file hashes, regenerated every release) are skipped, and so is
+DamSafety_PMP/noaa14/SHARED.json (SHA-256 of the Atlas 14 files shared with DamIT, rewritten at every sync).
 Usage: python detect_secrets_check.py <plugin_dir> [<plugin_dir> ...]
 """
 import json
@@ -18,7 +19,8 @@ for d in sys.argv[1:]:
         baseline = json.load(fh)
     known = {(f, s["type"], s["hashed_secret"]) for f, items in baseline["results"].items() for s in items}
     files = subprocess.run(["git", "ls-files", "-z", "."], cwd=d, check=True, capture_output=True).stdout.decode().split("\0")  # nosec B603 B607
-    files = [f for f in files if f and not f.endswith("FILES.json") and f != ".secrets.baseline"]
+    files = [f for f in files if f and not f.endswith("FILES.json") and f != ".secrets.baseline"
+             and os.path.normpath(os.path.join(d, f)).replace(os.sep, "/") != "DamSafety_PMP/noaa14/SHARED.json"]
     new = []
     for i in range(0, len(files), 200):
         out = subprocess.run(["detect-secrets", "scan", *files[i:i + 200]], cwd=d,

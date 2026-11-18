@@ -1314,13 +1314,8 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None, crest_line=None,
                                    "inflow point is wrong".format(cos))
     if has_line and fd is not None:
         a = np.asarray(crest_line, dtype=float).reshape(-1, 2)
-        tx, ty = a[-1, 0] - a[0, 0], a[-1, 1] - a[0, 1]
-        nt = math.hypot(tx, ty)
-        if nt > 1e-9:
-            n = (-ty / nt, tx / nt)
-            mid = (0.5 * (a[0, 0] + a[-1, 0]), 0.5 * (a[0, 1] + a[-1, 1]))
-            if _side(inflow_xy, mid, n) < 0:
-                n = (-n[0], -n[1])
+        n = _local_line_normal(a, inflow_xy)
+        if n is not None:
             cos = fd[0] * n[0] + fd[1] * n[1]
             out["trace_vs_dam_line_normal"] = round(cos, 2)
             if cos < 0 and not against:
@@ -1329,6 +1324,49 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None, crest_line=None,
                                        "the inflow's side)".format(cos))
     out["ok"] = not out["problems"]
     return out
+
+
+def _local_line_normal(a, xy):
+    """3.20.13: the unit normal of polyline `a` on the side of `xy`, taken at the segment
+    nearest `xy` (not the end-to-end chord: on an arched DWR line - DWR-3034 bows 61 m off
+    its chord - an inflow below the arc can lie on the reservoir side of the chord, and the
+    chord normal then points the wrong way). Falls back to the chord when `xy` is on the line
+    (or beyond its end, along it), or far from it for the line's size (more than half its
+    length and 25 m, or INFLOW_MAX_FROM_DAM_M: DWR-4031's first inflow, 374 m from its 60 m
+    line, where the chord is the dam's direction). None for a degenerate line."""
+    px, py = float(xy[0]), float(xy[1])
+    best = None
+    total = 0.0
+    for i in range(len(a) - 1):
+        total += math.hypot(a[i + 1, 0] - a[i, 0], a[i + 1, 1] - a[i, 1])
+    for i in range(len(a) - 1):
+        x0, y0, x1, y1 = a[i, 0], a[i, 1], a[i + 1, 0], a[i + 1, 1]
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy
+        if L2 <= 1e-18:
+            continue
+        t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / L2))
+        qx, qy = x0 + t * dx, y0 + t * dy
+        d = math.hypot(px - qx, py - qy)
+        if best is None or d < best[0]:
+            best = (d, dx, dy, qx, qy)
+    if best is not None:
+        _d, dx, dy, qx, qy = best
+        nl = math.hypot(dx, dy)
+        n = (-dy / nl, dx / nl)
+        s = (px - qx) * n[0] + (py - qy) * n[1]
+        near = _d <= max(25.0, 0.5 * total) and _d <= INFLOW_MAX_FROM_DAM_M
+        if near and abs(s) > 0.5 and abs(s) >= 0.2 * _d:
+            return n if s > 0 else (-n[0], -n[1])
+    tx, ty = a[-1, 0] - a[0, 0], a[-1, 1] - a[0, 1]
+    nt = math.hypot(tx, ty)
+    if nt <= 1e-9:
+        return None
+    n = (-ty / nt, tx / nt)
+    mid = (0.5 * (a[0, 0] + a[-1, 0]), 0.5 * (a[0, 1] + a[-1, 1]))
+    if _side(xy, mid, n) < 0:
+        n = (-n[0], -n[1])
+    return n
 
 
 def nearest_line_distance(xy, lines):

@@ -41,7 +41,7 @@ from .ui_widgets import CheckPanel, Collapsible, InfoBanner, StageStrip
 
 from .dialog_consts import (  # noqa: F401 - re-exported: tests and the plugin read them here
     TITLE, SCOPE, ENTRY, STATE_TEXT, DISCLAIMER, SCREEN_WHAT, HELP_FILE, PRESETS_DIR,
-    REVIEW_COLUMNS, HINT_STYLE,
+    REVIEW_COLUMNS, HINT_STYLE, EXE_KEY,
 )
 from .settings_tab import SettingsTabMixin
 from .review_tab import ReviewTabMixin
@@ -491,7 +491,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         self.package_edit = QLineEdit()
         self.package_edit.setToolTip(
             "Optional: the GeoPackage ND Dam Hazard's 'Export for Screening' writes, or your own "
-            "package from step 0. Every input left empty on the Inputs tab is taken from it.")
+            "package from step 0. Every input left empty under Override inputs on the Run tab is taken from it.")
         self.package_edit.editingFinished.connect(self._changed)
         b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._browse_file(self.package_edit, "GeoPackage (*.gpkg)"))
@@ -842,9 +842,30 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
             return
         try:
             from qgis.core import QgsProject
-            QgsProject.instance().writeEntry(SCOPE, ENTRY, json.dumps(self.settings()))
+            s = self.settings()
+            # security audit 2026-11-18: the solver program is a per-computer choice, never saved
+            # in the project (a shared .qgz could otherwise name the program the Runner launches).
+            exe = s.pop("exe", "")
+            QgsProject.instance().writeEntry(SCOPE, ENTRY, json.dumps(s))
+            self._save_exe(exe)
         except Exception:                                        # noqa
             pass
+
+    @staticmethod
+    def _save_exe(exe):
+        try:
+            from qgis.core import QgsSettings
+            QgsSettings().setValue(EXE_KEY, exe or "")
+        except Exception:                                        # noqa
+            pass
+
+    @staticmethod
+    def _computer_exe():
+        try:
+            from qgis.core import QgsSettings
+            return str(QgsSettings().value(EXE_KEY, "") or "")
+        except Exception:                                        # noqa
+            return ""
 
     def _load_state(self):
         s = wf.default_settings()
@@ -855,9 +876,11 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
                 loaded = json.loads(text)
                 if isinstance(loaded, dict):
                     self._saved_engine = "engine" in loaded
+                    loaded.pop("exe", None)     # never from the project (see _save_state)
                     s.update(loaded)
         except Exception:                                        # noqa
             pass
+        s["exe"] = self._computer_exe()
         if not (s.get("settings_file") or "").strip():
             s["settings_file"] = DS.current_path() or ""
         self._apply(s)

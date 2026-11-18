@@ -34,7 +34,8 @@ def _dam(crest_line_xy=None, **k):
 
 
 def _st(**k):
-    """Run settings for the check's tests: mode "move" (the default is "warn") unless given."""
+    """Run settings for the check's tests: mode "move" (the default since 3.20.13) unless
+    given."""
     d = dict(cell_size_m=20.0, planning_cell_m=90.0, initial_length_mi=1.0, half_width_mi=0.5,
              expand_step_mi=1.0, max_iterations=1, sim_time_hr=4.0, products=False,
              dam_point_check="move")
@@ -85,7 +86,7 @@ def _survey(fn, xy):
 
 
 def _decide(*a, **k):
-    """dam_point_check.decide in mode "move" (the default mode is "warn") unless given."""
+    """dam_point_check.decide in mode "move" (the default since 3.20.13) unless given."""
     k.setdefault("mode", "move")
     return dpc.decide(*a, **k)
 
@@ -142,9 +143,10 @@ def _full_run(fn, xy, preview_first=False, **st_kw):
 # ------------------------------------------------------------------------- the module ------
 @test
 def dpc_modes_and_the_environment_switch():
-    # 2026-11-17: the default is warn (the hold-out left one move 30 m off its dam line)
-    assert dpc.DEFAULT_MODE == "warn" == workflow.RunSettings().dam_point_check
-    assert dpc.normalize_mode(None) == "warn" and dpc.normalize_mode("") == "warn"
+    # 3.20.13 (Nick 2026-11-17, "center of the embankment in most all cases"): the default is
+    # move again (3.20.11 shipped warn: the hold-out left one move 30 m off its dam line)
+    assert dpc.DEFAULT_MODE == "move" == workflow.RunSettings().dam_point_check
+    assert dpc.normalize_mode(None) == "move" and dpc.normalize_mode("") == "move"
     assert dpc.normalize_mode(True) == "move" and dpc.normalize_mode(False) == "off"
     assert [dpc.normalize_mode(i) for i in (0, 1, 2)] == ["off", "warn", "move"]
     assert dpc.normalize_mode("Warn only") == "warn" and dpc.normalize_mode("ON") == "move"
@@ -161,7 +163,7 @@ def dpc_modes_and_the_environment_switch():
     with _env(None):
         assert workflow._env_off("DAM_POINT_CHECK") is None
         assert workflow._dam_point_mode(_st()) == ("move", "setting")
-        assert workflow._dam_point_mode(workflow.RunSettings()) == ("warn", "setting")
+        assert workflow._dam_point_mode(workflow.RunSettings()) == ("move", "setting")
         assert workflow._dam_point_mode(_st(dam_point_check="warn")) == ("warn", "setting")
     for v, want in (("off", "off"), ("0", "off"), ("no", "off"), ("false", "off"),
                     ("warn", "warn"), ("move", "move"), ("1", "move")):
@@ -222,7 +224,7 @@ def dpc_dem_cell_unknown_is_skipped_in_the_run():
 @test
 def dpc_run_settings_key_and_settings_record():
     st = workflow.RunSettings()
-    assert st.dam_point_check == "warn" == dpc.DEFAULT_MODE
+    assert st.dam_point_check == "move" == dpc.DEFAULT_MODE
     k = workflow.key_settings(st)
     assert "dam_point_check" not in k and "dam_point_others" not in k
     # the switch never enters the checkpoint key (the moved line does, through the dam)
@@ -230,8 +232,8 @@ def dpc_run_settings_key_and_settings_record():
         dam_point_check="off"))
     assert "dam_point_check" not in st.as_dict()
     assert st.as_dict().get("dam_point_lines") is None
-    assert workflow.RunSettings(dam_point_check="move").as_dict()["dam_point_check"] == "move"
-    assert "dam_point_check" not in workflow.RunSettings(dam_point_check="warn").as_dict()
+    assert workflow.RunSettings(dam_point_check="warn").as_dict()["dam_point_check"] == "warn"
+    assert "dam_point_check" not in workflow.RunSettings(dam_point_check="move").as_dict()
 
 
 @test
@@ -267,11 +269,11 @@ def dpc_batch_columns_are_the_same_in_the_tool_and_the_cli():
     algs, _fq = _algs()
     c = cli()
     assert tuple(algs.BATCH_FIELDS) == tuple(c.BATCH_FIELDS)
-    assert algs.BATCH_FIELDS[-1] == "Dam_Point_Check"
-    # the CLI setting (model.dam_point_check) and its default: warn in the template and
-    # without the key
+    assert algs.BATCH_FIELDS[-2:] == ("Dam_Point_Check", "Dam_Line")       # 3.20.13
+    # the CLI setting (model.dam_point_check) and its default: move (3.20.13) in the template
+    # and without the key
     assert c.MODEL_KEYS["dam_point_check"][0] == "dam_point_check"
-    assert c.TEMPLATE["model"]["dam_point_check"] == dpc.DEFAULT_MODE == "warn"
+    assert c.TEMPLATE["model"]["dam_point_check"] == dpc.DEFAULT_MODE == "move"
     import sys
     opts = type("O", (), {"lisflood": sys.executable, "anuga_python": None})()
     d = tempfile.mkdtemp(prefix="ndbr_dpc_")
@@ -280,18 +282,18 @@ def dpc_batch_columns_are_the_same_in_the_tool_and_the_cli():
         with open(tp, "w", encoding="utf-8") as f:
             f.write(c.template_text())
         for cfg in (c.load_config(tp), c.Config({"model": {}}, "")):
-            assert c.build_settings(cfg, opts, need_models=False).dam_point_check == "warn"
-        assert c.build_settings(c.Config({"model": {"dam_point_check": "move"}}, ""), opts,
-                                need_models=False).dam_point_check == "move"
+            assert c.build_settings(cfg, opts, need_models=False).dam_point_check == "move"
+        assert c.build_settings(c.Config({"model": {"dam_point_check": "warn"}}, ""), opts,
+                                need_models=False).dam_point_check == "warn"
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    # the tools' parameter: an advanced enum, warn by default
+    # the tools' parameter: an advanced enum, move by default (3.20.13)
     for cls in (algs.RunDamAlgorithm, algs.BatchAlgorithm):
         a = cls()
         a.initAlgorithm()
         p = a.parameterDefinition("DAM_POINT_CHECK")
         assert p is not None, cls
-        assert algs.dam_point_check_param(p.defaultValue()) == dpc.DEFAULT_MODE == "warn", \
+        assert algs.dam_point_check_param(p.defaultValue()) == dpc.DEFAULT_MODE == "move", \
             (cls, p.defaultValue())
     assert algs.DAM_POINT_CHECK_MODES == dpc.MODES
     assert [algs.dam_point_check_param(i) for i in (0, 1, 2)] == ["off", "warn", "move"]
@@ -303,12 +305,12 @@ def dpc_window_passes_the_setting_only_when_turned_down():
     from nd_breach_runner import popup_logic as pl
     assert pl.DAM_POINT_CHECK_DEFAULT == dpc.DEFAULT_MODE
     assert "DAM_POINT_CHECK" not in pl.defaults("rundam", "", "")
-    assert "DAM_POINT_CHECK" not in pl.defaults("rundam", "", "", {"dam_point_check": "warn"})
+    assert "DAM_POINT_CHECK" not in pl.defaults("rundam", "", "", {"dam_point_check": "move"})
     assert pl.defaults("rundam", "", "", {"dam_point_check": "off"})["DAM_POINT_CHECK"] == 0
-    assert pl.defaults("batch", "", "", {"dam_point_check": "move"})["DAM_POINT_CHECK"] == 2
-    assert pl.dam_point_check_choice(False) == "off" and pl.dam_point_check_choice(None) == "warn"
+    assert pl.defaults("batch", "", "", {"dam_point_check": "warn"})["DAM_POINT_CHECK"] == 1
+    assert pl.dam_point_check_choice(False) == "off" and pl.dam_point_check_choice(None) == "move"
     assert pl.dam_point_check_choice(True) == "move"
-    assert pl.dam_point_check_choice("nonsense") == "warn"
+    assert pl.dam_point_check_choice("nonsense") == "move"
 
 
 @test

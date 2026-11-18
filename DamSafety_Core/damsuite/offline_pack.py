@@ -877,7 +877,7 @@ class PackReader(object):
     def _decode(rows, rect):
         out = []
         for (blob,) in rows:
-            f = json.loads(zlib.decompress(blob).decode("utf-8"))
+            f = json.loads(_inflate(blob).decode("utf-8"))
             if intersects_rect(f.get("geometry"), rect):
                 out.append(f)
         return out
@@ -967,7 +967,29 @@ def open_pack(path, log=None):
 def _safe_member(name):
     """False for a zip member path that could point outside the folder."""
     n = name.replace("\\", "/")
-    return not (n.startswith("/") or ":" in n.split("/", 1)[0] or ".." in n.split("/"))
+    # A colon in ANY segment (not just the first) is a Windows drive-relative escape, e.g.
+    # "packroot/sub/D:evil.gpkg" collapses to "D:evil.gpkg" under ntpath.join and lands off the folder.
+    return not (n.startswith("/") or any(":" in seg for seg in n.split("/")) or ".." in n.split("/"))
+
+
+def _inflate(blob):
+    """A pack feature row, zlib-inflated with a size cap (zipsafe.inflate: refuses with
+    zipsafe.TooLarge, a ValueError, past zipsafe.MAX_ROW_BYTES). A pack is a file someone may
+    have handed the user, so one crafted row must not run QGIS out of memory."""
+    from . import zipsafe
+    return zipsafe.inflate(blob)
+
+
+def _check_pack_size(z, target, skip=None):
+    """Refuse a pack zip that unpacks to more than zipsafe.MAX_PACKAGE_BYTES, holds too many entries,
+    is compressed harder than any real pack, or would not fit on the disk - a decompression bomb.
+    zipsafe.check also rejects any member that would land outside `target`. Sizes come from the zip
+    directory; nothing is decompressed to check."""
+    from . import zipsafe
+    try:
+        zipsafe.check(z, target, zipsafe.MAX_PACKAGE_BYTES, skip=skip)
+    except zipsafe.ZipRefused as e:
+        raise PackError(str(e)) from e
 
 
 def _unzip_folder(zip_path, manifest, log):
@@ -986,7 +1008,9 @@ def _unzip_folder(zip_path, manifest, log):
             continue
         log("Offline data pack: unpacking {} to {} (once)...".format(
             os.path.basename(zip_path), target))
+        root = os.path.realpath(target)
         with zipfile.ZipFile(zip_path) as z:
+            _check_pack_size(z, target, skip=lambda n: not _safe_member(n))
             names = [n for n in z.namelist() if _safe_member(n) and not n.endswith("/")]
             top = min((n for n in names if n.rsplit("/", 1)[-1] == MANIFEST_NAME),
                       key=lambda n: n.count("/"))
@@ -995,6 +1019,9 @@ def _unzip_folder(zip_path, manifest, log):
                 if not n.startswith(prefix) or n == top:
                     continue
                 dst = os.path.join(target, *n[len(prefix):].split("/"))
+                full = os.path.realpath(dst)
+                if full != root and not full.startswith(root + os.sep):
+                    raise PackError("archive entry {!r} would be written outside {}".format(n[:200], target))
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 with z.open(n) as fin, open(dst + ".part", "wb") as fout:
                     shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
@@ -1057,6 +1084,7 @@ def _unzip(zip_path, log):
             os.path.basename(zip_path), target))
         tmp = db + ".part"
         with zipfile.ZipFile(zip_path) as z:
+            _check_pack_size(z, target, skip=lambda n: not _safe_member(n))
             # 1.9.0: a member path with ".." or a drive / root is never used
             names = [n for n in z.namelist() if _safe_member(n)]
             src = next((n for n in names if n.rsplit("/", 1)[-1] == DB_NAME), None)

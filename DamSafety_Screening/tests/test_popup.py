@@ -630,7 +630,7 @@ assert not ch.ok and ch.ran == ["1"] and "was cancelled" in ch.result
 W4 = new_work("w4g")
 ch, log = run_chain({"dwr": "d"})
 assert not ch.ok and ch.ran == ["1", "2"] and "Step 3 (Estimate reservoir storage) cannot run: no NHD waterbodies layer" in ch.result
-assert "Inputs / Settings tab" in ch.result and not any(c[0] == "3" for c in calls)
+assert "Override inputs on the Run tab" in ch.result and not any(c[0] == "3" for c in calls)
 # a late callback after a stop is ignored
 late = []
 W4 = new_work("w4h")

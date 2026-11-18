@@ -22,6 +22,12 @@ if not os.environ.get("NDBREACH_CKPT_KEY_FILE"):
     atexit.register(shutil.rmtree, _KEY_DIR, True)
 
 
+# 3.20.13: a batch takes each dam's DWR dam line from the offline pack (core/dwr_lines.py). The
+# tests must not read a developer's own pack: they run with it off unless a test turns it on
+# (tests/test_dwr_line_batch.py builds its own pack).
+os.environ.setdefault("NDBREACH_DWR_LINES", "off")
+
+
 class Skip(Exception):
     """Raised inside a test that cannot run here (a missing optional dependency)."""
 

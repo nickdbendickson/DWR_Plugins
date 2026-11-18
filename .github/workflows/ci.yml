@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -67,6 +67,10 @@ jobs:
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
         run: python3 DamSafety_Core/tests/test_shared_defaults.py
+      - name: Offline pack safety - extraction caps, cache-escaping names, row inflate cap (QGIS-free)
+        run: |
+          python3 DamSafety_Core/tests/test_offline_pack_safety.py
+          python3 DamSafety_Core/tests/test_pack_rows_safety.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
         run: python3 -W error -m unittest discover -v -s damit_ai/heim/tests
       - name: Vor - catalog, add a document, where the library lives (no Ollama, no QGIS)
@@ -87,7 +91,7 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS (newest conda-forge, Qt6) + scipy
         id: provision
         uses: mamba-org/setup-micromamba@v3
@@ -228,7 +232,7 @@ jobs:
       # never inside a step or a test. See tools/blas_selfcheck.py and docs/CI.md.
       OPENBLAS_CORETYPE: Haswell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision the test tools (pip + apt, no conda)
         id: provision
         run: |
@@ -312,7 +316,7 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:

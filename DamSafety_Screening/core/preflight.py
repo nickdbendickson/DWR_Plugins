@@ -197,7 +197,7 @@ def _slot(S, work, slot):
 
 
 def _pack_hit(S, slot):
-    """Offline-pack data set for a slot the Inputs tab does not have as a file."""
+    """Offline-pack data set for a slot Override inputs does not have as a file."""
     try:
         from ..damsuite.suite_fill import layers_for_settings, pack_slot
     except Exception:                                            # noqa
@@ -227,7 +227,7 @@ def _pack_check(S):
     return check(WARN, "Offline pack vs manifest.json", "{} | {}{}".format(
         res.summary(), " | ".join(bad[:6]), more),
         "The layers named are missing or not what the manifest says: rebuild or update the "
-        "offline pack, or pick those layers on the Inputs tab.")
+        "offline pack, or pick those layers under Override inputs on the Run tab.")
 
 
 def run_checks(work, settings, steps=None, env=None, n_dams=None):
@@ -334,11 +334,11 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                         "name": packed["name"], "source": "offline pack"}
             if slot == "waterbodies":
                 out.append(check(FAIL, label, "NHD waterbodies are not in the suite folder or the offline pack",
-                                 "Build or update the offline pack so it includes USGS NHD waterbodies, or pick a polygon layer on the Inputs tab."))
+                                 "Build or update the offline pack so it includes USGS NHD waterbodies, or pick a polygon layer under Override inputs on the Run tab."))
             else:
                 out.append(check(FAIL if slot in ("dwr", "dam_lines") else WARN, label,
                                  "no layer chosen (and none in the suite folder or the offline pack)",
-                                 "Pick it on the Inputs tab, or build the data package (step 0)."))
+                                 "Pick it under Override inputs on the Run tab, or build the data package (step 0)."))
             return None
         info = env.layer_info(ref)
         if info is None:

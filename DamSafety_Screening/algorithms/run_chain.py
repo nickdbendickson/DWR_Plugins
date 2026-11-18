@@ -20,36 +20,47 @@ OPTIONAL_LABELS = ["0 - Build offline data package", "6 - Quick screen (triage)"
 OPTIONAL_KEYS = ["0", "6", "9", "16", "18"]
 
 
-def load_settings(text_or_path):
+def load_settings(text_or_path, work=None, log=None):
     """Settings for core/workflow.defaults from a JSON file path or a JSON string ('' = the
     window's defaults), or (0.13) from the suite settings file (.xlsx / .csv): its "window" rows
     are the window's choices and the file becomes the tools' defaults for this run. The window
-    saves the same dict in the QGIS project (NDDamScreening/state)."""
+    saves the same dict in the QGIS project (NDDamScreening/state).
+
+    0.20.3: then core/pack_terrain moves the terrain to the configured offline pack DEM when
+    the settings did not choose USGS 3DEP (terrain_source = 0) themselves; with `work` the pack
+    DEM is reached through <work>/terrain_pack. The notes go to `log` (and stay in
+    settings['_terrain_source_notes'] when no log is given)."""
+    from ..core.pack_terrain import apply_offline_pack_terrain, pop_notes
     s = wf.default_settings()
     t = (text_or_path or "").strip()
-    if not t:
-        return s
-    if os.path.isfile(t) and os.path.splitext(t)[1].lower() in (".xlsx", ".csv"):
+    given = {}
+    if t and os.path.isfile(t) and os.path.splitext(t)[1].lower() in (".xlsx", ".csv"):
         from ..damsuite import settings as DS
         try:
             sf = DS.Settings.load(t)
         except DS.SettingsError as e:
             raise QgsProcessingException(str(e))
-        s.update(wf.window_settings_from(sf))
+        given = wf.window_settings_from(sf)
+        s.update(given)
         s["settings_file"] = t
         DS.set_current_path(t, remember=False)
-        return s
-    if os.path.isfile(t):
-        with open(t, encoding="utf-8") as fh:
-            t = fh.read()
-    try:
-        loaded = json.loads(t)
-    except ValueError as e:
-        raise QgsProcessingException("Settings are not JSON ({}): give the file the window exports "
-                                     "or a JSON object".format(e))
-    if not isinstance(loaded, dict):
-        raise QgsProcessingException("Settings must be a JSON object")
-    s.update(loaded)
+    elif t:
+        if os.path.isfile(t):
+            with open(t, encoding="utf-8") as fh:
+                t = fh.read()
+        try:
+            loaded = json.loads(t)
+        except ValueError as e:
+            raise QgsProcessingException("Settings are not JSON ({}): give the file the window exports "
+                                         "or a JSON object".format(e))
+        if not isinstance(loaded, dict):
+            raise QgsProcessingException("Settings must be a JSON object")
+        given = loaded
+        s.update(loaded)
+    apply_offline_pack_terrain(s, work=work, explicit=tuple(given))
+    if log is not None:
+        for line in pop_notes(s):
+            log(line)
     return s
 
 
@@ -101,7 +112,9 @@ class RunChain(UnitAlgorithm):
         work = self.parameterAsString(params, "WORK", context)
         if not work or not os.path.isdir(work):
             raise QgsProcessingException("Work folder not found: {}".format(work))
-        settings = load_settings(self.parameterAsString(params, "SETTINGS", context))
+        pack_notes = []
+        settings = load_settings(self.parameterAsString(params, "SETTINGS", context), work=work,
+                                 log=pack_notes.append)
         settings["work"] = work
         dam_id = (self.parameterAsString(params, "DAM_ID", context) or "").strip() \
             if self.parameterDefinition("DAM_ID") is not None else ""
@@ -139,6 +152,8 @@ class RunChain(UnitAlgorithm):
 
         if dam_id:
             log("DAM_ID filter: {}".format(dam_id))
+        for line in pack_notes:                  # 0.20.3: which terrain this run uses, and why
+            log(line)
 
         plan = wf.chain_plan(work, settings, include)
         first, problem = wf.chain_next(work, settings, include, ())

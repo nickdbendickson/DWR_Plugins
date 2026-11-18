@@ -181,6 +181,28 @@ def is_worker(status):
     return True
 
 
+def signalable(status):
+    """Strict form of is_worker() for the moment BEFORE sending a signal (not merely waiting on a
+    worker): the pid must be alive, on THIS host, and - where /proc is available - positively
+    confirmed to still run the worker script. A pid from another host (a shared/network workdir)
+    shares no pid space with us, and a pid /proc cannot confirm may have been recycled since the
+    status file was written; neither is ever signalled, so a stale status file can never make us
+    SIGTERM/SIGKILL an unrelated local process."""
+    if not status:
+        return False
+    pid = status.get("pid")
+    if not pid_alive(pid):
+        return False
+    host = status.get("host")
+    if host and host != socket.gethostname():
+        return False                 # another computer's pid: never signal it locally
+    cmd = _cmdline(pid)
+    script = os.path.basename(str(status.get("script") or ""))
+    if cmd is not None and script:
+        return script in cmd         # /proc confirms (or denies) it is still our worker
+    return True                      # no /proc (e.g. Windows): alive + host-matched is as far as we can verify
+
+
 def worker_state(workdir, result=None):
     """{"state": none | running | finished | failed | stopped | died, "status": dict or None,
     "result": path, "have_result": bool, "processed": bool}."""
@@ -366,6 +388,12 @@ class Attached:
 
     def _signal(self, sig):
         if self.poll() is not None:
+            return
+        # self.pid came from a status file an earlier session wrote. Re-read it and only signal when
+        # the live status still names this pid AND it is positively our worker on this host: a stale
+        # pid may have been recycled, and a pid on another host is not ours to kill.
+        st = read_status(self.spath) or self.status
+        if int((st or {}).get("pid") or -1) != self.pid or not signalable(st):
             return
         try:
             os.kill(self.pid, sig)

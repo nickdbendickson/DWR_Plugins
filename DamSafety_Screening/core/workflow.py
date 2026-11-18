@@ -15,6 +15,7 @@ that step as not done.
 import csv
 import json
 import os
+import sqlite3
 
 from ..damsuite.layout import STEP_OUTPUTS as _STEP_OUTPUTS
 
@@ -105,7 +106,7 @@ REQUIRES = {
     "18": ("3", "4", "16"), "19": (),
 }
 
-# settings slots that hold one of the data layers (a layer id / path chosen in the Inputs tab,
+# settings slots that hold one of the data layers (a layer id / path chosen under Override inputs,
 # else the package layer of the same meaning)
 LAYER_SLOTS = (
     # key, label, package layer
@@ -345,7 +346,7 @@ def statuses(work, settings):
         for slot in NEEDS_LAYER.get(key, ()):
             if slot_source(slot, work, settings) is None:
                 label = dict((k, l) for k, l, _p in LAYER_SLOTS)[slot]
-                notes.append("no {} layer (Inputs tab, or build the data package)".format(_phrase(label)))
+                notes.append("no {} layer (Override inputs on the Run tab, or build the data package)".format(_phrase(label)))
         if done and covered_by_proposed(work, key):
             rows.append((key, TITLE[key], "done", "made by step 19 (proposed dam)"))
             continue
@@ -1165,6 +1166,61 @@ def chain_summary(step, work, settings):
     return lines
 
 
+SIM_FLOODED = ("ok", "cached")
+SIM_LEFT_OUT = ("triage", "noflood", "excluded", "flagged")   # left out on purpose (tool 6, flags)
+
+
+def sim_status_counts(work):
+    """{sim_status: [dam ids]} from step 7's output layer, or None when it cannot be read (no
+    file, not a GeoPackage, no sim_status field). Pure sqlite3: the chain runs off the main thread."""
+    p = path(work, "7", "OUT") if work else ""
+    if not p or not os.path.isfile(p) or os.path.getsize(p) == 0:
+        return None
+    try:
+        con = sqlite3.connect("file:{}?mode=ro".format(p), uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = con.execute("SELECT table_name FROM gpkg_contents WHERE data_type = 'features'").fetchall()
+        for (table,) in rows:
+            cols = [c[1] for c in con.execute('PRAGMA table_info("{}")'.format(table.replace('"', '""')))]
+            if "sim_status" not in cols:
+                continue
+            idc = next((c for c in ("dam_id", "DAM_ID", "damid") if c in cols), None)
+            q = 'SELECT sim_status, {} FROM "{}"'.format('"{}"'.format(idc) if idc else "NULL",
+                                                          table.replace('"', '""'))
+            out = {}
+            for st, did in con.execute(q):
+                out.setdefault(str(st or "FAILED"), []).append(str(did) if did is not None else "?")
+            return out
+        return None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+def flood_problem(work):
+    """'' when step 7 flooded every dam it was meant to; else what went wrong. 0.20.4 (install
+    test 2026-11-18): the chain said OK when step 7 failed for dams (or skipped them for a missing
+    hydrograph or breach point), because step 7 still wrote its layer."""
+    counts = sim_status_counts(work)
+    if not counts:
+        return ""
+    total = sum(len(v) for v in counts.values())
+    flooded = sum(len(counts.get(k, ())) for k in SIM_FLOODED)
+    bad = {k: v for k, v in counts.items() if k not in SIM_FLOODED + SIM_LEFT_OUT}
+    nbad = sum(len(v) for v in bad.values())
+    if nbad:
+        ids = sorted(i for v in bad.values() for i in v)
+        return "step 7 (flood) failed or was skipped for {} of {} dam(s): {}{}".format(
+            nbad, total, ", ".join(ids[:12]), " ..." if len(ids) > 12 else "")
+    if not flooded:
+        return "step 7 (flood) flooded none of the {} dam(s) (all left out: {})".format(
+            total, ", ".join("{} {}".format(k, len(v)) for k, v in sorted(counts.items())))
+    return ""
+
+
 class Chain(object):
     """Runs steps one after the other. The window gives `start(step, algorithm id, params,
     on_done)` which starts the tool (in the background) and calls on_done(ok, message) when it
@@ -1201,6 +1257,10 @@ class Chain(object):
         if problem:
             return self._end(False, problem[0].upper() + problem[1:] + ".")
         if step is None:
+            flood = flood_problem(self.work)
+            if flood:
+                return self._end(False, "Ran step(s) {}, but {}. See sim_status / sim_notes in step 7's "
+                                        "layer.".format(", ".join(self.ran) or "none", flood))
             return self._end(True, "Nothing left to run; ran step(s) {}.".format(
                 ", ".join(self.ran) or "none (all were done)"))
         aid, params = algorithm_id(step), defaults(step, self.work, S)
@@ -1208,8 +1268,8 @@ class Chain(object):
         if self.problems:
             lacks += list(self.problems(step, aid, params) or [])
         if lacks:
-            return self._end(False, "Step {} ({}) cannot run: {}. Choose it in the Inputs / Settings "
-                                    "tab, or open the step and fill it in.".format(
+            return self._end(False, "Step {} ({}) cannot run: {}. Choose it under Override inputs on the "
+                                    "Run tab or in Settings, or open the step and fill it in.".format(
                                         step, TITLE[step], "; ".join(lacks)))
         self.current = step
         for line in chain_summary(step, self.work, S):
@@ -1230,4 +1290,11 @@ class Chain(object):
                                         DONE_MARK.get(step, "OUTDIR"), "")))
         self.ran.append(step)
         self.log("    step {} done".format(step))
+        if step == "7":
+            flood = flood_problem(self.work)
+            if flood and "flooded none" in flood:
+                return self._end(False, "Step 7 ({}) {}; nothing for the later steps to use.".format(
+                    TITLE[step], flood[len("step 7 (flood) "):]))
+            if flood:
+                self.log("!!! " + flood + " (the chain goes on with the others and ends as failed)")
         self._advance()

@@ -1,4 +1,4 @@
-# DamSafety_PMP (ND PMP Tool, prototype v0.4.0): INTERNAL / EXPERIMENTAL
+# DamSafety_PMP (ND PMP Tool, prototype v0.6.0): INTERNAL / EXPERIMENTAL
 
 > **LICENSING / PERMISSION: READ FIRST**
 > - This plugin ports Applied Weather Associates' (AWA) ND PMP Evaluation Tool (2021) from the North Dakota statewide PMP study.
@@ -30,13 +30,88 @@ time_hr,flow_cfs,precip_in,excess_in
 - `tests/test_light.py` checks this order.
 
 ### Tests
-- `python tests/run_tests.py`: light tests only. They need no AWA data, no HEC-HMS and no QGIS (just GDAL + numpy): hand calculations, the DAD lookup, and the hydrograph CSV column order.
+- `python tests/run_tests.py`: light tests only. They need no AWA data, no HEC-HMS and no network (just GDAL + numpy): hand calculations, the DAD lookup, the hydrograph CSV column order, and the NOAA Atlas 14 tests (v0.6.0):
+  - `test_atlas14_shared.py`: the shared-core tripwire (see *The shared Atlas 14 core* below).
+  - `test_atlas14_core.py`, `test_atlas14_grid.py`: DamIT PMP's Atlas 14, temporal / storm and grid tests, run on the copy in `noaa14/` (recorded PFDS answers and NOAA's own temporal file in `tests/fixtures_atlas14/`).
+  - `test_atlas14_chain.py`: Atlas 14 storms -> `core/hydro.py` -> the Runner's `read_inflow_csv` / `assess` on a toy dam.
+  - `test_atlas14_qgis.py`: the five Atlas 14 algorithms and `inflow_hydrograph` in real QGIS, offline (SKIP without QGIS).
+  - They also pass under `python3 -W error`.
 - `python tests/run_tests.py --all`: also runs the data-dependent scripts from the current working folder.
   - A script whose inputs are missing prints `SKIP` (exit 77).
   - Inputs: `ND_PMP_DATA_HOME` (the PMP_Evaluation_Tool folder), the Medina test inputs (`medina_pmp/`, `pothole_ws/`, `NOAA_Dist_C.xlsx`, `dem3dep.tif`), and `ND_PMP_HMS_HOME`.
   - `validate_pothole.py` runs its synthetic-cone part whenever WhiteboxTools is found.
 - Use a conda/QGIS Python with GDAL ≥ 3.7. `run_tests.py` sets `PROJ_DATA` from the interpreter's prefix.
 - `tests/test_streamstats.py` (offline, saved StreamStats responses for DWR 2801 and DWR 4031, no QGIS) is in the light set. `tests/test_streamstats_dialog.py` opens the dialog offscreen with real QGIS and a mocked client (`QT_QPA_PLATFORM=offscreen`; run it with `python -c "import os, sys, pytest; rc = pytest.main([...]); os._exit(int(rc))"`, as CI does). Set `PMP_SHOTS=<folder>` to save screenshots.
+
+## NOAA Atlas 14 tools (v0.6.0)
+
+Group **NOAA Atlas 14** in the `ndpmp` provider. These tools use NOAA's public Atlas 14 data only; they do not need the PMP study data. They are the Atlas 14 tools of **DamIT PMP** (`damit_pmp`, nickdbendickson/damit) on the same code, with the same parameter names, choice lists, caching, offline mode, citations and JSON files.
+
+| Tool | What it does | DamIT PMP |
+|---|---|---|
+| `ndpmp:atlas14_point` | PFDS point query: 19 durations (5 min - 60 days) x PDS 1 - 1000-year ARI (or AMS 1/2 - 1/1000 AEP), depth or intensity, English or metric, with 90% bounds. CSV table + JSON (volume, version, region, query URL, fetch time, citation). | `pointpf` |
+| `ndpmp:atlas14_basin` | The same at a point on the basin plus evenly spread points inside it (MAX_POINTS), combined cell by cell (mean or max); a sample-point layer. No areal reduction. | `basinpf` |
+| `ndpmp:atlas14_fetchgrid` | Downloads the Atlas 14 "PF in GIS format" grid for one frequency and duration, clips it to a point buffer, extent or basin and writes a GeoTIFF in inches + `<tif>.json` (always written; OUTPUT_JSON adds a copy). `atlas14_gridbasin` reads the GeoTIFF in inches only when `<tif>.json` sits beside it. MASK_TO_BASIN keeps every cell the basin touches. | `fetchgrid` |
+| `ndpmp:atlas14_gridbasin` | Basin mean / min / max of an Atlas 14 grid: a NOAA file, a `fetchgrid` GeoTIFF, or fetched for you. Every cell the basin touches counts. | `gridbasin` |
+| `ndpmp:atlas14_hyetograph` | Atlas 14 design storms as nd_pmp hyetograph CSVs for `inflow_hydrograph` (below). | `hyetograph`, changed for the DWR chain |
+
+Atlas 14 is not a PMP study: it stops at the 1000-year ARI. `ndpmp:pmp` gives the PMP storms; these tools give the frequency storms. A location outside Atlas 14 coverage stops with "NOAA Atlas 14 does not cover this location".
+
+### Design storms for the spillway check (`atlas14_hyetograph`)
+- **Input:** an `atlas14_point` / `atlas14_basin` JSON (DamIT's `pointpf` / `basinpf` JSON works too), or just a **POINT** (the dam or basin outlet): the tool then queries PFDS itself and keeps `atlas14_estimates.csv` / `.json` in the output folder.
+- **Several storms per run:** FREQUENCY is a list of whole years (`100,500,1000`), STORM a multi-select of the 19 Atlas 14 durations (default 24-hr), PATTERN a multi-select of temporal patterns: alternating block (default), the NOAA Atlas 14 temporal distribution (Volume 8 quartile curves for 6-, 12-, 24- and 96-hour storms; QUARTILE, PERCENT, area found from the point or TDA) and NRCS Type I / IA / II / III (24-hour only). One storm per frequency x duration x pattern. A pair with no curve (e.g. NRCS with a 6-hour storm), or a duration that is not a whole number of STEP_MIN steps, is skipped with a warning and listed in the JSON.
+- **STEP_MIN** (default 15 minutes, the step of the PMP 24-hour storms): use a step no longer than about 0.29 x the basin lag (Tc / 5). A longer block lowers the inflow peak of a small basin; the depth stays the same. At Raleigh Dam (7.68 sq mi, CN 80, Tc 3 h) the 1000-year 24-hour alternating-block peak is 7,554 cfs at 15 minutes and 6,182 cfs at 60 minutes.
+- **Output:** `<out>/hyetographs/<storm_id>.csv`, e.g. `atlas14_pds_0100yr_24hr_alternating.csv`, `atlas14_pds_0500yr_24hr_atlas14temporal_q2_50pct.csv`, `atlas14_pds_1000yr_24hr_nrcs_type2.csv`; `atlas14_storms_summary.csv` (one row per storm: storm_id, frequency, series, duration, pattern, depth, areal factor, file) and `atlas14_storms.json` (each storm a DamIT-style `damit.pmp.hyetograph` record, the skipped pairs, the sources and citations). A rerun into the same output folder removes the Atlas 14 hyetographs of the earlier run that it does not write again (a warning names them), because `inflow_hydrograph` routes every CSV in the folder; other CSVs there are left alone and the log says so.
+- **Format:** the nd_pmp hyetograph that `core/hydro.py` `read_hyetograph` reads:
+  ```
+  # storm_id: atlas14_pds_0100yr_24hr_alternating
+  # storm_type: atlas14
+  # duration_hr: 24
+  # timestep_hr: 0.25
+  # area_mi2: 7.68
+  # frequency_years: 100
+  # series: pds
+  # temporal_distribution: alternating block (Atlas 14 depth-duration curve)
+  # depth_in: 4.97
+  # atlas14_depth_in: 4.97
+  # areal_factor: 1
+  # ... (rain, atlas14, source, citation, temporal_source)
+  time_hr,incr_depth_in,cum_depth_in
+  0.25,0.0057,0.0057
+  ```
+  `time_hr` is the END of each uniform step (no t = 0 row); depths in inches (a metric JSON is converted).
+- **Gross rain.** There are no loss parameters: `inflow_hydrograph` applies the losses (CN or initial + constant). DamIT's INITIAL_LOSS / CONSTANT_LOSS were left out on purpose.
+- **AREA_MI2** goes into each header; `inflow_hydrograph` uses it unless its own AREA_MI2 is set.
+- **AREAL_FACTOR** (default 1 = none) multiplies every depth and is written to the header, the summary and the JSON. Atlas 14 values are point values; give your own areal reduction factor for the basin. The tool computes none.
+- **Chain:** `atlas14_hyetograph` -> `ndpmp:inflow_hydrograph` (HYETOGRAPHS = `<out>/hyetographs`) -> `ndbreach:spillwayadequacy` (INFLOWS = the inflow output folder). `spillwayadequacy` did not change. `inflow_hydrograph` computes these storms as before; only its StreamStats check (STREAMSTATS_JSON) now leaves them out, because a frequency storm is not a PMF (the log says how many were left out).
+- **Which storm (ND REG_05.2026 Table 6.1 and Section 6.4):** the Inflow Design Flood is the PMF for a high hazard dam, the 0.1 % AEP (1,000-year) flood for medium and the 1 % AEP (100-year) flood for low hazard. Where an incremental damage analysis (Section 6.4) sets a smaller IDF, the dam must still pass the 24-hour, 500-year rainstorm without overtopping (the `overtops` column of `ndbreach:spillwayadequacy`, not its `passes` column, which also asks for the residual freeboard).
+- **One frequency per spillway check.** `spillwayadequacy` takes every inflow it is given as the IDF, so a folder holding the 100-, 500- and 1000-year storms is judged by the 1000-year storm. Give it only the IDF storms: run `inflow_hydrograph` with PATTERN `*_0100yr_*` (low hazard), `*_1000yr_*` (medium) or `*_0500yr_24hr_*` (the 500-year check), each into its own output folder.
+
+```
+qgis_process run ndpmp:atlas14_hyetograph -- POINT="-101.36937,46.34799 [EPSG:4326]" FREQUENCY=100,500,1000 STORM=9 PATTERN=0,1 STEP_MIN=15 AREA_MI2=7.68 OUTPUT_FOLDER=out/storms
+qgis_process run ndpmp:inflow_hydrograph -- HYETOGRAPHS=out/storms/hyetographs "PATTERN=*_0100yr_*" CN=80 TC_HR=3 OUTPUT_FOLDER=out/inflow_0100yr
+```
+
+### Network, cache and offline use
+- The PFDS point query goes through **QGIS networking** (the proxy, authentication and SSL settings in Settings > Options > Network) when QGIS is running, else Python's `urllib` (`HTTPS_PROXY`). The GIS zips (3-4 MB) and the temporal files are streamed with `urllib` to a temporary file and renamed when complete (`noaa14_http.py`, the same behaviour as DamIT's `damit_core/lib/http.py`). No retries; a failure stops with the reason.
+- Basin queries wait one second between live requests.
+- **Cache:** CACHE_DIR; a folder given there is remembered in the QgsSettings key `nd_pmp/atlas14_cache` and used when CACHE_DIR is empty; else `pfds_cache` next to the outputs. PFDS answers, GIS zips and temporal files never expire (an Atlas 14 volume changes only with a new version, which the records show). **OFFLINE** uses the cache only.
+
+### The shared Atlas 14 core (`noaa14/`)
+- `noaa14/atlas14.py`, `temporal.py`, `storm.py`, `gisgrid.py` and `gridstats.py` are **byte-identical** with `damit_pmp/<same name>.py` in DamIT. They use the standard library, numpy and GDAL only, and take the network as arguments.
+- **Rule:** a change to one of the five is made the same way in both repositories, on paired branches of the same name. Code flows from DamIT to here only: nothing from this plugin's AWA-derived code goes into DamIT, whose README says it ships none of that tool's code or data.
+- **Guard:** `noaa14/SHARED.json` lists each file with its sha256 and its DamIT path. `tests/test_atlas14_shared.py` (light tests, CI) fails when a file no longer matches and says what to do; with `DAMIT_CHECKOUT=<DamIT checkout>` it also compares the bytes. After a paired change: `python3 DamSafety_PMP/tests/test_atlas14_shared.py --write --damit <DamIT checkout>` (it refuses unless the copies are identical). DamIT's `scripts/check_atlas14_shared.py` checks the pair daily.
+- The DWR-only parts are `algorithm_atlas14.py` (the Processing tools), `atlas14_outputs.py` (the files, including the nd_pmp hyetographs) and `noaa14_http.py` (the network).
+- **File formats:** the JSON schema names stay `damit.pmp.atlas14`, `damit.pmp.atlas14_gis`, `damit.pmp.atlas14_grid` and `damit.pmp.hyetograph`, so either plugin reads the other's files (a `fetchgrid` GeoTIFF from either is read in inches by both).
+- **GDAL exception mode:** the core turns GDAL exceptions on where it reads grids and the temporal-area shapefile. The DWR tools make those calls inside `core/gdalsafe.gdal_exceptions()`, so the mode QGIS and the other plugins see is restored afterwards (audit R3). Downloads run outside that block (the mode is process-wide), so it is on only while GDAL / OGR read. `test_atlas14_chain.py` and `test_atlas14_qgis.py` check it, also after a fresh QGIS loads the provider.
+
+### Not ported
+- DamIT's `raingrid`, `anugarain`, `lisfloodrain` (rain-on-grid files and jobs for LISFLOOD-FP / ANUGA) and `watershed` (watershed from a DEM). The Runner has its own model set-up; StreamStats gives the basin here.
+- DamIT's hyetograph losses (INITIAL_LOSS, CONSTANT_LOSS, LOSS_UNITS): `inflow_hydrograph` does the losses.
+
+### Limits
+- The Atlas 14 temporal distributions are wired for Volume 8 (Midwestern States, which includes North Dakota) only; elsewhere use the alternating block or an NRCS pattern.
+- Atlas 14 values are point estimates; the alternating block is not an Atlas 14 temporal distribution.
 
 ## Get basin data from StreamStats… (v0.4.0)
 
@@ -48,7 +123,7 @@ time_hr,flow_cfs,precip_in,excess_in
    - **Non-contributing area, suggested**: ISOLAKESUM, the area draining to isolated lakes and potholes. This is only a starting value; you decide the non-contributing area (or run `pothole_storage`).
    - **Tc / lag**: Kirpich (1940) from the longest flow path and its 10-85 slope (lag = 0.6 Tc), or the NRCS lag equation with **your own CN**. The window says which method was used. **CN is never taken from StreamStats.**
 3. **Sanity check (read-only).** The ND regression peaks for 50% to 0.2% AEP, with ~90% ranges from each equation's average standard error, and the Crippen & Bue (1977) maximum-flood envelope.
-4. **Open Inflow hydrograph…** opens the tool with the area, non-contributing area, Tc, lag and the StreamStats basin file filled (CN left as you set it). After the run, the tool compares the PMF peak with the 0.2% AEP peak and the envelope and writes `streamstats_pmf_check.json` next to the hydrographs. These are plain-language warnings; they never stop the run. **Open PMP tool…** opens `ndpmp:pmp` with the basin layer.
+4. **Open Inflow hydrograph…** opens the tool with the area, non-contributing area, Tc, lag and the StreamStats basin file filled (CN left as you set it). After the run, the tool compares the PMF peak with the 0.2% AEP peak and the envelope and writes `streamstats_pmf_check.json` next to the hydrographs (NOAA Atlas 14 frequency storms are left out: they are not a PMF). These are plain-language warnings; they never stop the run. **Open PMP tool…** opens `ndpmp:pmp` with the basin layer.
 
 The run runs in the background with progress and **Cancel**. Files go to the chosen folder: `<name>_watershed.geojson`, `<name>_streamstats_basin.json` (the values) and `<name>_streamstats_provenance.json` (service versions, query time, region, point and snapped point, every request with the sha256 of its answer, and the citations). Answers are cached in `<folder>/streamstats_cache/` by sha256 of the request; a cached file whose hash no longer matches is refused.
 
@@ -75,9 +150,9 @@ It runs as a QGIS Processing algorithm. **It has not been validated against ArcG
 | | |
 |---|---|
 | Plugin folder / module | `DamSafety_PMP` in this repo (was `nd_pmp`) |
-| Plugin name (metadata) | DamSafety PMP (prototype) (was "ND PMP Tool (prototype)" to 0.4.0), version 0.4.1, experimental |
+| Plugin name (metadata) | DamSafety PMP (prototype) (was "ND PMP Tool (prototype)" to 0.4.0), version 0.6.0, experimental |
 | Processing provider id | `ndpmp` ("ND PMP (prototype)") |
-| Algorithm ids | `ndpmp:pmp` ("PMP Evaluation (main tool)"), `ndpmp:inflow_hydrograph`, `ndpmp:pothole_storage` (v0.2.0) |
+| Algorithm ids | `ndpmp:pmp` ("PMP Evaluation (main tool)"), `ndpmp:inflow_hydrograph`, `ndpmp:pothole_storage` (v0.2.0), `ndpmp:spatial_distribution`, `ndpmp:snowmelt`, `ndpmp:export_hms`; NOAA Atlas 14 group (v0.6.0): `ndpmp:atlas14_point`, `ndpmp:atlas14_basin`, `ndpmp:atlas14_fetchgrid`, `ndpmp:atlas14_gridbasin`, `ndpmp:atlas14_hyetograph` |
 | Data-folder setting | QgsSettings key `nd_pmp/data_home` (remembered after each run) |
 
 ## Layout

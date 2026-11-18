@@ -248,8 +248,10 @@ them:
   classification). It stops at the first step that fails, is cancelled, lacks a required input
   (a dam layer for step 1, waterbodies for 3, dam lines for 4, structures for 8, or a required tool
   parameter that is still empty), or does not write its output file; nothing is asked in between.
-  Steps whose earlier step was run again are re-run (shown as "out of date").
-- **Inputs tab.** The package exported by ND Dam Hazard (for step 0) and the data layers: a project
+  Steps whose earlier step was run again are re-run (shown as "out of date"). A chain whose
+  step 7 failed or skipped a dam (sim_status FAILED in step 7's layer) ends as failed, not OK;
+  if step 7 flooded no dam at all, it stops right after step 7.
+- **Override inputs (Run tab).** The package exported by ND Dam Hazard (for step 0) and the data layers: a project
   layer or a file per data set. A layer chosen here wins; left empty, the tools use the layer of the
   same meaning in the package step 0 wrote. A layer of your own has unknown field names, so none
   are filled in for it.
@@ -368,6 +370,12 @@ Nothing downloads when QGIS or the window opens.
    pick these fields up automatically. Inputs can come from a package exported by ND Dam Hazard.
 1. Prepare dam inventory - ND DWR dams (primary) + NID; metric standard fields.
 2. Cache terrain per dam - USGS 3DEP (once, needs internet) or local ND LiDAR DEM tiles.
+   From 0.20.3 the headless chain (tool 15 *Run the chain*) and the Preflight tool, given no terrain
+   choice in their settings, use the configured offline pack DEM (`<data folder>/dem`, through one VRT in
+   `<work>/terrain_pack/`) for the terrain and the larger clips; `terrain_source = 0` in the settings keeps
+   USGS 3DEP and `offline_pack_terrain = false` turns the pack default off. The window's own terrain
+   setting is unchanged. When the local DEM has no ground at a dam (outside the pack, or a hole such as
+   Fort Berthold), tool 2 downloads that dam's clip from USGS 3DEP and warns.
 3. Estimate reservoir storage - NHD HR waterbody + DEM; calibrated to inventory storage.
 4. Breach point and flow direction - DWR dam line, joined by structure ID.
 5. Breach parameters and hydrograph - Froehlich 2008 (default), Froehlich 1995, Von Thun &
