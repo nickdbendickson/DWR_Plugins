@@ -21,7 +21,7 @@ if REPO not in sys.path:
 
 from nd_breach_runner.core import dem_refill            # noqa: E402
 from nd_breach_runner.damsuite import netproxy          # noqa: E402
-from nd_breach_runner.tests.registry import test as register  # noqa: E402
+from nd_breach_runner.tests.registry import test as register, need_osgeo, Skip  # noqa: E402
 
 # A minimal but valid little-endian TIFF signature padded past the 1,000-byte floor fetch_3dep
 # uses to reject an empty answer.
@@ -188,6 +188,53 @@ def refill_retries_transport_errors_then_succeeds():
     assert calls == dem_refill.RETRIES, "expected {} calls, got {}".format(dem_refill.RETRIES, calls)
 
 
+@register
+def refill_asks_3dep_to_mark_cells_without_ground():
+    # 3.20.14: without noData, 3DEP writes 0 m where it has no ground, and 0 m was filled in
+    _seen, q, _out = _capture_fetch(26916)
+    assert q.get("noData") == [str(dem_refill.NODATA_OUT)], q.get("noData")
+
+
+def _tif(path, arr, nodata=None):
+    from osgeo import gdal, osr
+    import numpy as np
+    gdal.UseExceptions()
+    a = np.asarray(arr, dtype="float32")
+    ds = gdal.GetDriverByName("GTiff").Create(path, a.shape[1], a.shape[0], 1, gdal.GDT_Float32)
+    ds.SetGeoTransform((700000.0, 30.0, 0.0, 4840000.0, 0.0, -30.0))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(26916)
+    ds.SetProjection(srs.ExportToWkt())
+    b = ds.GetRasterBand(1)
+    if nodata is not None:
+        b.SetNoDataValue(nodata)
+    b.WriteArray(a)
+    ds = None
+    return path
+
+
+@register
+def refill_tile_without_ground_is_refused():
+    # Edenville-Sanford 2020 storm runs: a box asked in the wrong CRS came back all 0 m, became a
+    # 5 km2 pit in the model, and its rim stopped the domain from growing past the Midland gauge
+    need_osgeo()
+    import numpy as np
+    d = tempfile.mkdtemp()
+    for name, arr, nd in (("zeros", np.zeros((4, 5)), None),
+                          ("nodata_tagged", np.full((4, 5), -9999.0), -9999.0),
+                          ("nodata_untagged", np.full((4, 5), -9999.0), None),
+                          ("flat", np.full((4, 5), 191.87), None)):
+        path = _tif(os.path.join(d, name + ".tif"), arr, nd)
+        try:
+            dem_refill.check_tile(path)
+        except IOError as e:
+            assert "ground" in str(e), (name, e)
+        else:
+            raise AssertionError("{} tile was accepted".format(name))
+    ok = np.array([[190.0, 191.5, 193.0], [189.0, -9999.0, 192.0]])
+    dem_refill.check_tile(_tif(os.path.join(d, "ok.tif"), ok, -9999.0))    # ground, with a hole
+
+
 def _run():
     tests = [refill_requests_the_grids_working_crs_not_hardcoded_5070,
              refill_accepts_epsg_string_and_defaults_to_5070,
@@ -197,12 +244,16 @@ def _run():
              refill_short_tiff_body_raises_short_and_writes_no_file,
              refill_html_body_raises_geotiff_and_writes_no_file,
              refill_bigtiff_body_over_floor_succeeds,
-             refill_retries_transport_errors_then_succeeds]
+             refill_retries_transport_errors_then_succeeds,
+             refill_asks_3dep_to_mark_cells_without_ground,
+             refill_tile_without_ground_is_refused]
     failed = 0
     for fn in tests:
         try:
             fn()
             print("ok    ", fn.__name__)
+        except Skip as e:
+            print("skip  ", fn.__name__, "->", e)
         except Exception as e:                           # noqa: BLE001
             failed += 1
             print("FAIL  ", fn.__name__, "->", repr(e))

@@ -19,6 +19,7 @@ USER_AGENT = "ND-Dam-Suite (QGIS plugins; dam safety)"
 TIFF_MAGIC = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
 MIN_TILE_BYTES = 1000                                # anything shorter is not a real tile
 RETRIES = 3                                          # transport retries; bad answers are not retried
+NODATA_OUT = -9999                                   # what 3DEP is asked to write where it has no ground
 
 
 def _sr(crs):
@@ -83,6 +84,9 @@ def fetch_3dep(bounds, cell_m, out_path, crs=TARGET_EPSG, timeout=120, retries=R
         "bboxSR": sr, "imageSR": sr,
         "size": "{},{}".format(w, h),
         "interpolation": "RSP_BilinearInterpolation",
+        # without it, cells with no 3DEP ground (outside its coverage, or a box asked in the wrong
+        # CRS) come back as 0 m, and a 0 m pit is filled into the model (3.20.14)
+        "noData": NODATA_OUT,
     }
     url = EXPORT_URL + "?" + urllib.parse.urlencode(params)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -113,6 +117,35 @@ def fetch_3dep(bounds, cell_m, out_path, crs=TARGET_EPSG, timeout=120, retries=R
         f.write(data)
     os.replace(part, out_path)
     return out_path
+
+
+def check_tile(path):
+    """Raise IOError unless the refill tile holds ground: at least one cell above -1000 m that is not
+    its no-data value, and not one flat value everywhere. 3.20.14: a tile asked for in the wrong CRS
+    (an ASCII-grid DEM carries none, so the box went out in EPSG:5070) came back all 0 m and was
+    filled in as a 5 km2 pit at 0 m; the pit's rim then read as wet no-data and stopped the domain
+    from growing (Edenville-Sanford 2020 storm runs). Without GDAL there is nothing to check."""
+    try:
+        from osgeo import gdal
+        import numpy as np
+    except ImportError:
+        return
+    gdal.UseExceptions()
+    try:
+        ds = gdal.Open(path)
+        band = ds.GetRasterBand(1)
+        arr = band.ReadAsArray().astype("float64")
+        nd = band.GetNoDataValue()
+    except Exception as e:                           # noqa: BLE001 - reported as a failed refill
+        raise IOError("3DEP refill could not be read ({})".format(e))
+    good = np.isfinite(arr) & (arr > -1000)
+    if nd is not None:
+        good &= arr != nd
+    if not good.any():
+        raise IOError("3DEP refill holds no ground (outside 3DEP coverage, or asked in the wrong CRS)")
+    v = arr[good]
+    if good.all() and float(v.max()) == float(v.min()):
+        raise IOError("3DEP refill is one flat value ({:g} m) everywhere: not ground".format(float(v.min())))
 
 
 class PatchedTerrain:
@@ -153,7 +186,7 @@ def fill_grid(grid, tif_path):
     xmin, ymin, xmax, ymax = grid.bounds
     kw = dict(format="MEM", outputBounds=(xmin, ymin, xmax, ymax),
               width=grid.nx, height=grid.ny, resampleAlg="bilinear",
-              dstNodata=-9999, outputType=gdal.GDT_Float32)
+              srcNodata=NODATA_OUT, dstNodata=-9999, outputType=gdal.GDT_Float32)
     # Reproject the tile into the grid's CRS so outputBounds (grid coordinates) line up even if
     # the tile is in another CRS; needs the grid's CRS and a tile that carries its own projection.
     crs_wkt = getattr(grid, "crs_wkt", None)
