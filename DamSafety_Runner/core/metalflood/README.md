@@ -1,8 +1,14 @@
 # GPU flood engine (Metal)
 
-LISFLOOD-FP's local-inertial ("acceleration", ACC) solver rewritten as GPU compute kernels for
-the Apple GPU. LISFLOOD-FP runs on a GPU only through NVIDIA CUDA, so on a Mac it runs on the
-CPU; this engine runs the same scheme on the Mac's own GPU.
+Two flood solvers as GPU compute kernels for the Apple GPU, on one shared Metal/CPU machinery:
+
+1. **ACC** (`engine.py`, `kernels.metal`) — LISFLOOD-FP's local-inertial ("acceleration") solver.
+   LISFLOOD-FP runs on a GPU only through NVIDIA CUDA, so on a Mac it runs on the CPU; this runs
+   the same scheme on the Mac's own GPU.
+2. **Shock-capturing FV** (`engine_fv.py`, `kernels_fv.metal`, Runner 3.23.0) — a well-balanced,
+   positivity-preserving **HLLC finite-volume** solver of the full 2-D shallow-water equations.
+   It resolves hydraulic jumps and dam-break fronts the ACC scheme diffuses, at the cost of a
+   shorter time step (CFL on `|u| + √(gh)`, not `√(gh)` alone).
 
 It reads the LISFLOOD-FP input deck the Runner already writes (`.par`, `.dem.asc`, `.bci`,
 `.bdy`, optional `.n.asc`, `.start`, `.gauge`) and writes the result files the Runner already
@@ -10,20 +16,26 @@ reads (`.max`, `.maxVc`, `.inittm`, `.maxtm`, `.mxe`, `.mass`, `.discharge`, `-N
 plugs into the Runner as an engine of its own.
 
 **Choosing it (Runner 3.22.0, Screening 0.21.0):** the Runner's run tools have "Flood engine"
-(LISFLOOD-FP or GPU engine), and the word `gpu` works wherever a LISFLOOD-FP executable is asked
-for (also CLI `model.lisflood_exe`). Screening tool 7 has engine "GPU engine". On a Mac with a
+(LISFLOOD-FP, GPU engine, or — Runner 3.23.0 — GPU engine, shock-capturing), and the words `gpu`
+(ACC) and `shock` / `gpu-fv` (the FV scheme) work wherever a LISFLOOD-FP executable is asked for
+(also CLI `model.lisflood_exe`). Screening tool 7 has engine "GPU engine". On a Mac with a
 Metal GPU it runs there; elsewhere on the CPU build of the same kernels (needs a C++ compiler).
 `DAMSAFETY_MF_BACKEND=metal|cpu` forces one. Screening holds a copy of this folder's engine files
 (`DamSafety_Screening/core/metalflood`, checked byte for byte by its tests).
+
+Both are GPU engines, not LISFLOOD-FP: reports, the run manifest and the classification record
+name them and say so. Confirm a final hazard classification with a LISFLOOD-FP run.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `kernels.metal` | The scheme, as seven Metal compute kernels (one thread per cell or face). |
-| `mf_shim.h`, `cpu_kernels.cpp` | The CPU build: the same `kernels.metal` compiled as C++ (one core). |
-| `backends.py` | `MetalBackend` (the GPU through the Metal framework, called with `ctypes`) and `CpuBackend`. |
-| `engine.py` | Reads the deck, runs batches of steps, writes the results. `run_par()` is the same call as `builtin_lisflood.run_par()`. |
+| `kernels.metal` | The ACC scheme, as seven Metal compute kernels (one thread per cell or face). |
+| `kernels_fv.metal` | The shock-capturing HLLC finite-volume scheme, as four Metal kernels. |
+| `mf_shim.h`, `cpu_kernels.cpp`, `cpu_kernels_fv.cpp` | The CPU build: the same `*.metal` kernels compiled as C++ (one core). |
+| `backends.py` | `MetalBackend` / `CpuBackend`, parameterised by a `KernelSet` (`ACC` or `FV`): one Metal/`ctypes` and one C++ build path, shared by both schemes. |
+| `engine.py` | ACC driver: reads the deck, runs batches of steps, writes the results. `run_par()` is the same call as `builtin_lisflood.run_par()`. |
+| `engine_fv.py` | FV driver: the same deck and result files, the HLLC scheme. `run_par()` is the same call. |
 | `cases.py` | Synthetic valley decks for the tests and the speed test. |
 | `bench.py` | The speed test (GPU, CPU build, LISFLOOD-FP if found). |
 
@@ -37,6 +49,7 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 
 ```
 <python with numpy> -m nd_breach_runner.core.metalflood run.par [-backend metal|cpu] [-v]
+<python with numpy> -m nd_breach_runner.core.metalflood.engine_fv run.par [-backend metal|cpu] [-v]
 <python with numpy> -m nd_breach_runner.core.metalflood.bench [--size small|medium|large]
 ```
 
@@ -88,10 +101,39 @@ bit for bit (test).
 The inflow cell itself can differ from LISFLOOD-FP by a few tenths of a metre at the peak of the
 hydrograph (the neighbouring cells agree to mm); not yet explained.
 
+## The shock-capturing FV scheme
+
+The full 2-D shallow-water equations in conserved form (`h`, `hu`, `hv`), first order in space,
+forward Euler in time:
+
+- **Audusse et al. (2004) hydrostatic reconstruction** at each face
+  (`h*_L = max(0, η_L − z_face)`, `h*_R = max(0, η_R − z_face)`, `z_face = max(z_L, z_R)`): this is
+  what keeps a lake at rest and keeps depths non-negative across a wet/dry front.
+- **HLLC** approximate Riemann flux (Toro) with Einfeldt-style wave speeds; the tangential
+  momentum rides the contact (HLL would smear the shear).
+- The **Audusse bed source** `½ g (h² − h*²)` added per face so still water stays still.
+- Semi-implicit Manning friction (unconditionally stable); a velocity desingularisation floor far
+  finer than the 1 mm output "dry", so a dam-break film's momentum is not thrown away at the front.
+- `dt = min(initial_tstep, cfl · dx / max_cell(|u|+c, |v|+c))`, `cfl` capped at 0.45 (the 2-D
+  explicit stability limit), computed on the GPU every step. FREE edges are transmissive; closed
+  edges are reflective walls.
+
+Same float32 care as the ACC scheme (bed relative to the lowest cell; host volumes in float64),
+same wet-window batching, same fixed-point atomic reductions.
+
+**Validation (CPU build of the kernels, 2026-11-18):**
+
+| Case | Result |
+|---|---|
+| Lake at rest, 20×20 bumpy bed, closed, 200 s | surface drift 7×10⁻⁷ m, spurious velocity 2×10⁻⁶ m/s (float32 round-off): well balanced |
+| Ritter dry-bed dam break, 801 cells, 8 s | matches a textbook float64 HLLC bit-close; depth at the dam 0.458 m (Ritter 4h₀/9 = 0.444); front a few cells behind the exact h=0 front, as any first-order scheme |
+| Closed valley with inflow | mass error under 10⁻³ of the volume injected |
+
 ## Not done (phase 2 and later)
 
-- Speed: one command buffer per batch, seven dispatches per step encoded from Python; an
-  indirect command buffer or kernel fusion would cut the host cost on small grids.
+- Speed: one command buffer per batch, dispatches per step encoded from Python; an indirect
+  command buffer or kernel fusion would cut the host cost on small grids.
 - The CPU build is one core and slower than LISFLOOD-FP on one core; it exists to test the
   kernels where there is no Apple GPU, not to replace LISFLOOD-FP.
-- Shock-capturing finite-volume scheme for steep dam-break fronts.
+- FV: second-order (MUSCL) reconstruction and an SSP-RK2 step; a head-to-head of the FV scheme
+  against LISFLOOD-FP's own FV1 solver on a steep ND dam-break.

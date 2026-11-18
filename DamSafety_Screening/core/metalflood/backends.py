@@ -23,13 +23,31 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KERNEL_SOURCE = os.path.join(HERE, "kernels.metal")
 SHIM = os.path.join(HERE, "mf_shim.h")
 CPU_SOURCE = os.path.join(HERE, "cpu_kernels.cpp")
+FV_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv.metal")
+FV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
+FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
 
 
 class BackendError(RuntimeError):
     pass
+
+
+class KernelSet:
+    """One scheme's kernels: the Metal source, its CPU-build .cpp, the kernel names in the order
+    their pipelines are built, the buffer layout, and the per-step dispatch plan. Both backends
+    take one of these (the local-inertial ACC set by default), so the Metal and C++ plumbing is
+    shared and only the numerics differ between schemes."""
+
+    def __init__(self, name, source, cpp, kernels, layout_fn, plan_fn):
+        self.name = name
+        self.source = source
+        self.cpp = cpp
+        self.kernels = kernels
+        self.layout = layout_fn
+        self.plan = plan_fn
 
 
 class Params(ctypes.Structure):
@@ -54,9 +72,44 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
             ("vxf", f, ny * (nx + 1)), ("vyf", f, (ny + 1) * nx)]
 
 
-def _source_hash():
+def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
+    """[(name, dtype, count)] in the order of kernels_fv.metal's buffer indices 0..23."""
+    cells = ny * nx
+    xf, yf = ny * (nx + 1), (ny + 1) * nx
+    f, u = np.float32, np.uint32
+    return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("hu", f, cells),
+            ("hv", f, cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
+            ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
+            ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
+            ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf)]
+
+
+def _acc_plan(params):
+    """The ACC scheme's seven kernels and their dispatch grids (w, h) for one step."""
+    one = (1, 1)
+    faces = (params.wc + 1, params.wr + 1)
+    cells = (params.wc, params.wr)
+    return [("k_begin", one), ("k_faces", faces), ("k_scale", cells), ("k_limit", faces),
+            ("k_cont", cells), ("k_speed", cells), ("k_end", one)]
+
+
+def _fv_plan(params):
+    """The FV scheme's four kernels and their dispatch grids (w, h) for one step."""
+    one = (1, 1)
+    faces = (params.wc + 1, params.wr + 1)
+    cells = (params.wc, params.wr)
+    return [("k_begin_fv", one), ("k_faces_fv", faces), ("k_cont_fv", cells), ("k_end_fv", one)]
+
+
+ACC = KernelSet("acc", KERNEL_SOURCE, CPU_SOURCE, KERNELS, buffer_layout, _acc_plan)
+FV = KernelSet("fv", FV_KERNEL_SOURCE, FV_CPU_SOURCE, FV_KERNELS, fv_buffer_layout, _fv_plan)
+
+
+def _source_hash(kernel_set=ACC):
     h = hashlib.sha256()
-    for p in (KERNEL_SOURCE, SHIM, CPU_SOURCE):
+    for p in (kernel_set.source, SHIM, kernel_set.cpp):
         with open(p, "rb") as f:
             h.update(f.read())
     return h.hexdigest()[:16]
@@ -83,10 +136,11 @@ def find_compiler():
     return None
 
 
-def build_cpu_library(log=None):
-    """The CPU build of the kernels (compiled once per source version), its path."""
+def build_cpu_library(kernel_set=ACC, log=None):
+    """The CPU build of a scheme's kernels (compiled once per source version), its path."""
     ext = ".dylib" if sys.platform == "darwin" else (".dll" if os.name == "nt" else ".so")
-    out = os.path.join(_cache_dir(), "mf_cpu_{}{}".format(_source_hash(), ext))
+    out = os.path.join(_cache_dir(), "mf_cpu_{}_{}{}".format(
+        kernel_set.name, _source_hash(kernel_set), ext))
     if os.path.isfile(out):
         return out
     cxx = find_compiler()
@@ -95,7 +149,7 @@ def build_cpu_library(log=None):
     fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
     os.close(fd)
     cmd = [cxx, "-O3", "-std=c++14", "-fno-strict-aliasing", "-shared", "-fPIC",
-           "-I", HERE, "-x", "c++", CPU_SOURCE, "-o", tmp]
+           "-I", HERE, "-x", "c++", kernel_set.cpp, "-o", tmp]
     if log:
         log("Building the engine's CPU kernels: " + " ".join(cmd))
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -110,8 +164,9 @@ def build_cpu_library(log=None):
 class CpuBackend:
     kind = "cpu"
 
-    def __init__(self, log=None):
-        self.lib = ctypes.CDLL(build_cpu_library(log))
+    def __init__(self, kernel_set=ACC, log=None):
+        self.ks = kernel_set
+        self.lib = ctypes.CDLL(build_cpu_library(kernel_set, log))
         self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(Params),
                                           ctypes.c_int]
         self.lib.mf_run_batch.restype = ctypes.c_int
@@ -232,7 +287,8 @@ def metal_available():
 class MetalBackend:
     kind = "metal"
 
-    def __init__(self, log=None):
+    def __init__(self, kernel_set=ACC, log=None):
+        self.ks = kernel_set
         if sys.platform != "darwin":
             raise BackendError("Metal needs macOS")
         try:
@@ -248,7 +304,7 @@ class MetalBackend:
                 raise BackendError("this Mac reports no Metal GPU")
             self.device = o.text(o(self.dev, "name"))
             self.queue = o(self.dev, "newCommandQueue")
-            with open(KERNEL_SOURCE, encoding="utf-8") as f:
+            with open(kernel_set.source, encoding="utf-8") as f:
                 src = f.read()
             opts = o(o(o.cls("MTLCompileOptions"), "alloc"), "init")
             # IEEE math (no fast-math), so the GPU follows the CPU build closely
@@ -267,7 +323,7 @@ class MetalBackend:
                 raise BackendError("Metal did not compile the kernels: " + o.error_text(err.value))
             self.pso = {}
             self.tg = {}
-            for name in KERNELS:
+            for name in kernel_set.kernels:
                 fn = o(self.library, "newFunctionWithName:", o.nsstring(name),
                        argtypes=[ctypes.c_void_p])
                 if not fn:
@@ -325,16 +381,13 @@ class MetalBackend:
               len(self.buffers), restype=None,
               argtypes=[ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong])
             one = _MTLSize(1, 1, 1)
-            faces = _MTLSize(params.wc + 1, params.wr + 1, 1)
-            cells = _MTLSize(params.wc, params.wr, 1)
-            plan = (("k_begin", one), ("k_faces", faces), ("k_scale", cells),
-                    ("k_limit", faces), ("k_cont", cells), ("k_speed", cells), ("k_end", one))
+            plan = [(name, _MTLSize(w, hgt, 1)) for name, (w, hgt) in self.ks.plan(params)]
             set_pso = ("setComputePipelineState:", [ctypes.c_void_p])
             disp_args = [_MTLSize, _MTLSize]
             for _ in range(int(nsteps)):
                 for name, grid in plan:
                     o(enc, set_pso[0], self.pso[name], restype=None, argtypes=set_pso[1])
-                    tg = self.tg[name] if grid is not one else one
+                    tg = one if (grid.width == 1 and grid.height == 1) else self.tg[name]
                     o(enc, "dispatchThreads:threadsPerThreadgroup:", grid, tg, restype=None,
                       argtypes=disp_args)
             o(enc, "endEncoding", restype=None)
@@ -359,20 +412,20 @@ class MetalBackend:
             setattr(self, obj, None)
 
 
-def make_backend(which="auto", log=None):
-    """'metal', 'cpu' or 'auto' (Metal when this Mac has it, else the CPU build). The
-    DAMSAFETY_MF_BACKEND environment variable overrides 'auto'."""
+def make_backend(which="auto", kernel_set=ACC, log=None):
+    """'metal', 'cpu' or 'auto' (Metal when this Mac has it, else the CPU build) for one scheme's
+    kernel set. The DAMSAFETY_MF_BACKEND environment variable overrides 'auto'."""
     which = (which or "auto").lower()
     if which == "auto":
         which = os.environ.get("DAMSAFETY_MF_BACKEND", "auto").lower()
     if which == "metal":
-        return MetalBackend(log)
+        return MetalBackend(kernel_set, log)
     if which == "cpu":
-        return CpuBackend(log)
+        return CpuBackend(kernel_set, log)
     if sys.platform == "darwin":
         try:
-            return MetalBackend(log)
+            return MetalBackend(kernel_set, log)
         except BackendError as e:
             if log:
                 log("Metal not used ({}); the CPU build runs instead.".format(e))
-    return CpuBackend(log)
+    return CpuBackend(kernel_set, log)

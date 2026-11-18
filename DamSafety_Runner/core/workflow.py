@@ -2890,6 +2890,16 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if gmsg not in warnings:
             warnings.append(gmsg)
             log(gmsg)
+    if lfmod.is_gpu_fv(st.lisflood_exe):
+        fmsg = ("This run uses the shock-capturing GPU engine (an HLLC finite-volume solver of "
+                "the 2-D shallow-water equations, on {}), not LISFLOOD-FP itself. It is well "
+                "balanced (lake at rest to machine precision) and reproduces the analytical "
+                "dam-break (Ritter) solution, but it is a different numerical scheme from "
+                "LISFLOOD-FP and is new: confirm a final hazard classification with a LISFLOOD-FP "
+                "run.".format(lfmod.gpu_backend_note()))
+        if fmsg not in warnings:
+            warnings.append(fmsg)
+            log(fmsg)
 
     # --- LISFLOOD-FP with domain extension ----------------------------------------
     iterations = list(state.get("iterations", []))
@@ -3670,7 +3680,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     report["flood_engine"] = ("Built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
                               if _builtin_run else
                               "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
-                              if lfmod.is_gpu(st.lisflood_exe) else "LISFLOOD-FP (inertial solver)")
+                              if lfmod.is_gpu(st.lisflood_exe) else
+                              "Shock-capturing GPU engine (HLLC finite volume; NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu_fv(st.lisflood_exe) else "LISFLOOD-FP (inertial solver)")
     report["flood_engine_short"] = lfmod.engine_name(st.lisflood_exe)
     summary["flood_engine_short"] = report["flood_engine_short"]
     # 3.15.0 (ND 3.27.7): a coarse cell over a wide, shallow flood on flat terrain can

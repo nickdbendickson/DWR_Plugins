@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MINE = os.path.join(HERE, "..", "core", "metalflood")
 RUNNER = os.path.join(HERE, "..", "..", "DamSafety_Runner", "core", "metalflood")
 FILES = ("__init__.py", "__main__.py", "backends.py", "deckio.py", "engine.py", "kernels.metal",
-         "cpu_kernels.cpp", "mf_shim.h")
+         "cpu_kernels.cpp", "mf_shim.h", "engine_fv.py", "kernels_fv.metal", "cpu_kernels_fv.cpp")
 
 # the engine list: appended, older indices unchanged
 assert rn.ENGINES[:4] == ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir")
