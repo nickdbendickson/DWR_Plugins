@@ -2,7 +2,7 @@
 
 MetalBackend   the Apple GPU, through the Metal framework called with ctypes (no PyObjC, no
                Xcode, nothing to install: the shader source is compiled by Metal at run time).
-               macOS 13 or newer on Apple silicon (Metal 3: atomic float adds).
+               Apple silicon (no float atomics needed).
 CpuBackend     the same kernel source built as C++ (mf_shim.h + cpu_kernels.cpp) with the
                computer's C++ compiler at first use, cached by the source's hash. One core. It is
                how the engine is tested where there is no Apple GPU (Linux CI, the cloud).

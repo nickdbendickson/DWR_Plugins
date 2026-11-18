@@ -42,7 +42,7 @@ using namespace metal;
 #define S_HNEXT 3      // uint (float bits), atomic: deepest water after this step
 #define S_VIN 4        // float: volume injected by the sources in this batch (m3)
 #define S_VOUT 5       // float: volume out through the free edges in this batch (m3)
-#define S_CLIP 6       // float, atomic: volume the depth >= 0 clip added in this batch (m3)
+#define S_CLIP 6       // uint, atomic: volume the depth >= 0 clip added in this batch (MF_FIX m3)
 #define S_STEPS 7      // uint: steps taken in this batch
 #define S_MINDT 8      // float: shortest dt in this batch
 #define S_RMIN 9       // uint, atomic: wet rows / columns seen in this batch
@@ -50,9 +50,13 @@ using namespace metal;
 #define S_CMIN 11
 #define S_CMAX 12
 #define S_QIN 13       // float: inflow of the sources this step (m3/s)
-#define S_QOUT 14      // float, atomic: outflow through the free edges this step (m3/s)
+#define S_QOUT 14      // uint, atomic: outflow through the free edges this step (MF_FIX m3/s)
 #define S_LASTDT 15    // float: dt of the last step taken
 #define S_WORDS 32
+// The two sums over many threads (edge outflow, clipped volume) are added as fixed-point uints:
+// not every Apple GPU has float atomics (the CI runner's paravirtual GPU has none). Each SIMD
+// group's sum is rounded to 1e-4 (m3/s, m3) before it is added: unbiased, and 4.3e5 at most.
+#define MF_FIX 1.0e-4f
 
 struct Params {
     uint nx, ny;          // grid columns, rows
@@ -208,7 +212,7 @@ kernel void k_begin(MF_ARGS) {
     }
     sf[S_DT] = dt;
     st[S_HNEXT] = 0u;
-    sf[S_QOUT] = 0.0f;
+    st[S_QOUT] = 0u;
     float tm = p.t0 + t;
     for (uint i = 0; i < p.n_src; ++i) {
         src[s_cell[i]] = 0.0f;
@@ -377,8 +381,8 @@ kernel void k_limit(MF_ARGS) {
     }
     float tot = simd_sum(out);
     if (simd_is_first() && tot != 0.0f) {
-        atomic_fetch_add_explicit((device atomic_float*)(st + S_QOUT), tot * p.dx,
-                                  memory_order_relaxed);
+        atomic_fetch_add_explicit((device atomic_uint*)(st + S_QOUT),
+                                  uint(tot * p.dx / MF_FIX + 0.5f), memory_order_relaxed);
     }
 }
 
@@ -439,8 +443,8 @@ kernel void k_cont(MF_ARGS) {
                                       memory_order_relaxed);
         }
         if (cl > 0.0f) {
-            atomic_fetch_add_explicit((device atomic_float*)(st + S_CLIP), cl,
-                                      memory_order_relaxed);
+            atomic_fetch_add_explicit((device atomic_uint*)(st + S_CLIP),
+                                      uint(cl / MF_FIX + 0.5f), memory_order_relaxed);
         }
     }
 }
@@ -478,6 +482,6 @@ kernel void k_end(MF_ARGS) {
     st[S_STEPS] = st[S_STEPS] + 1u;
     sf[S_MINDT] = fmin(sf[S_MINDT], dt);
     sf[S_LASTDT] = dt;
-    sf[S_VOUT] += sf[S_QOUT] * dt;
+    sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
     st[S_HMAX] = st[S_HNEXT];
 }

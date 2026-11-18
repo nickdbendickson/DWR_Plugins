@@ -28,7 +28,6 @@ using std::pow;
 using std::sqrt;
 
 typedef uint atomic_uint;
-typedef float atomic_float;
 enum mf_memory_order { memory_order_relaxed };
 
 inline uint atomic_fetch_max_explicit(atomic_uint* a, uint v, mf_memory_order) {
@@ -41,8 +40,8 @@ inline uint atomic_fetch_min_explicit(atomic_uint* a, uint v, mf_memory_order) {
     if (v < o) *a = v;
     return o;
 }
-inline float atomic_fetch_add_explicit(atomic_float* a, float v, mf_memory_order) {
-    float o = *a;
+inline uint atomic_fetch_add_explicit(atomic_uint* a, uint v, mf_memory_order) {
+    uint o = *a;
     *a = o + v;
     return o;
 }

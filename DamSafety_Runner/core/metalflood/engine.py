@@ -42,6 +42,7 @@ Cancelled = bl.Cancelled
 _FREE_BITS = {"N": 1, "S": 2, "E": 4, "W": 8}
 S_T, S_DT, S_HMAX, S_HNEXT, S_VIN, S_VOUT, S_CLIP, S_STEPS, S_MINDT = range(9)
 S_RMIN, S_RMAX, S_CMIN, S_CMAX, S_QIN, S_QOUT, S_LASTDT = range(9, 16)
+MF_FIX = 1.0e-4       # kernels.metal: fixed-point unit of the summed outflow and clip
 
 
 def _f(st, k):
@@ -216,7 +217,8 @@ class Engine:
         self.b.run_batch(p, nsteps)
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
-               "clip": _f(st, S_CLIP), "qin": _f(st, S_QIN), "qout": _f(st, S_QOUT)}
+               "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
+               "qout": int(st[S_QOUT]) * MF_FIX}
         rmin, rmax, cmin, cmax = (int(st[k]) for k in (S_RMIN, S_RMAX, S_CMIN, S_CMAX))
         if out["steps"]:
             # every cell wet during the batch lies in this box; cells still wet from before

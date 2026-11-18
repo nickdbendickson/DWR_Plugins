@@ -22,8 +22,8 @@ wired into the Runner yet.
 | `bench.py` | The speed test (GPU, CPU build, LISFLOOD-FP if found). |
 
 Nothing to install on a Mac: Metal compiles the kernel source at run time, and the framework is
-called with `ctypes` (no PyObjC, no Xcode). It needs Apple silicon and macOS 13 or newer
-(Metal 3, for atomic float adds). The CPU build needs a C++ compiler (`c++`, `clang++` or
+called with `ctypes` (no PyObjC, no Xcode). It needs a Mac with a Metal GPU (Apple silicon; no
+float atomics are used, so the paravirtual GPU of a macOS virtual machine works too). The CPU build needs a C++ compiler (`c++`, `clang++` or
 `g++`); it is compiled once into `~/Library/Caches/DamSafety/metalflood` (macOS) or
 `~/.cache/DamSafety/metalflood`.
 
