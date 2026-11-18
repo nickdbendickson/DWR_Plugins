@@ -493,6 +493,41 @@ def usbr_1982_peak(hw_m):
     return 19.1 * hw_m ** 1.85
 
 
+def froehlich_2016_peak(vw_m3, hw_m, hb_m, wave_m, mode="piping"):
+    """Froehlich (2016b) peak breach outflow, m3/s (a check): Qp = 0.0175 km kh
+    (g hw Vw hb^2 / Wave)^0.5, km = 1.85 overtopping / 1 piping, kh = 1 for hb <= 6.1 m else
+    (hb/6.1)^(1/8). Needs the average breach width Wave (m)."""
+    vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
+    hb_m, wave_m = _positive("breach height hb", hb_m), _positive("average breach width Wave", wave_m)
+    km = 1.85 if mode == "overtopping" else 1.0
+    kh = 1.0 if hb_m <= 6.1 else (hb_m / 6.1) ** (1.0 / 8.0)
+    return 0.0175 * km * kh * math.sqrt(G * hw_m * vw_m3 * hb_m ** 2 / wave_m)
+
+
+def zhong_2020_peak(vw_m3, hw_m, hb_m, hd_m, core_wall=False):
+    """Zhong et al. (2020) peak breach outflow, m3/s (a check): Qp = sqrt(g) hw^-0.5 Vw
+    (Vw^(1/3)/hw)^a (hw/hb)^b hd^c exp(d), with (a, b, c, d) = (-1.58, -0.76, 0.1, -4.55) for a
+    homogeneous or zoned-fill dam and (-1.51, -1.09, -0.12, -3.61) for a core-wall dam."""
+    vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
+    hb_m, hd_m = _positive("breach height hb", hb_m), _positive("dam height hd", hd_m)
+    a, b, c, d = (-1.51, -1.09, -0.12, -3.61) if core_wall else (-1.58, -0.76, 0.1, -4.55)
+    return (math.sqrt(G) * hw_m ** -0.5 * vw_m3
+            * (vw_m3 ** (1.0 / 3.0) / hw_m) ** a * (hw_m / hb_m) ** b
+            * hd_m ** c * math.exp(d))
+
+
+def azmi_2026_peak(vw_m3, hw_m, hb_m, hd_m, wave_m, mode="piping", dam_type="homogeneous",
+                   erodibility="medium"):
+    """Azmi (2026) updated data-fusion peak breach outflow, m3/s (a check):
+    Qp = 0.3048 F16 + 0.4804 XZ9 + 0.1674 Z20 (Natural Hazards 122:499, Table 5: the median of
+    100,000 cross-validation fits of a linear blend of Froehlich 2016b, Xu & Zhang 2009 and
+    Zhong 2020). F16 takes the run's average breach width as Wave."""
+    f16 = froehlich_2016_peak(vw_m3, hw_m, hb_m, wave_m, mode)
+    xz9 = xu_zhang_2009_peak(vw_m3, hw_m, hd_m, mode, dam_type, erodibility)
+    z20 = zhong_2020_peak(vw_m3, hw_m, hb_m, hd_m, core_wall=(dam_type == "core_wall"))
+    return 0.3048 * f16 + 0.4804 * xz9 + 0.1674 * z20
+
+
 def embankment_area_ft2(height_ft, crest_ft, us_h, ds_h):
     """Cross-section area of the embankment at the breach (ft2), trapezoid."""
     return height_ft * (crest_ft + 0.5 * (us_h + ds_h) * height_ft)
@@ -1033,6 +1068,12 @@ def _add_peak_range(dam, hy, ov=None):
         tr60 = p.get("tr60_peak_cfs_check", p.get("tr60_peak_cfs"))
         if tr60:
             peaks["NRCS TR-60"] = float(tr60)
+        wave_ft, hb_ft = p.get("avg_breach_width_ft"), p.get("hb_ft")
+        if wave_ft and hb_ft:                                  # Azmi 2026 F16 term needs the width
+            peaks["Azmi (2026) data fusion"] = azmi_2026_peak(
+                vw, hw, float(hb_ft) * FT, hd, float(wave_ft) * FT, mode,
+                ov.xz_dam_type, ov.xz_erodibility) / CFS
+            p["azmi_2026_peak_cfs"] = round(peaks["Azmi (2026) data fusion"], 0)
         lo, hi = min(peaks.values()), max(peaks.values())
         p["xu_zhang_2009_peak_cfs"] = round(peaks["Xu & Zhang (2009), {}".format(mode)], 0)
         p["mlm_1984_peak_cfs"] = round(peaks["MacDonald & Langridge-Monopolis (1984)"], 0)

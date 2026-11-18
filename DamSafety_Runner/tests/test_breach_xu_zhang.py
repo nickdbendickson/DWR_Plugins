@@ -85,6 +85,34 @@ def regression_peak_range_is_reported_for_every_method():
     assert "USBR (1982) envelope" in hy.params["regression_peak_range_cfs"]
     # the envelope is a ceiling, not part of the best-fit range it is reported beside
     assert hy.params["usbr_1982_envelope_peak_cfs"] >= min(peaks.values())
+    # Azmi (2026) data-fusion peak is in the best-fit range of a routed run (it needs the width,
+    # so it is absent from the TR-60 run above but present for Froehlich piping)
+    hp = br.make_hydrograph(d, br.METHOD_PIPING)
+    assert "Azmi (2026) data fusion" in hp.params["regression_peaks_cfs"]
+    assert hp.params["azmi_2026_peak_cfs"] == round(
+        hp.params["regression_peaks_cfs"]["Azmi (2026) data fusion"], 0)
+
+
+@test
+def azmi_2026_data_fusion_blends_its_three_components():
+    """Azmi (2026), Nat Hazards 122:499 Table 5: Qp = 0.3048 F16 + 0.4804 XZ9 + 0.1674 Z20.
+    Reference values worked by hand from the component equations (Froehlich 2016b, Xu & Zhang
+    2009, Zhong 2020), not from the code under test."""
+    vw, hw, hb, hd, wave = 5000.0 * ACFT, 20.0, 20.0, 22.0, 80.0
+    g = 9.80665
+    # Froehlich 2016b, piping (km = 1), hb > 6.1 m so kh = (hb/6.1)^(1/8)
+    kh = (hb / 6.1) ** (1.0 / 8.0)
+    f16 = 0.0175 * 1.0 * kh * math.sqrt(g * hw * vw * hb ** 2 / wave)
+    assert abs(br.froehlich_2016_peak(vw, hw, hb, wave, "piping") - f16) < 1e-6 * f16
+    # Zhong 2020, homogeneous (HD): (a,b,c,d) = (-1.58,-0.76,0.1,-4.55)
+    z20 = (math.sqrt(g) * hw ** -0.5 * vw * (vw ** (1.0 / 3.0) / hw) ** -1.58
+           * (hw / hb) ** -0.76 * hd ** 0.1 * math.exp(-4.55))
+    assert abs(br.zhong_2020_peak(vw, hw, hb, hd, core_wall=False) - z20) < 1e-6 * z20
+    xz9 = br.xu_zhang_2009_peak(vw, hw, hd, "piping", "homogeneous", "medium")
+    az = 0.3048 * f16 + 0.4804 * xz9 + 0.1674 * z20
+    assert abs(br.azmi_2026_peak(vw, hw, hb, hd, wave, "piping", "homogeneous", "medium") - az) < 1e-6 * az
+    # a core-wall dam picks the CD branch of Zhong and changes the result
+    assert br.zhong_2020_peak(vw, hw, hb, hd, core_wall=True) != z20
 
 
 @test
