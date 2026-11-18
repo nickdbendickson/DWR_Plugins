@@ -302,6 +302,8 @@ describe("spreadVolume: a stretch that runs out of ground is held at the cap, no
   it("holds the pool at the level that just reaches the last cell (above the routed stage + 1 ft)", () => {
     assert.equal(r.exhaustedStretches, 1);
     assert.equal(r.cappedStretches, 1);
+    assert.ok(r.held.some((v) => v === 1), "the held stretch's ground is marked");
+    assert.ok(r.held.every((v, k) => !v || r.ground[k] === 1));
     // The highest reachable ground is ~5.9 m above the channel bed (2 % over 295 m), above stage 1 m + 0.3 m.
     const m = maxDepth(r.depthM);
     assert.ok(m > 5.5 && m < 6.5, `max depth ${m} m`);

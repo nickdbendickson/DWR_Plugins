@@ -202,6 +202,11 @@ export type SpreadResult = {
    */
   ground: Uint8Array;
   /**
+   * 1 on the ground of every stretch held at the cap (cappedStretches): where its pool met the edge of its ground with
+   * water still to pour. The layer marks the wet edge of that ground as where the flood goes on beyond the terrain.
+   */
+  held: Uint8Array;
+  /**
    * How far down the channel the water got (m along the centreline, the downstream end of the last stretch with a wet
    * channel cell; 0 when none). The reach loop (reach.ts) reads it against the traced channel's end.
    */
@@ -589,6 +594,7 @@ function* spreadVolumeSteps(g: DemGrid, line: Centerline, sections: RoutedSectio
   let basinsFilled = 0;
   let stoppedIn: SpreadResult["stoppedIn"] = null;
   let poured = 0;
+  const heldStretch = new Uint8Array(Math.max(1, nS));
   const sqrtOf = (s: number) => Math.sqrt(Math.max(s, 1e-6));
   // Lay a level pool holding `vol` (m³) over a basin's cells, lowest ground first (still water: velocity 0). The
   // basin's cells were sorted lowest first when the basin was found (step 3c).
@@ -772,6 +778,7 @@ function* spreadVolumeSteps(g: DemGrid, line: Centerline, sections: RoutedSectio
     pouredM3 += Math.max(0, target - budget) * cellM2;
     if (exhaustedHere) exhausted++;
     if (cappedHere) {
+      heldStretch[j] = 1;
       capped++;
       unpouredM3 += Math.max(0, budget) * cellM2;
     }
@@ -841,6 +848,8 @@ function* spreadVolumeSteps(g: DemGrid, line: Centerline, sections: RoutedSectio
   const rel = opts.releasedM3;
   const ground = new Uint8Array(N);
   for (let k = 0; k < N; k++) if (label[k] >= 0 && valid(k)) ground[k] = 1;
+  const held = new Uint8Array(N);
+  for (let k = 0; k < N; k++) if (ground[k] && heldStretch[label[k]]) held[k] = 1;
   return {
     width: W,
     height: H,
@@ -864,6 +873,7 @@ function* spreadVolumeSteps(g: DemGrid, line: Centerline, sections: RoutedSectio
     stretches,
     reachedEdge,
     ground,
+    held,
     wetEndM,
   };
 }

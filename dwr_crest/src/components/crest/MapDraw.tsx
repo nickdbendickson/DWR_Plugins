@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
-import { extentLine } from "./extent-layer";
+import { extentLine, openEdgeLine } from "./extent-layer";
 import { layerKey, mountFloodLayer } from "./flood-layer";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -277,9 +277,11 @@ function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefi
       },
     });
     const edge = extentLine(fc, OUTLINE_PANE)?.addTo(map) ?? null;
+    const open = openEdgeLine(fc, OUTLINE_PANE)?.addTo(map) ?? null;
     return () => {
       mounted.remove();
       edge?.remove();
+      open?.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the outline's content
   }, [map, key, on]);

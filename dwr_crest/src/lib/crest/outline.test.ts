@@ -17,6 +17,7 @@ import {
   demUrl,
   fetchDem,
   lookupArea,
+  openEdgeOf,
   OUTLINE_LABEL,
   OUTLINE_OFFLINE,
   findToe,
@@ -480,5 +481,31 @@ describe("flood extent line (option 3 of the 2026-11-05 outline mock-up)", () =>
     const ext = gj.features.filter((f: { properties: { kind?: string } }) => f.properties.kind === "flood_extent");
     assert.equal(ext.length, 1);
     assert.equal(gj.features.length, OUTLINE.features.length + 1);
+  });
+});
+
+describe("openEdgeOf", () => {
+  const ll = (p: [number, number]): [number, number] => [p[0], p[1]];
+  it("draws the wet cells' edges on the DEM border, joined into runs", () => {
+    // 4 × 3, the middle row wet across: its west and east ends touch the border.
+    const wet = (k: number) => k >= 4 && k < 8;
+    const f = openEdgeOf(4, 3, wet, undefined, undefined, ll, 10, "x", 0);
+    assert.ok(f);
+    assert.deepEqual(f.geometry.coordinates, [
+      [[0, -1], [0, -2]],
+      [[4, -1], [4, -2]],
+    ]);
+    assert.equal(f.properties.edge_km, 0.02);
+  });
+  it("adds the edge of held ground facing ground the spread never reached; nothing when it stops inside", () => {
+    const ground = Uint8Array.from([0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0]);
+    const held = Uint8Array.from([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    const wet = (k: number) => k === 5 || k === 6;
+    const f = openEdgeOf(4, 3, wet, ground, held, ll, 10, "x", 1234);
+    assert.ok(f);
+    // Cell 5 (i 1, j 1) is held: its north, south and west sides face cells off the ground; cell 6 is not held.
+    assert.equal(f.geometry.coordinates.length, 3);
+    assert.equal(f.properties.held_ac_ft, 1234);
+    assert.equal(openEdgeOf(4, 3, wet, ground, new Uint8Array(12), ll, 10, "x", 0), null);
   });
 });

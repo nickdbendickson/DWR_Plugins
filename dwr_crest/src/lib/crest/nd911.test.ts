@@ -233,3 +233,14 @@ describe("911 exports (snapshot)", async () => {
     assert.ok(bandAt(STRIP, t.rows[0].lon, t.rows[0].lat));
   });
 });
+
+describe("exportFloodGeoJson: the routed layer's open edge", () => {
+  it("goes out as a flood_continues feature after the bands", () => {
+    const strip = floodStrip(SAMPLE_DAMS[0], analyze(SAMPLE_DAMS[0])).strip!;
+    const openEdge = { type: "Feature", properties: { kind: "flood_continues", label: "x", held_ac_ft: 10, edge_km: 0.1 }, geometry: { type: "MultiLineString", coordinates: [[[0, 0], [1, 1]]] } };
+    const out = JSON.parse(exportFloodGeoJson({ ...strip, openEdge } as never, null, null));
+    const kinds = out.features.map((f: { properties: { kind?: string } }) => f.properties.kind);
+    assert.equal(kinds[kinds.length - 1], "flood_continues");
+    assert.equal(out.openEdge, undefined, "not left as a foreign member");
+  });
+});

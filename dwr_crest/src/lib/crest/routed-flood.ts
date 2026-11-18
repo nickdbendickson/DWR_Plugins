@@ -120,6 +120,8 @@ export type RoutedFloodResult = {
   method: "stage" | "spread";
   /** Spread only: the cells the pools may settle over (spread.ts SpreadResult.ground), kept for settleRoutedFlood. */
   ground?: Uint8Array;
+  /** Spread only: the ground of the stretches held at the cap (spread.ts SpreadResult.held), for the layer's open edge. */
+  held?: Uint8Array;
   /** Spread only: sweeps of settlePools applied to the layer (0 or absent: the pools as poured). */
   settled?: number;
   centerline: Centerline;
@@ -354,6 +356,7 @@ export async function buildRoutedFlood(
   let unpouredM3 = 0;
   let demand: RoutedFloodResult["demand"];
   let ground: Uint8Array | undefined;
+  let held: Uint8Array | undefined;
   if (method === "spread") {
     const spOpts = {
       minDepthM: opts.minDepthM ?? 0.03,
@@ -367,6 +370,7 @@ export async function buildRoutedFlood(
     // Node) it runs straight through. Same result either way.
     const sp = opts.yieldFn ? await spreadVolumeAsync(g, centerline, routed.sections, spOpts, opts.yieldFn) : spreadVolume(g, centerline, routed.sections, spOpts);
     ground = sp.ground;
+    held = sp.held;
     exhaustedStretches = sp.exhaustedStretches;
     cappedStretches = sp.cappedStretches;
     unpouredM3 = sp.unpouredM3;
@@ -458,6 +462,7 @@ export async function buildRoutedFlood(
     ...(velocityFps ? { velocityFps, arrivalHr } : {}),
     method,
     ...(ground ? { ground } : {}),
+    ...(held ? { held } : {}),
     centerline,
     sections: routed.sections,
     stats: {

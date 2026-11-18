@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { LayersControl, MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
-import { extentLine } from "./extent-layer";
+import { extentLine, openEdgeLine } from "./extent-layer";
 import { layerKey, mountFloodLayer } from "./flood-layer";
 import "leaflet/dist/leaflet.css";
 import { basemaps } from "@/lib/crest/basemap";
@@ -93,9 +93,11 @@ function DepthLayer({ depth }: { depth: FloodStrip | null }) {
       }),
     });
     const edge = extentLine(fc, PANE)?.addTo(map) ?? null;
+    const open = openEdgeLine(fc, PANE)?.addTo(map) ?? null;
     return () => {
       mounted.remove();
       edge?.remove();
+      open?.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the layer's content
   }, [map, key]);

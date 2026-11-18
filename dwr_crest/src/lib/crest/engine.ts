@@ -25,6 +25,9 @@ const TIE_BAND = 100;
  * schematic valley (stations, half-width, depth), the receptor depth/velocity/arrival, the datum rules or the ACER
  * ranking. A wording-only change does not move it. Date of the last numeric change, yyyy.mm.dd.
  */
+/** A routed breach peak past this multiple of the Froehlich (1995) check gets a note (see analyze). */
+export const BREACH_CHECK_RATIO = 1.5;
+
 export const ENGINE_VERSION = "crest-desk-engine 2026.11.12";
 
 export const STEPS = [
@@ -491,6 +494,15 @@ export function analyze(dam: DamRecord): Analysis {
       : `Starting pool ${fmtFt(wse0M / FT)} ft NAVD88 (${start.label}), ${fmtFt((topM - wse0M) / FT)} ft below the top of dam. Head on the breach ${fmtFt(headM / FT)} ft (starting pool to breach bottom); the breach equations and the Froehlich (1995) check use the storage at that pool, ${fmtFt(vwM3 / ACFT)} ac-ft of ${fmtFt(volumeM3 / ACFT)} ac-ft.`,
   );
   notes.push(...routed.notes);
+  // The routed peak against the Froehlich (1995) regression (Nick, 2026-11-18). Level-pool routing draws the whole
+  // reservoir down together, as if the water at the far end reached the breach at once. A long, narrow reservoir
+  // cannot feed the opening that fast, so its real peak is lower: Edenville (2020) at its 680.1 ft failure pool routes
+  // 274,000 cfs here against 152,700 cfs in the ASCE 2-D reconstruction and 135,000 cfs from Froehlich (1995). Most
+  // dams route within 1.0–1.35× the regression; past BREACH_CHECK_RATIO the note says so, and the result is unchanged.
+  if (empiricalPeakCfs > 0 && peakCfs > BREACH_CHECK_RATIO * empiricalPeakCfs)
+    notes.push(
+      `The routed peak (${Math.round(peakCfs).toLocaleString("en-US")} cfs) is ${(peakCfs / empiricalPeakCfs).toFixed(1)}× the Froehlich (1995) check (${Math.round(empiricalPeakCfs).toLocaleString("en-US")} cfs). The routing draws the whole pool down at once; a long or narrow reservoir cannot feed the breach that fast, so its peak may be nearer the check. Edenville (2020): routed 274,000 cfs, 2-D reconstruction 152,700 cfs, check 135,000 cfs.`,
+    );
 
   // Schematic valley. L0 sets the decay scale; the reach runs until the desk depth falls below
   // the 0.1 ft wet threshold (or the reach the user sets), up to MAX_REACH_KM.

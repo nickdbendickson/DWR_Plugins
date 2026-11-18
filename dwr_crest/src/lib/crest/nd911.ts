@@ -566,12 +566,14 @@ export function nd911KmlPlacemarks(t: Nd911Table): string[] {
 export function exportFloodGeoJson(area: FloodStrip, plss: PlssTable | null, nd911: Nd911Table | null): string {
   // A terrain layer's flood extent line (outline.ts extentOf) rides as a foreign member; GIS reads features only, so it
   // goes out as one more feature (kind "flood_extent"), after the depth bands.
-  const { extent, ...rest } = area as FloodStrip & { extent?: unknown };
-  if (!plss && !nd911 && !extent) return exportFloodStripGeoJson(area);
+  // Where a routed flood goes on beyond the terrain shown (outline.ts openEdgeOf) goes out the same way (kind
+  // "flood_continues").
+  const { extent, openEdge, ...rest } = area as FloodStrip & { extent?: unknown; openEdge?: unknown };
+  if (!plss && !nd911 && !extent && !openEdge) return exportFloodStripGeoJson(area);
   return exportFloodStripGeoJson({
     ...rest,
     properties: { ...area.properties, ...(plss ? plssProperties(plss) : {}), ...(nd911 ? nd911Properties(nd911) : {}) },
-    features: [...area.features, ...(extent ? [extent] : []), ...(nd911 ? nd911Features(nd911) : [])],
+    features: [...area.features, ...(extent ? [extent] : []), ...(openEdge ? [openEdge] : []), ...(nd911 ? nd911Features(nd911) : [])],
   } as unknown as FloodStrip);
 }
 

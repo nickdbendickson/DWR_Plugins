@@ -417,12 +417,87 @@ export type ExtentFeature = {
   geometry: { type: "MultiLineString"; coordinates: [number, number][][] };
 };
 
+/**
+ * Where the routed flood goes on beyond the terrain shown (Nick, 2026-11-18): the wet cells' edges on the DEM's border,
+ * and on the edge of a stretch's ground that was held at the cap with water still to pour (spread.ts held). A dashed
+ * line on the map and one more feature in the GeoJSON export, so a reader sees where the layer stops short of the water.
+ */
+export type OpenEdgeFeature = {
+  type: "Feature";
+  properties: { kind: "flood_continues"; label: string; held_ac_ft: number; edge_km: number };
+  geometry: { type: "MultiLineString"; coordinates: [number, number][][] };
+};
+
+/**
+ * The open edge of a routed layer (OpenEdgeFeature), or null when the flood stops inside what is shown. `wet(k)` is the
+ * layer's wet test; `ground` and `held` are the spread's (absent: only the DEM's border counts). Cell edges are joined
+ * into straight runs along each row and column.
+ */
+export function openEdgeOf(
+  W: number,
+  H: number,
+  wet: (k: number) => boolean,
+  ground: Uint8Array | undefined,
+  held: Uint8Array | undefined,
+  toLonLat: (p: XY) => [number, number],
+  cellM: number,
+  label: string,
+  heldAcFt: number,
+): OpenEdgeFeature | null {
+  const open = (k: number, i: number, j: number) => {
+    if (i < 0 || j < 0 || i >= W || j >= H) return true;
+    return !!held && held[k] === 1 && !!ground && ground[j * W + i] === 0;
+  };
+  const lines: [number, number][][] = [];
+  let edges = 0;
+  // Horizontal edges: the north side of row j (facing j - 1) and the south side (facing j + 1), runs along i.
+  for (let j = 0; j < H; j++)
+    for (const dj of [-1, 1]) {
+      let run = -1;
+      for (let i = 0; i <= W; i++) {
+        const k = j * W + i;
+        const on = i < W && wet(k) && (j + dj < 0 || j + dj >= H ? true : open(k, i, j + dj));
+        if (on && run < 0) run = i;
+        if (!on && run >= 0) {
+          const y = dj < 0 ? -j : -(j + 1);
+          lines.push([toLonLat([run, y]), toLonLat([i, y])]);
+          edges += i - run;
+          run = -1;
+        }
+      }
+    }
+  // Vertical edges: the west side of column i (facing i - 1) and the east side (facing i + 1), runs along j.
+  for (let i = 0; i < W; i++)
+    for (const di of [-1, 1]) {
+      let run = -1;
+      for (let j = 0; j <= H; j++) {
+        const k = j * W + i;
+        const on = j < H && wet(k) && (i + di < 0 || i + di >= W ? true : open(k, i + di, j));
+        if (on && run < 0) run = j;
+        if (!on && run >= 0) {
+          const x = di < 0 ? i : i + 1;
+          lines.push([toLonLat([x, -run]), toLonLat([x, -j])]);
+          edges += j - run;
+          run = -1;
+        }
+      }
+    }
+  if (!lines.length) return null;
+  return {
+    type: "Feature",
+    properties: { kind: "flood_continues", label, held_ac_ft: Math.round(heldAcFt), edge_km: r3((edges * cellM) / 1000) },
+    geometry: { type: "MultiLineString", coordinates: lines },
+  };
+}
+
 export type TerrainOutline = FloodStrip & {
   /**
    * Foreign member (RFC 7946 §6.1): the generalized flood extent line (trace version 8 on). Kept out of `features` so
    * the band lists, legend and acres read the bands only; exportFloodGeoJson adds it as a feature for GIS.
    */
   extent?: ExtentFeature;
+  /** Foreign member: where a routed flood goes on beyond the terrain shown (openEdgeOf); absent when it stops inside. */
+  openEdge?: OpenEdgeFeature;
   properties: FloodStrip["properties"] & {
     kind: "terrain_outline";
     outline_area_ac: number;

@@ -19,6 +19,7 @@
  * with { method: "stage" }.
  */
 
+import { WET_FT } from "./acer.ts";
 import { type ExtentSensitivity, extentSensitivity } from "./extent.ts";
 import { floodStrip } from "./floodstrip.ts";
 import { fetchFlowlines, type FlowLine } from "./flowlines.ts";
@@ -30,6 +31,7 @@ import {
   demRequest,
   demSourceLabel,
   fetchDem,
+  openEdgeOf,
   outlineInputs,
   polygonizeDepth,
   polygonizeDepthAsync,
@@ -215,7 +217,25 @@ async function routedCache(
     ...(reach ? { reach } : {}),
     notes: routed.notes,
   };
-  return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline: poly.outline, layer: "routed", routed: r };
+  // Where the flood goes on beyond the terrain shown: a dashed edge on the map and a feature in the export.
+  const dlon = (g.bbox[2] - g.bbox[0]) / g.width;
+  const dlat = (g.bbox[3] - g.bbox[1]) / g.height;
+  const r7 = (v: number) => Math.round(v * 1e7) / 1e7;
+  // The water still travelling where the flood meets the terrain's edge (what the reach could not take in).
+  const beyondAcFt = routed.stats.reachedEdge ? routed.stats.travellingAcFt : 0;
+  const openEdge = openEdgeOf(
+    g.width,
+    g.height,
+    (k) => routed.depthFt[k] >= WET_FT - 1e-9,
+    routed.ground,
+    routed.held,
+    (p) => [r7(g.bbox[0] + p[0] * dlon), r7(g.bbox[3] + p[1] * dlat)],
+    g.cellM,
+    `${common.dam_id}: the flood goes on beyond the terrain shown`,
+    beyondAcFt,
+  );
+  const outline = openEdge ? { ...poly.outline, openEdge } : poly.outline;
+  return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline, layer: "routed", routed: r };
 }
 
 /**
