@@ -5161,7 +5161,9 @@ def render_report(r):
               "formation_time_hr", "pipe_initial_dia_ft", "pipe_collapse_dia_ft",
               "pipe_phase_hr", "tr60_peak_cfs", "tr60_rule", "breach_factor_br_ac",
               "embankment_area_ft2", "rise_time_hr", "base_time_hr", "shape",
-              "froehlich_1995_peak_cfs", "tr60_peak_cfs_check", "tr60_rule_check", "peak_cfs",
+              "xu_zhang_2009_failure_time_hr", "froehlich_1995_peak_cfs",
+              "mlm_1984_peak_cfs", "xu_zhang_2009_peak_cfs", "tr60_peak_cfs_check",
+              "tr60_rule_check", "regression_peak_range_cfs", "peak_cfs",
               "time_to_peak_hr", "volume_acft", "source",
               "peak_pool_ft", "peak_pool_hr", "freeboard_at_peak_ft", "aux_spillway",
               "aux_spillway_peak_cfs"):
