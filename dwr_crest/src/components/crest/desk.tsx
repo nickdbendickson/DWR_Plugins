@@ -1471,7 +1471,7 @@ const handoff = {
 };
 let handoffTimer = 0;
 
-type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers";
+type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers" | "/api/check";
 
 /** The desktop server hands out a per-launch token at /api/token; every /api/ call must send it back in the
  * X-Crest-Token header (crest-desktop/crest/__main__.py). crestToken() fetches it once and caches it; the token
@@ -1535,7 +1535,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
             dem: handoff.dem,
             model: handoff.model,
             source: handoff.source,
-            files: path === "/api/layers" ? undefined : files,
+            files: path === "/api/layers" || path === "/api/check" ? undefined : files,
           }),
         });
       } catch {
@@ -1600,7 +1600,8 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         Writes the dam folder the plugins read, including the LISFLOOD package and the flood strip. Get layers downloads
         a DEM and streams for this area, or uses the ND offline pack both plugin sets already share. Screening runs tool
         17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. Cancel
-        stops QGIS; CREST_SCREENING_TIMEOUT_S sets a time limit. This is not an official class.
+        stops QGIS; CREST_SCREENING_TIMEOUT_S sets a time limit. Check QGIS hand-off tests the link to the plugins
+        first, without running a dam. This is not an official class.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
@@ -1659,6 +1660,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         </label>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="inline-flex h-10 items-center rounded-sm border border-water bg-paper px-3 text-sm text-water disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={handoff.busy}
+          onClick={() => void start("/api/check")}
+          title="Checks that qgis_process is found and that nddam:preflight, nddam:runchain and ndbreach:rundam are in its QGIS profile. Runs no dam and writes nothing."
+        >
+          Check QGIS hand-off
+        </button>
         <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/layers")}>
           Get layers
         </button>

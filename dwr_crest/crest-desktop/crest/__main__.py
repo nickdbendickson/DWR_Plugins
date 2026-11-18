@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
 from crest import defaults, localdem
-from crest.qgis_run import WorkFolderError, resolve_work, run_folder, run_layers, run_model, run_screening
+from crest.qgis_run import WorkFolderError, resolve_work, run_check, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
 #: If it is taken, a random port is used for that session.
@@ -131,7 +131,9 @@ def start_job(
     def work_job():
         try:
             log = lambda line: _job_log(job, line)
-            if kind == "layers":
+            if kind == "check":
+                result = run_check(log, cancel=cancel)
+            elif kind == "layers":
                 result = run_layers(dam or {}, work, source, log)
             elif kind == "folder":
                 result = run_folder(dam or {}, analysis or {}, work, log, files)
@@ -146,6 +148,8 @@ def start_job(
                     job["chainIds"] = list(result["chainIds"])
                 if result.get("chainResult"):
                     job["chainResult"] = list(result["chainResult"])
+                if result.get("check"):
+                    job["check"] = list(result["check"])
                 job["folder"] = result.get("folder") or ""
                 job["work"] = result.get("work") or ""
         except Exception as exc:
@@ -313,7 +317,8 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers"}
+        kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers",
+                 "/api/check": "check"}
         kind = kinds.get(parsed.path)
         if not self._api_allowed():
             return
@@ -419,7 +424,7 @@ def serve(root: Path | None = None, port: int = PREFERRED_PORT) -> ThreadingHTTP
     except OSError as e:
         if port == 0 or e.errno not in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1), 10048):
             raise
-        print(f"Crest desktop: port {port} is busy; using a random port (saved records will not carry over).")
+        print(f"Crest desktop: port {port} is busy; using a random port (saved records will not carry over).", flush=True)
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -669,6 +674,9 @@ def write_text(path: Path, text: str) -> None:
 def main() -> None:
     server = serve()
     url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+    # install test 2026-11-18: the address is printed at start (flushed: the launcher's output may be a pipe),
+    # so it can be opened in a browser and the port is visible whichever window opens.
+    print(f"Crest desktop: {url}", flush=True)
     try:
         import webview
 
@@ -692,7 +700,7 @@ def main() -> None:
         api._window.events.loaded += lambda *a: api._window.evaluate_js(NAV_GUARD_JS)
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)
-        print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.")
+        print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.", flush=True)
         webbrowser.open(url)
         try:
             threading.Event().wait()

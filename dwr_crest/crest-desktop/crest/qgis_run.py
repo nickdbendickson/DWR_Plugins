@@ -403,6 +403,50 @@ def run_folder(dam: dict, analysis: dict, work: str | None, log, files=None) -> 
     return {"ok": True, "stopped": False, "folder": str(folder), "work": str(root)}
 
 
+# The Processing tools the Report step's buttons call, for "Check QGIS hand-off" (install test 2026-11-18).
+HANDOFF_ALGORITHMS = (
+    ("nddam:preflight", "Screening preflight (tool 17), run first by the screening button"),
+    ("nddam:runchain", "Screening chain (tool 15), the screening button"),
+    ("ndbreach:rundam", "DamSafety Runner, one dam: the flood model button"),
+)
+CHECK_TIMEOUT_S = 180.0
+
+
+def run_check(log, cancel: threading.Event | None = None) -> dict:
+    """Check the hand-off without running a dam: qgis_process is found, which QGIS profile it reads, and every
+    tool the buttons call is registered there (`qgis_process help <id>`). Writes nothing."""
+    exe = find_qgis_process()
+    if not exe:
+        log("qgis_process was not found (QGIS_PROCESS, PATH, /Applications/QGIS*.app). Open the desk with the "
+            "dam-suite launcher open-nd-crest.sh, or put QGIS's qgis_process on PATH.")
+        return {"ok": False, "check": []}
+    log(f"qgis_process: {exe}")
+    custom = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
+    log(f"QGIS profile it reads: {'default profile under ' + custom if custom else 'the default profile (QGIS_CUSTOM_CONFIG_PATH not set)'}")
+    if custom:
+        link = Path(custom) / "profiles" / "default"
+        target = os.path.realpath(link) if link.exists() else None
+        log(f"  -> {target}" if target else f"  -> {link} does not exist: the launcher's link is missing")
+    rows = []
+    for alg, label in HANDOFF_ALGORITHMS:
+        if cancel is not None and cancel.is_set():
+            log("Cancelled.")
+            return {"ok": False, "cancelled": True, "check": rows}
+        code, out = _run([exe, "help", alg], CHECK_TIMEOUT_S, cancel)
+        found = code == 0 and alg in out
+        rows.append({"algorithm": alg, "label": label, "found": found})
+        log(f"{'OK     ' if found else 'MISSING'} {alg}  ({label})")
+        if not found:
+            tail = [ln for ln in out.strip().splitlines() if ln.strip()][-2:]
+            for ln in tail:
+                log(f"        {ln}")
+    ok = all(r["found"] for r in rows)
+    log("The hand-off is ready: every tool the buttons call is in QGIS." if ok else
+        "Not ready: install or enable the missing DamSafety plugins in that profile (DamSafety Screening for nddam:, "
+        "DamSafety Runner for ndbreach:), then check again.")
+    return {"ok": ok, "check": rows}
+
+
 def run_layers(dam: dict, work: str | None, source: str, log) -> dict:
     root = work_dir(work)
     if source == "download":

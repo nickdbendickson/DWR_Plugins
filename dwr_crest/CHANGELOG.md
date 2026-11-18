@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-18
+
+- **Check QGIS hand-off.** A new button on the Report step's "Plugins already in QGIS" panel checks the link to the
+  DamSafety plugins without running a dam: it says which `qgis_process` the desk found, which QGIS profile it reads
+  (with the dam-suite launcher, the link in `~/dam-suite/qgis-process/damsafety`), and whether each tool the buttons call
+  is registered there (`nddam:preflight`, `nddam:runchain`, `ndbreach:rundam`, via `qgis_process help`). It writes
+  nothing. Server: `POST /api/check`, a job like the others (`crest/qgis_run.run_check`). Asked for after the
+  2026-11-18 install test, where the hand-off could not be tested from the desk.
+- **The desk prints its address when it starts.** `python run.py` (and the dam-suite launcher `open-nd-crest.sh`) now
+  prints `Crest desktop: http://127.0.0.1:47231/index.html` (or the random port it took when 47231 was busy) as soon as
+  the server is up, flushed so it shows even when the output is a pipe. Before, the address only appeared when there was
+  no webview, and could stay in the output buffer. Found in the 2026-11-18 install test.
+
 ## 2026-11-17
 
 - **Desktop CSP: no more Uncaught EvalError at startup.** pywebview binds `window.pywebview.api` with `new Function` and wraps return values in `eval(...)`, which the desktop Content-Security-Policy (`script-src 'self'`, no `unsafe-eval`) refused. The desk now rewrites that binder to a closure and runs evaluate_js without eval (`crest/webview_csp.py`) so the policy is not weakened. Crest.html and the web app are unchanged. Tests: `tests/test_webview_csp.py`.
