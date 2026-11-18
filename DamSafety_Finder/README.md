@@ -21,7 +21,7 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 | `ndfind:water_mosaic` Build a class-9 water mosaic from LiDAR tiles | a classified LiDAR tile or a folder of them (.las/.laz, ASPRS class 9); the water classes, their EPSG (only if the files carry none) and the cell size | `water_count.vrt` (class-9 points per cell) and `water_elev.vrt` (their mean elevation, the pond water surface), in North Dakota's UTM 14N (EPSG:26914): build once, then give the count VRT to the open-water tool as its **prebuilt class-9 water-count raster** |
 | `ndfind:osm` Extract dams, dikes and culverts from OpenStreetMap | an OpenStreetMap file (.osm.pbf, the Geofabrik extract) | `waterway=dam / weir`, `man_made=dyke / embankment`, `tunnel=culvert`, `ford=yes` as points: one more known-structure layer |
 | `ndfind:score` Score fills by how much they look like the listed dams | the `embankments` layers of one or more runs | A model learned from the fills already on a dam list (four kinds; reviewers' marks as trusted labels), and every fill scored 0-1 with it (look at the high-scoring new ones first) |
-| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check; for scored fills `review_order` (score first, then water, then what is below) |
+| `ndfind:evidence` Add evidence to fills | an `embankments` layer; imagery years, NWI, quarries, land cover, soils, the LiDAR return-count and class-9 mosaics, a DEM with buildings / roads (all optional) | Water year after year, bare ground, NWI h / x, LiDAR drop-out in the pool, buildings and roads down the flow path, the 12.5 ac-ft permit check; for scored fills `review_order` (score first, a fill on a pond-outlet line four bands lower, then water, then what is below) |
 | `ndfind:review_batch` Pick a review batch | scored fills; cards already reviewed (optional); imagery years, NWI, the LiDAR return-count mosaic (optional) | A batch for review: random control, top-ranked, near the cut, each card with its chance of being picked; a share flagged for a blind second look; on each card the water evidence (`water_years`, NWI code, LiDAR drop-out) |
 
 The first three take **Known structures** (any number of point, line or polygon layers: DWR dams, DWR
@@ -520,8 +520,9 @@ and the pond-outlet fills 3 of 8 at 0.73 and up, 2 of 10 at 0.5 to 0.73, 0 of 8 
 Work down the list to a score of about **0.5** (about 0.4 if one dam in two cards is worth the
 time); below that, real dams are few and far between. The **CSV is written in this order; the layer keeps
 the fills' own order** (sort it on `review_order` in the attribute table). Without a DEM there is
-no downstream step: the order is by score band, then water (2 or more image years), then score.
-With neither a DEM nor image years it is by score alone. The rule is `core/evidence.py` `review_order`.
+no downstream step: the order is by score band (pond-outlet fills four bands lower), then water
+(2 or more image years), then score. With neither a DEM nor image years it is by score band, with
+the pond-outlet drop, then score. The rule is `core/evidence.py` `review_order`.
 
 `BUILDINGS` and `ROADS` start from the suite's offline data pack when one is set up in DamSafety
 Core: the structure inventory the Hazard tool counts (`NSI_structures`; else `USA_Structures`,

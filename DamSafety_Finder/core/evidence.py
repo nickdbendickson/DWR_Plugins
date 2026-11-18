@@ -278,7 +278,8 @@ def review_order(scores, conseqs=None, band=SCORE_BAND, wet_years=None, wet_min=
     (wet_min years or more), not a count, so what is below still orders the fills on each side
     of it. A fill whose water history or consequence was not read (blank) counts as dry / as 0
     there, the same as a fill with none found, so the score decides between them. A fill with no
-    score comes after every scored fill (by water, by consequence, then as it came). conseqs /
+    score comes after every scored fill (pond-outlet ones after the others, then by water, by
+    consequence, then as it came). conseqs /
     wet_years / outlets None: not computed, so they do not reorder anything.
     Why water: on a review sheet of 90 fills picked at random among the dry ones (no pool in the
     LiDAR; North Dakota 2026-11-16) 6 of the 22 with water in 2 or more of the 10 image years
