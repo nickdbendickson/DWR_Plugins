@@ -186,7 +186,7 @@ WHAT IT WRITES (all in --out)
                                    ('candidates'), the spill points, the channel-side dikes, run_info
   ND_finder_candidates_ranked.csv  the unlisted dam / dry-embankment candidates in the order to look
                                    at them (every one: about 240,000 rows for the state; see THE
-                                   ORDER below)
+                                   ORDER above)
   ND_finder_candidates_top.csv     the short list a person can open: the first 2,000 of them (--top N)
                                    with lat, lon, score, kind, height, storage, tile, a link to
                                    the satellite picture, the crowded-ground note, and line_source
@@ -2828,8 +2828,13 @@ def merge(a, finder, out, key, dem_path, outline, outline_what, inputs, plan_not
             L.append("  highest score first (--outlet-drop 0)")
         L.append("  with a score of {} or more: {:,} ({:,} of them on a pond-outlet line)".format(
             SCORE_CUT, n_cut, n_cut_outlet))
-        L.append("    work down the list to about a score of 0.5, or 0.4 if one dam in two cards is worth the time")
-        L.append("    (the yields above). Pond-outlet fills come later in the list, at their lower place.")
+        if o_drop:
+            L.append("    work down the list to about a score of 0.5, or 0.4 if one dam in two cards is worth the time")
+            L.append("    (the yields above). Pond-outlet fills come later in the list, at their lower place.")
+        else:
+            L.append("    work down the list to about a score of 0.5, or 0.4 if one dam in two cards is worth the time;")
+            L.append("    a fill on a pond-outlet line was a dam far less often than its score says (statewide review")
+            L.append("    sheet of 2026-11-18: 3 of 8 at 0.73 and up, 2 of 10 at 0.5 to 0.73)")
     if n_top:
         L.append("  the short list ({}): the top {:,} of them, each with a link to the satellite picture".format(
             OUT_TOP, n_short))
@@ -3003,6 +3008,7 @@ def run(a):
         raise UserError("--top must be 0 (no short list) or more")
     if not a.crowd_km2 >= 0:
         raise UserError("--crowd-km2 must be 0 (no crowded-ground note) or more")
+    outlet_drop(a)                                      # --outlet-drop 0 or more, before any tile runs
     try:
         gdal, _o, _s = gdal_mods()
         import numpy                                                    # noqa - checked here, used later

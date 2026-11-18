@@ -1313,6 +1313,8 @@ class Seams(unittest.TestCase):
         of its band. --outlet-drop 0 gives the score order of script 1.3."""
         from importlib import import_module
         ev = import_module(rfs.ENGINE + ".core.evidence")
+        if not hasattr(ev, "OUTLET_DROP_BANDS"):
+            self.skipTest("this Finder is older than 0.7.2 (no pond-outlet review order to compare with)")
         S, P = self.finder.LINE_STREAM, self.finder.LINE_POOL
         src = [P, S, P, S, S, P, S, S]
         self._tile("T10_W0370_N2620", [(-369000.0 + 1100.0 * i, 2621000.0 + 900.0 * i, 4.0 + 2.0 * i, None,
@@ -1343,6 +1345,8 @@ class Seams(unittest.TestCase):
         plain = [float(r["score"]) for r in self._csv(rfs.OUT_CSV)]
         self.assertEqual(plain, sorted(plain, reverse=True))
         self.assertEqual(dict((r["key"], r["value"]) for r in self._merged("run_info"))["order"], "score, height")
+        self.assertIn("  highest score first (--outlet-drop 0)", out)
+        self.assertFalse(any("Pond-outlet fills come later" in ln for ln in out[out.index("  highest score first (--outlet-drop 0)"):]))
         with self.assertRaises(rfs.UserError):
             rfs.outlet_drop(rfs.parser().parse_args(["--outlet-drop", "-1"]))
 
@@ -1840,6 +1844,12 @@ class WholeRun(unittest.TestCase):
         vrt = os.path.join(folder, "ND test.vrt")
         gdal.BuildVRT(vrt, [os.path.join(folder, "a.tif")])
         return vrt
+
+    def test_negative_outlet_drop_is_refused_before_anything_runs(self):
+        rc, _so, se = self._main(["--dem", self._dem(), "--out", self.out, "--outlet-drop", "-1"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--outlet-drop must be 0 or more", se)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "tiles")))
 
     def test_out_inside_the_data_folder_is_refused_also_under_another_spelling(self):
         vrt = self._dem()
