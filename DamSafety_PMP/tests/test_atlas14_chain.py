@@ -350,7 +350,9 @@ class Options(unittest.TestCase):
         before = modes()
         with GS.gdal_exceptions():
             from DamSafety_PMP.noaa14 import gridstats  # noqa: F401 - sets exceptions at import
-            self.assertEqual(modes(), (1, 1, 1))
+            # gdal and ogr: what gridstats switches on. osr follows the gdal switch on newer GDAL (3.8 here)
+            # but keeps its own on GDAL 3.4 (the QGIS 3.34 LTR image), so it is not part of the check.
+            self.assertEqual(modes()[:2], (1, 1))
         self.assertEqual(modes(), before)
 
 

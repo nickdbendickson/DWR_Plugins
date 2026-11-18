@@ -86,6 +86,13 @@ class FakePFDS:
             return fh.read()
 
 
+# the .prj NOAA ships (full ESRI WKT). The two test scripts that wrote a cut-down
+# GEOGCS["GCS_North_American_1983"] were the two that stalled at their first grid read on GDAL 3.4
+# (QGIS 3.34 LTR image, CI 2026-11-18), so the fixtures use the real text.
+NAD83_PRJ = ('GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137.0,'
+             '298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
+
+
 def noaa_zip(path, name, x0=-97.0, y0=46.6, n=60, cell=0.0083333, base=6000):
     """A NOAA-shaped Atlas 14 grid zip covering Fargo: base + column thousandths of an inch."""
     rows = "\n".join(" ".join(str(base + c) for c in range(n)) for _ in range(n))
@@ -93,7 +100,7 @@ def noaa_zip(path, name, x0=-97.0, y0=46.6, n=60, cell=0.0083333, base=6000):
         n=n, x=x0, y=y0, c=cell, r=rows)
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(name + ".asc", body)
-        z.writestr(name + ".prj", 'GEOGCS["GCS_North_American_1983"]')
+        z.writestr(name + ".prj", NAD83_PRJ)
         z.writestr(name + ".xml", "<metadata><title>test</title><pubdate>20130415</pubdate></metadata>")
 
 

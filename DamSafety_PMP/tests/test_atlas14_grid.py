@@ -38,6 +38,13 @@ WGS84_WKT = ('GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257
              'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]')
 
 
+# the .prj NOAA ships (full ESRI WKT). The two test scripts that wrote a cut-down
+# GEOGCS["GCS_North_American_1983"] were the two that stalled at their first grid read on GDAL 3.4
+# (QGIS 3.34 LTR image, CI 2026-11-18), so the fixtures use the real text.
+NAD83_PRJ = ('GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137.0,'
+             '298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
+
+
 def fake_noaa_zip(path, values, x0=-97.5, y0=46.9, cell=0.0083333, nodata=-9, name="mw100yr24ha"):
     """A zip shaped like NOAA's: <name>.asc (ESRI ASCII, thousandths of an inch), .prj and .xml."""
     nr, nc = len(values), len(values[0])
@@ -45,7 +52,7 @@ def fake_noaa_zip(path, values, x0=-97.5, y0=46.9, cell=0.0083333, nodata=-9, na
         nc, nr, x0, y0, cell, nodata) + "\n".join(" ".join(str(v) for v in row) for row in values) + "\n"
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(name + ".asc", body)
-        z.writestr(name + ".prj", 'GEOGCS["GCS_North_American_1983"]')
+        z.writestr(name + ".prj", NAD83_PRJ)
         z.writestr(name + ".xml", "<metadata><title>Precipitation Frequency for Midwestern states, USA - NOAA Atlas 14 "
                                   "Volume 8</title><pubdate>20130415</pubdate></metadata>")
 

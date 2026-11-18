@@ -21,15 +21,22 @@ def run_one(path):
     """(returncode or None on a hang, stdout, stderr). The script runs in its own process group, so a hang
     kills it and anything it started (a child left holding the output pipe would block the read)."""
     kw = {"start_new_session": True} if os.name == "posix" else {}
-    p = subprocess.Popen([sys.executable, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                         env=env, **kw)
+    # -X faulthandler: on a hang the SIGABRT below makes Python print where every thread is (also inside a
+    # C call such as a GDAL read) before the script ends, so the CI log names the line that stalled
+    p = subprocess.Popen([sys.executable, "-X", "faulthandler", path], stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, env=env, **kw)
     try:
         out, err = p.communicate(timeout=LIMIT_S)
         return p.returncode, out, err
     except subprocess.TimeoutExpired:
         if os.name == "posix":
             import signal
-            os.killpg(p.pid, signal.SIGKILL)
+            os.killpg(p.pid, signal.SIGABRT)
+            try:
+                out, err = p.communicate(timeout=15)
+                return None, out or "", err or ""
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
         else:
             p.kill()
         try:
@@ -45,6 +52,6 @@ for t in todo:
     bad += tag == "FAIL"
     print("%-5s %s%s" % (tag, t, " (no result after %d s)" % LIMIT_S if rc is None else ""), flush=True)
     if tag == "FAIL":
-        print(out[-1500:], err[-2500:], flush=True)
+        print(out[-1500:], err[-(6000 if rc is None else 2500):], flush=True)
 print("%d scripts, %d failed" % (len(todo), bad))
 sys.exit(1 if bad else 0)
