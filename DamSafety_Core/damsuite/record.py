@@ -29,6 +29,7 @@ RECORD_NAME = "classification_record.json"
 KIND = "nd_dam_classification_record"
 VERSION = 1
 BUILTIN_MARK = "builtin_lisflood.py"      # a run whose engine "binary" is this is the built-in
+GPU_MARK = "metalflood/engine.py"         # ... and this is the GPU engine (Runner 3.22.0)
 
 
 def _digest(body):
@@ -79,9 +80,12 @@ def _engine_block(engine, manifest):
     sw = ((manifest or {}).get("software") or {}).get("lisflood_exe") or {}
     path = str(sw.get("path") or "")
     sha = str(sw.get("sha256") or "")
+    gpu = path.replace("\\", "/").endswith(GPU_MARK)
     label = engine if isinstance(engine, str) and engine else (
         "built-in engine (numpy; NOT LISFLOOD-FP)"
-        if path.endswith(BUILTIN_MARK) else ("LISFLOOD-FP" if path else "unknown"))
+        if path.endswith(BUILTIN_MARK) else
+        "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)" if gpu else
+        ("LISFLOOD-FP" if path else "unknown"))
     built_in = path.endswith(BUILTIN_MARK) or ("built-in" in label.lower())
     return {"model": label, "built_in": bool(built_in), "sha256": sha, "path": path}
 

@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from .. import builtin_lisflood as bl
+from . import deckio as bl
 from . import backends as be
 
 NAME = "DamSafety GPU flood engine (local inertial on Metal, LISFLOOD-FP compatible)"
@@ -54,7 +54,7 @@ def _setf(st, k, v):
 
 
 class Deck:
-    """The inputs of one .par file, read with builtin_lisflood's readers."""
+    """The inputs of one .par file, read with deckio's readers (builtin_lisflood's)."""
 
     def __init__(self, par_path):
         wd = os.path.dirname(os.path.abspath(par_path))

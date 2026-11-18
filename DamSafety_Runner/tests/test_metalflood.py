@@ -175,6 +175,65 @@ def metalflood_gpu_matches_cpu_build():
         shutil.rmtree(d, True)
 
 
+@test
+def metalflood_deckio_reads_as_builtin_engine():
+    """deckio.py is a copy of builtin_lisflood's readers (so the package stands alone for
+    Screening and DamIT): both read a deck the same."""
+    from nd_breach_runner.core.metalflood import deckio
+    d = _tmp()
+    try:
+        par = valley_deck(d, nfile=True, gauge=True)
+        pa, pb = bl.read_par(par), deckio.read_par(par)
+        assert pa == pb
+        folder = os.path.dirname(par)
+        for key, ra, rb in (("demfile", bl._read_asc, deckio._read_asc),
+                            ("manningfile", bl._read_asc, deckio._read_asc),
+                            ("bcifile", bl.read_bci, deckio.read_bci),
+                            ("bdyfile", bl.read_bdy, deckio.read_bdy),
+                            ("gaugefile", bl.read_gauges, deckio.read_gauges)):
+            a, b = ra(os.path.join(folder, pa[key])), rb(os.path.join(folder, pa[key]))
+            assert repr(a) == repr(b), key
+        for k in ("G", "ALPHA", "DRY_M", "MAX_HFLOW", "VEL_MIN_DEPTH_M", "NODATA"):
+            assert getattr(bl, k) == getattr(deckio, k), k
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def gpu_engine_is_a_runner_engine_choice():
+    """Runner 3.22.0: the word 'gpu' (or 'metal') and the FLOOD_ENGINE choice select the GPU
+    engine; it runs in-process, is labelled as not LISFLOOD-FP everywhere, and passes the
+    Runner's own engine check (arrival-depth keyword honoured, velocity written)."""
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.damsuite import record
+    for w in ("gpu", "GPU", " metal ", "metalflood"):
+        assert lf.resolve_exe(w) == lf.GPU_EXE, w
+    assert os.path.isfile(lf.GPU_EXE)
+    assert lf.is_gpu(lf.GPU_EXE) and lf.is_inprocess(lf.GPU_EXE) and not lf.is_builtin(lf.GPU_EXE)
+    assert not lf.is_gpu(lf.BUILTIN_EXE) and lf.resolve_exe("builtin") == lf.BUILTIN_EXE
+    assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_EXE)
+    assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_EXE)
+    assert lf.engine_name(lf.GPU_EXE) == "the GPU engine"
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
+    assert blk["model"].startswith("GPU engine"), blk
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {
+        "path": "C:\\x\\core\\metalflood\\engine.py"}}})
+    assert blk["model"].startswith("GPU engine"), blk
+    from nd_breach_runner import algorithms as algs
+    assert algs.FLOOD_ENGINES[0] == "lisflood" and algs.FLOOD_ENGINES[1] == "gpu"
+    assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        r = lf.check_lisflood(lf.GPU_EXE, os.path.join(d, "chk"))
+        assert r["ok"] and r["patched"] and r["velocity"], r
+        assert "GPU engine" in r["message"], r
+        with open(os.path.join(d, "chk", "lisflood.log")) as f:
+            assert f.readline().startswith(mf.NAME)
+    finally:
+        shutil.rmtree(d, True)
+
+
 @model_test
 def metalflood_matches_lisflood_fp():
     """The same deck through LISFLOOD-FP (NDBREACH_LISFLOOD) and this engine."""
@@ -209,7 +268,8 @@ if __name__ == "__main__":
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
                metalflood_wet_window_does_not_change_the_answer,
                metalflood_reads_lisflood_acc_options, metalflood_params_layout_matches_kernels,
-               metalflood_gpu_matches_cpu_build, metalflood_matches_lisflood_fp):
+               metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
+               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp):
         try:
             fn()
             print("ok    ", fn.__name__)

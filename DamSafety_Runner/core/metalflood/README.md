@@ -1,4 +1,4 @@
-# GPU flood engine (Metal) — phase 1 prototype
+# GPU flood engine (Metal)
 
 LISFLOOD-FP's local-inertial ("acceleration", ACC) solver rewritten as GPU compute kernels for
 the Apple GPU. LISFLOOD-FP runs on a GPU only through NVIDIA CUDA, so on a Mac it runs on the
@@ -6,9 +6,15 @@ CPU; this engine runs the same scheme on the Mac's own GPU.
 
 It reads the LISFLOOD-FP input deck the Runner already writes (`.par`, `.dem.asc`, `.bci`,
 `.bdy`, optional `.n.asc`, `.start`, `.gauge`) and writes the result files the Runner already
-reads (`.max`, `.maxVc`, `.inittm`, `.maxtm`, `.mxe`, `.mass`, `.discharge`, `-NNNN.wd`), so
-plugging it into the Runner (phase 2) is a third engine choice, not a new pipeline. It is not
-wired into the Runner yet.
+reads (`.max`, `.maxVc`, `.inittm`, `.maxtm`, `.mxe`, `.mass`, `.discharge`, `-NNNN.wd`), so it
+plugs into the Runner as an engine of its own.
+
+**Choosing it (Runner 3.22.0, Screening 0.21.0):** the Runner's run tools have "Flood engine"
+(LISFLOOD-FP or GPU engine), and the word `gpu` works wherever a LISFLOOD-FP executable is asked
+for (also CLI `model.lisflood_exe`). Screening tool 7 has engine "GPU engine". On a Mac with a
+Metal GPU it runs there; elsewhere on the CPU build of the same kernels (needs a C++ compiler).
+`DAMSAFETY_MF_BACKEND=metal|cpu` forces one. Screening holds a copy of this folder's engine files
+(`DamSafety_Screening/core/metalflood`, checked byte for byte by its tests).
 
 ## Files
 
@@ -76,15 +82,14 @@ bit for bit (test).
 |---|---|---|
 | Test valley, 3 h | depth MAE 4 mm, CSI 1.00 at 0.1 m, max velocity 6.03 vs 6.02 m/s, arrival MAE 0.001 h | depth MAE 78 mm, CSI 0.95, max velocity 87 m/s (spike) |
 | Same, `theta 0.7`, `cfl 0.5` | depth MAE 9 mm, CSI 1.00 | depth MAE 266 mm, CSI 0.83 (ignores theta and cfl) |
-| DWR-2801, 30 m, 24 h | see the pull request | |
+| DWR-2801, 30 m, 24 h | CSI 1.000, depth MAE 0.001 ft, P99 velocity equal, arrival MAE 0.001 h | CSI 0.92, MAE 0.080 ft, max velocity 247 ft/s |
+| Lake Delhi 2010, whole Runner, 30 m, 48 h | 8 USGS high-water marks: mean +2.06 ft, largest +3.69 ft, as LISFLOOD-FP; max depths within 0.003 ft | |
 
 The inflow cell itself can differ from LISFLOOD-FP by a few tenths of a metre at the peak of the
 hydrograph (the neighbouring cells agree to mm); not yet explained.
 
 ## Not done (phase 2 and later)
 
-- Runner integration: a third engine choice next to LISFLOOD-FP and ANUGA (the word `metal`
-  like `builtin`, `core/lisflood.py`).
 - Speed: one command buffer per batch, seven dispatches per step encoded from Python; an
   indirect command buffer or kernel fusion would cut the host cost on small grids.
 - The CPU build is one core and slower than LISFLOOD-FP on one core; it exists to test the

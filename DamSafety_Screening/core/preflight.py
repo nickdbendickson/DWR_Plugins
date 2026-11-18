@@ -44,6 +44,7 @@ DWR_EXPECTED = ("structure_", "dam_name", "max_dam_he", "normal_vol", "max_pool_
 STRUCT_FIELDS = (("occ_cls", "OCC_CLS", "occtype", "OCC_TYPE"),
                  ("prim_occ", "PRIM_OCC", "bldgtype", "fd_id"))
 LISFLOOD_ENGINES = (0, 1)
+GPU_ENGINE = 4                      # 0.21.0: tool 7's "GPU engine" (runner.ENGINES[4])
 
 
 def check(status, title, detail="", fix=""):
@@ -311,6 +312,15 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
             else:
                 out.append(check(FAIL, "LISFLOOD-FP", "executable not found: {}".format(exe or "(none)"),
                                  "Give the LISFLOOD-FP executable, or choose the built-in engine."))
+        elif eng == GPU_ENGINE:
+            try:
+                from . import metalflood as _mf
+                ok, why = _mf.available()
+            except Exception as e:                               # noqa - a check result
+                ok, why = False, str(e)
+            out.append(check(OK if ok else FAIL, "Flood engine", "GPU engine: " + why,
+                             "" if ok else "Choose LISFLOOD-FP or a built-in engine, or install a "
+                             "C++ compiler (Xcode command line tools on a Mac)."))
         else:
             out.append(check(OK, "Flood engine", "built-in engine (no install needed)"))
         workers = int(S.get("workers") or 0)

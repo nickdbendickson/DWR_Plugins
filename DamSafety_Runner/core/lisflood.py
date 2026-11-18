@@ -193,6 +193,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
+# 3.22.0: the GPU engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
+# Apple GPU through Metal, or on other computers through the CPU build of the same kernels (one
+# core, needs a C++ compiler). Like the built-in engine it is chosen only by name, never as a
+# fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
+GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
+GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
 
 
 def bundled_platform(system=None, machine=None):
@@ -244,6 +250,30 @@ def is_builtin(exe):
     return bool(exe) and os.path.abspath(str(exe)) == BUILTIN_EXE
 
 
+def is_gpu(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_EXE
+
+
+def is_inprocess(exe):
+    """True for the engines that run inside this process (built-in, GPU), not as a program."""
+    return is_builtin(exe) or is_gpu(exe)
+
+
+def gpu_backend_note():
+    """Which device the GPU engine will use here, in words (for logs and the self-test)."""
+    try:
+        from .metalflood import backends as mfb
+        ok, why = mfb.metal_available()
+        if ok:
+            return "the Apple GPU ({})".format(why)
+        if mfb.find_compiler():
+            return ("the CPU build of the GPU kernels, one core (no Metal GPU here: {})"
+                    .format(why))
+        return "nothing: no Metal GPU ({}) and no C++ compiler for the CPU build".format(why)
+    except Exception as e:  # a description only
+        return "unknown ({})".format(e)
+
+
 def resolve_exe(exe):
     """The flood engine for a setting or parameter value. The word "builtin" (any BUILTIN_WORDS
     spelling) selects the built-in engine; anything else is returned verbatim. An empty value
@@ -252,6 +282,8 @@ def resolve_exe(exe):
     v = (str(exe).strip() if exe else "")
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
+    if v.lower() in GPU_WORDS:
+        return GPU_EXE
     return v
 
 
@@ -259,6 +291,8 @@ def describe_exe(exe):
     """One line for logs and reports: which program runs the floods."""
     if is_builtin(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
+    if is_gpu(exe):
+        return "the GPU engine (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
     if exe and os.path.abspath(str(exe)).startswith(BUNDLED_DIR + os.sep):
         return "LISFLOOD-FP bundled with the plugin ({})".format(exe)
     return "LISFLOOD-FP at {}".format(exe)
@@ -270,11 +304,15 @@ def engine_label(exe):
     it was not."""
     if is_builtin(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
+    if is_gpu(exe):
+        return "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
     return "LISFLOOD-FP"
 
 
 def engine_name(exe):
     """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
+    if is_gpu(exe):
+        return "the GPU engine"
     return "the built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
 
 
@@ -796,6 +834,34 @@ def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
     return time.time() - t0
 
 
+def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
+    """Run core/metalflood in-process: on the Apple GPU when there is one, else the CPU build of
+    the same kernels. Writes lisflood.log whose first line is the engine name."""
+    from . import metalflood as mf
+    t0 = time.time()
+    lines = []
+
+    def say(msg):
+        lines.append(msg)
+        if log:
+            log(msg)
+
+    def prog(t, sim):
+        if progress:
+            progress(min(100.0, 100.0 * t / sim), "GPU engine t = {:.2f} h".format(t / 3600.0))
+    backend = os.environ.get("DAMSAFETY_MF_BACKEND") or "auto"
+    try:
+        mf.run_par(par, progress=prog, cancel=cancel, log=say, backend=backend)
+    except mf.Cancelled:
+        raise Cancelled("cancelled")
+    except mf.EngineError as e:
+        raise ModelError("GPU engine: {}".format(e))
+    finally:
+        with open(os.path.join(workdir, "lisflood.log"), "w", encoding="utf-8") as f:
+            f.write(mf.NAME + " " + mf.VERSION + "\n" + "\n".join(lines) + "\n")
+    return time.time() - t0
+
+
 def run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     # Keep-awake runs beside the solver, not around it, so Cancel still reaches the model
     # and a missing systemd bus cannot stop the run.
@@ -808,6 +874,8 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     exe = st.exe
     if is_builtin(exe):
         return _run_builtin(workdir, par, st, progress, cancel, log)
+    if is_gpu(exe):
+        return _run_gpu(workdir, par, st, progress, cancel, log)
     if not exe or not os.path.isfile(exe):
         raise ModelError("LISFLOOD-FP executable not found: {}".format(exe))
     env = dict(os.environ)
@@ -1136,12 +1204,16 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC):
     # it is recorded wherever there was any water, which is far more cells.
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
-    who = "The built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
+    who = ("The built-in engine" if is_builtin(exe) else "The GPU engine" if is_gpu(exe)
+           else "LISFLOOD-FP")
     msg = ("{} ran: {} cells reached 0.3 m.".format(who, thr_wet))
     if is_builtin(exe):
         msg += (" This is the built-in numpy screening engine (local inertial), NOT LISFLOOD-FP; "
                 "its results are preliminary estimates.")
-    if not patched and not is_builtin(exe):
+    if is_gpu(exe):
+        msg += (" This is the GPU engine (LISFLOOD-FP 8.3's ACC scheme on {}), NOT LISFLOOD-FP "
+                "itself.".format(gpu_backend_note()))
+    if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "
                 "scripts/build_lisflood_macos.sh on macOS (both apply scripts/patch_lisflood.py).")
