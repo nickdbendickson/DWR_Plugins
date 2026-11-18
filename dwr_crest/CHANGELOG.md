@@ -2,6 +2,16 @@
 
 ## 2026-11-18
 
+- **Security: the browser fallback no longer puts the API token on the browser's command line.** When no pywebview
+  window starts, the OS starts the browser with the address as an argument, which other local users can list for as
+  long as that browser runs. The fallback now opens `/launch?code=<one-time code>`; the server swaps a valid code,
+  once and within 120 s, for a 303 redirect to `index.html#crest-token=<token>` (the token is only in the HTTP
+  response on the loopback connection). A used, expired or wrong code gets a plain refusal and no token; a second use
+  prints a warning in the terminal. If no browser starts, the one-time link is printed. Residual risk: a local user
+  who reads the code and uses it before the browser does gets the token; the browser then shows "already used" and a
+  restart makes a new token. The pywebview window is unchanged. Tests: `tests/test_local_api.py`.
+- **Docs: the printed address.** README (Desktop app) and `crest-desktop/INSTALL.txt` say the printed address carries
+  no token (the desk loads, its `/api/` calls are refused), and how the window and the browser fallback get it.
 - **Security: the desktop API token is no longer handed out over HTTP.** `GET /api/token` (added 2026-11-17) answered
   any loopback client that sent no `Origin` header, so another process or another OS account on a shared machine
   could still fetch the token and drive the local API as the Crest user (security audit 2026-11-18, F1). The endpoint

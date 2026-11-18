@@ -11,8 +11,16 @@ Python 3.10 or newer. Python 3.14 is fine. You do not need Node.
 4. Start the desk. Leave this Terminal window open.
      python3 run.py
 
-If the window does not open, the desk opens in your browser instead.
+If the window does not open, the desk opens in your browser instead,
+through a one-time launch link (valid 2 minutes, used once). If no browser
+starts, the link is printed in Terminal: open it yourself.
 The same Terminal has to stay open while you use the desk.
+
+The address printed at start (http://127.0.0.1:47231/index.html) has no
+key in it: typed into a browser it shows the desk, but the buttons that
+use this computer (layers, dam folder, screening, model) are refused.
+Use the Crest window. If you closed the browser tab or the link expired,
+stop the desk (Ctrl+C) and start it again.
 
 Report step — Plugins already in QGIS
 --------------------------------------

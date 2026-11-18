@@ -78,6 +78,101 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(base, f"http://127.0.0.1:{self.port}/index.html")
         self.assertEqual(frag, f"crest-token={m.API_TOKEN}")
 
+    # ---- browser fallback: one-time launch code instead of the token on the browser's command line ----------------
+    def get_raw(self, path, host=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path, headers={"Host": host or f"127.0.0.1:{self.port}"})
+        r = conn.getresponse()
+        data = r.read()
+        headers = {k.lower(): v for (k, v) in r.getheaders()}
+        conn.close()
+        return r.status, headers, data
+
+    def test_launch_url_has_no_token(self):
+        code = m.issue_launch_code()
+        url = m.launch_url(self.port, code)
+        self.assertEqual(url, f"http://127.0.0.1:{self.port}/launch?code={code}")
+        self.assertNotIn(m.API_TOKEN, url)
+        self.assertNotEqual(code, m.API_TOKEN)
+        self.assertGreaterEqual(len(code), 32)
+        self.assertNotEqual(code, m.issue_launch_code())
+
+    def test_launch_code_redirects_once(self):
+        code = m.issue_launch_code()
+        status, headers, data = self.get_raw(f"/launch?code={code}")
+        self.assertEqual(status, 303)
+        self.assertTrue(headers.get("location") == f"/index.html#crest-token={m.API_TOKEN}", "redirect target")
+        self.assertEqual(data, b"")
+        self.assertEqual(headers.get("cache-control"), "no-store")
+        # spent: a second use (another local user who read the browser's command line) gets nothing
+        with mock.patch("builtins.print"):
+            status, headers, data = self.get_raw(f"/launch?code={code}")
+        self.assertEqual(status, 410)
+        self.assertNotIn("location", headers)
+        self.assertNotIn(m.API_TOKEN.encode(), data)
+
+    def test_wrong_or_missing_code_refused_and_does_not_spend_the_real_one(self):
+        code = m.issue_launch_code()
+        for path in ("/launch", "/launch?code=", "/launch?code=nope", f"/launch?code={code}x", f"/launch?code={m.API_TOKEN}"):
+            status, headers, data = self.get_raw(path)
+            self.assertEqual(status, 403, path)
+            self.assertNotIn("location", headers, path)
+            self.assertNotIn(m.API_TOKEN.encode(), data, path)
+        status, _, _ = self.get_raw(f"/launch?code={code}")
+        self.assertEqual(status, 303)
+
+    def test_launch_code_expires(self):
+        code = m.issue_launch_code(ttl=-1)
+        status, headers, data = self.get_raw(f"/launch?code={code}")
+        self.assertEqual(status, 410)
+        self.assertNotIn("location", headers)
+        self.assertNotIn(m.API_TOKEN.encode(), data)
+
+    def test_new_code_replaces_old(self):
+        old = m.issue_launch_code()
+        new = m.issue_launch_code()
+        self.assertEqual(self.get_raw(f"/launch?code={old}")[0], 403)
+        self.assertEqual(self.get_raw(f"/launch?code={new}")[0], 303)
+
+    def test_launch_needs_local_host(self):
+        code = m.issue_launch_code()
+        status, headers, _ = self.get_raw(f"/launch?code={code}", host="evil.example:80")
+        self.assertEqual(status, 403)
+        self.assertNotIn("location", headers)
+        self.assertEqual(self.get_raw(f"/launch?code={code}")[0], 303)
+
+    def test_browser_fallback_never_puts_token_on_command_line(self):
+        # No pywebview: main() opens the system browser. The address it hands the OS must be the one-time launch link.
+        event = mock.Mock()
+        event.wait.side_effect = KeyboardInterrupt
+        with mock.patch.dict(sys.modules, {"webview": None}), \
+                mock.patch.object(m, "serve", return_value=self.server), \
+                mock.patch.object(m.webbrowser, "open", return_value=True) as wb, \
+                mock.patch.object(m.threading, "Event", return_value=event), \
+                mock.patch("builtins.print") as out:
+            with self.assertRaises(SystemExit):
+                m.main()
+        opened = wb.call_args.args[0]
+        self.assertTrue(opened.startswith(f"http://127.0.0.1:{self.port}/launch?code="))
+        self.assertNotIn(m.API_TOKEN, opened)
+        printed = " ".join(str(a) for c in out.call_args_list for a in c.args)
+        self.assertNotIn(m.API_TOKEN, printed)
+        self.assertEqual(self.get_raw(opened.split(str(self.port), 1)[1])[0], 303)
+
+    def test_browser_fallback_prints_one_time_link_when_no_browser(self):
+        event = mock.Mock()
+        event.wait.side_effect = KeyboardInterrupt
+        with mock.patch.dict(sys.modules, {"webview": None}), \
+                mock.patch.object(m, "serve", return_value=self.server), \
+                mock.patch.object(m.webbrowser, "open", return_value=False) as wb, \
+                mock.patch.object(m.threading, "Event", return_value=event), \
+                mock.patch("builtins.print") as out:
+            with self.assertRaises(SystemExit):
+                m.main()
+        printed = " ".join(str(a) for c in out.call_args_list for a in c.args)
+        self.assertIn(wb.call_args.args[0], printed)
+        self.assertNotIn(m.API_TOKEN, printed)
+
     def test_token_is_random_and_long(self):
         self.assertGreaterEqual(len(m.API_TOKEN), 32)
 

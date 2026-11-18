@@ -376,6 +376,20 @@ The Report step can hand the open dam to the QGIS plugins already installed on t
 ### Linux
 `pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.
 
+### The printed address and the browser
+When it starts, the desk prints its address in the terminal, e.g. `Crest desktop: http://127.0.0.1:47231/index.html`
+(a random port when 47231 is busy). That address carries no API token. Opened by hand in a browser it shows the desk
+and the in-page engine works, but every call to the local server (**Get layers**, **Write the dam folder**, screening,
+**Run the flood model**, the local DEM) is refused (HTTP 403). Use the Crest window: it opens with the token itself.
+
+When no window backend starts (no pywebview, as on the suite installer's `ndqgis` env), Crest opens the system
+browser for you with a one-time launch link (`http://127.0.0.1:<port>/launch?code=…`). The server swaps that code,
+once and within 2 minutes, for the token, so the token never appears on the browser's command line. If no browser can
+be started, the link is printed in the terminal; open it yourself within 2 minutes. A reload of that tab keeps working.
+A used or expired link, or the plain address in a new tab, does not: stop Crest (Ctrl+C) and start it again for a
+fresh link. If the browser says the link was already used when you never opened it before, another program on the
+computer used it first; restart Crest, which also makes a new token.
+
 ### For developers
 - After changing anything under `src/`, rebuild and commit the desktop bundle:
   `npm run build:desktop`. `npm test` fails while `crest-desktop/crest/web/` is older than the sources.
