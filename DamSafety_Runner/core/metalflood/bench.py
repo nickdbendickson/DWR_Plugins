@@ -113,9 +113,8 @@ def main(argv=None):
                 env = dict(os.environ)
                 if args.threads:
                     env["OMP_NUM_THREADS"] = str(args.threads)
-                r = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- local speed test: fixed argv list, no shell, the user's own LISFLOOD-FP
-                    [lf, "run.par"], cwd=d, env=env, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.STDOUT)
+                argv = [lf, "run.par"]
+                r = subprocess.run(argv, cwd=d, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- local speed test: fixed argv list, no shell, the user's own LISFLOOD-FP
                 wall = time.time() - t0
                 info["runs"][name] = {"wall_s": round(wall, 2), "exe": lf,
                                       "threads": args.threads or os.cpu_count(),
