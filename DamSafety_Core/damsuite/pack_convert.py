@@ -76,13 +76,15 @@ def _pack_datasets(con):
 
 def _decode_features(con, tbl):
     """GeoJSON features of one pack table - offline_pack.PackReader._decode()
-    (zlib-decompress, then json-decode); unreadable rows are skipped."""
+    (zlib-decompress, then json-decode); unreadable rows are skipped, and so is a row that
+    inflates past zipsafe.MAX_ROW_BYTES (zipsafe.TooLarge is a ValueError)."""
+    from . import zipsafe
     feats = []
     for (blob,) in con.execute('SELECT feat FROM "{}" ORDER BY fid'.format(tbl)):
         if blob is None:
             continue
         try:
-            feats.append(json.loads(zlib.decompress(blob).decode("utf-8")))
+            feats.append(json.loads(zipsafe.inflate(blob).decode("utf-8")))
         except (zlib.error, ValueError, UnicodeDecodeError, TypeError):
             continue
     return feats
