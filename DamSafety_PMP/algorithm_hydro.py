@@ -30,9 +30,10 @@ class InflowHydrographAlgorithm(_UnitParams, QgsProcessingAlgorithm):
                 "(time_hr, flow_cfs, precip_in, excess_in) + inflow_hydrograph_summary.csv. INTERNAL PROTOTYPE.<br><br>"
                 "Basin inputs: Plugins ▸ DamSafety PMP ▸ Get basin data from StreamStats… fills the "
                 "drainage area, a suggested non-contributing area and Tc / lag from USGS StreamStats, and sets "
-                "'StreamStats basin values'. With that file set, the largest peak is compared with the ND 0.2% "
+                "'StreamStats basin values'. With that file set, the largest PMF peak is compared with the ND 0.2% "
                 "AEP regression peak and the Crippen & Bue envelope after the run (a warning in the log, "
-                "never a block; streamstats_pmf_check.json). The curve number is never taken from StreamStats.")
+                "never a block; streamstats_pmf_check.json). NOAA Atlas 14 frequency storms (atlas14_hyetograph) "
+                "are not a PMF and are left out of that check. The curve number is never taken from StreamStats.")
 
     def initAlgorithm(self, config=None):
         A = self.addParameter
