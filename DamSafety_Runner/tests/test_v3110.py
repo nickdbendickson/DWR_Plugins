@@ -113,6 +113,27 @@ def v31611_bundled_platform_names_the_release_folders():
         lf.bundled_exe = saved
 
 
+@test
+def suite_installer_lisflood_is_a_candidate():
+    """3.20.15: the dam-suite installer's build (<DAMSUITE_PREFIX>/bin/lisflood) is found."""
+    d = tempfile.mkdtemp()
+    exe = os.path.join(d, "bin", "lisflood")
+    os.makedirs(os.path.dirname(exe))
+    with open(exe, "w") as fh:
+        fh.write("#!/bin/sh\n")
+    os.chmod(exe, 0o755)
+    old = os.environ.get("DAMSUITE_PREFIX")
+    os.environ["DAMSUITE_PREFIX"] = d
+    try:
+        assert exe in nd_data.lisflood_candidates()
+    finally:
+        if old is None:
+            os.environ.pop("DAMSUITE_PREFIX", None)
+        else:
+            os.environ["DAMSUITE_PREFIX"] = old
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # --- runs, conserves mass, names itself ------------------------------------------------------
 
 @test

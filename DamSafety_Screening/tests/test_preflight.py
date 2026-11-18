@@ -51,7 +51,7 @@ checks = pf.run_checks(W, S, env=net)
 t = by_title(checks)
 assert t["Work folder"]["status"] == pf.OK and t["Disk space"]["status"] in (pf.OK, pf.WARN)
 assert t["USGS 3DEP service"]["status"] == pf.OK and net.calls == 1
-assert t["ND DWR dams"]["status"] == pf.FAIL and "Inputs tab" in t["ND DWR dams"]["fix"]
+assert t["ND DWR dams"]["status"] == pf.FAIL and "Override inputs" in t["ND DWR dams"]["fix"]
 assert t["Flood engine"]["detail"].startswith("built-in") and t["Settings file"]["status"] == pf.OK
 assert not pf.ready(checks) and pf.summary(checks).startswith("not ready: ND DWR dams")
 assert "Prepare the dams" in t["Steps that would run"]["detail"] and "1 -" not in t["Steps that would run"]["detail"]
@@ -97,7 +97,7 @@ assert t["DWR dam lines"]["status"] == pf.OK
 assert t["Dams without a dam line"]["status"] == pf.WARN and "1 of 3" in t["Dams without a dam line"]["detail"]
 assert t["Water bodies"]["status"] == pf.WARN and "geometry is point" in t["Water bodies"]["detail"]
 assert t["Structures"]["status"] == pf.WARN and "occ_cls" in t["Structures"]["detail"]
-assert t["Roads"]["status"] == pf.WARN and "Inputs tab" in t["Roads"]["fix"]      # a warning, not a failure
+assert t["Roads"]["status"] == pf.WARN and "Override inputs" in t["Roads"]["fix"]      # a warning, not a failure
 assert "roughly" in t["Disk space"]["detail"] and "3 dams" in t["Disk space"]["detail"]
 # the pond path: water bodies needed, dams not
 S5 = dict(S4, chain=["16"])
@@ -193,7 +193,7 @@ from nd_dam_screening.core import errors as er  # noqa: E402
 assert "run step 3" in er.plain(FileNotFoundError("no stage-storage curve (tool 3 failed for this dam)"), "DWR-1")
 e = FileNotFoundError(2, "No such file", "/w/2_terrain/dam_DWR-1.tif")
 assert "no terrain clip for dam DWR-1" in er.plain(e, "DWR-1")
-assert "no field 'aadt'" in er.plain(KeyError("aadt"), "DWR-1") and "Inputs tab" in er.plain(KeyError("aadt"))
+assert "no field 'aadt'" in er.plain(KeyError("aadt"), "DWR-1") and "Override inputs" in er.plain(KeyError("aadt"))
 assert "coarser cell size" in er.plain(MemoryError(), "DWR-1")
 assert "zero in the dam record" in er.plain(ZeroDivisionError("float division by zero"), "DWR-1")
 assert "not a number" in er.plain(ValueError("could not convert string to float: 'n/a'"), "DWR-1")

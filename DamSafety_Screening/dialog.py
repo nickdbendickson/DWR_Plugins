@@ -491,7 +491,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         self.package_edit = QLineEdit()
         self.package_edit.setToolTip(
             "Optional: the GeoPackage ND Dam Hazard's 'Export for Screening' writes, or your own "
-            "package from step 0. Every input left empty on the Inputs tab is taken from it.")
+            "package from step 0. Every input left empty under Override inputs on the Run tab is taken from it.")
         self.package_edit.editingFinished.connect(self._changed)
         b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._browse_file(self.package_edit, "GeoPackage (*.gpkg)"))

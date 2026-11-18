@@ -85,11 +85,11 @@ class SettingsTabMixin(object):
         self.runner_water_mask = QCheckBox("Step 7b: mask existing lakes and ponds in the Runner's report")
         self.runner_water_mask.setToolTip(
             "Off (default): the Runner does what it always does. On: step 7b gives the Runner the "
-            "'NHD waterbodies' layer from the Inputs tab, and the Runner's run report then shows the "
+            "'NHD waterbodies' layer from Override inputs on the Run tab, and the Runner's run report then shows the "
             "flooded area and speeds twice - with and without the lakes and ponds that were "
             "already there before the breach. Only the report changes: the flood model, its maps "
             "and the hazard class are the same either way. Needs that layer saved in a "
-            "file (Inputs tab) and ND Dam Breach Runner 3.10.27 or later.")
+            "file (Override inputs on the Run tab) and ND Dam Breach Runner 3.10.27 or later.")
         self.runner_water_mask.toggled.connect(self._changed)
         self.runner_tier.currentIndexChanged.connect(self._changed)
         self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")

@@ -196,6 +196,12 @@ def lisflood_candidates():
     w = shutil.which("lisflood")
     if w:
         c.append(w)
+    # 3.20.15 (install test 2026-11-18): the build the dam-suite install-all package puts in
+    # <DAMSUITE_PREFIX or ~/dam-suite>/bin (lisflood, lisflood.exe on Windows), before the
+    # other install places
+    for root in (os.environ.get("DAMSUITE_PREFIX", "").strip(), _home_paths("dam-suite")):
+        if root:
+            c += [os.path.join(root, "bin", "lisflood"), os.path.join(root, "bin", "lisflood.exe")]
     pats = [
         _home_paths("lisflood-fp", "lisflood"),
         _home_paths("lisflood-fp*", "build", "lisflood"),

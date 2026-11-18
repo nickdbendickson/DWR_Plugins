@@ -248,8 +248,10 @@ them:
   classification). It stops at the first step that fails, is cancelled, lacks a required input
   (a dam layer for step 1, waterbodies for 3, dam lines for 4, structures for 8, or a required tool
   parameter that is still empty), or does not write its output file; nothing is asked in between.
-  Steps whose earlier step was run again are re-run (shown as "out of date").
-- **Inputs tab.** The package exported by ND Dam Hazard (for step 0) and the data layers: a project
+  Steps whose earlier step was run again are re-run (shown as "out of date"). A chain whose
+  step 7 failed or skipped a dam (sim_status FAILED in step 7's layer) ends as failed, not OK;
+  if step 7 flooded no dam at all, it stops right after step 7.
+- **Override inputs (Run tab).** The package exported by ND Dam Hazard (for step 0) and the data layers: a project
   layer or a file per data set. A layer chosen here wins; left empty, the tools use the layer of the
   same meaning in the package step 0 wrote. A layer of your own has unknown field names, so none
   are filled in for it.
