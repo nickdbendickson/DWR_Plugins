@@ -420,7 +420,9 @@ def mlm_1984(vw_m3, hw_m, embankment_area_m2):
 def vtg_1990(vw_m3, hw_m, erodible=True):
     """Von Thun & Gillette (1990): Bave = 2.5 hw + Cb (m), Cb from the reservoir
     size; tf = 0.015 hw (easily erodible) or 0.02 hw + 0.25 (erosion resistant)
-    in hours; side slopes taken as 0.5H:1V."""
+    in hours; side slopes taken as 0.5H:1V.
+    Von Thun, J.L. & Gillette, D.R. (1990) Guidance on breach parameters.
+    Internal memorandum, U.S. Bureau of Reclamation, Denver, CO."""
     vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
     acft = vw_m3 / ACFT
     if acft < 1000.0:
@@ -496,7 +498,9 @@ def usbr_1982_peak(hw_m):
 def froehlich_2016_peak(vw_m3, hw_m, hb_m, wave_m, mode="piping"):
     """Froehlich (2016b) peak breach outflow, m3/s (a check): Qp = 0.0175 km kh
     (g hw Vw hb^2 / Wave)^0.5, km = 1.85 overtopping / 1 piping, kh = 1 for hb <= 6.1 m else
-    (hb/6.1)^(1/8). Needs the average breach width Wave (m)."""
+    (hb/6.1)^(1/8). Needs the average breach width Wave (m).
+    Froehlich, D.C. (2016b) Predicting peak discharge from gradually breached
+    embankment dams. J. Hydrologic Engineering 21(11), 04016041."""
     vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
     hb_m, wave_m = _positive("breach height hb", hb_m), _positive("average breach width Wave", wave_m)
     km = 1.85 if mode == "overtopping" else 1.0
@@ -1083,16 +1087,28 @@ def _add_peak_range(dam, hy, ov=None):
         p["regression_peaks_cfs"] = {k: round(v, 0) for k, v in peaks.items()}
         envelope = usbr_1982_peak(hw) / CFS
         p["usbr_1982_envelope_peak_cfs"] = round(envelope, 0)
-        p["regression_peak_range_cfs"] = "{:,.0f} to {:,.0f} ({} equations); USBR (1982) " \
-            "envelope (upper-bound screen): {:,.0f} cfs".format(lo, hi, len(peaks), envelope)
+        p["regression_peak_range_cfs"] = "{:,.0f} to {:,.0f} ({}); USBR (1982) envelope " \
+            "(a conservative upper-bound ceiling, not a best fit and not inside the range): " \
+            "{:,.0f} cfs".format(lo, hi, "; ".join(peaks), envelope)
+        basis = "{} dam, {} erodibility".format(
+            XZ_DAM_TYPE_TEXT[ov.xz_dam_type], ov.xz_erodibility)
+        if ov.xz_dam_type == "homogeneous" and ov.xz_erodibility == "medium":
+            basis += " (the defaults)"
+        hy.notes.append("The peak-flow regression range uses the Xu & Zhang (2009) {} basis for "
+                        "its Xu & Zhang and Azmi (2026) terms; set the dam type and erodibility "
+                        "from the embankment materials if known.".format(basis))
         q = hy.peak_cfs
-        if q > 0 and (q > 1.5 * hi or q < lo / 1.5):
-            hy.notes.append("The hydrograph peak {:,.0f} cfs is {} the range of the peak-flow "
-                            "regressions ({:,.0f} to {:,.0f} cfs: {}). The regressions scatter "
-                            "widely, so this is not an error by itself; review the breach width "
-                            "and formation time against the embankment.".format(
-                                q, "above" if q > hi else "below", lo, hi,
-                                ", ".join(sorted(peaks))))
+        if q > 0:
+            hy.notes.append("The routed breach peak {:,.0f} cfs is {:.2f}x the low end and "
+                            "{:.2f}x the high end of the peak-flow regression range "
+                            "({:,.0f} to {:,.0f} cfs) and {:.2f}x the USBR (1982) envelope "
+                            "({:,.0f} cfs).".format(q, q / lo, q / hi, lo, hi, q / envelope,
+                                                    envelope))
+            if q > 1.5 * hi or q < lo / 1.5:
+                hy.notes.append("That routed peak is more than 1.5x {} the regression range. "
+                                "The regressions scatter widely, so this is not an error by "
+                                "itself; review the breach width and formation time against the "
+                                "embankment.".format("above" if q > hi else "below"))
     except Exception:  # a check only
         pass
 

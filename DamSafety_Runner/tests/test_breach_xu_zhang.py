@@ -122,3 +122,51 @@ def older_breach_methods_keep_their_processing_index():
            "froehlich1995_overtopping", "mlm1984", "vtg1990", "tr60", "tr60_curvilinear", "user")
     assert br.METHODS[:len(old)] == old, br.METHODS
     assert br.METHODS[len(old):] == (br.METHOD_XZ_PIPING, br.METHOD_XZ_OVERTOPPING)
+
+
+@test
+def regression_range_names_equations_and_always_flags_routed_peak():
+    """M7: the printed range names every equation, the routed peak is always compared against
+    both ends of the range and the USBR (1982) envelope (not only past 1.5x), and a note states
+    the Xu & Zhang (2009) dam-type / erodibility basis. Display/label text only: the
+    regression_peaks_cfs keys and values do not change."""
+    d = br.DamData(dam_id="R", dam_height_ft=25.0, storage_top_acft=500.0,
+                   top_of_dam_ft=1850.0, surface_area_top_ac=60.0, crest_width_ft=12.0,
+                   us_slope_h=3.0, ds_slope_h=3.0)
+    hy = br.make_hydrograph(d, br.METHOD_PIPING)
+    peaks = hy.params["regression_peaks_cfs"]
+    rng = hy.params["regression_peak_range_cfs"]
+    lo, hi = min(peaks.values()), max(peaks.values())
+    # hard constraint: the named key set is unchanged (a key/value edit would show here)
+    assert set(peaks) == {"Froehlich (1995)", "MacDonald & Langridge-Monopolis (1984)",
+                          "Xu & Zhang (2009), piping", "NRCS TR-60",
+                          "Azmi (2026) data fusion"}, peaks
+    # the range still starts with "lo to hi" and still carries the USBR envelope
+    assert rng.startswith("{:,.0f} to {:,.0f}".format(lo, hi)), rng
+    assert "USBR (1982) envelope" in rng
+    # every equation is now named in the printed range; the bare "(N equations)" is gone
+    for name in peaks:
+        assert name in rng, (name, rng)
+    assert "equations)" not in rng, rng
+    # the USBR "upper-bound screen" label is reworded
+    assert "upper-bound screen" not in rng, rng
+    assert "upper-bound ceiling" in rng, rng
+    # this run's routed peak sits INSIDE 1.5x of the range, yet the routed-vs-range note fires
+    q = hy.peak_cfs
+    assert lo / 1.5 <= q <= 1.5 * hi, (q, lo, hi)
+    rvr = [n for n in hy.notes if "routed breach peak" in n]
+    assert len(rvr) == 1, hy.notes
+    assert "the low end" in rvr[0] and "the high end" in rvr[0]
+    assert "USBR (1982) envelope" in rvr[0]
+    assert "1.5x" not in rvr[0]                      # the always-on line, not the 1.5x flag
+    # a basis note states the default Xu & Zhang (2009) dam type and erodibility
+    assert any("Xu & Zhang (2009)" in n and "homogeneous / zoned fill" in n
+               and "medium erodibility" in n and "(the defaults)" in n
+               for n in hy.notes), hy.notes
+    # overriding the basis changes that note and drops "(the defaults)"
+    ov = br.BreachOverrides(xz_dam_type="core_wall", xz_erodibility="high")
+    hy2 = br.make_hydrograph(d, br.METHOD_XZ_OVERTOPPING, ov)
+    basis = [n for n in hy2.notes if "regression range uses the Xu & Zhang (2009)" in n]
+    assert len(basis) == 1, hy2.notes
+    assert "core wall dam" in basis[0] and "high erodibility" in basis[0]
+    assert "(the defaults)" not in basis[0]

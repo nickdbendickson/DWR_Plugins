@@ -332,11 +332,20 @@ model installation*, *Self-test in this QGIS*.
      equation and a power-law storage curve fitted to storage and surface area:
      Froehlich (2008) piping or overtopping (default: piping); Froehlich (2008) piping
      with a **pipe (orifice) phase** first; Froehlich (1995); MacDonald &
-     Langridge-Monopolis (1984); Von Thun & Gillette (1990). *NRCS TR-60* gives a peak,
-     drawn as a triangle or a curvilinear hydrograph of the same volume and peak. Or give
-     your own CSV.
-   - The report lists the Froehlich (1995) peak and the TR-60 peak as checks. The routed
-     peak can be well above the regression peaks; review the breach width and time.
+     Langridge-Monopolis (1984); Von Thun & Gillette (1990); **Xu & Zhang (2009)** piping
+     or overtopping (average breach width, top width and side slope, with the dam type and
+     erodibility as advanced options — homogeneous / zoned fill and medium erodibility by
+     default; the routed formation time is Froehlich (2008), as HEC advises, not Xu &
+     Zhang's own failure time). *NRCS TR-60* gives a peak, drawn as a triangle or a
+     curvilinear hydrograph of the same volume and peak. Or give your own CSV.
+   - Every sunny-day run reports a peak-flow regression **range** as a check, naming each
+     equation: Froehlich (1995), MacDonald & Langridge-Monopolis (1984), Xu & Zhang (2009)
+     and, when the embankment geometry is given, NRCS TR-60, plus the Azmi (2026)
+     data-fusion peak. The USBR (1982) envelope (Q = 19.1 Hw^1.85) is shown beside the range
+     as a conservative upper-bound ceiling, not mixed into it. A note always compares the
+     routed peak against both ends of the range and the envelope, and states the Xu & Zhang
+     (2009) dam-type and erodibility basis used; the regressions scatter widely (roughly a
+     factor of two to three), so review the breach width and formation time.
 2. **Flood scenario (optional).** Give the PMF inflow hydrograph (CSV: time hr, discharge
    cfs), the spillway rating (elevation ft, discharge cfs) and the normal pool level. The
    inflow is routed through the reservoir, over the spillway and, if the pool overtops the
@@ -1066,6 +1075,23 @@ writing) and the real ND hazard plugin's interface; try those once on real data.
   *J. Hydraulic Engineering* 134(12).
 - Froehlich, D.C. (1995). Peak outflow from breached embankment dam. *J. Water Resources
   Planning and Management* 121(1).
+- MacDonald, T.C. & Langridge-Monopolis, J. (1984). Breaching characteristics of dam
+  failures. *J. Hydraulic Engineering* 110(5). Best-fit peak Q = 1.154 (Vw Hw)^0.412.
+- Von Thun, J.L. & Gillette, D.R. (1990). *Guidance on Breach Parameters.* Unpublished
+  internal memorandum, U.S. Bureau of Reclamation, Denver, CO.
+- Xu, Y. & Zhang, L.M. (2009). Breaching parameters for earth and rockfill dams.
+  *J. Geotechnical and Geoenvironmental Engineering* 135(12), 1957-1970 (coefficients as
+  tabulated in the HEC-RAS Hydraulic Reference Manual, "Estimating Breach Parameters").
+- U.S. Bureau of Reclamation (1982). *Guidelines for Defining Inundation Areas Downstream
+  from Bureau of Reclamation Dams.* Envelope relation Q = 19.1 Hw^1.85, an upper bound over
+  the case data reported as a conservative ceiling, not a best fit.
+- Froehlich, D.C. (2016). Peak outflow from breached embankment dams. Used (with the run's
+  average breach width) as a component of the Azmi (2026) data-fusion peak.
+- Zhong et al. (2020). Peak-outflow regression for earth and rockfill dam breaches. Used as
+  a component of the Azmi (2026) data-fusion peak.
+- Azmi (2026). Updated data-fusion estimate of peak breach outflow. *Natural Hazards*
+  122:499, Table 5: Qp = 0.3048 Froehlich (2016) + 0.4804 Xu & Zhang (2009) + 0.1674 Zhong
+  (2020).
 - USDA NRCS Technical Release 60, *Earth Dams and Reservoirs*.
 - Bates, P.D., Horritt, M.S., Fewtrell, T.J. (2010). A simple inertial formulation of the
   shallow water equations for efficient two-dimensional flood inundation modelling.
