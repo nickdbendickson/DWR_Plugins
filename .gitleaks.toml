@@ -4,3 +4,10 @@ useDefault = true
 [allowlist]
 description = "detect-secrets baselines store hashed_secret values (SHA-1 of already-reviewed false positives), not secrets"
 paths = ['''(^|/)\.secrets\.baseline$''', '''^\.gitleaksignore$''']
+# `discharge_m3s` is a CSV column name read by hydro_stats_csv() in DamSafety_Runner/core/solve_gate.py
+# (and its byte-identical DamSafety_Screening copy): the discharge column ("discharge in m3/s") of a
+# hydrograph CSV, not a credential. gitleaks' generic-api-key heuristic flags the literal. This exact,
+# anchored allowlist is commit-independent, unlike a SHA-pinned .gitleaksignore fingerprint, which
+# re-orphans on every history reconciliation (it did, on the BoannGrid stack rebase). It matches the
+# exact literal only - never a path suppression of solve_gate.py, which could hide a real secret.
+regexes = ['''^discharge_m3s$''']
