@@ -36,6 +36,24 @@ def find_lisflood_reads_the_suite_setting_setup_writes():
 
 
 @test
+def find_lisflood_setting_wins_over_installer_and_path():
+    """3.24.2: the Runner setting still wins over the installer's bin and PATH, which
+    nd_data.lisflood_candidates now puts in that order."""
+    from nd_breach_runner.core import nd_data
+    fd, path = tempfile.mkstemp(prefix="lisflood_set_"); os.close(fd)
+    orig_get, orig_detect = suite_config.get, nd_data.detect_lisflood
+    try:
+        suite_config.get = lambda key, project=None: path if key == "lisflood_exe" else ""
+        nd_data.detect_lisflood = lambda check=None: "/installer/bin/lisflood"
+        assert _Base().find_lisflood({}, None) == path
+        suite_config.get = lambda key, project=None: ""
+        assert _Base().find_lisflood({}, None) == "/installer/bin/lisflood"
+    finally:
+        suite_config.get, nd_data.detect_lisflood = orig_get, orig_detect
+        os.remove(path)
+
+
+@test
 def suite_setting_empty_when_unset():
     QgsSettings._store.clear()
     # Restore NDBREACH_LISFLOOD afterwards: popping it permanently made every later MODEL_TEST
