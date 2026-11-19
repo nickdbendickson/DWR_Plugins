@@ -1,0 +1,1 @@
+var e=e=>e.replace(/&/g,`&amp;`).replace(/</g,`&lt;`).replace(/>/g,`&gt;`);export{e as t};
