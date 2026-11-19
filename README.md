@@ -15,6 +15,10 @@ They install separately and work together through a shared suite data folder.
 | DamSafety Hazard Lite | `DamSafety_HazardLite` | One Processing tool: hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters. Screening aid. |
 | DamSafety Finder | `DamSafety_Finder` | Finds structures that are not on the lists: fills across streams in the LiDAR (dams, dry dams, road fills), ponds and dugouts in a water-body layer, and road / rail stream crossings (culverts). Each is marked listed, unsure or new against the DWR, NID and bridge / culvert layers you give; the not-listed dams and ponds are also written for Screening tool 1. Screening aid. |
 
+**Crest** (`dwr_crest/`) is not a QGIS plugin: it is the desk-screening app (web and desktop) that hands dams to the
+Runner and Hazard. It was the `nickdbendickson/crest` repository until 2026-11-19 and came over with its full
+history; see [dwr_crest/README.md](dwr_crest/README.md). Its CI is `.github/workflows/crest-*.yml`.
+
 Install order: **Core → Setup → Data → Runner → Hazard**. DamSafety Core (`DamSafety_Core`) holds the
 code the others share and must be installed first. Screening, PMP, Hazard Lite and Finder are
 optional and can be added at any time. Each plugin checks the versions of the others it works with at

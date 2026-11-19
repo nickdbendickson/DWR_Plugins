@@ -4,3 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Crest (dwr_crest/), moved here from the nickdbendickson/crest repo on 2026-11-19
+  - package-ecosystem: npm
+    directory: /dwr_crest
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
