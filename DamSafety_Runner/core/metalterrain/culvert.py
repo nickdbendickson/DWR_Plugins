@@ -14,10 +14,20 @@ HDS-5 is public domain; HY-8 is the external verification oracle for the coeffic
 (a future cross-check). The equations are evaluated in English units (HDS-5's native units) with SI
 in and out, so the published coefficients apply unchanged.
 
+Coefficient discipline (nothing silent): the PRESET coefficients below are the published HDS-5
+Appendix A values, but every preset carries its printed-table `source` and ships `verified=False`.
+The head/discharge math is pure physics and runs regardless (for research / PROVISIONAL use), but an
+emitted rating - the thing a flood engine would consume as an internal boundary - is stamped
+PROVISIONAL until a caller has checked the coefficients against the printed FHWA tables and built
+the culvert with `verified=True`. After the Froehlich/Xu-Zhang breach-regression lessons, a
+hazard-affecting rating never claims PRODUCTION on constants nobody confirmed against the book.
+
     from nd_breach_runner.core.metalterrain import culvert as cv
     c = cv.Culvert.preset("circular_concrete_groove", diameter_m=1.5, length_m=20, slope=0.01)
-    hw_m = c.headwater(q_cms=8.0, tailwater_m=0.0)       # governing headwater depth (m)
-    table = c.rating([1, 2, 4, 8, 16], tailwater_m=0.0)   # [(Q, HW, control), ...]
+    hw_m = c.headwater(q_cms=8.0, tailwater_m=0.0)       # governing headwater depth (m) - pure math
+    rated = c.emit([1, 2, 4, 8, 16], tailwater_m=0.0)     # {"status": "PROVISIONAL", "table": [...]}
+    # after checking the printed HDS-5 chart for this inlet:
+    cv.Culvert.preset("circular_concrete_groove", 1.5, 20, 0.01, verified=True).emit([...])  # PRODUCTION
 """
 import math
 from dataclasses import dataclass
@@ -27,16 +37,23 @@ CFS = 0.0283168            # m^3/s per cfs
 G = 32.174                 # ft/s^2
 
 # HDS-5 inlet-control (submerged) coefficients c, Y and entrance loss ke, by shape + edge.
-# Published HDS-5 Appendix A / HY-8 values (English units); HY-8 is the verification oracle.
+# Published HDS-5 (3rd ed.) Appendix A / HY-8 values (English units); HY-8 is the verification
+# oracle. `source` names the printed configuration to confirm each set against - the exact chart /
+# scale number is left for that human check rather than asserted here from memory.
 PRESETS = {
     # circular concrete
-    "circular_concrete_groove": dict(shape="circular", c=0.0292, Y=0.74, ke=0.2, n=0.012),
-    "circular_concrete_square": dict(shape="circular", c=0.0398, Y=0.67, ke=0.5, n=0.012),
+    "circular_concrete_groove": dict(shape="circular", c=0.0292, Y=0.74, ke=0.2, n=0.012,
+        source="HDS-5 App. A, circular concrete pipe, groove end w/ headwall (inlet-control c, Y)"),
+    "circular_concrete_square": dict(shape="circular", c=0.0398, Y=0.67, ke=0.5, n=0.012,
+        source="HDS-5 App. A, circular concrete pipe, square edge w/ headwall"),
     # circular corrugated metal pipe
-    "circular_cmp_headwall": dict(shape="circular", c=0.0379, Y=0.69, ke=0.5, n=0.024),
-    "circular_cmp_projecting": dict(shape="circular", c=0.0553, Y=0.54, ke=0.9, n=0.024),
+    "circular_cmp_headwall": dict(shape="circular", c=0.0379, Y=0.69, ke=0.5, n=0.024,
+        source="HDS-5 App. A, circular corrugated metal pipe, headwall"),
+    "circular_cmp_projecting": dict(shape="circular", c=0.0553, Y=0.54, ke=0.9, n=0.024,
+        source="HDS-5 App. A, circular corrugated metal pipe, projecting (thin-wall) entrance"),
     # concrete box, 90-deg headwall
-    "box_concrete_headwall": dict(shape="box", c=0.0385, Y=0.81, ke=0.5, n=0.012),
+    "box_concrete_headwall": dict(shape="box", c=0.0385, Y=0.81, ke=0.5, n=0.012,
+        source="HDS-5 App. A, concrete box, 90-deg headwall"),
 }
 
 
@@ -51,13 +68,19 @@ class Culvert:
     ke: float                   # entrance loss coefficient
     n: float                    # Manning's n of the barrel
     span_m: float = None        # box only: width; None => circular
+    source: str = ""            # printed-table provenance of the inlet coefficients
+    verified: bool = False      # True only once a human checked the coefficients vs the HDS-5 book
 
     @classmethod
-    def preset(cls, name, diameter_m, length_m, slope=0.0, span_m=None, n=None):
+    def preset(cls, name, diameter_m, length_m, slope=0.0, span_m=None, n=None, verified=False):
+        """Build from a named HDS-5 preset. `verified=True` asserts the caller has confirmed this
+        preset's coefficients against the printed HDS-5 chart (see PRESETS[...]['source']); it is
+        what lets an emitted rating reach PRODUCTION status."""
         p = PRESETS[name]
         return cls(shape=p["shape"], diameter_m=diameter_m, length_m=length_m, slope=slope,
                    c=p["c"], Y=p["Y"], ke=p["ke"], n=n if n is not None else p["n"],
-                   span_m=span_m if p["shape"] == "box" else None)
+                   span_m=span_m if p["shape"] == "box" else None,
+                   source=p["source"], verified=bool(verified))
 
     # -- barrel geometry in English units (full-flow) --
     def _area_ft2(self):
@@ -108,9 +131,27 @@ class Culvert:
                 else "outlet")
 
     def rating(self, q_list_cms, tailwater_m=0.0):
-        """Head-discharge rating: [(Q m^3/s, HW m, control), ...] for each Q in `q_list_cms`."""
+        """Head-discharge rating: [(Q m^3/s, HW m, control), ...] for each Q in `q_list_cms`. Pure
+        physics (no status stamp); use `emit` for a rating a downstream consumer should trust."""
         return [(float(q), self.headwater(q, tailwater_m), self.control(q, tailwater_m))
                 for q in q_list_cms]
+
+    def status(self):
+        """'PRODUCTION' once the coefficients have been confirmed against the printed HDS-5 chart
+        (verified=True), else 'PROVISIONAL'. An unverified rating is never production-ready."""
+        return "PRODUCTION" if self.verified else "PROVISIONAL"
+
+    def emit(self, q_list_cms, tailwater_m=0.0):
+        """A rating stamped for downstream use (e.g. a flood engine's internal boundary): the
+        head->Q table plus its PROVISIONAL/PRODUCTION status and the coefficient provenance, so a
+        consumer can see whether the constants were ever checked against the book."""
+        return {
+            "status": self.status(),
+            "coefficients": {"c": self.c, "Y": self.Y, "ke": self.ke, "n": self.n,
+                             "source": self.source, "verified": self.verified},
+            "table": [{"Q_m3s": float(q), "HW_m": self.headwater(q, tailwater_m),
+                       "control": self.control(q, tailwater_m)} for q in q_list_cms],
+        }
 
     def discharge(self, headwater_m, tailwater_m=0.0, q_hi_cms=1.0e5):
         """Invert the rating: the discharge (m^3/s) that produces `headwater_m`, by bisection.

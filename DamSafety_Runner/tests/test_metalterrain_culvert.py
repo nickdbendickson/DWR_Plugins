@@ -63,12 +63,35 @@ def culvert_outlet_control_can_govern():
     assert c.headwater(q, tailwater_m=tw) > tw
 
 
+@test
+def culvert_coefficients_are_gated_and_sourced():
+    """Every preset carries printed-table provenance; an emitted rating is PROVISIONAL until the
+    coefficients are confirmed against the HDS-5 book (verified=True), and the verified flag changes
+    only the status stamp - never the physics."""
+    # every preset names its printed source, so nothing is a silent bare number
+    for name, p in CV.PRESETS.items():
+        assert p.get("source"), "preset {} has no coefficient provenance".format(name)
+    unver = CV.Culvert.preset("circular_concrete_groove", diameter_m=1.5, length_m=20.0, slope=0.01)
+    assert unver.verified is False and unver.status() == "PROVISIONAL"
+    em = unver.emit([2.0, 8.0])
+    assert em["status"] == "PROVISIONAL"
+    assert em["coefficients"]["source"] and em["coefficients"]["verified"] is False
+    assert len(em["table"]) == 2 and em["table"][0]["control"] in ("inlet", "outlet")
+    # a caller who has checked the chart marks it verified -> PRODUCTION
+    ver = CV.Culvert.preset("circular_concrete_groove", diameter_m=1.5, length_m=20.0, slope=0.01,
+                            verified=True)
+    assert ver.status() == "PRODUCTION" and ver.emit([2.0, 8.0])["status"] == "PRODUCTION"
+    # the status stamp is bookkeeping only: the governing headwater is identical either way
+    for q in (1.0, 4.0, 12.0):
+        assert unver.headwater(q) == ver.headwater(q), q
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
     for fn in (culvert_submerged_inlet_matches_hand_calc, culvert_rating_is_monotone,
                culvert_rating_round_trips, culvert_bigger_barrel_passes_more_flow,
-               culvert_outlet_control_can_govern):
+               culvert_outlet_control_can_govern, culvert_coefficients_are_gated_and_sourced):
         try:
             fn()
             print("ok    ", fn.__name__)
