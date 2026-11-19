@@ -71,7 +71,7 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          # appended (design #68): indices 0 and 1 and the default are unchanged
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
-# 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
+# 3.27.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
 FLOOD_ENGINES = ("lisflood", "gpu")
 FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "GPU engine (LISFLOOD-FP's ACC scheme on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
@@ -1051,7 +1051,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
                    "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
                    "- a numpy approximation, NOT LISFLOOD-FP)", advanced=True)
-        # 3.22.0: the flood engine, a choice of its own (appended; LISFLOOD-FP stays the default)
+        # 3.27.0: the flood engine, a choice of its own (appended; LISFLOOD-FP stays the default)
         p = QgsProcessingParameterEnum("FLOOD_ENGINE", "Flood engine", FLOOD_ENGINES_TEXT,
                                        defaultValue=0, optional=True)
         _set_help(p, "LISFLOOD-FP: the executable below, else the provider setting, else an "
@@ -1104,7 +1104,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
         if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
             return lfmod.BUILTIN_EXE
-        # 3.22.0: the GPU engine, likewise only by name ("gpu" / "metal")
+        # 3.27.0: the GPU engine, likewise only by name ("gpu" / "metal")
         if exe and str(exe).strip().lower() in lfmod.GPU_WORDS:
             return lfmod.GPU_EXE
         if not exe or not os.path.isfile(exe):

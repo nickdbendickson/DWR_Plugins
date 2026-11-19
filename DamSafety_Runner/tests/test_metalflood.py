@@ -201,7 +201,7 @@ def metalflood_deckio_reads_as_builtin_engine():
 
 @test
 def gpu_engine_is_a_runner_engine_choice():
-    """Runner 3.22.0: the word 'gpu' (or 'metal') and the FLOOD_ENGINE choice select the GPU
+    """Runner 3.27.0: the word 'gpu' (or 'metal') and the FLOOD_ENGINE choice select the GPU
     engine; it runs in-process, is labelled as not LISFLOOD-FP everywhere, and passes the
     Runner's own engine check (arrival-depth keyword honoured, velocity written)."""
     from nd_breach_runner.core import lisflood as lf
