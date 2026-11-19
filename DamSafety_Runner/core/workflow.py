@@ -3434,6 +3434,24 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                  or terrain_src.last_manning_counts),
             "note": "cell counts are on the last grid the models read; the source DEM is "
                     "never changed"}
+    # --- H9 (v3.22.0): land-cover Manning's n coverage, reporting only (no n value changes) --
+    _mc = getattr(terrain_src, "manning_coverage", None)
+    mcov = None
+    if callable(_mc):
+        try:
+            mcov = _mc()
+        except Exception:                             # noqa: BLE001 - reporting only
+            mcov = None
+    if mcov and mcov.get("total_cells"):
+        report["manning_coverage"] = dict(mcov)
+        _ml = ("Manning's n from the land-cover raster: {:,} of {:,} cells took the default "
+               "n = {} because the raster did not cover them.".format(
+                   int(mcov.get("default_cells", 0)), int(mcov["total_cells"]),
+                   mcov.get("default_n", st.manning_n)))
+        log(_ml)
+        if (mcov.get("default_cells") and mcov["default_cells"] > 0.25 * mcov["total_cells"]
+                and _ml not in warnings):
+            warnings.append(_ml)
     # --- v3.4.0: near-dam refine on a fine FV1 grid -----------------------------------------
     fin = final_arrays
     # M21 (product-write defence, signed off 2026-11-10): a LISFLOOD-FP build that wrote no
@@ -5022,7 +5040,8 @@ def scr_has_final(r):
 
 
 def render_report(r):
-    from .report_docx import pass_number, domain_run_text, peak_inflow_text   # stdlib only
+    from .report_docx import (pass_number, domain_run_text, peak_inflow_text,   # stdlib only
+                              run_assumption_lines, headline_peak_inputs)
     s = r["summary"]
     h = r["hydrograph"]
     lines = ["# Breach model run: {}".format(s["dam_id"]), "",
@@ -5086,6 +5105,14 @@ def render_report(r):
         lines.append("| HEC-RAS wall-clock limit | {} |".format(s["hecras_time_limit"]))
     if s.get("hecras_depth_basis"):
         lines.append("| HEC-RAS depth basis | {} |".format(s["hecras_depth_basis"]))
+    lines.append("")
+    # A5 (v3.22.0): one line naming the inputs behind the headline routed breach peak
+    _peak_inputs = headline_peak_inputs(r)
+    if _peak_inputs:
+        lines += [_peak_inputs, ""]
+    # H4b (v3.22.0): a concrete list of what this run actually used, built from the report
+    lines += ["## Assumptions used in this run", ""]
+    lines += ["- {}: {}".format(k, v) for k, v in run_assumption_lines(r)]
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
@@ -5269,6 +5296,14 @@ def render_report(r):
         for k, v in sorted(c.get("manning_edits", {}).items()):
             lines.append("- Manning's n {}: {:,} cells".format(k, v))
         lines += ["- " + c["note"], ""]
+    # H9 (v3.22.0): land-cover Manning's n coverage, if n came from a raster
+    mc = r.get("manning_coverage")
+    if isinstance(mc, dict) and mc.get("total_cells"):
+        lines += ["## Manning's n coverage", "",
+                  "- {:,} of {:,} cells took the default n = {} because the land-cover "
+                  "raster did not cover them.".format(
+                      int(mc.get("default_cells", 0)), int(mc["total_cells"]),
+                      mc.get("default_n", 0.06)), ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
     if r.get("bridge_snap"):

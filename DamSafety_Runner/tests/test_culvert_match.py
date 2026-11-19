@@ -446,7 +446,9 @@ def culvert_guess_cut_report_section_and_off_switch():
     st = W.RunSettings()
     assert st.culvert_burn_guesses is True and st.culvert_burn_matched is False
     r = copy.deepcopy(_MIN_REPORT)
-    assert "Guessed culverts cut" not in W.render_report(r)
+    # the guessed-culvert SECTION is absent with no guesses (the "Assumptions used in this run"
+    # list always carries a "Guessed culverts cut into the DEM: 0" count line, v3.22.0)
+    assert "## Guessed culverts cut" not in W.render_report(r)
     r["culvert_guesses_cut"] = [{"name": "guess: road 1 crosses channel 1", "width_m": 1.2,
                                  "height_m": 0.9, "barrels": 1, "shape": "box",
                                  "invert_up_m": 300.0 * FT, "invert_dn_m": 299.5 * FT}]

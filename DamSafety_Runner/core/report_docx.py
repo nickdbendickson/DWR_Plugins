@@ -1719,6 +1719,215 @@ def peak_inflow_text(stats):
     return txt
 
 
+def _breach_mod():
+    try:
+        from . import breach as brmod
+        return brmod
+    except Exception:                                            # pragma: no cover
+        return None
+
+
+def start_pool_basis(rep):
+    """H4a/H4b: (pool value text, basis phrase) for the reservoir level this run started at,
+    read from run_report.json. 'not recorded' / '' when the report does not carry it. Pure
+    reporting: never recomputes a number."""
+    rep = rep or {}
+    s = rep.get("summary") or {}
+    h = rep.get("hydrograph") or {}
+    scen = rep.get("scenario") or s.get("scenario")
+    br = _breach_mod()
+    method = h.get("method")
+    is_tr60 = (method in br.TR60_METHODS) if br else str(method or "").startswith("tr60")
+    is_user = (method == br.METHOD_USER) if br else (method == "user")
+    if is_user:
+        return ("", "a user-supplied outflow hydrograph (this tool did not set a starting pool)")
+    wse = h.get("starting_wse_ft")
+    rule = (h.get("starting_wse_rule") or "").strip()
+    wse_txt = "{} ft".format(fmt_val(wse)) if wse is not None else ""
+    rl = rule.lower()
+    if scen in ("flood", "flood_no_breach"):
+        # the breach starts at the pool reached during the PMF inflow, not a chosen pool
+        if "normal pool" in rl:
+            basis = "normal pool, the pool at breach initiation during the PMF inflow"
+        elif rule:
+            basis = "{} (the pool at breach initiation during the PMF inflow)".format(rule)
+        else:
+            basis = "the pool at breach initiation during the PMF inflow"
+    elif "top of dam" in rl:
+        basis = "the top of dam (ND 5.1.1)"
+    elif "pmf maximum" in rl:
+        basis = "the PMF maximum reservoir level (below the top of dam)"
+    elif "normal pool" in rl:
+        basis = "normal pool (your choice, not the ND 5.1.1 top-of-dam case)"
+    elif "stated elevation" in rl:
+        basis = "a stated elevation (your choice, not the ND 5.1.1 top-of-dam case)"
+    elif rule:
+        basis = rule
+    else:
+        basis = "not recorded"
+    if is_tr60:
+        basis += "; TR-60 screening"
+    return (wse_txt, basis)
+
+
+def _m_parts(rep):
+    """(m value text, source phrase) for the storage-curve exponent, or (None, None)."""
+    rep = rep or {}
+    h = rep.get("hydrograph") or {}
+    dam = rep.get("dam") or {}
+    m = h.get("storage_exponent_m")
+    if m is None:
+        return (None, None)
+    if dam.get("surface_area_top_ac"):
+        return (fmt_val(m), "fitted to the storage and surface area given")
+    return (fmt_val(m), "m = 2 default: no surface area given, so storage is taken "
+            "proportional to depth squared")
+
+
+def storage_m_text(rep):
+    """H4b: the storage-curve exponent m and where it came from (fitted to the given surface
+    area, or the m = 2 no-surface-area default)."""
+    mt, src = _m_parts(rep)
+    if mt is None:
+        return "not recorded"
+    return "{} ({})".format(mt, src)
+
+
+def manning_source_text(rep):
+    """H4b: the roughness this run used - a land-cover raster, or a single Manning's n."""
+    rep = rep or {}
+    st = rep.get("settings") or {}
+    cov = rep.get("manning_coverage") or {}
+    if st.get("manning_path") or st.get("manning_lut") or cov:
+        base = "from a land-cover (NLCD) raster"
+        if cov.get("default_cells") is not None and cov.get("total_cells"):
+            base += " ({:,} of {:,} cells took the default n = {} where the raster did not " \
+                    "cover them)".format(int(cov["default_cells"]), int(cov["total_cells"]),
+                                         fmt_val(cov.get("default_n", st.get("manning_n", 0.06))))
+        return base
+    n = st.get("manning_n")
+    return "single Manning's n = {}".format(fmt_val(n)) if n is not None else "not recorded"
+
+
+def datum_text(rep):
+    """H4b: the vertical datum of the dam elevations, as recorded by the run."""
+    rep = rep or {}
+    vd = rep.get("vertical_datum") or {}
+    tgt = vd.get("target")
+    if not tgt:
+        return "not recorded"
+    bits = []
+    how = vd.get("how")
+    if vd.get("source_datum") and vd.get("source_datum") != tgt:
+        bits.append("from {}".format(vd["source_datum"]))
+    if how:
+        bits.append(str(how))
+    if vd.get("applied") is False and (vd.get("shift_ft") in (None, 0, 0.0)):
+        bits.append("no shift applied")
+    return "{}{}".format(tgt, " ({})".format(", ".join(bits)) if bits else "")
+
+
+def cutoff_text(rep):
+    """H4b: whether the results were cut off before the full downstream extent."""
+    rep = rep or {}
+    co = rep.get("cut_off")
+    if isinstance(co, dict) and co.get("reason"):
+        return "cut off ({})".format(co["reason"])
+    return "not cut off (results reached the full modelled extent)"
+
+
+def routing_sentence(rep):
+    """H4a: whether, and how, the breach was routed through the reservoir, built from the run."""
+    rep = rep or {}
+    h = rep.get("hydrograph") or {}
+    br = _breach_mod()
+    method = h.get("method")
+    is_tr60 = (method in br.TR60_METHODS) if br else str(method or "").startswith("tr60")
+    is_user = (method == br.METHOD_USER) if br else (method == "user")
+    is_routed = (method in br.ROUTED_METHODS) if br else False
+    if is_user:
+        return ("The reservoir was NOT routed by this tool: the with-breach and without-breach "
+                "outflow hydrographs are the ones the user supplied.")
+    if is_tr60:
+        return ("The breach peak is NOT routed through the reservoir by this tool: it is the "
+                "NRCS TR-60 screening peak discharge, shaped into a triangular or curvilinear "
+                "hydrograph.")
+    if is_routed or h.get("peak_cfs") is not None:
+        mt, src = _m_parts(rep)
+        m_phrase = ("exponent m = {}, {}".format(mt, src) if mt is not None
+                    else "a storage exponent that was not recorded")
+        return ("The breach is routed through the reservoir with the broad-crested weir equation "
+                "and a power-law storage curve ({}).".format(m_phrase))
+    return ("Whether the breach was routed through the reservoir is not recorded in the run "
+            "report.")
+
+
+def run_assumption_lines(rep):
+    """H4b: the concrete assumptions this run used, as (label, value) pairs built from
+    run_report.json. A value absent from the report reads 'not recorded'. Shared by the docx
+    'Assumptions used in this run' list and by run_report.md. Reporting only - no number is
+    recomputed here."""
+    rep = rep or {}
+    h = rep.get("hydrograph") or {}
+    br = _breach_mod()
+
+    def g(v):
+        return "not recorded" if v in (None, "") else fmt_val(v)
+
+    wse_txt, basis = start_pool_basis(rep)
+    pool = "{} - {}".format(wse_txt, basis) if wse_txt else basis
+    method = h.get("method")
+    method_lab = (br.METHOD_LABELS.get(method, method) if br else method)
+    out = [
+        ("Starting reservoir pool", pool),
+        ("Breach method", g(method_lab)),
+        ("Average breach width (ft)", g(h.get("avg_breach_width_ft"))),
+        ("Formation time (h)", g(h.get("formation_time_hr"))),
+        ("Side slope (H:1V)", g(h.get("side_slope_h"))),
+        ("Storage-curve exponent m", storage_m_text(rep)),
+        ("Roughness (Manning's n)", manning_source_text(rep)),
+        ("Guessed culverts cut into the DEM",
+         str(len(rep.get("culvert_guesses_cut") or []))),
+        ("Vertical datum", datum_text(rep)),
+        ("Results cut off", cutoff_text(rep)),
+        ("Flood engine", g(rep.get("flood_engine_short") or rep.get("flood_engine"))),
+    ]
+    return out
+
+
+def headline_peak_inputs(rep):
+    """A5: one line naming the inputs that produced the headline routed breach peak - breach
+    height Hb, head, Vw and its source, surface area (or the m = 2 assumption), starting pool
+    and method. '' when there is no breach peak (e.g. a no-breach flood). Reporting only."""
+    rep = rep or {}
+    s = rep.get("summary") or {}
+    h = rep.get("hydrograph") or {}
+    dam = rep.get("dam") or {}
+    if s.get("peak_breach_cfs") is None or s.get("no_breach_scenario") \
+            or rep.get("scenario") == "flood_no_breach":
+        return ""
+    br = _breach_mod()
+    method = h.get("method")
+    method_lab = (br.METHOD_LABELS.get(method, method) if br else method)
+    sa = dam.get("surface_area_top_ac")
+    sa_txt = ("surface area {} ac".format(fmt_val(sa)) if sa
+              else "no surface area given (m = 2 assumed)")
+    wse_txt, basis = start_pool_basis(rep)
+    parts = []
+    if h.get("hb_ft") is not None:
+        parts.append("breach height Hb {} ft".format(fmt_val(h["hb_ft"])))
+    if h.get("hw_ft") is not None:
+        parts.append("head on the breach {} ft".format(fmt_val(h["hw_ft"])))
+    if h.get("vw_acft") is not None:
+        parts.append("Vw {} ac-ft ({})".format(
+            fmt_val(h["vw_acft"]), h.get("vw_source") or "source not recorded"))
+    parts.append(sa_txt)
+    parts.append("starting pool {}".format(wse_txt or basis))
+    if method_lab:
+        parts.append("method {}".format(method_lab))
+    return "Inputs to this peak: " + "; ".join(parts) + "."
+
+
 def label_of(key):
     if key in LABELS:
         return LABELS[key]
@@ -2241,6 +2450,10 @@ class _Report(object):
         add("Run finished", self.rep.get("run_finished"))
         add("Software", self.rep.get("tool"))
         self.kv(rows, head=("Item", "Result"), caption="Key results")
+        # A5 (v3.22.0): one line naming the inputs behind the headline routed breach peak.
+        peak_inputs = headline_peak_inputs(self.rep)
+        if peak_inputs:
+            self.note(peak_inputs)
         if s.get("units"):
             self.note("Units: {}.".format(s["units"]))
         if self.no_breach:
@@ -2926,11 +3139,10 @@ class _Report(object):
             "user. They are estimates from regression equations that differ from one another "
             "by a factor of two or more; they are not measured behaviour of this dam.".format(
                 method),
-            "The starting reservoir level is the top of dam, or the PMF maximum reservoir level "
-            "when that is lower. The breach is routed through the reservoir with the "
-            "broad-crested weir equation and a power-law storage curve fitted to the storage "
-            "and surface area given (volume proportional to depth squared when no surface area "
-            "is given).",
+            # H4a (v3.22.0): the start-pool and routing sentence is built from THIS run, not a
+            # fixed top-of-dam claim, so a normal-pool, stated-pool, flood, TR-60 or
+            # user-hydrograph run reads truthfully.
+            "{} {}".format(self._start_pool_sentence(), routing_sentence(self.rep)),
             "The flood scenario uses level-pool routing, a weir crest and the spillway rating "
             "supplied. Gated spillways, outlet works and pool operations are not modelled "
             "unless they are in the rating.",
@@ -2983,9 +3195,24 @@ class _Report(object):
                     "confirm before the results are relied on.")
         self.sub("Assumptions made by the tool")
         d.bullets(a)
+        # H4b (v3.22.0): a concrete list of what THIS run actually used, built from the run
+        # report (not the generic caveats above). Reporting only; absent values read "not
+        # recorded".
+        if self.rep:
+            self.sub("Assumptions used in this run")
+            self.kv([(k, val) for k, val in run_assumption_lines(self.rep)],
+                    head=("Assumption", "This run"),
+                    caption="Values this run used (from the run report)")
         self.sub("To be verified before submittal")
         d.bullets(v)
         return True
+
+    def _start_pool_sentence(self):
+        """H4a: the starting-reservoir-level sentence, built from this run's report."""
+        wse_txt, basis = start_pool_basis(self.rep)
+        if wse_txt:
+            return "The reservoir starts at {}, {}.".format(wse_txt, basis)
+        return "The starting reservoir level is {}.".format(basis)
 
     # -- section 10 ----------------------------------------------------------------------
     def sec_repro(self):

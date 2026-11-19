@@ -407,7 +407,7 @@ def froehlich_1995_peak(vw_m3, hw_m):
 
 def mlm_1984(vw_m3, hw_m, embankment_area_m2):
     """MacDonald & Langridge-Monopolis (1984), earthfill: eroded volume
-    Ver = 0.0261 (Vw hw)^0.769 (m3), formation time tf = 0.0179 Ver^0.364 (hr).
+    Ver = 0.0261 (Vw hw)^0.769 (m3), formation time tf = 0.0179·Ver^0.364 (hr).
     The average width is the eroded volume divided by the embankment
     cross-section area at the breach; side slopes taken as 1H:1V."""
     vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
@@ -704,8 +704,11 @@ def breach_parameters(method, c, dam, ov):
                          "slopes was assumed. Enter the real geometry.")
         b, tf, z = mlm_1984(c.vw, hw, a_ft2 * FT * FT)
         src = "MacDonald & Langridge-Monopolis (1984), earthfill"
+        # M2 (v3.22.0): the units the MLM regressions are locked to, appended verbatim; the
+        # failure time is tf = 0.0179 Ver^0.364. Text only - no coefficient or value changes.
         notes.append("MacDonald & Langridge-Monopolis side slope taken as 1H:1V; override it "
-                     "if the embankment differs.")
+                     "if the embankment differs. Failure time tf = 0.0179·Ver^0.364. "
+                     "SI only: Vout in m3, hw in m, Ver in m3.")
         if hb < dam.dam_height_ft * FT - 0.03:
             notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the MLM "
                          "embankment cross-section is measured over the breach height, not the "
