@@ -68,19 +68,31 @@ def manning_lut(overrides=None, default=0.06):
     return lut
 
 
-def nlcd_to_manning(codes, lut=None):
+def nlcd_to_manning(codes, lut=None, counts=None):
     """Array of NLCD class codes -> array of n (NaN codes and unknown classes
-    get the default)."""
+    get the default). When `counts` is a dict it is filled with the coverage of this
+    read (total_cells, default_cells = cells that took the default n because no class
+    matched, nodata_cells, default_n); the returned n values are unchanged either way
+    (H9: reporting only)."""
     import numpy as np
     lut = lut or manning_lut()
     a = np.asarray(codes, dtype=float)
-    out = np.full(a.shape, float(lut.get("default", 0.06)))
+    default_n = float(lut.get("default", 0.06))
+    out = np.full(a.shape, default_n)
     ok = np.isfinite(a)
     ai = np.where(ok, a, -1).astype(int)
+    covered = np.zeros(a.shape, dtype=bool)
     for code, n in lut.items():
         if code == "default":
             continue
-        out[ok & (ai == int(code))] = float(n)
+        m = ok & (ai == int(code))
+        out[m] = float(n)
+        covered |= m
+    if counts is not None:
+        counts["total_cells"] = int(a.size)
+        counts["default_cells"] = int((~covered).sum())
+        counts["nodata_cells"] = int((~ok).sum())
+        counts["default_n"] = default_n
     return out
 
 
