@@ -339,17 +339,38 @@ def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print)
     length = meta["up_m"] + meta["down_m"]
     sim_s = (sim_hr or max(24.0, length / 1000.0 * 1.6)) * 3600.0
     hyd = Hydrograph(t_s=np.array([0.0, sim_s + 3600.0]), q_cms=np.array([q, q]), method="steady")
-    st = lf.LisfloodSettings(exe or os.environ.get("LISFLOOD_EXE", "lisflood"), threads,
-                             manning_n=n if n else 0.06, manning_grid=man, sim_time_s=sim_s)
     wd = os.path.join(folder, "runs", tag)
     line = [tuple(p) for p in meta["inflow"]["line"]]
-    par = lf.write_inputs(wd, dem, tuple(meta["inflow"]["xy"]), hyd, st, inflow_line=line)
+    inflow_xy = tuple(meta["inflow"]["xy"])
+    exe_path = exe or os.environ.get("LISFLOOD_EXE", "lisflood")
+    mann = n if n else 0.06
+
+    def once(theta, cfl):
+        s = lf.LisfloodSettings(exe_path, threads, manning_n=mann, manning_grid=man,
+                                sim_time_s=sim_s, theta=theta, cfl=cfl)
+        p = lf.write_inputs(wd, dem, inflow_xy, hyd, s, inflow_line=line)
+        lf.run(wd, p, s, log=lambda m: None)
+        return s
+
     t0 = time.time()
-    lf.run(wd, par, st, log=lambda m: None)
+    st = once(1.0, None)                               # LISFLOOD-FP's own ACC settings
+    verr = _volume_error_pct(lf, wd, dem, st, hyd)
+    stable = False
+    # Mirror the Runner's cure (workflow.py): if the default ACC run loses mass balance (the
+    # solver "makes water"), repeat with the stable settings rather than score a blown-up run.
+    # Converged runs never trigger it, so results already published do not move.
+    if verr is not None and verr > lf.STABILITY_RETRY_PCT:
+        say("{} {}: default run lost mass balance ({:.1f}% of injected); repeating with "
+            "theta {:g} / CFL {:g}".format(meta["gauge"]["id"], tag, verr,
+                                           lf.STABLE_THETA, lf.STABLE_CFL))
+        stable = True
+        st = once(lf.STABLE_THETA, lf.STABLE_CFL)
+        verr = _volume_error_pct(lf, wd, dem, st, hyd)
     hmax = Grid.read_asc(os.path.join(wd, "results", "run.max")).data
     wse = np.where(hmax > 0.05, dem.data + hmax, np.nan)
     out = {"tag": tag, "n": n, "nlcd": bool(nlcd), "q_cms": q, "sim_hr": sim_s / 3600.0,
-           "wall_s": round(time.time() - t0, 1)}
+           "wall_s": round(time.time() - t0, 1), "volume_error_pct": verr,
+           "stable_rerun": stable, "acc_theta": st.theta, "acc_cfl": st.cfl}
     out.update(read_gauge(meta, dem, wse))
     out.update(balance(os.path.join(wd, "results", "run.mass")))
     with open(os.path.join(wd, "result.json"), "w", encoding="utf-8") as f:
@@ -390,6 +411,15 @@ def balance(mass):
         return {"qout_over_qin": round(float(qo[tail].mean() / max(qi[tail].mean(), 1e-9)), 3)}
     except (OSError, ValueError, IndexError):
         return {}
+
+
+def _volume_error_pct(lf, wd, dem, st, hyd):
+    """LISFLOOD-FP's max volume error (% of injected), or None if it can't be read. Used only to
+    decide the stability re-run; the gauge WSE still comes from run.max exactly as before."""
+    try:
+        return lf.read_results(wd, dem, st, hyd).stats.get("max_volume_error_pct")
+    except Exception:  # noqa: BLE001 -- a partial/limited run can't be assessed, so skip the cure
+        return None
 
 
 # ------------------------------------------------------------------------------ score
