@@ -32,7 +32,7 @@
  "servers.py": "96afd4d0c10c56da4c01a8a2fb18f0dd660da5db06b281330dc272e31d353c3e",
  "services.py": "ffe05d45f0ca490801f94832c8d782b4b56e0ef35929c3b3b431c0da817d1fff",
  "settings.py": "87bb840224ffb56db7127ad2956b272b70d52f8ff2c71e3e39480003f4d5d8d1",
- "shared_defaults.py": "0baaffd60d14f29ac508503ea38ecffed8135213545a8438256048f692e565d2",
+ "shared_defaults.py": "983d702e1b2595b615d8e484556fac26fc252b73ed1854a4beeaf156e4040fa7",
  "solvegate.py": "ce938b1c7930dc027ee60fecdc5a0aceb83c6b6e425fc8cd92fa80e3e029f1da",
  "structure_flags.py": "25864cea36e53112222f01e0a8e5eae32101598a586845b68ddf57bb9e5697f6",
  "suite_config.py": "864c6eeb607dfd21c2a8b70a84cc1403f0366ccf7f7aa17531c2f4ef996bbbb6",

@@ -104,7 +104,8 @@ def culvert_matched_rows_become_structures_and_csv():
     lines = open(p).read().splitlines()
     assert lines[0].split(",")[5] == "barrels" and lines[0].split(",")[8] == "match_m"
     assert lines[1].split(",")[6] == "NDDOT 09-116-20.0" and lines[1].split(",")[8] == "0.0"
-    assert lines[2].split(",")[7] == "no" and len(lines[2].split(",")) == 14
+    assert lines[2].split(",")[7] == "no" and len(lines[2].split(",")) == 15
+    assert lines[0].split(",")[14] == "on_dam" and lines[2].split(",")[14] == "no"
 
 
 @register
@@ -269,6 +270,55 @@ def culvert_matches_section_in_run_report():
             "8.0 | 2 | box | yes |  |") in md, md
     r["culvert_matches"][0].update(invert_up_m=300.0 * FT, invert_dn_m=299.5 * FT)
     assert "| box | yes | 300.0 / 299.5 |" in W.render_report(r)
+
+
+@register
+def culvert_guess_on_dam_marks_cut_crossing_dam_line():
+    """H6-1: a guessed cut that crosses the DWR dam line is marked on_dam (CSV column and the
+    guessed-culvert report table) and counted for the warning. Mark/report only: no size,
+    invert, cut geometry or structure changes."""
+    import copy
+    import os as _os
+    import tempfile
+    from nd_breach_runner.core import culvert_guess as cg
+    from nd_breach_runner.core import workflow as W
+    road = [(0.0, -500.0), (0.0, 500.0)]
+    chan = [(-600.0, 0.0), (600.0, 0.0)]
+    rows = cg.guess_crossings([road], [chan])            # one guess at (0, 0), cut along x
+    assert len(rows) == 1 and rows[0].get("match_m") is None
+    line_before = [tuple(p) for p in rows[0]["line"]]
+    cut_before = cg.burn_line(rows[0])
+    dam_line = [(0.0, -30.0), (0.0, 30.0)]               # crosses the along-channel cut at origin
+    assert cg.mark_on_dam(rows, dam_line) == 1
+    assert rows[0]["on_dam"] is True
+    # mark/report only: cut geometry and the guessed structure are untouched
+    assert [tuple(p) for p in rows[0]["line"]] == line_before
+    assert cg.burn_line(rows[0]) == cut_before
+    ss = cg.guess_structures(rows)
+    assert len(ss) == 1 and abs(ss[0].width_m - 1.2) < 1e-9 and \
+        abs(ss[0].height_m - 0.9) < 1e-9 and ss[0].barrels == 1
+    # a dam line the cut does not reach: not marked, not counted
+    far = cg.guess_crossings([road], [chan])
+    assert cg.mark_on_dam(far, [(1000.0, -30.0), (1000.0, 30.0)]) == 0
+    assert far[0]["on_dam"] is False
+    # no dam line: nothing marked
+    none = cg.guess_crossings([road], [chan])
+    assert cg.mark_on_dam(none, None) == 0 and none[0]["on_dam"] is False
+    # CSV carries the on_dam column as the last field
+    p = _os.path.join(tempfile.mkdtemp(), "c.csv")
+    cg.write_candidates_csv(p, rows)
+    csv_lines = open(p).read().splitlines()
+    assert csv_lines[0].split(",")[-1] == "on_dam"
+    assert csv_lines[1].split(",")[-1] == "yes"
+    # the guessed-culvert report table carries an On dam column
+    r = copy.deepcopy(_MIN_REPORT)
+    r["culvert_guesses_cut"] = [{"name": "guess: road 1 crosses channel 1", "width_m": 1.2,
+                                 "height_m": 0.9, "barrels": 1, "shape": "box",
+                                 "invert_up_m": 300.0 * FT, "invert_dn_m": 299.5 * FT,
+                                 "on_dam": True}]
+    md = W.render_report(r)
+    assert "| On dam |" in md
+    assert "| 300.0 / 299.5 | yes |" in md, md
 
 
 CLP = os.path.join(SOURCES, "research", "nddot_centerline_pipes.gpkg")

@@ -306,12 +306,20 @@ def runner_method(values):
 
 def from_runner_method(method_id):
     """(failure_mode, breach_method) of a Runner METHOD id; failure_mode None when the equation
-    does not use it; (None, None) for your own hydrograph."""
+    does not use it; (None, None) for your own hydrograph. An Xu & Zhang (2009) run records its
+    failure mode and the "xu_zhang2009" equation (3.22.x)."""
     for (mode, m), rid in RUNNER_METHOD.items():
         if rid == method_id:
             return mode, m
     if method_id == "piping_orifice":
         return "piping", "froehlich2008"
+    # 3.22.x (M3b): an Xu & Zhang (2009) run (Runner METHOD_XZ_PIPING / METHOD_XZ_OVERTOPPING)
+    # uses the failure mode its method id names. Record that mode and the "xu_zhang2009"
+    # equation so dam.json no longer stores null for an XZ run. "xu_zhang2009" is not (yet) a
+    # shared-defaults breach_method choice, so it is recorded but cannot be a run's default.
+    if method_id in ("xu_zhang2009_piping", "xu_zhang2009_overtopping"):
+        return ("piping" if method_id == "xu_zhang2009_piping" else "overtopping",
+                "xu_zhang2009")
     for m, rid in RUNNER_METHOD_ANY.items():
         if rid == method_id:
             return None, m
