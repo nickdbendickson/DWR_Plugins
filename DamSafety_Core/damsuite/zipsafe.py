@@ -34,6 +34,7 @@ MAX_TILE_BYTES = 8 * GB              # one LiDAR tile zip (real ones: tens of MB
 MAX_DATASET_BYTES = 64 * GB          # one data set of the updater
 MAX_PACKAGE_BYTES = 64 * GB          # a submittal / DSS-WISE package, an offline pack
 MAX_DOWNLOAD_BYTES = 64 * GB         # one downloaded file, when the caller names no limit
+MAX_ROW_BYTES = 64 * 1024 ** 2       # one zlib-packed pack feature row (real ones: KB, a few MB)
 ENV = "NDSUITE_ZIP_MAX_GB"
 
 
@@ -159,3 +160,19 @@ def copy_capped(read, write, max_bytes=MAX_DOWNLOAD_BYTES, what="the download", 
                 "{} is larger than {} and was stopped; set {} to a larger number of GB if it "
                 "is really that large".format(what, _gb(cap), ENV))
         write(chunk)
+
+
+def inflate(blob, max_bytes=MAX_ROW_BYTES, what="a pack feature row"):
+    """zlib.decompress(blob), refused with TooLarge once the output passes `max_bytes` (security
+    audit 2026-11-18: an offline pack is a file someone hands the user, and a ~200 KB row that
+    inflates ~1000x ran QGIS out of memory). Never allocates more than max_bytes + one block.
+    A corrupt blob still raises zlib.error, as zlib.decompress did."""
+    import zlib
+    d = zlib.decompressobj()
+    out = d.decompress(blob, max_bytes + 1)
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise TooLarge("{} unpacks to more than {}; refused".format(what, _gb(max_bytes)))
+    out += d.flush()
+    if len(out) > max_bytes:
+        raise TooLarge("{} unpacks to more than {}; refused".format(what, _gb(max_bytes)))
+    return out

@@ -40,6 +40,7 @@ QgsSettings is used when it can be imported).
 import datetime
 import json
 import os
+import re
 
 KEY_DATA = "ndsuite/data_folder"
 KEY_DAMS = "ndsuite/dams_folder"
@@ -378,6 +379,8 @@ def _v1_manifest(db):
         for name, count, status, geom in rows:
             if status not in OP.USABLE_STATUS or not count:
                 continue
+            if not _v1_name_ok(name):
+                continue        # security audit 2026-11-18: a name like "HIFLD_/../x" left the cache
             e = dict(listed.get(name) or {}) if isinstance(listed.get(name), dict) else {}
             e.update({"count": int(count), "status": status, "geometry": geom or "",
                       "group": GP.group_of(name)})
@@ -392,6 +395,16 @@ def _v1_manifest(db):
         out = {"datasets": {}, "rasters": {}}
     _V1_MANIFESTS[db] = (stamp, out)
     return out
+
+
+_V1_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _v1_name_ok(name):
+    """A format-1 data set name usable as a cache file name: letters, digits and underscores only
+    (every real one, e.g. HIFLD_local_eoc, NHD_flowlines). A pack is a file someone may have
+    handed the user, so a name holding a path separator or '..' is ignored, never joined."""
+    return isinstance(name, str) and bool(_V1_NAME.match(name))
 
 
 def pack_cache_root():
@@ -421,8 +434,13 @@ def _v1_layer(db, name):
     the .sqlite changes. "" when it cannot be written."""
     try:
         from . import gpkgpack as GP
+        if not _v1_name_ok(name):
+            return ""
+        root = os.path.realpath(pack_cache_root())
         folder = os.path.join(pack_cache_root(), _v1_key(db), GP.group_of(name))
         path = os.path.join(folder, name + ".gpkg")
+        if not os.path.realpath(path).startswith(root + os.sep):
+            return ""           # never write outside the cache (security audit 2026-11-18)
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             return path
         os.makedirs(folder, exist_ok=True)

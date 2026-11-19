@@ -101,6 +101,21 @@ def shared_assumptions_record_what_the_run_used():
 
 
 @test
+def shared_assumptions_record_xu_zhang_method():
+    # 3.22.x (M3b): an Xu & Zhang (2009) breach run records its failure mode and the
+    # xu_zhang2009 equation into dam.json's "assumptions" instead of null.
+    with _YourFile(None):
+        e = wf._assumptions(_st(breach_method=br.METHOD_XZ_PIPING), "3.22.0", [].append, [])
+    assert e["used"]["failure_mode"] == "piping", e["used"]
+    assert e["used"]["breach_method"] == "xu_zhang2009", e["used"]
+    with _YourFile(None):
+        e = wf._assumptions(_st(breach_method=br.METHOD_XZ_OVERTOPPING), "3.22.0", [].append, [])
+    assert e["used"]["failure_mode"] == "overtopping", e["used"]
+    assert e["used"]["breach_method"] == "xu_zhang2009", e["used"]
+    json.dumps(e)
+
+
+@test
 def shared_assumptions_flood_run_records_the_pmf_rule():
     fi = fl.FloodInputs.triangle(3000.0, 12.0, 48.0, normal_pool_ft=1090.0)
     with _YourFile({"pmf_breach_volume": "max_storage"}):

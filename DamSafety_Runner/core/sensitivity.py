@@ -176,7 +176,8 @@ def default_cases(base_method, width=(0.7, 1.4), time=(0.5, 2.0), manning=(0.75,
         cs.append(Case("Manning x{:g}".format(f), GROUP_N, n_factor=f))
     if methods:
         for m in (brmod.METHOD_PIPING, brmod.METHOD_OVERTOPPING, brmod.METHOD_F95_PIPING,
-                  brmod.METHOD_MLM, brmod.METHOD_VTG, brmod.METHOD_TR60):
+                  brmod.METHOD_MLM, brmod.METHOD_VTG, brmod.METHOD_XZ_PIPING,
+                  brmod.METHOD_TR60):
             if m == base_method:
                 continue
             if m in (brmod.METHOD_MLM, brmod.METHOD_TR60) and not has_geometry:

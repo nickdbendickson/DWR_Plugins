@@ -193,7 +193,7 @@ Each problem then gets one line, `ERROR: <layer>: ...`, `WARNING: <layer>: ...` 
 | `note: ... is not in manifest.json (not used)` | An extra GeoPackage sits in the folder. | Nothing to do; it's ignored. |
 | `note: a zipped format-... pack: ... checked once it is unpacked` | A `.zip` was chosen. | Nothing to do. |
 
-The Screening preflight row says the same thing: "The layers named are missing or not what the manifest says: rebuild or update the offline pack, or pick those layers on the Inputs tab."
+The Screening preflight row says the same thing: "The layers named are missing or not what the manifest says: rebuild or update the offline pack, or pick those layers under Override inputs on the Run tab." (Screening 0.20.4; before it said "on the Inputs tab".)
 
 **Required layers**
 - Only `NSI_structures` (the structure inventory) is required today. *(Pending decision: whether more layers should be required, for example `USA_Structures` or `NDGISHUB_address_points`.)*

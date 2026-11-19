@@ -73,22 +73,25 @@ def simulate(net, excess_in, dt_hr, initial_full_frac=0.0, other_exit_to_outlet=
         full = {k: S[k] >= V[k] * (1 - 1e-9) for k in V}
         conn = {}
         def connected(k):
+            # k counts when it and every pothole below it to the outlet are full. Settle the chain from its
+            # downstream end, so each pothole gets its OWN answer (0.6.0 gave every pothole below k k's
+            # answer: one pothole not yet full upstream marked its whole full chain as not connected, and the
+            # contributing area depended on the order of the potholes in the network).
             if k in conn:
                 return conn[k]
-            c, ok, seen = k, True, []
-            while c > 0:
-                if c in conn:
-                    ok = ok and conn[c]; break
+            seen, on_path, c = [], set(), k
+            while c > 0 and c not in conn and c not in on_path:
                 seen.append(c)
-                if not full[c]:
-                    ok = False
+                on_path.add(c)
                 c = T[c]
-            if c == -1 and not other_exit_to_outlet:
-                ok = False
-            for s_ in seen:
-                conn[s_] = ok if s_ == seen[0] else conn.get(s_, ok)
-            conn[k] = ok
-            return ok
+            for s_ in reversed(seen):
+                j = T[s_]
+                if j > 0:
+                    down = conn.get(j, False)          # False only for a spill loop (no way to the outlet)
+                else:
+                    down = j == 0 or other_exit_to_outlet
+                conn[s_] = full[s_] and down
+            return conn[k]
         ca = direct + sum(A[k] for k in V if connected(k))
         out["outlet_m3"][t] = to_outlet
         out["stored_m3"][t] = sum(S.values())

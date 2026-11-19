@@ -316,6 +316,9 @@ _METHOD_ALIASES.update({
     "mlm": brmod.METHOD_MLM, "macdonald": brmod.METHOD_MLM, "vtg": brmod.METHOD_VTG,
     "vonthun": brmod.METHOD_VTG, "tr60triangular": brmod.METHOD_TR60,
     "tr60curve": brmod.METHOD_TR60_CURVE,
+    "xuzhangpiping": brmod.METHOD_XZ_PIPING, "xzpiping": brmod.METHOD_XZ_PIPING,
+    "xuzhangovertopping": brmod.METHOD_XZ_OVERTOPPING,
+    "xzovertopping": brmod.METHOD_XZ_OVERTOPPING,
 })
 
 

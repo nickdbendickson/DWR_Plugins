@@ -276,7 +276,7 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(k6, json.loads(json.dumps(k6)))      # as it comes back from done.json
         self.assertIsNone(rfs.settings_key("0.6.0", a, None)["dem"])
         # a tile made by script 1.0 or 1.1 is a tile of script 1.2: the key holds the first number only
-        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.3", "1"))
+        self.assertEqual((rfs.SCRIPT_VERSION, k6["script"]), ("1.4", "1"))
 
     def test_tile_box_from_done_json_or_from_the_id(self):
         self.assertEqual(rfs.tile_box("T10_W0370_N2620"), (-370000.0, 2620000.0, -360000.0, 2630000.0))
@@ -284,6 +284,39 @@ class NoGdal(unittest.TestCase):
         self.assertEqual(rfs.tile_box("x", {"box": [1, 2, 3, 4]}), (1.0, 2.0, 3.0, 4.0))
         for t in rfs.lattice((-381234.5, -12000.0, 9000.0, 26000.0), 10000.0) + rfs.lattice((-7000.0, -7000.0, 7000.0, 7000.0), 5000.0):
             self.assertEqual(rfs.tile_box(t.id), t.box)
+
+
+class RankOrder(unittest.TestCase):
+    """rank_order_sql (script 1.4) in SQLite gives the order of the Finder's review_order."""
+
+    def test_sql_order_is_the_review_order(self):
+        import sqlite3
+        p = os.path.normpath(os.path.join(HERE, "..", "..", rfs.ENGINE, "core", "evidence.py"))
+        if not os.path.isfile(p):
+            self.skipTest("no Finder checkout beside the script")
+        spec = importlib.util.spec_from_file_location("finder_evidence", p)
+        ev = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ev)
+        rng = random.Random(7)
+        pool = "DEM pool outlet"
+        edges = [1.0, 0.9, 0.3, 0.7, 0.29999, 0.5, 0.0, 0.4, 0.8, 0.1, 0.2, 0.6]
+        for trial in range(40):
+            n = 60
+            scores = [rng.choice(edges) if rng.random() < 0.3 else round(rng.random(), 3) for _ in range(n)]
+            scores = [None if rng.random() < 0.05 else s_ for s_ in scores]
+            outs = [rng.random() < 0.3 for _ in range(n)]
+            drop = rng.choice([1, 4, 4, 9])
+            db = sqlite3.connect(":memory:")
+            db.execute("CREATE TABLE embankments (i INTEGER, score REAL, line_source TEXT, height_ft REAL, "
+                       "find_id TEXT, tile TEXT)")
+            db.executemany("INSERT INTO embankments VALUES (?, ?, ?, ?, ?, ?)",
+                           [(i, scores[i], pool if outs[i] else "stream line", float(n - i), "F{:04d}".format(i), "T")
+                            for i in range(n)])
+            got = [r[0] for r in db.execute("SELECT i FROM embankments ORDER BY " + rfs.rank_order_sql(drop, pool))]
+            want = ev.review_order(scores, outlets=outs, outlet_drop=drop)
+            self.assertEqual(got, sorted(range(n), key=want.__getitem__), (trial, drop))
+        self.assertIn("''", rfs.rank_order_sql(4, "it's"))       # a quote in the name is escaped
+        self.assertEqual((rfs.OUTLET_DROP_DEFAULT, rfs.SCORE_BAND), (ev.OUTLET_DROP_BANDS, ev.SCORE_BAND))
 
 
 class PackLookup(unittest.TestCase):
@@ -1274,6 +1307,49 @@ class Seams(unittest.TestCase):
         return self._tile("T10_W0370_N2620", [(-369000.0 + 1500.0 * i, 2621000.0 + 1500.0 * i, 4.0 + 3.0 * i, None,
                                                1600.0, None, S) for i in range(5)])
 
+    def test_pond_outlet_fills_rank_four_bands_lower(self):
+        """Script 1.4: the ranked lists are the Finder's review order without the imagery - a fill
+        on a pond-outlet line counts --outlet-drop (4) score bands lower and after the other fills
+        of its band. --outlet-drop 0 gives the score order of script 1.3."""
+        from importlib import import_module
+        ev = import_module(rfs.ENGINE + ".core.evidence")
+        if not hasattr(ev, "OUTLET_DROP_BANDS"):
+            self.skipTest("this Finder is older than 0.7.2 (no pond-outlet review order to compare with)")
+        S, P = self.finder.LINE_STREAM, self.finder.LINE_POOL
+        src = [P, S, P, S, S, P, S, S]
+        self._tile("T10_W0370_N2620", [(-369000.0 + 1100.0 * i, 2621000.0 + 900.0 * i, 4.0 + 2.0 * i, None,
+                                        1600.0, None, src[i]) for i in range(len(src))])
+        out = []
+        rfs.merge(rfs.parser().parse_args(["--no-checksums", "--top", "8"]), self.finder, self.d, {"k": 1},
+                  "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+        ranked, top = self._csv(rfs.OUT_CSV), self._csv(rfs.OUT_TOP)
+        self.assertEqual(len(ranked), 8)
+        self.assertEqual([r["find_id"] for r in top], [r["find_id"] for r in ranked])
+        scores = [float(r["score"]) for r in ranked]
+        outs = [r["line_source"] == P for r in ranked]
+        self.assertEqual(sum(outs), 3)
+        # the order is the engine's review_order on these scores and flags (the CSV is in it)
+        self.assertEqual(ev.review_order(scores, outlets=outs), list(range(1, 9)))
+        # the test fills all score under 0.1, one band: the pond-outlet fills come last, by score
+        self.assertEqual(outs, [False] * 5 + [True] * 3)
+        self.assertEqual(scores[5:], sorted(scores[5:], reverse=True))
+        self.assertTrue(any(ln.startswith("  in the order to look at them") and "(3)" in ln for ln in out))
+        info = dict((r["key"], r["value"]) for r in self._merged("run_info"))
+        self.assertIn("4 band(s) lower", info["order"])
+        cand = self._merged("candidates")
+        self.assertEqual([r["find_id"] for r in cand], [r["find_id"] for r in ranked])
+        self.assertEqual([r["rank"] for r in cand], list(range(1, 9)))
+        # --outlet-drop 0: highest score first, as script 1.3
+        rfs.merge(rfs.parser().parse_args(["--no-checksums", "--outlet-drop", "0"]), self.finder, self.d, {"k": 1},
+                  "/no/such/dem.vrt", None, "none", {}, {}, self._model(), out.append)
+        plain = [float(r["score"]) for r in self._csv(rfs.OUT_CSV)]
+        self.assertEqual(plain, sorted(plain, reverse=True))
+        self.assertEqual(dict((r["key"], r["value"]) for r in self._merged("run_info"))["order"], "score, height")
+        self.assertIn("  highest score first (--outlet-drop 0)", out)
+        self.assertFalse(any("Pond-outlet fills come later" in ln for ln in out[out.index("  highest score first (--outlet-drop 0)"):]))
+        with self.assertRaises(rfs.UserError):
+            rfs.outlet_drop(rfs.parser().parse_args(["--outlet-drop", "-1"]))
+
     def test_short_list_and_score_count(self):
         ids = self._five()
         a = rfs.parser().parse_args(["--no-checksums", "--top", "3"])
@@ -1300,8 +1376,12 @@ class Seams(unittest.TestCase):
         info = dict((r["key"], r["value"]) for r in self._merged("run_info"))
         self.assertEqual(info["candidates_score_0.5_or_more"], str(want))
         self.assertEqual(info["short_list_rows"], "3")
-        self.assertIn("  with a score of 0.5 or more: {:,}".format(want), out)
-        self.assertTrue(any(ln.startswith("    work down the list to about here") for ln in out))
+        self.assertIn("  with a score of 0.5 or more: {:,} (0 of them on a pond-outlet line)".format(want), out)
+        self.assertTrue(any(ln.startswith("    work down the list to about a score of 0.5") for ln in out))
+        self.assertTrue(any(ln.startswith("  in the order to look at them") for ln in out))
+        self.assertEqual([t["line_source"] for t in top], [r["line_source"] for r in ranked[:3]])
+        self.assertEqual([t["pool"] for t in top], [r["pool"] for r in ranked[:3]])
+        self.assertEqual(set(t["line_source"] for t in top), {self.finder.LINE_STREAM})
         self.assertTrue(any(rfs.OUT_TOP in ln and "top 3" in ln for ln in out))
         # --top 0: no short list, and the one of an earlier merge is taken away
         a = rfs.parser().parse_args(["--no-checksums", "--top", "0"])
@@ -1585,7 +1665,7 @@ class Seams(unittest.TestCase):
         self.assertEqual((info["candidates_crowded"], info["short_list_crowded"]), ("16", str(in_top)))
         self.assertTrue(info["crowd_km2"].startswith("4.5 "))
         self.assertEqual(info["crowd_fills_counted"], "19")  # the 16, the one alone and the two of the east tile
-        self.assertEqual(info["script"], "run_finder_statewide.py 1.3")
+        self.assertEqual(info["script"], "run_finder_statewide.py 1.4")
         ds = ogr.Open(os.path.join(self.d, rfs.OUT_GPKG))
         for layer, lead in (("embankments", []), ("candidates", ["rank"])):
             names = rfs.field_names(ds.GetLayerByName(layer))
@@ -1764,6 +1844,12 @@ class WholeRun(unittest.TestCase):
         vrt = os.path.join(folder, "ND test.vrt")
         gdal.BuildVRT(vrt, [os.path.join(folder, "a.tif")])
         return vrt
+
+    def test_negative_outlet_drop_is_refused_before_anything_runs(self):
+        rc, _so, se = self._main(["--dem", self._dem(), "--out", self.out, "--outlet-drop", "-1"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--outlet-drop must be 0 or more", se)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "tiles")))
 
     def test_out_inside_the_data_folder_is_refused_also_under_another_spelling(self):
         vrt = self._dem()

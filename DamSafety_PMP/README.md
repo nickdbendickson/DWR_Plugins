@@ -150,9 +150,9 @@ It runs as a QGIS Processing algorithm. **It has not been validated against ArcG
 | | |
 |---|---|
 | Plugin folder / module | `DamSafety_PMP` in this repo (was `nd_pmp`) |
-| Plugin name (metadata) | DamSafety PMP (prototype) (was "ND PMP Tool (prototype)" to 0.4.0), version 0.4.1, experimental |
+| Plugin name (metadata) | DamSafety PMP (prototype) (was "ND PMP Tool (prototype)" to 0.4.0), version 0.6.0, experimental |
 | Processing provider id | `ndpmp` ("ND PMP (prototype)") |
-| Algorithm ids | `ndpmp:pmp` ("PMP Evaluation (main tool)"), `ndpmp:inflow_hydrograph`, `ndpmp:pothole_storage` (v0.2.0) |
+| Algorithm ids | `ndpmp:pmp` ("PMP Evaluation (main tool)"), `ndpmp:inflow_hydrograph`, `ndpmp:pothole_storage` (v0.2.0), `ndpmp:spatial_distribution`, `ndpmp:snowmelt`, `ndpmp:export_hms`; NOAA Atlas 14 group (v0.6.0): `ndpmp:atlas14_point`, `ndpmp:atlas14_basin`, `ndpmp:atlas14_fetchgrid`, `ndpmp:atlas14_gridbasin`, `ndpmp:atlas14_hyetograph` |
 | Data-folder setting | QgsSettings key `nd_pmp/data_home` (remembered after each run) |
 
 ## Layout

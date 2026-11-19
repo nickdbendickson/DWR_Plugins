@@ -23,7 +23,7 @@ from nd_breach_runner.core import gmsh_mesher as GM  # noqa: E402
 from nd_breach_runner.core import terrain  # noqa: E402
 from nd_breach_runner.core import workflow as W  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
-from nd_breach_runner.tests.registry import test  # noqa: E402
+from nd_breach_runner.tests.registry import test, Skip  # noqa: E402
 from nd_breach_runner.tests.test_gmsh_mesher import HAVE_GMSH, _case, _spec  # noqa: E402
 from nd_breach_runner.tests.test_gmsh_gate import REJECT, _run  # noqa: E402
 
@@ -339,8 +339,7 @@ def gmsh_sizing_record_and_note():
 @test
 def gmsh_sizing_options_make_fewer_triangles():
     if not HAVE_GMSH:
-        print("skip: gmsh not importable")
-        return
+        raise Skip("gmsh not importable")
     n = {}
     band = [[0, 1500], [6000, 1500], [6000, 3500], [0, 3500]]
     for name, extra in (("default", {}), ("grade", {"grade_dist_m": 500.0}),

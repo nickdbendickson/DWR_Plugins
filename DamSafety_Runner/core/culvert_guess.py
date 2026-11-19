@@ -82,19 +82,20 @@ def write_candidates_csv(path, rows):
         os.makedirs(folder, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("name,kind,shape,width_m,height_m,barrels,source,surveyed,match_m,"
-                 "x1,y1,x2,y2,note\n")
+                 "x1,y1,x2,y2,note,on_dam\n")
         for s in rows or []:
             line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
             a = line[0] if line else ("", "")
             b = line[-1] if line else ("", "")
-            fh.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
+            fh.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
                 (s.get("name") or "").replace(",", ";"), s.get("kind") or "culvert",
                 s.get("shape") or "", s.get("width_m"), s.get("height_m"),
                 s.get("barrels") or "", s.get("source") or "guess",
                 "yes" if s.get("surveyed") else "no",
                 "" if s.get("match_m") is None else round(float(s["match_m"]), 1),
                 a[0], a[1], b[0], b[1],
-                (s.get("note") or "not surveyed").replace(",", ";")))
+                (s.get("note") or "not surveyed").replace(",", ";"),
+                "yes" if s.get("on_dam") else "no"))
     return path
 
 
@@ -459,6 +460,32 @@ def burn_line(g, margin_m=BURN_MARGIN_M):
     L = max(L, L0)
     h = 0.5 * L
     return [(xy[0] - d[0] * h, xy[1] - d[1] * h), (xy[0] + d[0] * h, xy[1] + d[1] * h)]
+
+
+def mark_on_dam(rows, dam_line):
+    """H6-1: flag each candidate whose cut crosses the dam embankment. on_dam is set True when
+    the candidate's cut (burn_line, the same along-channel geometry that would be cut into the
+    DEM) crosses the dam line, else False. dam_line is the dam's crest line in the work CRS
+    (the workflow passes dam.crest_line_xy); DWR / NID inventory points sit a median ~160 m off
+    the embankment, so the line geometry is used, not the dam point. Report / flag only: it sets
+    no size, invert or cut and changes no modelled value. Returns the number of GUESSED
+    (unmatched) candidates marked, for the run warning. A dam line with fewer than 2 points
+    marks nothing."""
+    for r in rows or []:
+        r["on_dam"] = False
+    dl = [(float(p[0]), float(p[1])) for p in (dam_line or [])]
+    if len(dl) < 2:
+        return 0
+    n = 0
+    for r in rows or []:
+        line = r.get("line")
+        if line is None or len(line) < 2:
+            continue
+        if _first_cross(burn_line(r), dl) is not None:
+            r["on_dam"] = True
+            if r.get("match_m") is None:
+                n += 1
+    return n
 
 
 def matched_structures(rows, min_cells=BURN_MIN_CELLS):

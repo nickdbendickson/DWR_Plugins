@@ -37,6 +37,48 @@ def channel_with_barrier(ny=60, nx=120, dx=10.0, bed=300.0, slope=0.01, chan_row
     return z
 
 
+def nested_basins(ny=30, nx=60, high=350.0, inner_floor=310.0, inner_rim=325.0,
+                  outer_floor=320.0, outer_rim=330.0, exit_low=300.0):
+    """A basin inside a basin: a deep inner basin that spills over an inner saddle into a
+    shallower outer basin, which spills over a higher outer saddle down a channel to the right
+    border (the only outlet). Everything else is a high wall.
+
+    This is the case where epsilon-relaxation Planchon-Darboux and priority-flood classically
+    diverge: the inner basin must NOT stop filling at the inner saddle (inner_rim); it must
+    chain through the inner spill, across the outer basin, and up to the OUTER spill (outer_rim)
+    - the lowest point of the only path to a true outlet. So the whole enclosed region
+    (inner basin + inner saddle + outer basin) fills to outer_rim, with the eps drainage ramp
+    rising from the outer spill back into the deepest (inner) cells.
+
+    Returns (z, meta); meta has the boolean masks `inner`, `outer`, `enclosed` and the floats
+    `inner_rim`, `outer_rim`, `fill_level` (== outer_rim) so the test can assert the fill level
+    and the spill sequence, not just the final surface shape. Requires nx >= 40, no NoData;
+    border cells are outlets (as pitted_plane)."""
+    z = np.full((ny, nx), high, dtype=np.float64)
+    band = slice(1, ny - 1)                      # interior rows; rows 0 / ny-1 stay high walls
+    c_in0, c_in1 = 6, 16                          # inner basin columns [c_in0, c_in1)
+    c_irim = 16                                   # inner saddle (inner -> outer)
+    c_out0, c_out1 = 17, 31                       # outer basin columns [c_out0, c_out1)
+    c_orim = 31                                   # outer saddle (outer -> exit channel)
+    z[band, c_in0:c_in1] = inner_floor
+    z[band, c_irim] = inner_rim
+    z[band, c_out0:c_out1] = outer_floor
+    z[band, c_orim] = outer_rim
+    # exit channel: monotone downhill from the outer saddle to the right-border outlet, so it
+    # drains freely and is not filled.
+    xs = np.arange(c_orim + 1, nx)
+    z[band, c_orim + 1:nx] = outer_rim - (outer_rim - exit_low) * (xs - c_orim) / (nx - 1 - c_orim)
+    inner = np.zeros((ny, nx), bool)
+    inner[band, c_in0:c_in1] = True
+    outer = np.zeros((ny, nx), bool)
+    outer[band, c_out0:c_out1] = True
+    enclosed = np.zeros((ny, nx), bool)
+    enclosed[band, c_in0:c_orim] = True          # inner basin + inner saddle + outer basin
+    meta = {"inner": inner, "outer": outer, "enclosed": enclosed,
+            "inner_rim": inner_rim, "outer_rim": outer_rim, "fill_level": outer_rim}
+    return z, meta
+
+
 def nodata_ringed_pit(n=64, dx=10.0, bed=300.0, collar=4, depth=8.0, rad=6.0):
     """A square valid island inside a NoData collar, with one deep pit. The pit cannot drain to
     the grid border (the collar blocks it); it must drain to the NoData, so the fill is finite.

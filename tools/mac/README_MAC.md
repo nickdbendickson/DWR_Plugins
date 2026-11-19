@@ -271,9 +271,10 @@ bash run_finder_statewide.sh               # the whole state; the same command g
   enough for tiles that are already finished.
 * **Results:** `ND_finder_fills.gpkg` (`embankments`, `candidates`, `spillways`, `ridges`,
   `run_info`), `ND_finder_candidates_ranked.csv` (every candidate: not listed, dam or dry
-  embankment, in the state, not at the data edge, not excluded; highest score first, scored
-  with the plugin's `models/nd_fill_score_trees_2026-11.json`; about 300,000 rows for the
-  state), `ND_finder_candidates_top.csv` (the first 2,000 of them, `--top N`, with a link to
+  embankment, in the state, not at the data edge, not excluded; scored with the plugin's
+  `models/nd_fill_score_trees_2026-11.json` and in the order to look at them: score bands of
+  0.1, a fill on a pond-outlet line four bands lower (script 1.4; `--outlet-drop 0` = highest
+  score first); about 240,000 rows for the state), `ND_finder_candidates_top.csv` (the first 2,000 of them, `--top N`, with a link to
   the satellite picture at each: the one to open) and `ND_finder_summary.txt` (which also says
   how many candidates score 0.5 or more, and which Finder version made the run).
 * **Finder versions and ids:** one result holds the fills of one Finder version; tiles made by

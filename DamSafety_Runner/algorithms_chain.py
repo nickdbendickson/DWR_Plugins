@@ -677,6 +677,9 @@ class ChainBatchAlgorithm(_Base):
         return path, values
 
     def processAlgorithm(self, parameters, context, feedback):
+        note = CH.open_files_note(CH.raise_open_files())      # 3.24.1
+        if note:
+            feedback.pushInfo(note)
         spath, values = self.batch_values(parameters, context)
         cv, _p = CH.chain_values(values)
         src = self.parameterAsSource(parameters, "DAMS", context)

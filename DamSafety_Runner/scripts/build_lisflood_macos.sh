@@ -37,6 +37,7 @@ cmake --build build-nd -j "$(sysctl -n hw.ncpu)" --target lisflood
 # The executable must link libomp (otherwise it runs on one core) and know the new keyword.
 otool -L build-nd/lisflood | grep -q libomp || echo "WARNING: not linked against libomp; runs will be single-threaded."
 grep -q inittm_depth build-nd/lisflood || { echo "ERROR: the patch is not in the build."; exit 1; }
+grep -aq "nd-breach-runner: SGC arrival depth" build-nd/lisflood || { echo "ERROR: the sub-grid channel (SGC) part of the patch is not in the build."; exit 1; }
 
 mkdir -p "$OUT"
 cp build-nd/lisflood "$OUT/lisflood"
