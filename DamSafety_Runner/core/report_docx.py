@@ -3146,11 +3146,17 @@ class _Report(object):
             "The flood scenario uses level-pool routing, a weir crest and the spillway rating "
             "supplied. Gated spillways, outlet works and pool operations are not modelled "
             "unless they are in the rating.",
-            "The DEM is taken as the channel and floodplain. Bare-earth LiDAR leaves road "
-            "embankments as walls unless culverts, bridges or notches are supplied; channels "
-            "are burned and ponds lowered only where layers were given. The source DEM is "
-            "never changed. The vertical datum and units are as recorded in the raster or as "
-            "assumed and warned in the run report.",
+            # H12: the breach outflow ignores tailwater. Stated as a limitation only; the modelled
+            # peak is NOT framed as an upper bound (tailwater reduces the breach discharge but can
+            # raise downstream depths, so the direction of the error is deliberately not asserted).
+            "The breach outflow is computed as free weir or orifice discharge with no tailwater: "
+            "a downstream river, lake or reservoir standing against the breach is not modelled, "
+            "and its effect on the breach discharge is not included.",
+            # S7 (3.22.x): the crossing clause is built from report['crossing_check'] when the
+            # run recorded one (_crossings_sentence), else the generic bare-earth caveat.
+            "The DEM is taken as the channel and floodplain. " + self._crossings_sentence()
+            + " The source DEM is never changed. The vertical datum and units are as recorded "
+            "in the raster or as assumed and warned in the run report.",
             "Roughness is a single Manning's n ({}) or values from a land-cover raster; these "
             "are typical floodplain values and have not been calibrated.".format(
                 fmt_val(st.get("manning_n", 0.06))),
@@ -3206,6 +3212,27 @@ class _Report(object):
         self.sub("To be verified before submittal")
         d.bullets(v)
         return True
+
+    def _crossings_sentence(self):
+        # S7 (3.22.x): what the DEM did with road / rail / STRUCTURES crossings on the flow
+        # path, from report['crossing_check'] when the run recorded one, else the generic
+        # bare-earth caveat (unchanged for older run reports). Report text only.
+        cc = (self.rep or {}).get("crossing_check")
+        generic = ("Bare-earth LiDAR leaves road embankments as walls unless culverts, bridges "
+                   "or notches are supplied; channels are burned and ponds lowered only where "
+                   "layers were given.")
+        if not isinstance(cc, dict):
+            return generic
+        tail = " Channels are burned and ponds lowered only where layers were given."
+        n = cc.get("blocked") or 0
+        if not n:
+            return ("Road and rail embankments on the flow path were checked after the culvert "
+                    "and bridge cuts and none still walls the channel." + tail)
+        return ("{} road/rail crossing(s) on the flow path are still held as a wall after the "
+                "culvert and bridge cuts (worst residual embankment {} m above the upstream "
+                "channel at {} m cells); water cannot pass there in the model.{}".format(
+                    n, fmt_val(cc.get("worst_height_m", 0.0)), fmt_val(cc.get("cell_m", 0.0)),
+                    tail))
 
     def _start_pool_sentence(self):
         """H4a: the starting-reservoir-level sentence, built from this run's report."""
