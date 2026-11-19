@@ -31,7 +31,9 @@ def _terrain(resample=None):
     saved = (gdal_io._gdal, gdal_io.GS.open_raster, gdal_io.z_to_m_factor)
     band = types.SimpleNamespace(GetNoDataValue=lambda: None)
     gdal_io._gdal = lambda: (None, None)
-    gdal_io.GS.open_raster = lambda p: types.SimpleNamespace(GetRasterBand=lambda i: band)
+    # the stand-in carries a CRS: GdalTerrain.__init__ now refuses an untagged terrain source
+    gdal_io.GS.open_raster = lambda p: types.SimpleNamespace(
+        GetRasterBand=lambda i: band, GetProjection=lambda: "PROJCS[\"UTM14N\"]")
     gdal_io.z_to_m_factor = lambda p, c: (1.0, "metres")
     try:
         return gdal_io.GdalTerrain("dem.tif", "EPSG:26914", resample=resample)

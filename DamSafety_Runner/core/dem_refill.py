@@ -184,6 +184,11 @@ def fill_grid(grid, tif_path):
     ds = gdal.Open(tif_path)
     if ds is None:
         return grid
+    # audit: #397's no-ground / one-flat-value refusal (check_tile) ran only on the first refill
+    # download; enforce it on EVERY application of a saved tile too - model_dem re-reads
+    # refill_paths here on later passes and on a resumed run without re-fetching, so a 0 m pit is
+    # never filled in beyond the first refill. A tile with real ground passes untouched.
+    check_tile(tif_path)
     xmin, ymin, xmax, ymax = grid.bounds
     kw = dict(format="MEM", outputBounds=(xmin, ymin, xmax, ymax),
               width=grid.nx, height=grid.ny, resampleAlg="bilinear",
