@@ -7,13 +7,14 @@
  * repo, so the two repos could drift apart with both checks green (their pins had already differed), and it covered
  * engine.ts and warnings.ts only. This one reads both copies and compares them.
  *
- * The same script lives in both repos (crest: scripts/, damit: damit_crest/scripts/); it finds which repo it is in
+ * Crest lives in nickdbendickson/DWR_Plugins under dwr_crest/ (it was the nickdbendickson/crest repo until 2026-11-19).
+ * The same script lives in both repos (DWR_Plugins: dwr_crest/scripts/, damit: damit_crest/scripts/); it finds which repo it is in
  * and reads the other copy from:
- *   --other <dir>     a checkout of the other repo (its root). CI checks the other repo out with actions/checkout.
+ *   --other <dir>     a checkout of the other repo (its root: DWR_Plugins or damit). CI checks it out with actions/checkout.
  *   (default)         raw.githubusercontent.com, branch --ref (default main).
  *
  * Usage:
- *   node scripts/check-engine-sync.mjs [--other ../damit] [--ref main]
+ *   node scripts/check-engine-sync.mjs [--other ../damit] [--ref main]      (run from dwr_crest/ or damit_crest/)
  *
  * Exit 0 when every file matches; 1 on a difference that is not allowed, a missing file, or a stale allow entry
  * (one whose line is no longer in the file, so the list cannot rot).
@@ -25,8 +26,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Repo layout: where src/lib/crest sits, from each repo's root. */
-export const LIB = { crest: "src/lib/crest", damit: "damit_crest/src/lib/crest" };
-export const GITHUB = { crest: "nickdbendickson/crest", damit: "nickdbendickson/damit" };
+export const LIB = { crest: "dwr_crest/src/lib/crest", damit: "damit_crest/src/lib/crest" };
+export const GITHUB = { crest: "nickdbendickson/DWR_Plugins", damit: "nickdbendickson/damit" };
 
 export function loadAllowList(path = join(__dirname, "engine-sync-allow.json")) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -66,7 +67,7 @@ export function compareFile(file, crestText, damitText, allow) {
   return { ok: problems.length === 0, problems };
 }
 
-/** Which repo is this script in? crest has scripts/ at the root; damit has it under damit_crest/. */
+/** Which repo is this script in? crest has it under dwr_crest/ (DWR_Plugins); damit has it under damit_crest/. */
 export function selfRepo(dir = __dirname) {
   return /damit_crest[\\/]scripts$/.test(dir) ? "damit" : "crest";
 }
@@ -91,7 +92,7 @@ function arg(name) {
 export async function main() {
   const self = selfRepo();
   const other = self === "crest" ? "damit" : "crest";
-  const root = resolve(__dirname, self === "crest" ? ".." : "../..");
+  const root = resolve(__dirname, "../..");
   const { files, allow } = loadAllowList();
   const otherDir = arg("--other");
   const ref = arg("--ref") ?? "main";

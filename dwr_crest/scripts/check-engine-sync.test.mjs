@@ -52,7 +52,7 @@ describe("engine sync compare", () => {
     for (const f of ["engine.ts", "spread.ts", "outline.ts", "routing.ts"])
       assert.ok(files.includes(f), f);
     for (const a of list) assert.ok(a.why, `allow entry in ${a.file} has no reason`);
-    assert.equal(selfRepo("/x/crest/scripts"), "crest");
+    assert.equal(selfRepo("/x/DWR_Plugins/dwr_crest/scripts"), "crest");
     assert.equal(selfRepo("/x/damit/damit_crest/scripts"), "damit");
   });
 });

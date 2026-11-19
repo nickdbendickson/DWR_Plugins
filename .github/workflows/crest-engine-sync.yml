@@ -1,12 +1,14 @@
-name: Engine sync
+name: Crest engine sync
 
-# crest's engine files (engine.ts, spread.ts, outline.ts, routing.ts, warnings.ts) must match DamIT's damit_crest copy
+# Crest's (dwr_crest/) engine files (engine.ts, spread.ts, outline.ts, routing.ts, warnings.ts) must match DamIT's damit_crest copy
 # line for line, apart from the pairs in scripts/engine-sync-allow.json. Runs on every crest change, and daily so a
 # change landed on the damit side shows up here too.
 on:
   push:
     branches: [main]
+    paths: ["dwr_crest/src/lib/crest/**", "dwr_crest/scripts/*engine-sync*", ".github/workflows/crest-engine-sync.yml"]
   pull_request:
+    paths: ["dwr_crest/src/lib/crest/**", "dwr_crest/scripts/*engine-sync*", ".github/workflows/crest-engine-sync.yml"]
   schedule:
     - cron: "17 11 * * *"
   workflow_dispatch:
@@ -15,7 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  engine-sync:
+  crest-engine-sync:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -45,4 +47,4 @@ jobs:
         with:
           node-version: 22
       - name: Compare engine files with damit_crest
-        run: node scripts/check-engine-sync.mjs --other .damit
+        run: node dwr_crest/scripts/check-engine-sync.mjs --other .damit

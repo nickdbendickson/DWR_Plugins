@@ -7,7 +7,7 @@ request.
 
 Use GitHub's private vulnerability reporting for this repository:
 **Security → Advisories → Report a vulnerability**
-(<https://github.com/nickdbendickson/crest/security/advisories/new>).
+(<https://github.com/nickdbendickson/DWR_Plugins/security/advisories/new>).
 
 Include the version or commit, the platform, and the steps to reproduce.
 You'll get an acknowledgement, and a fix or an explanation of why it is not a

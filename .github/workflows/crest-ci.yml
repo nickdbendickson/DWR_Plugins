@@ -1,17 +1,27 @@
-name: CI
+name: Crest CI
+
+# Crest (dwr_crest/): typecheck, lint, unit tests + the bundle check, the browser click-through, and the desktop
+# server tests. Moved here from the nickdbendickson/crest repo (its "CI" workflow) on 2026-11-19; every step runs
+# inside dwr_crest/. Only runs when dwr_crest/ or this file changes.
 
 on:
   push:
     branches: [main]
+    paths: ["dwr_crest/**", ".github/workflows/crest-ci.yml"]
   pull_request:
+    paths: ["dwr_crest/**", ".github/workflows/crest-ci.yml"]
 
 # A newer push to the same branch cancels the older in-progress run (but never a run on main).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: crest-ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+defaults:
+  run:
+    working-directory: dwr_crest
+
 jobs:
-  checks:
+  crest-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -20,6 +30,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: dwr_crest/package-lock.json
       - run: npm ci
       - name: Typecheck
         run: npm run typecheck
@@ -33,7 +44,7 @@ jobs:
   # Browser click-through (e2e/): Chromium opens the desktop bundle behind its Python server and the built
   # web app, and walks the eight steps on the first sample dam with every public service stubbed. Fails on an uncaught
   # error, a console error, or anything the Content-Security-Policy blocks.
-  e2e:
+  crest-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -42,6 +53,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: dwr_crest/package-lock.json
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -59,7 +71,7 @@ jobs:
   # CI before, so the desktop robustness fixes only had local coverage; this gates them too.
   # Also on Windows and macOS, where the desktop app is installed (the server, the save / open paths and the bundle
   # hashes are the parts that differ by platform); the pywebview window itself is not opened.
-  desktop-tests:
+  crest-desktop-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -72,5 +84,5 @@ jobs:
         with:
           python-version: "3.12"
       - name: Desktop tests
-        working-directory: crest-desktop
+        working-directory: dwr_crest/crest-desktop
         run: python -m unittest discover -s tests

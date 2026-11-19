@@ -1,5 +1,8 @@
 # Crest
 
+> Crest lives in **nickdbendickson/DWR_Plugins**, folder `dwr_crest/` (it was the `nickdbendickson/crest` repository
+> until 2026-11-19; its full history came along). Run every `npm` command below from `dwr_crest/`.
+
 Desk screening of small embankment dams: breach hydrograph, schematic valley flood, receptor ranking
 (ACER TM 11), and a datum-aware export. The engine is the pure `analyze()` in `src/lib/crest/engine.ts`.
 
@@ -353,7 +356,7 @@ Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.
 2. Make sure the Microsoft Edge WebView2 Runtime is installed. It is built into Windows 11; on Windows 10 get it from Microsoft.
 3. In PowerShell:
    ```
-   git clone https://github.com/nickdbendickson/crest ; cd crest\crest-desktop
+   git clone https://github.com/nickdbendickson/DWR_Plugins ; cd DWR_Plugins\dwr_crest\crest-desktop
    py -3.12 -m venv .venv ; .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    python run.py
@@ -364,7 +367,7 @@ Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.
 1. Install Python 3.12 (python.org or `brew install python@3.12`) and Git.
 2. In Terminal:
    ```
-   git clone https://github.com/nickdbendickson/crest && cd crest/crest-desktop
+   git clone https://github.com/nickdbendickson/DWR_Plugins && cd DWR_Plugins/dwr_crest/crest-desktop
    python3.12 -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    python run.py
