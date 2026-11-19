@@ -29,8 +29,11 @@ GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "golde
                       "builtin_engine.json")
 
 
-def run_fixed_case():
-    """The fixed synthetic breach, run on the built-in engine. Returns (scalars, raster_agg)."""
+def _build_fixed_deck(wd):
+    """Write the fixed synthetic breach deck into wd and return (dem, par, st, hy). Deterministic:
+    a 20 x 100, 20 m-cell sloped prairie DEM, a fixed triangular 30 cms breach hydrograph, the
+    built-in engine, 1200 s of sim at a 1 s initial step. Shared by the golden-number test and the
+    byte-identical repeat-run guard so both exercise exactly the same deck."""
     nr, nc, dx = 20, 100, 20.0
     X, Y = np.meshgrid((np.arange(nc) + 0.5) * dx, (np.arange(nr) + 0.5) * dx)
     z = 100.0 - 0.002 * X + 0.02 * np.abs(Y - nr * dx / 2)
@@ -38,8 +41,14 @@ def run_fixed_case():
     hy = Hydrograph(np.array([0.0, 600.0, 1200.0]), np.array([30.0, 30.0, 0.0]), "test")
     st = lf.LisfloodSettings(lf.BUILTIN_EXE, arrival_depth_m=0.3, sim_time_s=1200.0,
                              massint_s=60.0, initial_tstep_s=1.0)
-    wd = tempfile.mkdtemp(prefix="golden_")
     par = lf.write_inputs(wd, dem, (30.0, nr * dx / 2 + 5), hy, st)
+    return dem, par, st, hy
+
+
+def run_fixed_case():
+    """The fixed synthetic breach, run on the built-in engine. Returns (scalars, raster_agg)."""
+    wd = tempfile.mkdtemp(prefix="golden_")
+    dem, par, st, hy = _build_fixed_deck(wd)
     lf.run(wd, par, st)
     env = lf.read_results(wd, dem, st, hy)
     s = getattr(env, "statistics", None) or getattr(env, "stats")
@@ -76,3 +85,39 @@ def golden_builtin_engine_regulatory_numbers():
     for k in ("max_depth_m", "sum_depth_m"):
         got, want = float(raster[k]), float(golden["raster"][k])
         assert abs(got - want) <= 1e-3 * max(abs(want), 1.0), (k, got, want)
+
+
+# S5: byte-identical repeat-run determinism guard for the built-in engine.
+_REPEAT_FILES = ("run.max", "run.maxVc", "run.inittm", "run.maxtm", "run.mxe", "run.mass")
+
+
+def _result_bytes(wd):
+    """Raw bytes of every result file the built-in engine writes for the fixed deck."""
+    res = os.path.join(wd, "results")
+    out = {}
+    for fname in _REPEAT_FILES:
+        with open(os.path.join(res, fname), "rb") as f:
+            out[fname] = f.read()
+    return out
+
+
+@test
+def builtin_engine_repeat_run_is_byte_identical():
+    """The built-in engine is pure numpy, single-threaded and unseeded, so running the SAME deck
+    twice must write byte-identical result files. This is a determinism guard: a regression that
+    made a run nondeterministic (iterating a dict/set into the grid, an unseeded RNG, a thread
+    race, a wall-clock-dependent change to the step sequence) would break this even while the
+    golden tolerance test still passed. Compares the five result rasters (.max, .maxVc, .inittm,
+    .maxtm, .mxe) and the .mass time-step trajectory log byte-for-byte between two independent
+    runs; the non-deterministic lisflood.log (it records wall time) is deliberately excluded."""
+    runs = []
+    for _ in range(2):
+        wd = tempfile.mkdtemp(prefix="repeat_")
+        _dem, par, st, _hy = _build_fixed_deck(wd)
+        lf.run(wd, par, st)
+        runs.append(_result_bytes(wd))
+    first, second = runs
+    assert first.keys() == second.keys()
+    for fname in _REPEAT_FILES:
+        assert first[fname] == second[fname], (
+            "built-in engine nondeterministic: {} differs between two identical runs".format(fname))

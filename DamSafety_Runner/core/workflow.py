@@ -1002,18 +1002,30 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         products.write_gpkg(os.path.join(out_folder, "Breach Products.gpkg"), layers, crs)
 
 
-def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=()):
+def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edits_out=None):
     """The DEM an engine gets: the (conditioned) terrain read at the model's cell size, the
     refill paths, then the structure cuts applied AT THAT CELL SIZE (after any resampling,
-    so an averaged or bilinear read cannot wash a narrow cut out)."""
+    so an averaged or bilinear read cannot wash a narrow cut out).
+
+    S3: when `edits_out` is a dict it receives the DEM-edits record for this grid -
+    edits_out["source"] (the plain source DEM, read before the refill and the cuts),
+    edits_out["model"] (the grid returned) and edits_out["counts"] (the per structure-cut
+    cell counts, which model_dem otherwise throws away). The grid returned is unchanged, so
+    callers that pass no edits_out are unaffected."""
     g = terrain_src.read(bounds, cell)
+    if edits_out is not None:
+        edits_out["source"] = g.like(g.data.copy())
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
             g = dem_refill.fill_grid(g, _p)
     cuts = structmod.structure_edits(structures or [], cell, model)
+    counts = {}
     if cuts:
-        g, _, _ = cond.Edits(notches=cuts).apply(g)
+        g, _, counts = cond.Edits(notches=cuts).apply(g)
+    if edits_out is not None:
+        edits_out["counts"] = {k: int(v) for k, v in counts.items()}
+        edits_out["model"] = g
     return g
 
 
@@ -3508,6 +3520,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     # --- final rasters for the classification plugin ------------------------------
     progress(93, "writing rasters")
+    dem_edits_mask = None            # S3: footprint of the DEM edits for the products layer
+    dem_edits_counts = {}            # S3: structure-cut counts kept from model_dem
     if st.write_final:
         # A hazard classification of the previous rasters no longer applies. A rerun that
         # changes scenario (e.g. a sunny-day run into a folder left by a flood run) must not
@@ -3539,6 +3553,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
+        # S3: raster + layer record of the DEM edits baked into the published model DEM
+        try:
+            _ei = {}
+            model_dem(terrain_src, st.structures, "lisflood", dem.bounds, dem.dx,
+                      refill_paths, edits_out=_ei)
+            _src = _ei.get("source")
+            dem_edits_counts = _ei.get("counts", {}) or {}
+            if _src is not None and _src.data.shape == dem.data.shape:
+                with np.errstate(invalid="ignore"):
+                    _diff = np.where(dem.valid() & _src.valid(),
+                                     dem.data - _src.data, np.nan)
+                    _diff = np.where(_diff != 0.0, _diff, np.nan)
+                _m = np.isfinite(_diff)
+                if _m.any():
+                    dem_edits_mask = _m
+                    _p = os.path.join(out_folder,
+                                      "{}_dem_edits.tif".format(_safe(dam.dam_id)))
+                    writer(dem.like(_diff, np.nan), _p)
+                    report["dem_edits"] = {
+                        "raster": os.path.basename(_p),
+                        "cells": int(_m.sum()),
+                        "structure_cuts": {k: int(v) for k, v in dem_edits_counts.items()},
+                        "note": "model/engine DEM minus the plain source DEM, in work-CRS "
+                                "metres; a cell differs where the refill and the structure "
+                                "cuts lowered the ground. The source DEM is never changed."}
+        except Exception as _e:          # a record extra; never lose the run for it
+            log("DEM-edits record skipped: {}: {}".format(type(_e).__name__, _e))
     incr = None
     if lf_base_arrays is not None:
         thr_m = [t * FT for t in st.incr_thresholds_ft]
@@ -3738,7 +3779,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             from . import products
             products.write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb,
                                     path, out_folder, model_dir, arrival_m,
-                                    crs=getattr(writer, "work_srs", None))
+                                    crs=getattr(writer, "work_srs", None),
+                                    dem_edits_mask=dem_edits_mask)
         except Exception as e:          # products are extras; never lose the run for them
             warnings.append("Could not write the vector products / map: {}: {}".format(
                 type(e).__name__, e))

@@ -548,7 +548,7 @@ def _arrival_polys(grid, arrival, hours):
 
 
 def write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb, path, out_folder,
-                   model_dir, arrival_m, crs=None, unit_m=1.0, plots=True):
+                   model_dir, arrival_m, crs=None, unit_m=1.0, plots=True, dem_edits_mask=None):
     """Flood polygons, arrival zones, the flow path, a GeoPackage, the EAP map
     and (plots) the hydrograph and gauge plots. Fills res.vectors and res.eap_map."""
     crs = crs or getattr(res, "crs", None)
@@ -628,6 +628,11 @@ def write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb, path
         p = os.path.join(model_dir, "qa_dam_inflow_and_flow_path.geojson")
         write_geojson(p, qa, crs)
         res.vectors["qa_points_and_path"] = p
+    if dem_edits_mask is not None and np.any(dem_edits_mask):
+        polys = mask_polygons(dem, dem_edits_mask, min_cells=1, simplify=0.0)
+        if polys:
+            props = {"dam_id": dam.dam_id, "cells": int(np.count_nonzero(dem_edits_mask))}
+            layers["dem_edits"] = ("polygon", [(polys, props)])
     if layers:
         g = write_gpkg(os.path.join(out_folder, "Breach Products.gpkg"), layers, crs)
         if g:
