@@ -11,8 +11,15 @@ from nd_breach_runner.core.metalterrain import fill as F
 from nd_breach_runner.core.metalterrain import audit as A
 from nd_breach_runner.core.metalterrain import burn as B
 from nd_breach_runner.core.metalterrain import cases
+from nd_breach_runner.core.metalterrain import delta_log as dl
 from nd_breach_runner.core.metalflood import backends as mfb
 from nd_breach_runner.tests.registry import Skip, test
+
+
+def _freeze_the_barrier(z):
+    """A freeze mask over the road fill: cells sitting notably above both east/west neighbours."""
+    raised = z - np.minimum(np.roll(z, 1, axis=1), np.roll(z, -1, axis=1))
+    return raised > 1.0
 
 
 def _need_cpu_build():
@@ -107,6 +114,63 @@ def reconnect_respects_freeze_mask():
 
 
 @test
+def reconnect_freeze_refusal_reaches_the_bottom_line():
+    """The aggregate freeze-refusal count must survive the whole census -> ledger -> summary path
+    and land in the report's BOTTOM LINE, not only the assumption-register appendix: a sweep that
+    left a frozen embankment uncarved must not read as 'no interventions'. (review #419)"""
+    _need_cpu_build()
+    z = cases.channel_with_barrier(ny=50, nx=120, chan_depth=3.0, sill=1.0)
+    freeze = _freeze_the_barrier(z)
+    assert freeze.any(), "could not locate the barrier to freeze"
+    logs = []
+    out, records = B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu",
+                                         freeze_mask=freeze, refuse_freeze="record",
+                                         log=logs.append)
+    refused = B.freeze_refusals(records)
+    assert refused, "no freeze-refusal recorded"
+    n = len(refused)
+    # record mode emits the loud aggregate line to the log callback
+    assert any("crossing(s) refused" in m and "frozen" in m for m in logs), logs
+    # the count survives into the ledger and back out of its own accessor
+    log = dl.DeltaLog(run_id="FREEZE_TEST")
+    returned = dl.log_reconnect(log, records)
+    assert returned == n, (returned, n)
+    assert len(log.freeze_refusals()) == n, "refusals did not reach the ledger accessor"
+    # ... and into the Bottom line of the rendered summary, not merely the assumption register
+    s = log.summary()
+    bottom = s.split("## By class", 1)[0]          # everything before the by-class section
+    assert "NOT carved" in bottom and str(n) in bottom, ("refusal missing from Bottom line", bottom)
+    assert "⚠" in bottom, "the Bottom-line refusal is not flagged loudly"
+    # it is also still in the assumption register (flagged), so it can be reviewed/rejected
+    assert any(r[2] == dl.REFUSE_FREEZE_ACTION for r in log.flagged()), "refusal not flagged"
+    log.close()
+
+
+@test
+def reconnect_raise_mode_aborts_on_frozen_crossing():
+    """refuse_freeze='raise' stops the conditioner outright on a frozen crossing (single-dam /
+    interactive runs), naming the aggregate count - rather than deferring to the register."""
+    _need_cpu_build()
+    z = cases.channel_with_barrier(ny=50, nx=120, chan_depth=3.0, sill=1.0)
+    freeze = _freeze_the_barrier(z)
+    assert freeze.any()
+    try:
+        B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu",
+                              freeze_mask=freeze, refuse_freeze="raise")
+    except RuntimeError as e:
+        assert "refused" in str(e) and "dam-safety" in str(e), str(e)
+    else:
+        assert False, "refuse_freeze='raise' did not abort on a frozen crossing"
+    # a bad policy value is rejected up front
+    try:
+        B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu", refuse_freeze="x")
+    except ValueError:
+        pass
+    else:
+        assert False, "an invalid refuse_freeze was accepted"
+
+
+@test
 def reconnect_leaves_a_clean_dem_alone():
     """A plane with no dammed channel gets no carves (nothing to reconnect)."""
     _need_cpu_build()
@@ -122,6 +186,8 @@ if __name__ == "__main__":
     fails = 0
     for fn in (burn_channel_enforces_monotone_fall, reconnect_drains_a_blocked_channel,
                burn_channel_refuses_frozen_cell, reconnect_respects_freeze_mask,
+               reconnect_freeze_refusal_reaches_the_bottom_line,
+               reconnect_raise_mode_aborts_on_frozen_crossing,
                reconnect_leaves_a_clean_dem_alone):
         try:
             fn()

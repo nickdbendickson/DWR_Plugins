@@ -85,9 +85,16 @@ def _carve_path(dem, valid, depr, floor):
     return path
 
 
+def freeze_refusals(records):
+    """The subset of `reconnect_crossings` records that were refused because their carve path hit a
+    frozen (embankment / dam-crest) cell. `len(freeze_refusals(records))` is the aggregate count the
+    caller must not ignore (it is also surfaced in delta_log.summary()'s Bottom line)."""
+    return [r for r in records if r.get("refused") == "freeze"]
+
+
 def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="auto",
                         filled=None, labels=None, items=None, accum=None, freeze_mask=None,
-                        log=None):
+                        refuse_freeze="record", log=None):
     """Carve a notch through the barrier of every filled depression a real channel drains into (at
     least `min_accum_cells` of upstream area), so the channel reconnects. Returns (conditioned_dem,
     records). Each carved record: id, pour (r,c), exit (r,c), barrier_cells, accum_cells,
@@ -96,10 +103,20 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
     If `freeze_mask` is given (a bool array, True = frozen embankment / dam crest), a crossing whose
     carve path would lower a frozen cell is NOT carved: the dam-safety invariant is that the
     conditioner never breaches a frozen embankment (a real dam can look like a "blocked channel"
-    with upstream area - breaching it is the exact catastrophe the mask prevents). Because this runs
-    over the whole DEM, the refusal is recorded loudly as a FLAGGED record ({"refused": "freeze",
-    "frozen_cells": [...]}) rather than aborting the batch, so it reaches the delta-log / review and
-    an operator decides (real culvert? mask wrong?). Nothing is lowered silently through the mask."""
+    with upstream area - breaching it is the exact catastrophe the mask prevents).
+
+    `refuse_freeze` says how loud a freeze-refusal is, because a whole-DEM sweep must not finish
+    with uncarved dams the report never mentions:
+      "record" (default, for batch sweeps): the crossing is left uncarved and a FLAGGED record
+          ({"refused": "freeze", "frozen_cells": [...]}) is kept so it reaches the delta-log /
+          review; a loud line is sent to `log` with the AGGREGATE count. The caller must surface
+          `len(freeze_refusals(records))` (delta_log.log_reconnect + summary() do).
+      "raise": any freeze-refusal raises RuntimeError naming the aggregate count and the dams - the
+          mode for a single-dam / interactive run where a frozen crossing should stop the conditioner
+          outright rather than be deferred to a register.
+    Nothing is lowered silently through the mask in either mode."""
+    if refuse_freeze not in ("record", "raise"):
+        raise ValueError("refuse_freeze must be 'record' or 'raise', not {!r}".format(refuse_freeze))
     a = np.asarray(dem, dtype=np.float64)
     valid = np.isfinite(a) & (a != NODATA)
     if filled is None:
@@ -139,4 +156,15 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
         records.append({"id": it["id"], "pour": path[0], "exit": exit_rc,
                         "barrier_cells": n, "accum_cells": amax, "floor_elev_m": floor,
                         "spill_before_m": it["spill_elev_m"]})
+    refused = freeze_refusals(records)
+    if refused:
+        msg = ("{} crossing(s) refused: a frozen embankment / dam-crest cell lies on the carve "
+               "path - NOT carved (depressions {}).".format(
+                   len(refused), ", ".join(str(r["id"]) for r in refused)))
+        if refuse_freeze == "raise":
+            raise RuntimeError("reconnect_crossings (refuse_freeze='raise'): " + msg +
+                               " The dam-safety invariant stops the conditioner here.")
+        if log is not None:
+            log("[boanngrid] WARNING: " + msg + " They are FLAGGED in the delta-log for an "
+                "operator decision (real culvert? mask wrong?).")
     return out, records

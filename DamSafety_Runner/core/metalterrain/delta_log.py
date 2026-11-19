@@ -76,6 +76,11 @@ CLASS_NAMES = {
     EditClass.CULVERT: "CULVERT", EditClass.CREST_WEIR: "CREST_WEIR",
 }
 
+# The action string for a crossing the conditioner REFUSED to carve because a frozen embankment /
+# dam-crest cell lay on the carve path. It is a CROSSING_STITCH that did not happen, FLAGGED, and
+# summary() lifts it into the Bottom line (see DeltaLog.freeze_refusals).
+REFUSE_FREEZE_ACTION = "REFUSE_FREEZE"
+
 
 @dataclass
 class Edit:
@@ -155,6 +160,15 @@ class DeltaLog:
             "SELECT fid, class, action, evidence, review_reason FROM delta_log WHERE run_id=?"
             " AND review_status='FLAGGED' ORDER BY fid", (self.run_id,)).fetchall()
 
+    def freeze_refusals(self):
+        """Rows (fid, class, action, evidence, review_reason) for crossings the conditioner refused
+        to carve because a frozen embankment / dam-crest cell lay on the carve path. These are the
+        dam-safety refusals that MUST reach the Bottom line of the report, never only the appendix:
+        a sweep that leaves three dams uncarved cannot read as 'no interventions'."""
+        return self._db.execute(
+            "SELECT fid, class, action, evidence, review_reason FROM delta_log WHERE run_id=?"
+            " AND action=? ORDER BY fid", (self.run_id, REFUSE_FREEZE_ACTION)).fetchall()
+
     def to_dataframe(self):
         import pandas as pd            # optional; notebook / QGIS inspection
         return pd.read_sql_query("SELECT * FROM delta_log WHERE run_id=?", self._db,
@@ -169,6 +183,16 @@ class DeltaLog:
         out.append("- {} interventions touching {:,} cells, each with a recorded reason and "
                    "evidence reference.".format(n_edits, n_cells) if n_edits
                    else "- No terrain edits recorded for this run.")
+        # Dam-safety refusals belong in the Bottom line, not only the assumption register: a
+        # whole-DEM sweep that silently left frozen embankments uncarved must not read as
+        # "no interventions". This line is blocking - the run is not final until each is resolved.
+        refusals = self.freeze_refusals()
+        if refusals:
+            out.append("- **⚠ {} crossing(s) NOT carved: a frozen embankment / dam-crest cell "
+                       "lies on the carve path (depression fid {}).** The conditioner refused them "
+                       "(the dam-safety invariant); an operator must resolve each (real culvert? "
+                       "mask wrong?) before this conditioned DEM is used.".format(
+                           len(refusals), ", ".join(str(r[0]) for r in refusals)))
         out += ["", "## By class", ""]
         out += ["- {}: {} edits / {:,} cells".format(c, v["edits"], v["cells"])
                 for c, v in sorted(counts.items())] or ["- (none)"]
@@ -251,6 +275,34 @@ def log_census(log, items, algo_ref="LEVELSET_CENSUS_V1+PD2002_FILL"):
         else:
             log.add(e)
     return flagged
+
+
+def log_reconnect(log, records, cell_m=1.0, algo_ref="CROSSING_RECONNECT_V1+PD2002_FILL"):
+    """Record `burn.reconnect_crossings` records in the ledger: each carved crossing as an AUTO
+    CROSSING_STITCH edit, and each freeze-refusal (burn.freeze_refusals) as a FLAGGED CROSSING_STITCH
+    with action REFUSE_FREEZE and a reason naming the frozen cells, so it reaches summary()'s Bottom
+    line. Returns the number of freeze-refusals (the aggregate count the caller must not drop)."""
+    refused = 0
+    for r in records:
+        ev = "crossing #{} pour {} -> exit {}".format(r["id"], r["pour"], r["exit"])
+        if r.get("refused") == "freeze":
+            cells = r.get("frozen_cells", [])
+            e = Edit(EditClass.CROSSING_STITCH, REFUSE_FREEZE_ACTION, evidence="FREEZE_MASK",
+                     n_cells=int(r.get("barrier_cells", 0)), spill_before=r.get("spill_before_m"),
+                     algo_ref=algo_ref, evidence_ref=ev,
+                     params={"frozen_cells": [list(c) for c in cells],
+                             "accum_cells": r.get("accum_cells")})
+            log.flag(e, reason="carve path crosses {} frozen (embankment / dam-crest) cell(s); "
+                               "refused by the dam-safety invariant - resolve before use "
+                               "(real culvert? mask wrong?)".format(len(cells)))
+            refused += 1
+        else:
+            e = Edit(EditClass.CROSSING_STITCH, "STITCH", evidence="GEOMORPHIC_SIGNAL",
+                     n_cells=int(r.get("barrier_cells", 0)), spill_before=r.get("spill_before_m"),
+                     spill_after=r.get("floor_elev_m"), algo_ref=algo_ref, evidence_ref=ev,
+                     params={"accum_cells": r.get("accum_cells")})
+            log.add(e)
+    return refused
 
 
 def selftest():

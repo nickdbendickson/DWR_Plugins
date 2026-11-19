@@ -122,6 +122,29 @@ def metalterrain_nested_basin_spill_sequence():
 
 
 @test
+def metalterrain_case_makers_keep_their_border_outlet_convention():
+    """The "border cells are outlets (no NoData)" convention that pitted_plane, channel_with_barrier
+    and nested_basins document is load-bearing: fill._outlets reads the grid border as outlets, so if
+    a border cell were ever NoData the fill's free-exit behaviour would change materially. Pin the
+    convention on the case-makers themselves (review #419), not in prose only."""
+    grids = [cases.pitted_plane(ny=40, nx=60),
+             cases.channel_with_barrier(ny=50, nx=120),
+             cases.nested_basins()[0]]                     # returns (z, meta)
+    for z in grids:
+        z = np.asarray(z, dtype=np.float64)
+        border = np.zeros(z.shape, bool)
+        border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
+        b = z[border]
+        assert np.isfinite(b).all(), "a border cell is NaN (NoData) - breaks the outlet convention"
+        assert (b != F.NODATA).all(), "a border cell holds the NoData sentinel"
+        # and these makers carry no NoData anywhere (the NoData case is nodata_ringed_pit's job)
+        assert np.isfinite(z).all() and (z != F.NODATA).all(), "unexpected NoData in the case"
+        # the convention is what fill._outlets consumes: the whole border rings as outlets
+        assert F._outlets(np.isfinite(z) & (z != F.NODATA))[border].all(), \
+            "the border does not ring as outlets"
+
+
+@test
 def metalterrain_params_layout_matches_kernel():
     """TParams in Python is the struct the kernel source declares, and the buffers are named at
     the indices the kernel reads them from - the same contract the flood engine checks."""
@@ -164,6 +187,7 @@ if __name__ == "__main__":
     fails = 0
     for fn in (metalterrain_cpu_build_matches_priority_flood, metalterrain_fill_is_deterministic,
                metalterrain_nodata_is_a_free_exit, metalterrain_nested_basin_spill_sequence,
+               metalterrain_case_makers_keep_their_border_outlet_convention,
                metalterrain_params_layout_matches_kernel,
                metalterrain_reuses_the_metalflood_backend, metalterrain_gpu_matches_cpu_build):
         try:
