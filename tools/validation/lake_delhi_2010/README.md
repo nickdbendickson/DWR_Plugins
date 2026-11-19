@@ -34,6 +34,12 @@ Without LISFLOOD-FP, add `--lisflood DamSafety_Runner/core/builtin_lisflood.py` 
 at 30 m this valley takes it about 9 hours, at 40 m about 25 minutes a run, and at 60 m its
 flow at the bridges swings between nothing and several times the flood (see Results).
 `build_case.py --manning-n` sets one Manning's n for the valley (default: the suite's 0.06).
+`--nlcd-year 2011` takes the n from NLCD land cover instead (downloaded from MRLC, turned into n
+by the Runner's own table in `DamSafety_Runner/core/nd_data.py`), and `--formation-hr 7` makes
+the as_observed breach form in 7 hours, which brings its peak outflow down to the panel's
+69,000 cfs. The workflow's roughness job (by hand with `engine` set to `roughness`, or on a pull
+request whose title holds `[roughness]`) runs the observed breach with NLCD n, n 0.05, n 0.035
+and the 7-hour breach side by side.
 
 **ANUGA on the gmsh mesh, with road breaklines and the crest burn.** `build_case.py --anuga`
 makes the two runs the Runner's `lisflood+anuga` tier and fetches the road and rail centrelines
