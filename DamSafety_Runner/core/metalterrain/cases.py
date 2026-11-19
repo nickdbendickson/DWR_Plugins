@@ -20,6 +20,23 @@ def pitted_plane(ny=80, nx=120, dx=10.0, bed=300.0, slope=0.01, pits=((0.30, 0.4
     return z
 
 
+def channel_with_barrier(ny=60, nx=120, dx=10.0, bed=300.0, slope=0.01, chan_row=None,
+                         chan_depth=3.0, barrier_col=None, barrier_w=2, sill=1.0, seed=0):
+    """A plane draining east with a channel trench along one row, crossed by a road that fills the
+    trench at the crossing (a culvert-less road fill): the plane drains east freely, but the
+    channel west of the road is dammed into a long depression it drains into - the crossing case
+    Stage 4c reconnection must detect and carve through. Border cells are outlets (no NoData)."""
+    yy, xx = np.mgrid[0:ny, 0:nx].astype(np.float64)
+    z = bed - slope * dx * xx                       # drains east (+x), ground falls eastward
+    rng = np.random.RandomState(seed)
+    z += 0.02 * rng.standard_normal((ny, nx))
+    cr = ny // 2 if chan_row is None else int(chan_row)
+    z[cr, :] -= chan_depth                           # the channel trench
+    bc = nx // 2 if barrier_col is None else int(barrier_col)
+    z[cr, bc:bc + barrier_w] += chan_depth + sill    # the road fills the trench to a sill at the crossing
+    return z
+
+
 def nodata_ringed_pit(n=64, dx=10.0, bed=300.0, collar=4, depth=8.0, rad=6.0):
     """A square valid island inside a NoData collar, with one deep pit. The pit cannot drain to
     the grid border (the collar blocks it); it must drain to the NoData, so the fill is finite.
