@@ -227,6 +227,7 @@ fi
 BIN="$SRC/build-nd/lisflood"
 [ -x "$BIN" ] || die "no binary at $BIN"
 grep -aq inittm_depth "$BIN" || die "the built binary has no inittm_depth (patch not compiled in)"
+grep -aq "nd-breach-runner: SGC arrival depth" "$BIN" || die "the built binary has no SGC arrival-depth edit (sub-grid channels would be refused by the Runner)"
 BANNER="$("$BIN" -version 2>&1 || true)"
 grep -q "LISFLOOD-FP" <<<"$BANNER" || die "the built binary does not run: $BANNER"
 say "built: $BIN ($(grep -m1 -o 'LISFLOOD-FP [0-9.]*' <<<"$BANNER"), Runner patch compiled in)"
