@@ -42,6 +42,7 @@ SRC_CELL = 1.0                     # terrain cell asked of 3DEP, m (averaged to 
 TILE_M = 2000.0                    # one 3DEP request: 2000 x 2000 cells of 1 m
 UP_M, DOWN_M, BUFFER_M = 5000.0, 12000.0, 2500.0
 READ_RADIUS_M = 100.0
+CONV_TOL = 0.1                     # |outflow/inflow - 1| within this = a steady run; others non-converged
 NHD = "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6/query"
 DEP = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage"
 NLCD_WCS = "https://www.mrlc.gov/geoserver/mrlc_download/wcs"
@@ -407,10 +408,13 @@ def score(root, say=print):
     for r in rows:
         if r[0] not in names:
             names.append(r[0])
+    steady = lambda oi: oi is not None and abs(oi - 1.0) <= CONV_TOL
     lines = ["# Manning's n at North Dakota streamgages", "",
              "Model minus measured stage, ft, at the measured flood discharge (LISFLOOD-FP, "
-             "1 m 3DEP terrain averaged to 10 m cells, steady inflow). Outflow over inflow at "
-             "the end of each run in brackets (1.00 = steady).", "",
+             "1 m 3DEP terrain averaged to 10 m cells, steady inflow). Outflow over inflow at the "
+             "end of each run in brackets (1.00 = steady). A run that did not reach steady state "
+             "(outflow/inflow outside 1.00 +/- 0.10) is shown as n/c with its ratio and left out "
+             "of the mean.", "",
              "| Gauge | Measured, cfs | " + " | ".join(tags) + " |",
              "|---|---|" + "---|" * len(tags)]
     for nm in names:
@@ -419,12 +423,18 @@ def score(root, say=print):
         for t in tags:
             hit = [r for r in rows if r[0] == nm and r[2] == t]
             q = q or (hit[0][1] if hit else None)
-            cells.append("{:+.2f} ({:.2f})".format(hit[0][3], hit[0][4] or float("nan"))
-                         if hit and hit[0][3] is not None else "")
+            if not hit or hit[0][3] is None:
+                cells.append("")
+            elif steady(hit[0][4]):
+                cells.append("{:+.2f} ({:.2f})".format(hit[0][3], hit[0][4]))
+            elif hit[0][4] is not None:
+                cells.append("n/c ({:.1f}x)".format(hit[0][4]))
+            else:
+                cells.append("{:+.2f} (?)".format(hit[0][3]))
         lines.append("| {} | {:,.0f} | ".format(nm, q or 0) + " | ".join(cells) + " |")
     means = []
     for t in tags:
-        d = [r[3] for r in rows if r[2] == t and r[3] is not None]
+        d = [r[3] for r in rows if r[2] == t and r[3] is not None and steady(r[4])]
         means.append("{:+.2f} / {:.2f}".format(np.mean(d), np.mean(np.abs(d))) if d else "")
     lines.append("| **Mean / mean size** | | " + " | ".join(means) + " |")
     text = "\n".join(lines) + "\n"
