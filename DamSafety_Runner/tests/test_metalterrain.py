@@ -83,6 +83,45 @@ def metalterrain_nodata_is_a_free_exit():
 
 
 @test
+def metalterrain_nested_basin_spill_sequence():
+    """A basin inside a basin - the case where eps-relaxation PD and priority-flood classically
+    diverge in fill *level* (the inner basin must chain through its own saddle to the OUTER
+    spill, not stop at the inner saddle). Assert the fill levels of both basins and the
+    inter-basin spill, not just that the surface is smooth."""
+    _need_cpu_build()
+    z, meta = cases.nested_basins()
+    filled, info = F.fill_dem(z, backend="cpu")
+    assert info["converged"], info
+    inner, outer = meta["inner"], meta["outer"]
+    inner_rim, outer_rim = meta["inner_rim"], meta["outer_rim"]   # 325, 330
+    fi, fo = filled[inner], filled[outer]
+    # 1) The inner basin fills to the OUTER spill (330), NOT the inner saddle (325): the spill
+    #    sequence chained. A fill that treated the inner saddle as an exit would stop near 325.
+    assert fi.min() >= outer_rim - 1e-3, ("inner basin under-filled", fi.min(), outer_rim)
+    assert fi.min() > inner_rim + 1.0, ("inner basin stopped at the inner saddle", fi.min())
+    assert fi.max() <= outer_rim + 0.05, ("inner basin over-filled", fi.max())
+    # 2) The outer basin fills to its spill (330) too.
+    assert abs(float(np.median(fo)) - outer_rim) <= 1e-2, (float(np.median(fo)), outer_rim)
+    assert fo.min() >= outer_rim - 1e-3 and fo.max() <= outer_rim + 0.05, (fo.min(), fo.max())
+    # 3) The eps drainage ramp runs the right way: it rises from the outer spill back into the
+    #    deeper inner basin, so the whole enclosed pool drains toward the one exit as a single
+    #    connected path (not two disconnected flat pools). The datum shift is what keeps this
+    #    eps ramp representable in float32 at ~330 m, so this also guards that.
+    assert float(fi.mean()) >= float(fo.mean()) - 1e-6, (fi.mean(), fo.mean())
+    # never lowers ground
+    assert (filled + 1e-4 >= z).all(), float((filled - z).min())
+    # 4) Cross-check against the serial oracle over the enclosed region specifically (no NoData
+    #    here, so priority_flood needs no scipy). A global tolerance can hide a wrong spill level
+    #    in a small region, so compare where the two algorithms diverge.
+    enc = meta["enclosed"]
+    orc = terrain.priority_flood(z)
+    assert float(np.abs(filled[enc] - orc[enc]).max()) <= 5e-3, \
+        float(np.abs(filled[enc] - orc[enc]).max())
+    # and the oracle agrees the inner basin reached the outer spill
+    assert orc[inner].min() > inner_rim + 1.0, ("oracle inner basin", orc[inner].min())
+
+
+@test
 def metalterrain_params_layout_matches_kernel():
     """TParams in Python is the struct the kernel source declares, and the buffers are named at
     the indices the kernel reads them from - the same contract the flood engine checks."""
@@ -124,7 +163,8 @@ def metalterrain_gpu_matches_cpu_build():
 if __name__ == "__main__":
     fails = 0
     for fn in (metalterrain_cpu_build_matches_priority_flood, metalterrain_fill_is_deterministic,
-               metalterrain_nodata_is_a_free_exit, metalterrain_params_layout_matches_kernel,
+               metalterrain_nodata_is_a_free_exit, metalterrain_nested_basin_spill_sequence,
+               metalterrain_params_layout_matches_kernel,
                metalterrain_reuses_the_metalflood_backend, metalterrain_gpu_matches_cpu_build):
         try:
             fn()
