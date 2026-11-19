@@ -134,6 +134,45 @@ def suite_installer_lisflood_is_a_candidate():
         shutil.rmtree(d, ignore_errors=True)
 
 
+@test
+def suite_installer_lisflood_beats_path():
+    """3.24.2: the installer's build comes before a LISFLOOD-FP on PATH (an 8.2 wrapper on the
+    install-test box won); NDBREACH_LISFLOOD still comes first."""
+    d = tempfile.mkdtemp()
+
+    def mk(*parts):
+        p = os.path.join(d, *parts)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(p, 0o755)
+        return p
+    inst, wrapper, env = mk("suite", "bin", "lisflood"), mk("pathbin", "lisflood"), mk("env", "lisflood")
+    keys = ("DAMSUITE_PREFIX", "PATH", "NDBREACH_LISFLOOD")
+    old = {k: os.environ.get(k) for k in keys}
+    try:
+        os.environ["DAMSUITE_PREFIX"] = os.path.join(d, "suite")
+        os.environ["PATH"] = os.path.join(d, "pathbin") + os.pathsep + (old["PATH"] or "")
+        os.environ.pop("NDBREACH_LISFLOOD", None)
+        assert shutil.which("lisflood") == wrapper
+        c = nd_data.lisflood_candidates()
+        assert c[0] == inst and c.index(inst) < c.index(wrapper), c
+        assert nd_data.detect_lisflood() == inst
+        os.environ["NDBREACH_LISFLOOD"] = env
+        c = nd_data.lisflood_candidates()
+        assert c[:2] == [env, inst], c
+        os.environ.pop("NDBREACH_LISFLOOD")
+        os.remove(inst)                                   # no installer build: PATH
+        assert nd_data.lisflood_candidates()[0] == wrapper
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # --- runs, conserves mass, names itself ------------------------------------------------------
 
 @test

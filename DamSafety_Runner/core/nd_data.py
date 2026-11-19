@@ -205,15 +205,16 @@ def lisflood_candidates():
     env = os.environ.get("NDBREACH_LISFLOOD")
     if env:
         c.append(env)
-    w = shutil.which("lisflood")
-    if w:
-        c.append(w)
     # 3.20.15 (install test 2026-11-18): the build the dam-suite install-all package puts in
-    # <DAMSUITE_PREFIX or ~/dam-suite>/bin (lisflood, lisflood.exe on Windows), before the
-    # other install places
+    # <DAMSUITE_PREFIX or ~/dam-suite>/bin (lisflood, lisflood.exe on Windows). 3.24.2: before
+    # PATH too, so an older LISFLOOD-FP on PATH (an 8.2 wrapper on the test box) does not win
+    # over the installer's 8.3. Order: NDBREACH_LISFLOOD > installer bin > PATH > install places.
     for root in (os.environ.get("DAMSUITE_PREFIX", "").strip(), _home_paths("dam-suite")):
         if root:
             c += [os.path.join(root, "bin", "lisflood"), os.path.join(root, "bin", "lisflood.exe")]
+    w = shutil.which("lisflood")
+    if w:
+        c.append(w)
     pats = [
         _home_paths("lisflood-fp", "lisflood"),
         _home_paths("lisflood-fp*", "build", "lisflood"),

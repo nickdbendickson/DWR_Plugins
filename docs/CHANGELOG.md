@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Runner 3.24.2: the installer's LISFLOOD-FP comes before PATH (no number changes).** Follow-up to #398, from the dam-suite-all-2026-11-17 install test. With the LISFLOOD-FP setting empty, `core/nd_data.lisflood_candidates()` (first-run default, `detect_lisflood` for the selftest, wizard, CLI and algorithms) checked PATH before `<DAMSUITE_PREFIX or ~/dam-suite>/bin`, so an older LISFLOOD-FP on PATH (an 8.2 wrapper on the test box) won over the installer's 8.3. Order now: the Runner setting > `NDBREACH_LISFLOOD` > installer bin > PATH > the usual install places > the release zip's bundled build.
+  - Tests: `tests/test_v3110.py` `suite_installer_lisflood_beats_path` and `tests/test_m15_m16.py` `find_lisflood_setting_wins_over_installer_and_path`.
+  - Pairs with damit Runner 0.6.8 / PMP 0.4.6.
+
 - **Runner 3.24.1: batch runs lift the open-file limit (NO computed results change).** `ndbreach:chainbatch` and `ndbreach:batch` raise the process's soft limit on open files to 10240 (4096 when the system refuses, never above the hard limit) and log it, or warn with the `ulimit -n 10240` fix when it stays low. macOS starts every process at 256; batch-44 run1118 ran all 44 dams in one `qgis_process` on the statewide 1 m VRT (GDAL keeps up to 100 tiles open) and stopped after four dams with `Too many open files`, every later DEM warp failing. `dam_chain.py` 1.5.4 lifts the limit too before it starts `qgis_process`, so the child inherits it. New `core/chain.raise_open_files` / `open_files_note`; test `chain_raises_open_file_limit` in `tests/test_chain_batch.py`.
 
 - **Runner 3.24.0: records, tests and report/display text only (NO computed results change — no number, raster, breach peak, flood extent, arrival time or hydrograph moves).** Five items that keep and surface more of what the run already computes, report honestly, and name the checks; no computation is touched.
