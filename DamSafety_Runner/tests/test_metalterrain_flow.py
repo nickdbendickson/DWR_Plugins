@@ -78,6 +78,55 @@ def flow_cpu_build_matches_oracle():
     assert np.array_equal(accum[valid], oa[valid]), "drainage areas differ from the oracle"
 
 
+def _kahn_accum(direction, valid):
+    """Kahn topological in-degree accumulation on the D4 direction field (adapted from Nick's
+    acc_oracle to 4-connectivity): acc = 1 + sum of donors, cells drained in index order once
+    their in-degree hits zero. A genuinely different algorithm from both the descending-elevation
+    oracle and the GPU fixed-point iteration. Returns (acc, every_valid_cell_drained)."""
+    from collections import deque
+    ny, nx = direction.shape
+    acc = valid.astype(np.float64)
+    indeg = np.zeros((ny, nx), dtype=np.int64)
+    rr, cc = np.nonzero(valid & (direction >= 0) & (direction < FL.NONE))
+    for r, c in zip(rr, cc):
+        dr, dc = FL._DRC[int(direction[r, c])]
+        if valid[r + dr, c + dc]:
+            indeg[r + dr, c + dc] += 1
+    rem = indeg.copy()
+    q = deque(int(r) * nx + int(c) for r, c in zip(*np.nonzero(valid & (indeg == 0))))
+    touched = np.zeros((ny, nx), dtype=bool)
+    while q:
+        i = q.popleft()
+        r, c = divmod(i, nx)
+        touched[r, c] = True
+        d = int(direction[r, c])
+        if d == FL.NONE or d < 0:
+            continue
+        dr, dc = FL._DRC[d]
+        tr, tc = r + dr, c + dc
+        if valid[tr, tc]:
+            acc[tr, tc] += acc[r, c]
+            rem[tr, tc] -= 1
+            if rem[tr, tc] == 0:
+                q.append(tr * nx + tc)
+    return acc, bool((~valid | touched).all())
+
+
+@test
+def flow_accum_matches_kahn_oracle():
+    """A third, independent accumulation algorithm (Kahn topological in-degree, from Nick's
+    oracle, adapted to D4) agrees with the GPU accumulation exactly, and the drainage network has
+    no cycles - the GPU-fixed-point vs CPU-Kahn pairing is two different algorithms, not one spec
+    twice."""
+    _need_cpu_build()
+    z = cases.pitted_plane(ny=66, nx=98, seed=4)
+    direction, accum, info = FL.flow_accum(z, backend="cpu")
+    valid = np.isfinite(accum)
+    kahn, no_cycles = _kahn_accum(direction, valid)
+    assert no_cycles, "the D4 drainage network has a cycle (fill did not drain everywhere)"
+    assert np.array_equal(accum[valid], kahn[valid]), "GPU accumulation disagrees with Kahn"
+
+
 @test
 def flow_accum_invariants():
     """Drainage-area invariants, independent of the oracle: every valid cell has area >= 1; the
@@ -163,9 +212,9 @@ def flow_gpu_matches_cpu_build():
 if __name__ == "__main__":
     import sys
     fails = 0
-    for fn in (flow_cpu_build_matches_oracle, flow_accum_invariants, flow_is_deterministic,
-               flow_nodata_drains_out, flow_params_layout_matches_kernel,
-               flow_gpu_matches_cpu_build):
+    for fn in (flow_cpu_build_matches_oracle, flow_accum_matches_kahn_oracle,
+               flow_accum_invariants, flow_is_deterministic, flow_nodata_drains_out,
+               flow_params_layout_matches_kernel, flow_gpu_matches_cpu_build):
         try:
             fn()
             print("ok    ", fn.__name__)
