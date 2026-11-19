@@ -78,7 +78,14 @@ def fill_dem(dem, eps=1e-5, backend="auto", sweeps_per_batch=0, max_sweeps=0, lo
         raise ValueError("dem must be 2-D")
     ny, nx = a.shape
     valid = np.isfinite(a) & (a != NODATA)
-    z32 = np.where(valid, a, 0.0).astype(np.float32)
+    # Datum shift: the kernel runs in float32, where eps (1e-5 m) is lost to rounding once
+    # elevations reach ~170 m (ULP(300 m) ~ 3e-5 > eps), so flats on ND terrain (~300 m) would
+    # fill FLAT instead of with the eps drainage ramp priority_flood lays down. Relaxing in
+    # (z - datum), datum = min valid elevation, keeps working values small (relief, not altitude)
+    # so eps stays representable; the datum is added back in float64 at the end.
+    datum = float(a[valid].min()) if valid.any() else 0.0
+    zc = np.where(valid, a - datum, 0.0)                 # datum-shifted ground, float64
+    z32 = zc.astype(np.float32)
     outlet = _outlets(valid)
     w0 = np.where(valid, BIG, NODATA).astype(np.float32)
     w0[outlet] = z32[outlet]
@@ -93,14 +100,19 @@ def fill_dem(dem, eps=1e-5, backend="auto", sweeps_per_batch=0, max_sweeps=0, lo
         p.nx, p.ny, p.r0, p.c0, p.wr, p.wc, p.pad = nx, ny, 0, 0, ny, nx, 0
         p.eps, p.tol, p.pad2 = float(eps), 1.0e-6, 0.0
         k = int(sweeps_per_batch) or max(16, nx + ny)
-        cap = int(max_sweeps) or 200 * (nx + ny)
+        # The filled wave travels ~1 cell/sweep along the drainage path, so the worst case is the
+        # longest drainage path, which is O(valid cells) (a winding channel), not O(perimeter).
+        # Cap at 2x the valid-cell count (a loose bound on any simple path), with the perimeter as
+        # a floor for tiny grids. Convergence (change-counter 0) still stops early in the usual case.
+        nvalid = int(valid.sum())
+        cap = int(max_sweeps) or max(200 * (nx + ny), 2 * nvalid)
         sweeps, changed = 0, 1
         while changed and sweeps < cap:
             arr["st"][0] = 0
             bk.run_batch(p, k)
             changed = int(arr["st"][0])
             sweeps += k
-        filled = arr["w"].reshape(ny, nx).astype(np.float64)
+        filled = arr["w"].reshape(ny, nx).astype(np.float64) + datum   # undo the datum shift
         filled = np.where(valid, filled, np.nan)
         info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": sweeps,
                 "converged": changed == 0, "eps": float(eps)}

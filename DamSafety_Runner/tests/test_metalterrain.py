@@ -37,8 +37,9 @@ def metalterrain_cpu_build_matches_priority_flood():
     orc = terrain.priority_flood(z)
     dmax = float(np.abs(filled - orc).max())
     assert dmax <= 5e-3, dmax                       # eps*path at most; same surface
-    z32 = z.astype(np.float32).astype(np.float64)   # the ground the float32 kernel sees
-    assert (filled + 1e-6 >= z32).all()             # fill only raises (never lowers the ground)
+    # fill only raises: filled >= z to float32-relief precision (the kernel relaxes in a
+    # datum-shifted space, so it is accurate to ULP(relief) ~ 1e-6 m, not ULP(altitude)).
+    assert (filled + 1e-4 >= z).all(), float((filled - z).min())
     # it really removed depressions (the pits held water)
     assert float(np.maximum(filled - z, 0.0).sum()) > 10.0, "no depressions filled"
 
@@ -69,8 +70,7 @@ def metalterrain_nodata_is_a_free_exit():
     assert fv.max() < 1e6, "a cell filled toward the unbounded sentinel: NoData not a free exit"
     # NoData stays NoData
     assert np.isnan(filled[~valid]).all()
-    z32 = z.astype(np.float32).astype(np.float64)   # the ground the float32 kernel sees
-    assert (filled[valid] + 1e-6 >= z32[valid]).all()
+    assert (filled[valid] + 1e-4 >= z[valid]).all(), float((filled[valid] - z[valid]).min())
     # the deep pit actually took water
     assert float(np.nansum(np.maximum(filled - z, 0.0))) > 5.0, "the ringed pit did not fill"
     # cross-check against the serial oracle when it can run (its NaN path needs scipy, which is

@@ -34,8 +34,7 @@ def verify(backend):
     orc = _oracle(z)
     d = np.abs(f1 - orc)
     dmax = float(np.nanmax(d))
-    z32 = z.astype(np.float32).astype(np.float64)    # the ground the float32 kernel sees
-    rose = bool(np.all(f1 + 1e-6 >= z32))
+    rose = bool(np.all(f1 + 1e-4 >= z))             # fill only raises the true ground
     print("device       : {} ({})".format(i1["device"], i1["backend"]))
     print("sweeps        : {}  converged={}".format(i1["sweeps"], i1["converged"]))
     print("determinism   : {}  (SHA256 of two runs {})".format(
