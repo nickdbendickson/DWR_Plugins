@@ -68,19 +68,31 @@ def manning_lut(overrides=None, default=0.06):
     return lut
 
 
-def nlcd_to_manning(codes, lut=None):
+def nlcd_to_manning(codes, lut=None, counts=None):
     """Array of NLCD class codes -> array of n (NaN codes and unknown classes
-    get the default)."""
+    get the default). When `counts` is a dict it is filled with the coverage of this
+    read (total_cells, default_cells = cells that took the default n because no class
+    matched, nodata_cells, default_n); the returned n values are unchanged either way
+    (H9: reporting only)."""
     import numpy as np
     lut = lut or manning_lut()
     a = np.asarray(codes, dtype=float)
-    out = np.full(a.shape, float(lut.get("default", 0.06)))
+    default_n = float(lut.get("default", 0.06))
+    out = np.full(a.shape, default_n)
     ok = np.isfinite(a)
     ai = np.where(ok, a, -1).astype(int)
+    covered = np.zeros(a.shape, dtype=bool)
     for code, n in lut.items():
         if code == "default":
             continue
-        out[ok & (ai == int(code))] = float(n)
+        m = ok & (ai == int(code))
+        out[m] = float(n)
+        covered |= m
+    if counts is not None:
+        counts["total_cells"] = int(a.size)
+        counts["default_cells"] = int((~covered).sum())
+        counts["nodata_cells"] = int((~ok).sum())
+        counts["default_n"] = default_n
     return out
 
 
@@ -193,15 +205,16 @@ def lisflood_candidates():
     env = os.environ.get("NDBREACH_LISFLOOD")
     if env:
         c.append(env)
-    w = shutil.which("lisflood")
-    if w:
-        c.append(w)
     # 3.20.15 (install test 2026-11-18): the build the dam-suite install-all package puts in
-    # <DAMSUITE_PREFIX or ~/dam-suite>/bin (lisflood, lisflood.exe on Windows), before the
-    # other install places
+    # <DAMSUITE_PREFIX or ~/dam-suite>/bin (lisflood, lisflood.exe on Windows). 3.24.2: before
+    # PATH too, so an older LISFLOOD-FP on PATH (an 8.2 wrapper on the test box) does not win
+    # over the installer's 8.3. Order: NDBREACH_LISFLOOD > installer bin > PATH > install places.
     for root in (os.environ.get("DAMSUITE_PREFIX", "").strip(), _home_paths("dam-suite")):
         if root:
             c += [os.path.join(root, "bin", "lisflood"), os.path.join(root, "bin", "lisflood.exe")]
+    w = shutil.which("lisflood")
+    if w:
+        c.append(w)
     pats = [
         _home_paths("lisflood-fp", "lisflood"),
         _home_paths("lisflood-fp*", "build", "lisflood"),

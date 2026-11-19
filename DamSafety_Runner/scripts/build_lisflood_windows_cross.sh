@@ -55,6 +55,7 @@ BIN=build-win/lisflood.exe
 [ -f "$BIN" ] || { echo "ERROR: no $BIN"; exit 1; }
 # the executable must know the new keyword (otherwise the Runner refuses it)
 grep -aq inittm_depth "$BIN" || { echo "ERROR: the patch is not in the build."; exit 1; }
+grep -aq "nd-breach-runner: SGC arrival depth" "$BIN" || { echo "ERROR: the sub-grid channel (SGC) part of the patch is not in the build."; exit 1; }
 # no DLL beyond Windows' own: objdump lists the imports
 if command -v x86_64-w64-mingw32-objdump >/dev/null; then
   DLLS="$(x86_64-w64-mingw32-objdump -p "$BIN" | awk '/DLL Name/ {print $3}' | tr '\n' ' ')"

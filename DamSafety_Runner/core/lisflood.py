@@ -49,6 +49,20 @@ PATCH_MISSING_WARNING = (
     "defensible run.")
 
 
+# 3.26.0: the line the patched LISFLOOD-FP prints when its sub-grid channel (SGC) solver starts
+# with the arrival-depth patch (scripts/patch_lisflood.py edit 4). Without it the SGC solver
+# records arrival at the first millimetre, measured from the channel BED, so a channel that
+# starts full would "arrive" at t = 0 everywhere: an SGC run is refused, whatever
+# allow_unpatched says.
+SGC_PATCH_MARKER = "nd-breach-runner: SGC arrival depth"
+SGC_PATCH_MISSING_MSG = (
+    "This LISFLOOD-FP build does not have the sub-grid channel part of the arrival-depth patch "
+    "(scripts/patch_lisflood.py, Runner 3.26.0 or later), so its sub-grid channel solver would "
+    "record arrival at the first millimetre of water in the channel. Rebuild LISFLOOD-FP with "
+    "the current scripts/build_lisflood_linux.sh / build_lisflood_macos.sh, or turn sub-grid "
+    "channels off.")
+
+
 def patch_missing(logtxt):
     """True when a LISFLOOD-FP log shows it ignored the arrival-depth keyword."""
     return PATCH_MISSING_MARKER in (logtxt or "")
@@ -339,11 +353,18 @@ class LisfloodSettings:
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None):
+                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
         self.solver = solver                    # v3.4.0: "acceleration" (default) or "fv1"
+        # 3.26.0: sub-grid river channels (core/sgc.Channels on this run's DEM) or None. LISFLOOD-FP
+        # runs them in its own local-inertial SGC solver, so they go with ACC only.
+        self.sgc = sgc
+        if sgc is not None and solver != SOLVER_ACC:
+            raise ModelError("sub-grid channels run with the ACC solver only (LISFLOOD-FP's SGC "
+                             "model is local inertial), not {}".format(
+                                 SOLVER_SHORT.get(solver, solver)))
         # 3.16.0: "limitslopes" for FV2 / MWDG2 (ignored by the other solvers)
         self.limit_slopes = bool(limit_slopes)
         # 3.15.1: ACC theta (1.0 = LISFLOOD-FP's own, nothing written) and cfl (None = LISFLOOD-FP's
@@ -628,12 +649,32 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         lines.append("fpfric {:.4f}".format(st.manning_n))
     else:
         lines.append("fpfric {:.4f}".format(st.manning_n))
+    sgc = getattr(st, "sgc", None)
+    if sgc is not None:
+        if sgc.width.shape != dem.data.shape:
+            raise ModelError("the sub-grid channel grids do not match the DEM")
+        if is_builtin(st.exe):
+            raise ModelError("sub-grid channels need LISFLOOD-FP; the built-in engine has none")
+        w_g, bank_g, bed_g = sgc.grids()
+        for g, ext, fmt in ((w_g, ".sgcwidth.asc", "%.3f"), (bank_g, ".sgcbank.asc", "%.3f"),
+                            (bed_g, ".sgcbed.asc", "%.3f")):
+            local_grid(g).write_asc(os.path.join(workdir, name + ext), fmt=fmt)
+        lines += ["SGCwidth {}.sgcwidth.asc".format(name),
+                  "SGCbank {}.sgcbank.asc".format(name),
+                  "SGCbed {}.sgcbed.asc".format(name),
+                  "SGCn {:.4f}".format(sgc.channel_n)]
+    init = None
     if st.initial_depth is not None:
         init = st.initial_depth.data
         if init.shape != dem.data.shape:
             raise ModelError("the initial depth grid does not match the DEM")
-        init_grid = dem.like(np.where(np.isfinite(init), init, 0.0))
-        init_grid.write_asc(os.path.join(workdir, name + ".start"), fmt="%.3f")
+        init = np.where(np.isfinite(init), init, 0.0)
+    if sgc is not None and sgc.start_depth.any():
+        # the SGC start depth is measured from the channel bed: a channel that starts full adds
+        # its own depth under whatever stands above the bank
+        init = (init if init is not None else 0.0) + sgc.start_depth
+    if init is not None:
+        dem.like(init).write_asc(os.path.join(workdir, name + ".start"), fmt="%.3f")
         lines.append("startfile {}.start".format(name))
     if st.gauges:
         xmin_l, ymin_l = dem.x0, dem.yll
@@ -955,6 +996,8 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     if proc.returncode != 0:
         raise ModelError("LISFLOOD-FP stopped with code {}:\n{}".format(proc.returncode,
                                                                       logtxt[-1500:]))
+    if getattr(st, "sgc", None) is not None and SGC_PATCH_MARKER not in logtxt:
+        raise ModelError(SGC_PATCH_MISSING_MSG)
     if patch_missing(logtxt):
         # 3.16.0: FV2 / MWDG2 are never run without the patch, whatever allow_unpatched says
         if getattr(st, "allow_unpatched", False) and \
@@ -1031,6 +1074,14 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     wse = load(".mxe", required=False)
     notes = []
     hmax = np.where(np.isfinite(hmax), hmax, f32(0.0))
+    sgc = getattr(st, "sgc", None)
+    if sgc is not None:
+        # 3.26.0: in a channel cell the SGC solver's depth is measured from the channel bed. The
+        # Runner reports the depth ABOVE THE BANK (the ground a person or building stands on), so a
+        # flood that stays inside the channel is not flooded ground; .mxe (bed-based) is not used.
+        hmax = np.where(sgc.mask, np.clip(hmax - sgc.depth.astype(f32), f32(0.0), None),
+                        hmax).astype(f32)
+        wse = None
     # the thresholds are compared in float64 (as before 3.16.10) so a cell at exactly the
     # arrival depth is counted the same way the float64 read counted it
     hmax64 = hmax.astype(np.float64)
@@ -1077,6 +1128,19 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         init_d = st.initial_depth.data
         stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),
                                             init_d, 0.0))) * dem.dx ** 2 / ACFT, 2)
+    if sgc is not None:
+        stats["sgc"] = dict(sgc.info)
+        stats["initial_water_acft"] = round(stats["initial_water_acft"]
+                                            + sgc.start_volume_m3() / ACFT, 2)
+        stats["sgc_capacity_acft"] = round(sgc.capacity_m3() / ACFT, 2)
+        if st.gauges:
+            # LISFLOOD-FP's flow sections (CalcVirtualGauge) sum the floodplain fluxes only; the
+            # flow inside a sub-grid channel is not in them (Lake Delhi 2010: 18,800 cfs at a
+            # bridge whose neighbours read 43,000)
+            notes.append("With sub-grid channels, LISFLOOD-FP's flow sections (gauges) count only "
+                         "the flow over the floodplain, not the flow inside the channels: the gauge "
+                         "discharges are low and should not be used. Depths, water levels, "
+                         "velocities and arrival times are not affected.")
     # v3.11.0: what the model holds against what was put in. A free FV1 edge can import water
     # (it grew to 6.5e10 m3 against 9.7e6 m3 injected at Elm River Dam 1); the near-dam refine
     # checks these before it merges anything. Only meaningful without ambient sources.
@@ -1172,11 +1236,12 @@ def collect_snapshots(workdir, st, out_path, name="run", step=1, remove=True):
     return np.asarray(times), out_path
 
 
-def check_lisflood(exe, workdir, solver=SOLVER_ACC):
+def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     """Run a 2 km synthetic channel for 20 minutes. Returns a dict with 'ok',
     'patched' (arrival-depth keyword honoured), 'velocity' (a maximum velocity was written) and
     'message'. 3.16.0: `solver` checks that solver (workflow.run_dam does before an FV2 / MWDG2
-    run)."""
+    run). 3.26.0: `sgc` runs it with sub-grid channels (full at the start), which also needs
+    the SGC part of the patch (SGC_PATCH_MARKER in the log)."""
     from .breach import Hydrograph
     os.makedirs(workdir, exist_ok=True)
     nr, nc, dx = 20, 100, 20.0
@@ -1184,13 +1249,20 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC):
     z = 100.0 - 0.002 * X + 0.02 * np.abs(Y - nr * dx / 2)
     dem = Grid(z[::-1], 0.0, nr * dx, dx)
     hy = Hydrograph(np.array([0.0, 600.0, 1200.0]), np.array([30.0, 30.0, 0.0]), "test")
+    chans = None
+    if sgc:
+        from . import sgc as sgcmod
+        chans = sgcmod.build(dem, inflow_rc=dem.rc(30.0, nr * dx / 2 + 5), upstream_km2=50.0,
+                             start="full")
     st = LisfloodSettings(exe, arrival_depth_m=0.3, sim_time_s=1200.0, massint_s=60.0,
-                          initial_tstep_s=1.0, solver=solver)
+                          initial_tstep_s=1.0, solver=solver, sgc=chans)
     try:
         par = write_inputs(workdir, dem, (30.0, nr * dx / 2 + 5), hy, st)
         run(workdir, par, st)
         env = read_results(workdir, dem, st, hy)
     except Exception as e:  # report, don't raise
+        if sgc and SGC_PATCH_MISSING_MSG in str(e):
+            return {"ok": True, "patched": False, "velocity": False, "message": str(e)}
         return {"ok": False, "patched": False, "velocity": False, "message": str(e)}
     p_init = os.path.join(workdir, "results", "run.inittm")
     if not os.path.exists(p_init):

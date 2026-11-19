@@ -1,5 +1,6 @@
 {
  "what_this_is": "USGS streamgages in North Dakota with a measured open-water flood discharge (a field measurement: discharge and mean gage height taken together, May to October, control clear or debris, no ice). Each measurement is a surveyed flood stage at a known flow: the model, given that flow, should reproduce that stage. Values from the USGS Water Data API (api.waterdata.usgs.gov, collections field-measurements and monitoring-locations), read 2026-11-17. Gage datum is the station's current datum; stage elevation = datum + gage height.",
+ "study_scope": "The study runs every gauge below that is not marked \"exclude\": true; an excluded gauge keeps its measurement here for the record, with an exclude_reason. The nd-gauges.yml workflow reads this file to build its run set.",
  "gauges": [
   {"id": "USGS-05116000", "name": "Souris River near Foxholm", "river": "Souris River", "lon": -101.505, "lat": 48.372222,
    "datum_ft": 1562.04, "datum": "NAVD88", "drainage_mi2": 9470, "median_annual_peak_cfs": 444,
@@ -12,9 +13,11 @@
    "measured": {"time_utc": "2011-06-30T08:52", "q_cfs": 21200, "gage_height_ft": 18.32, "control": "Clear", "rated": "Fair"}},
   {"id": "USGS-06335500", "name": "Little Missouri River at Marmarth", "river": "Little Missouri River", "lon": -103.9175, "lat": 46.297778,
    "datum_ft": 2688.11, "datum": "NAVD88", "drainage_mi2": 4670, "median_annual_peak_cfs": 6850,
+   "exclude": true, "exclude_reason": "Steep supercritical Little Missouri badlands canyon: at the edge of LISFLOOD-FP's local-inertial validity (the steady run lost mass balance and inflated the stage) and unrepresentative of the prairie/cropland dam-tailwater reaches this roughness study targets. Dropped from the study 2026-11-19.",
    "measured": {"time_utc": "2011-05-22T16:45", "q_cfs": 32000, "gage_height_ft": 19.45, "control": "Clear", "rated": "Good"}},
   {"id": "USGS-06336000", "name": "Little Missouri River at Medora", "river": "Little Missouri River", "lon": -103.532283, "lat": 46.916842,
    "datum_ft": 2246.62, "datum": "NAVD88", "drainage_mi2": 6210, "median_annual_peak_cfs": 8100,
+   "exclude": true, "exclude_reason": "Steep supercritical Little Missouri badlands canyon: at the edge of LISFLOOD-FP's local-inertial validity (the steady run did not settle to a balanced state) and unrepresentative of the prairie/cropland dam-tailwater reaches this roughness study targets. Dropped from the study 2026-11-19.",
    "measured": {"time_utc": "2011-05-25T16:40", "q_cfs": 35600, "gage_height_ft": 20.23, "control": "Clear", "rated": "Fair"}},
   {"id": "USGS-06348300", "name": "Heart River at Stark Bridge near Judson", "river": "Heart River", "lon": -101.213611, "lat": 46.703333,
    "datum_ft": 1721.3, "datum": "NAVD88", "drainage_mi2": 2940, "median_annual_peak_cfs": 1560,

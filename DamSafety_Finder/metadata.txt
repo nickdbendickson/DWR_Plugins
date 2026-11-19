@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Finds dams, dry dams, road fills, ponds, dugouts and road / rail stream crossings in LiDAR, hydrography and aerial imagery that are not on the DWR, NID or bridge / culvert lists.
 about=Nine Processing tools (Processing Toolbox > DamSafety Finder > Find structures). Fills across streams and draws: walks the 3DHP / NHD flowlines and every draw traced from the DEM itself over a bare-earth DEM and reports every fill that blocks the valley (spill level, height, head, storage, pool), as a dam, dry embankment or road fill. Ponds and dugouts: the Screening tool 16 pond engine over a water-body layer. Crossings: every road / rail x stream crossing, the places a culvert or bridge must be. Open water: pond outlines from 4-band or colour-infrared aerial imagery (NDWI; several years keep the persistent water) or straight from a classified LiDAR point cloud (ASPRS class 9), marked when no water-body layer has them. Build the water mosaic: turn a folder of classified LiDAR tiles into the statewide class-9 water-count / mean-elevation rasters the open-water tool reads. Also: where each pool spills, dug pits and raised ridges (levees, dikes) anywhere in the DEM, the drainage area and expected pipe size at each crossing, dams / dikes / culverts from OpenStreetMap, a score learned from the fills already on a dam list (bagged boosted trees by default), evidence the DEM cannot give (water year after year in the imagery, NWI codes, LiDAR return drop-out, buildings and roads down the flow path), and review batches whose marks give precision and recall with honest 95 %% intervals. Every candidate is checked against the known-structure layers you give (DWR dams, dugouts, Unknown Structures, NID, NBI, NDDOT, USGS / SARP crossings): listed, unsure or new. The not-listed dams and ponds are also written as DWR-style dam records (status Candidate) that DamSafety Screening tool 1 reads. Screening aid: check every candidate against an aerial image; the Department makes the determination.
-version=0.7.1
+version=0.7.2
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 author=N.D. Bendickson
@@ -17,6 +17,8 @@ tags=dam,dam safety,lidar,culvert,pond,processing
 experimental=True
 hasProcessingProvider=yes
 changelog=
+    0.7.2 - 2026-11-18 (the review order, from Nick's statewide review sheet)
+      * review_order (evidence tool): a fill on a pond-outlet line counts four score bands lower than its score (one scoring 0.85 is looked at with the other fills of 0.4 to 0.5). On the statewide sheet of 90 cards picked at random inside score bands, pond-outlet fills were dams 3 of 8 at 0.73 and up, 2 of 10 at 0.5 to 0.73 and 0 of 8 at 0.3 to 0.5; the others 10 of 10, 13 of 16 at 0.6 to 0.73, 11 of 16 at 0.5 to 0.6, 6 of 12 at 0.4 to 0.5. The score, the fills and the review batch are unchanged.
     0.7.1 - 2026-11-16 (the review order and how far down to look, from Nick's two review sheets)
       * review_order (evidence tool): inside a score band, a fill with open water in its pool in 2 or more image years now comes first, then what is below, then the score. On a sheet of 90 dry fills picked at random, 6 of the 22 with water in 2+ years were dams, 2 of the other 68.
       * Guide: work down the ranked list to a score of about 0.5. On the 0.7.0 sheets 55 of the 60 top-scored fills were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75. No change to the fills or the score.

@@ -113,8 +113,8 @@ All in `~/ND_Finder_Statewide`:
 | file | what it is |
 |---|---|
 | `ND_finder_summary.txt` | the Finder version, counts by status and kind, how many candidates score 0.5 or more, tiles run / skipped / failed, the settings used, checksums of the inputs |
-| `ND_finder_candidates_top.csv` | **open this one first.** The top 2,000 candidates by score: rank, score, kind, status, height, storage, `lat`, `lon`, tile, `find_id`, `link`, and the three columns of the crowded-ground note (below). The link opens Google Maps on the satellite picture at that point (nothing is sent anywhere until you click one). It opens at once in Excel or Numbers. `--top 5000` makes it longer |
-| `ND_finder_candidates_ranked.csv` | every candidate: fills that are **not on a list** (new or unsure), of kind **dam** or **dry embankment**, inside North Dakota, not at the edge of the terrain - highest score first, every column. About 300,000 rows for the state |
+| `ND_finder_candidates_top.csv` | **open this one first.** The first 2,000 candidates in the order to look at them (below): rank, score, kind, status, height, storage, `lat`, `lon`, tile, `find_id`, `link`, `line_source` and `pool` (script 1.4), and the three columns of the crowded-ground note (below). The link opens Google Maps on the satellite picture at that point (nothing is sent anywhere until you click one). It opens at once in Excel or Numbers. `--top 5000` makes it longer |
+| `ND_finder_candidates_ranked.csv` | every candidate: fills that are **not on a list** (new or unsure), of kind **dam** or **dry embankment**, inside North Dakota, not at the edge of the terrain - in the order to look at them (below), every column. About 240,000 rows for the state |
 | `ND_finder_fills.gpkg` | for QGIS. Layer `embankments` = every fill (scored); `candidates` = the ranked list as points; `spillways`; `ridges` (channel-side dikes); `run_info` |
 | `tiles/` | one folder per tile (what lets it go on after a stop). Leave it there until you are done |
 | `logs/`, `failed/` | a log per run; the log of any tile that failed |
@@ -142,13 +142,31 @@ ranked lists:
 * `near_n`, `near_km2`, `crowded`: the crowded-ground note, the last three columns of every
   list. See "Crowded ground" below. They leave nothing out of the lists.
 
-Expect roughly 450,000 fills in all, most of them low-scoring, and about 300,000 rows in the
-full ranked list (a CSV of about 160 MB: it opens slowly in Excel or Numbers, which is why the
-short list is there). The summary says how many candidates score 0.5 or more: **work down the
-list to about there.** On the review sheets of 2026-11-16 (Finder 0.7.0 fills), 55 of the 60
-top-scored candidates were dams, and the dams with no pool in the LiDAR scored 0.5 to 0.75. If
-more score 0.5 or more than the short list holds, `--top N` makes it longer. In QGIS the
-`candidates` layer is the full ranked list as points; filter it on `rank` for the top ones.
+The 2026-11-18 statewide run found 325,399 fills, 236,805 of them in the full ranked list (a
+CSV of about 130 MB: it opens slowly in Excel or Numbers, which is why the short list is there).
+
+**The order (script 1.4).** The lists are in the order to look at the fills: the score in bands
+0.1 wide, the highest first, and a fill on a **pond-outlet line** (`line_source` = `DEM pool
+outlet`: the line traced out of a pool in the DEM, not a mapped stream or draw) counted **four
+bands lower** than its score, after the other fills of the band it lands in. So a pond-outlet
+fill scoring 0.85 sits with the other fills of 0.4 to 0.5. The score itself is not changed. On
+Nick's statewide review sheet of 2026-11-18 (90 cards picked at random inside score bands):
+
+| score | other fills: dams | pond-outlet fills: dams |
+|---|---|---|
+| 0.73 and up | 10 of 10 | 3 of 8 |
+| 0.6 to 0.73 | 13 of 16 | 2 of 10 (0.5 to 0.73) |
+| 0.5 to 0.6 | 11 of 16 | |
+| 0.4 to 0.5 | 6 of 12 | 0 of 8 (0.3 to 0.5) |
+| 0.3 to 0.4 | 2 of 10 | |
+
+**Work down the list to about a score of 0.5, or 0.4 if one dam in two cards is worth the
+time.** The summary counts the candidates at 0.5 or more (and how many of them are pond-outlet
+fills, which come later in the list). `--outlet-drop 0` ranks by the score alone, as script 1.3
+did. The order is made in the merge: `--merge-only` puts an earlier run in this order without
+running a tile, with the Finder that made the tiles. If more fills are worth a look than the
+short list holds, `--top N` makes it longer. In QGIS the `candidates` layer is the full ranked
+list as points; filter it on `rank` for the top ones.
 
 **The ids.** `find_id` is made from the crest point of a fill.
 
@@ -270,6 +288,7 @@ bash run_finder_statewide.sh --merge-only --top 5000         # a longer short li
 bash run_finder_statewide.sh --merge-only --exclude-polygons "/path/to/mine_areas.gpkg"   # leave that ground out of the lists
 bash run_finder_statewide.sh --merge-only --crowd-km2 10     # another limit for the crowded-ground note (0 = off)
 bash run_finder_statewide.sh --merge-only --no-score         # no score; the list is ranked by height
+bash run_finder_statewide.sh --merge-only --outlet-drop 0    # rank by the score alone (no pond-outlet drop)
 bash run_finder_statewide.sh --merge-only --review-batch 90  # also draw a 90-card review batch from the candidates
 bash run_finder_statewide.sh --workers 6                     # 6 tiles at a time
 bash run_finder_statewide.sh --redo --bbox=...               # run finished tiles again
