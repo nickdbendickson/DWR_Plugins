@@ -106,6 +106,89 @@ def structure_edits(structures, cell, models):
     return out
 
 
+# --- S7 (3.22.x): crossings still blocked after the cuts ------------------------------
+# Report only. A bare-earth road or rail embankment is a wall across the channel until a
+# culvert, bridge or notch is cut through it; the cut can be too narrow for the model cell (a
+# guessed 1.2 m box in a 30 m cell cuts nothing) or there may be no structure at all, and the
+# wall then survives into the model DEM. crossing_barriers measures what is left on the flow
+# path; it reads the DEM only (sample_bilinear), cuts nothing and changes no modelled number.
+CROSSING_NEAR_M = 60.0      # a rise is "at" a line within this, or one model cell, whichever larger
+CROSSING_TOL_M = 0.5        # a residual rise below this is DEM noise, not a wall
+
+
+def _near_runs(mask):
+    """(start, stop) index pairs of each contiguous True run in a 1-D bool array."""
+    runs = []
+    i, n = 0, len(mask)
+    while i < n:
+        if not mask[i]:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and mask[j]:
+            j += 1
+        runs.append((i, j))
+        i = j
+    return runs
+
+
+def crossing_barriers(grid, trace, lines, cell, near_m=CROSSING_NEAR_M, tol_m=CROSSING_TOL_M):
+    """Road / rail / STRUCTURES crossings still blocked on the flow path after the DEM cuts.
+
+    grid  : the model DEM with the structure cuts already applied (core.grid.Grid).
+    trace : the flow path, upstream end first, [(x, y), ...] in the work CRS.
+    lines : road, rail and STRUCTURES polylines (each [(x, y), ...]).
+    cell  : the model cell size (work-CRS m).
+
+    Walks `trace` downstream, takes the running minimum of the bed (the enforced-fall pattern
+    conditioning.ChannelBurn uses), and measures at each station how far the bed rises above the
+    lowest ground already reached. A rise over `tol_m` within max(1 cell, `near_m`) of one of
+    `lines` is an embankment the water must still overtop. Returns a dict, or None when there is
+    nothing to walk. Report only: nothing is cut and no modelled number changes.
+    """
+    trace = np.asarray(trace, dtype=float)
+    lines = [np.asarray(ln, dtype=float) for ln in (lines or [])
+             if ln is not None and len(np.asarray(ln)) >= 2]
+    if len(trace) < 2 or not lines:
+        return None
+    reach = max(float(cell), float(near_m))
+    pts = cond.densify(trace, max(0.5 * float(cell), 0.5))
+    if len(pts) < 2:
+        return None
+    z = grid.sample_bilinear(pts[:, 0], pts[:, 1])
+    good = np.isfinite(z)
+    if int(good.sum()) < 2:
+        return None
+    idx = np.arange(len(z))
+    zf = np.interp(idx, idx[good], z[good])        # bridge short no-data gaps
+    floor = np.minimum.accumulate(zf)              # lowest bed reached, going downstream
+    rise = zf - floor                              # how far the bed climbs back up
+    dist = np.full(len(pts), np.inf)
+    for ln in lines:
+        d, _ = cond.polyline_distance(pts[:, 0], pts[:, 1], ln)
+        dist = np.minimum(dist, d)
+    near = good & (dist <= reach)
+    seg = np.hypot(*np.diff(pts, axis=0).T)
+    stn = np.concatenate([[0.0], np.cumsum(seg)])
+    barriers = []
+    for a, b in _near_runs(near):
+        k = a + int(np.argmax(rise[a:b]))
+        h = float(rise[k])
+        if h <= tol_m:
+            continue
+        barriers.append({"height_m": round(h, 3),
+                         "x": round(float(pts[k, 0]), 2), "y": round(float(pts[k, 1]), 2),
+                         "station_m": round(float(stn[k]), 1),
+                         "line_dist_m": round(float(dist[k]), 2),
+                         "crest_z_m": round(float(zf[k]), 3),
+                         "floor_z_m": round(float(floor[k]), 3)})
+    barriers.sort(key=lambda e: e["height_m"], reverse=True)
+    return {"cell_m": round(float(cell), 3), "near_m": round(reach, 1), "tol_m": float(tol_m),
+            "trace_points": int(len(pts)), "blocked": len(barriers),
+            "worst_height_m": barriers[0]["height_m"] if barriers else 0.0,
+            "barriers": barriers}
+
+
 def anuga_culverts(structures, dem, mesh_polygon=None, bed_floor="off"):
     """ANUGA culvert specs for the worker (dicts with end points and inverts
     read from the DEM), and notes for those that cannot be used. bed_floor (3.10.96,

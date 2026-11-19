@@ -447,6 +447,11 @@ class RunSettings:
                     "spillway_schedule": v.spillway_schedule}
                 if v is not None and getattr(v, "aux_spillway", None) is not None:
                     d[k]["aux_spillway"] = v.aux_text       # 3.19.0 (only when one is given)
+                # H12: the embankment-crest weir coefficient, recorded only when it is not the
+                # default (flood.CREST_C_US), so a default run's key and run_report are unchanged
+                if v is not None and abs(float(getattr(v, "crest_c_us", floodmod.CREST_C_US))
+                                         - floodmod.CREST_C_US) > 1e-9:
+                    d[k]["crest_c_us"] = round(float(v.crest_c_us), 3)
             elif k == "receptors":
                 d[k] = None if v is None else len(v)
             elif k == "structures":
@@ -2087,6 +2092,44 @@ def _amend_report(res, entry, texts):
                 "run report markdown not updated ({}): {}".format(res.report_md, e)]
 
 
+def tailwater_breach_warning(dam_xy, dam, edits):
+    """H12: a disclosure warning when a TAILWATER stage or a cascade downstream reservoir pool
+    stands over the breach point. The breach outflow is routed as free weir / orifice discharge
+    with no tailwater (breach.routed_hydrograph, flood.route_flood), so the submergence of the
+    breach by downstream standing water is not reflected in the breach discharge. Reporting only:
+    it reads nothing from the terrain and changes no computed number. Returns the warning text or
+    None."""
+    if edits is None or dam_xy is None:
+        return None
+    px, py = [float(dam_xy[0])], [float(dam_xy[1])]
+    invert_ft = getattr(dam, "breach_bottom_ft", None)      # the breach bottom, else the dam toe
+    if invert_ft is None:
+        top, h = getattr(dam, "top_of_dam_ft", None), getattr(dam, "dam_height_ft", None)
+        if top is not None and h:
+            invert_ft = top - h
+    stages = list(getattr(edits, "stages", None) or [])
+    pools = [p for p in (getattr(edits, "ponds", None) or [])
+             if getattr(p, "wse_m", None) is not None]
+    for s in stages + pools:
+        poly, wse_m = getattr(s, "polygon", None), getattr(s, "wse_m", None)
+        if poly is None or wse_m is None:
+            continue
+        poly = np.asarray(poly, dtype=float)
+        if poly.ndim != 2 or len(poly) < 3:
+            continue
+        if not bool(cond.points_in_polygon(px, py, poly)[0]):
+            continue
+        if invert_ft is not None and float(wse_m) / FT < invert_ft - 0.01:
+            continue                 # the standing water is below the breach invert: no submergence
+        return ("Tailwater disclosure: a downstream standing-water stage ({}, {:.1f} ft) covers "
+                "the breach point. The breach outflow is routed as free weir / orifice discharge "
+                "with no tailwater, so the submergence of the breach by this standing water is "
+                "not reflected in the breach discharge. Confirm whether the tailwater affects the "
+                "breach outflow for this run.".format(getattr(s, "name", "tailwater"),
+                                                      float(wse_m) / FT))
+    return None
+
+
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
@@ -2156,6 +2199,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     attach_proposed(st, out_folder, dam, warnings, log)
     if st.edits is not None and not st.edits.empty():
         terrain_src = cond.ConditionedTerrain(terrain_src, st.edits, default_n=st.manning_n)
+        # S6a: a channel burn narrower than the model cell is floored to one cell wide
+        try:
+            _bw = cond.channel_width_warning(st.edits, cs)
+        except Exception:                                    # noqa - a disclosure never stops a run
+            _bw = None
+        if _bw:
+            warnings.append(_bw)
+            log(_bw)
     has_ponds = st.edits is not None and st.edits.has_water()
 
     def manning_for(bnds, cell):
@@ -2278,6 +2329,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append(w)
     except Exception as e:                                   # noqa - never stop the run for this
         warnings.append("Elevation datum not checked: {}: {}".format(type(e).__name__, e))
+
+    # H12: a disclosure warning when a tailwater stage or a cascade downstream reservoir pool
+    # stands over the breach point (the breach outflow is routed with no tailwater). Never stops
+    # the run; adds no computed number.
+    if not no_breach:
+        try:
+            tw_warn = tailwater_breach_warning(dam_xy, dam, st.edits)
+        except Exception:                                   # noqa - a disclosure never stops a run
+            tw_warn = None
+        if tw_warn and tw_warn not in warnings:
+            warnings.append(tw_warn)
+            log(tw_warn)
 
     # --- top of dam from the DEM if not given ---------------------------------
     near = terrain_src.read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60),
@@ -2583,8 +2646,17 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         from . import culvert_guess as cgmod
         n_match = sum(1 for c in candidates if c.get("match_m") is not None)
         burn = bool(getattr(st, "culvert_burn_matched", False))
+        # H6-1: flag guessed cuts that cross the dam embankment (DWR dam line, not the point);
+        # mark/report only - on_dam goes to the CSV and the report table, nothing is cut.
+        n_on_dam = cgmod.mark_on_dam(candidates, getattr(dam, "crest_line_xy", None))
         csv_path = cgmod.write_candidates_csv(
             os.path.join(model_dir, "culvert_candidates.csv"), candidates)
+        if n_on_dam:
+            warnings.append(
+                "{} guessed culvert cut(s) cross a DWR dam embankment line (marked on_dam in "
+                "{}). A cut across a dam crest can lower it; review before using them.".format(
+                    n_on_dam, os.path.basename(csv_path)))
+            log(warnings[-1])
         if n_match:
             if burn:
                 burned = cgmod.matched_structures(candidates)
@@ -2625,7 +2697,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     {"name": g.name, "width_m": g.width_m, "height_m": g.height_m,
                      "barrels": g.barrels, "shape": g.shape, "source": "guess",
                      "surveyed": False, "invert_up_m": g.invert_up_m,
-                     "invert_dn_m": g.invert_dn_m} for g in gss]
+                     "invert_dn_m": g.invert_dn_m, "on_dam": bool(c.get("on_dam"))}
+                    for c, g in zip(unmatched, gss)]
                 warnings.append(
                     "{} culvert candidate(s) where a road crosses a channel or the flow path "
                     "were cut into the DEM as GUESSED, UNVERIFIED culverts (one 1.2 x 0.9 m "
@@ -2660,6 +2733,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         report["structures_used"] = [s.to_dict() for s in st.structures]
         json.dump([s.to_dict() for s in st.structures],
                   open(os.path.join(model_dir, "structures.json"), "w", encoding="utf-8"), indent=2)
+
+    # --- S7 (3.22.x): road / rail / STRUCTURES crossings still blocked after the cuts ------
+    # Report only; never fails a run. Walk the flow path on the model DEM AFTER the culvert,
+    # bridge and notch cuts and record where an embankment still walls the channel. This reads
+    # the DEM and writes report["crossing_check"] and one warning only - it cuts nothing and
+    # changes no breach, hydrograph, raster, extent, arrival, storage or routing value.
+    try:
+        _cross_lines = (list(getattr(st, "road_lines", None) or [])
+                        + list(getattr(st, "rail_lines", None) or [])
+                        + [s.line for s in (st.structures or [])])
+        if _cross_lines and len(path) >= 2:
+            _cc = structmod.crossing_barriers(dem_for("lisflood", bounds, cs), path,
+                                              _cross_lines, cs)
+            if _cc:
+                report["crossing_check"] = _cc
+                if _cc["blocked"]:
+                    _cw = ("{} road/rail crossing(s) on the flow path are still blocked after "
+                           "the culvert and bridge cuts (worst residual embankment {:.2f} m "
+                           "above the upstream channel, at {:g} m cells). The model holds that "
+                           "embankment as a wall there; add or widen a culvert, bridge or "
+                           "notch, or model at a finer cell. Report only; the run is "
+                           "unchanged.").format(_cc["blocked"], _cc["worst_height_m"],
+                                                _cc["cell_m"])
+                    warnings.append(_cw)
+                    log(_cw)
+    except Exception as _cc_err:                 # noqa - a report check never stops the run
+        log("crossing check skipped: {}".format(_cc_err))
 
     # --- LISFLOOD-FP run helper -----------------------------------------------------
     def gauge_list(bnds, gauges):
@@ -5344,16 +5444,17 @@ def render_report(r):
                   "assumed size. GUESSED: location from the road x channel crossing, size not "
                   "surveyed. Set culvert_burn_guesses (CULVERT_BURN_GUESSES) off to leave them "
                   "out.", "",
-                  "| Guess | Span (ft) | Rise (ft) | Barrels | Shape | Inverts up / down (ft) |",
-                  "|---|---|---|---|---|---|"]
+                  "| Guess | Span (ft) | Rise (ft) | Barrels | Shape | Inverts up / down (ft) "
+                  "| On dam |",
+                  "|---|---|---|---|---|---|---|"]
         for m in r["culvert_guesses_cut"]:
             iu, idn = m.get("invert_up_m"), m.get("invert_dn_m")
             inv = "{:.1f} / {:.1f}".format(iu / FT, idn / FT) if (iu is not None and
                                                                    idn is not None) else ""
-            lines.append("| {} | {:.1f} | {:.1f} | {} | {} | {} |".format(
+            lines.append("| {} | {:.1f} | {:.1f} | {} | {} | {} | {} |".format(
                 str(m.get("name", "")).replace("|", "/"), float(m.get("width_m") or 0.0) / FT,
                 float(m.get("height_m") or 0.0) / FT, m.get("barrels", ""), m.get("shape", ""),
-                inv))
+                inv, "yes" if m.get("on_dam") else "no"))
         lines.append("")
     if r.get("receptors"):
         lines += ["## Receptors", ""]
