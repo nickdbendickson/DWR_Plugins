@@ -1,0 +1,158 @@
+name: Edenville-Sanford 2020 (real cascade dam failure)
+
+# The 2020 Edenville -> Sanford dam-break flood at the Tittabawassee gauge at Midland, Michigan,
+# in two tests (tools/validation/edenville_2020/). A study, not a gate: a job is red only when a
+# run does not finish or a case cannot be built. The numbers are in each job's summary.
+#
+#   * "Midland reach (10 m roughness)": midland_reach.py runs the OBSERVED 51,800 cfs steady
+#     through a 17 km reach around the gauge (3DEP 1 m terrain to 10 m cells) at several Manning's
+#     n and with NLCD, and compares the model stage with the observed 614.61 ft NAVD88. The same
+#     test as the ND streamgages (nd-gauges.yml), on the one Michigan gauge. It isolates roughness.
+#
+#   * "Edenville-Sanford cascade (30 m)": cascade_case.py drives the Runner's own cascade engine
+#     headless -- Edenville fails sunny-day at normal pool, the surge overtops and breaches Sanford,
+#     and the combined flood is routed to the Midland gauge -- and compares the modelled breach
+#     peaks with the peer-reviewed ASCE 2-D model and the peak stage at Midland with the gauge.
+#     It isolates the cascade dam-break physics. The clock is capped (the peak reaches the gauge
+#     well inside a day; the long drain-down only slows the run).
+#
+# By hand (Actions > this workflow > Run workflow) or on a pull request that changes the case.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/validation/edenville_2020/**"
+      - "tools/validation/nd_gauges/**"
+      - ".github/workflows/edenville-2020.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edenville-2020-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  midland-reach:
+    name: Midland reach (10 m roughness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      GAUGE: USGS-04156000
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      # the same key as model-tests in ci.yml and the other validation jobs, so all share one build
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      - name: Build the reach (NHD river line, 3DEP 1 m terrain, NLCD)
+        run: python tools/validation/edenville_2020/midland_reach.py build --out "$RUNNER_TEMP/mid/$GAUGE"
+      # four runs side by side (a runner has four cores), one thread each, then NLCD on all four
+      - name: Run n 0.035, 0.04, 0.05, 0.06 and NLCD
+        run: |
+          r="python tools/validation/edenville_2020/midland_reach.py run $RUNNER_TEMP/mid/$GAUGE --lisflood $HOME/lisflood-nd/lisflood --threads 1"
+          $r --n 0.035 > n035.log 2>&1 & $r --n 0.04 > n040.log 2>&1 & $r --n 0.05 > n050.log 2>&1 & $r --n 0.06 > n060.log 2>&1 &
+          wait
+          $r --nlcd --threads 4 > nlcd.log 2>&1 || true
+          for f in n035 n040 n050 n060 nlcd; do echo "::group::$f"; grep -v -i warn $f.log | tail -n 20; echo "::endgroup::"; done
+      - name: Score the reach against the observed 614.61 ft
+        if: always()
+        run: |
+          python tools/validation/edenville_2020/midland_reach.py score "$RUNNER_TEMP/mid" || true
+          cat "$RUNNER_TEMP/mid/Midland_Reach_Score.md" | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Keep the reach results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: midland-reach
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/mid/Midland_Reach_Score.*
+            ${{ runner.temp }}/mid/${{ env.GAUGE }}/reach.json
+            ${{ runner.temp }}/mid/${{ env.GAUGE }}/runs/*/result.json
+
+  cascade:
+    name: Edenville-Sanford cascade (30 m)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      HOURS: "48"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Cache the patched LISFLOOD-FP
+        id: lisflood-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/lisflood-nd
+          key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
+      - name: Build the patched LISFLOOD-FP
+        if: steps.lisflood-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o lisflood.zip https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+          echo "abaa2e41b58f6c7df4443274bf130d4a  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+          bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
+      - name: The case's own tests (no internet, no LISFLOOD-FP)
+        run: python -W error tools/validation/edenville_2020/test_case.py
+      - name: Build the corridor terrain (3DEP, Edenville -> Sanford -> Midland, 30 m)
+        run: python tools/validation/edenville_2020/cascade_case.py build --out "$RUNNER_TEMP/cascade"
+      - name: Run the cascade (Edenville breach -> Sanford overtops -> Midland)
+        run: |
+          python tools/validation/edenville_2020/cascade_case.py run "$RUNNER_TEMP/cascade" \
+            --lisflood "$HOME/lisflood-nd/lisflood" --threads 4 --rule overtop --hours "$HOURS" \
+            2>&1 | tee cascade.log
+      - name: Score against the ASCE model and the Midland gauge
+        if: always()
+        run: |
+          python tools/validation/edenville_2020/cascade_case.py score "$RUNNER_TEMP" || true
+          cat "$RUNNER_TEMP/Edenville_Sanford_2020_Score.md" | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Keep the score, the report and the combined rasters
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: edenville-sanford-cascade
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/Edenville_Sanford_2020_Score.*
+            ${{ runner.temp }}/cascade/cascade.json
+            ${{ runner.temp }}/cascade/result.json
+            ${{ runner.temp }}/cascade/cascade_run.log
+            ${{ runner.temp }}/cascade/Cascade_*/Cascade_Report.md
+            ${{ runner.temp }}/cascade/Cascade_*/Cascade *.asc
