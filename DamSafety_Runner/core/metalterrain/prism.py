@@ -20,8 +20,16 @@ import numpy as np
 
 
 def bieger_geometry(da_km2, a_w=2.70, b_w=0.352, a_d=0.30, b_d=0.213):
-    """Regional channel width (m) and bankfull depth (m) for drainage area `da_km2` (km^2), from
-    the Bieger et al. (2015) US regional curves. Swap the coefficients for a local regression."""
+    """Regional channel width (m) and bankfull depth (m) for drainage area `da_km2` (km^2).
+
+    The default coefficients are the Bieger et al. (2015) *national* (conterminous-US) regional
+    curves (W = 2.70*DA^0.352 m, D = 0.30*DA^0.213 m, DA in km^2). They are US-wide averages and
+    are NOT calibrated for North Dakota: a national curve can be wide of a given physiographic
+    region by a large factor, so do not carve a prism into a hazard-affecting DEM on these defaults
+    without first checking them against a local/State hydraulic-geometry regression (and pass that
+    regression's a_w/b_w/a_d/b_d here). This is why the module is labelled RESEARCH; a production
+    carve must verify the coefficients against the printed source for the region, as the suite's
+    regression-constant rule requires."""
     da = max(float(da_km2), 0.0)
     return a_w * da ** b_w, a_d * da ** b_d
 
