@@ -43,7 +43,7 @@ TILE_M = 2000.0                    # one 3DEP request: 2000 x 2000 cells of 1 m
 UP_M, DOWN_M, BUFFER_M = 5000.0, 12000.0, 2500.0
 READ_RADIUS_M = 100.0
 CONV_TOL = 0.1                     # |outflow/inflow - 1| within this = a steady run; others non-converged
-NHD ="https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6/query"
+NHD = "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6/query"
 DEP = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage"
 NLCD_WCS = "https://www.mrlc.gov/geoserver/mrlc_download/wcs"
 UA = {"User-Agent": "DamSafety-suite"}
