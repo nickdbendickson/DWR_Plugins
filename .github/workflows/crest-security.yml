@@ -1,0 +1,59 @@
+name: Crest security scans
+
+# The scans the nickdbendickson/crest repo ran on Crest (dwr_crest/), moved here 2026-11-19: Bandit, Semgrep with the
+# TypeScript rules, and OSV-Scanner on Crest's package-lock.json. gitleaks over the full history is the repo-wide
+# "Security scans" workflow (security.yml), whose .gitleaks.toml now carries Crest's allowlist too.
+
+on:
+  pull_request:
+    paths: ["dwr_crest/**", ".github/workflows/crest-security.yml"]
+  push:
+    branches: [main]
+    paths: ["dwr_crest/**", ".github/workflows/crest-security.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crest-security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+defaults:
+  run:
+    working-directory: dwr_crest
+
+jobs:
+  crest-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Python scanners
+        run: pip install bandit==1.9.4 detect-secrets==1.5.0 semgrep==1.183.0
+      - name: Bandit (high severity)
+        run: |
+          bandit -r . -lll -x ./node_modules,./.git
+      - name: Semgrep OSS (fail on ERROR)
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        # use-defused-xml*: defusedxml is not shipped with QGIS; stdlib expat in Python 3.7.1+ does not resolve external entities
+        run: >-
+          semgrep scan --config p/python --config p/typescript --config p/security-audit --config p/secrets
+          --severity ERROR --error --metrics off
+          --exclude node_modules --exclude tests --exclude test
+          --exclude-rule python.lang.security.use-defused-xml.use-defused-xml
+          --exclude-rule python.lang.security.use-defused-xml-parse.use-defused-xml-parse
+      - name: Install OSV-Scanner v2.7.0
+        run: |
+          curl -sSfL -o osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64
+          curl -sSfL -o osv.sums https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_SHA256SUMS
+          grep ' osv-scanner_linux_amd64$' osv.sums | sed 's/osv-scanner_linux_amd64/osv-scanner/' | sha256sum -c -
+          chmod +x osv-scanner
+      - name: OSV-Scanner (package-lock.json)
+        # Accepted/deferred advisories are listed with reasons in osv-scanner.toml
+        run: ./osv-scanner scan --lockfile package-lock.json --config osv-scanner.toml

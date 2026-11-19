@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crest — Dam Breach Desk (Static Preview)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<style>
+  :root{
+    --bg:#F5F5F0; --panel:#FFFFFF; --ink:#1F2933; --muted:#6B7280;
+    --teal:#0E768A; --teal-dark:#0B5C6C; --teal-light:#E0F2F5;
+    --border:#E5E7EB; --amber:#B45309; --amber-bg:#FEF3C7;
+    --red:#B91C1C; --red-bg:#FEE2E2; --green:#15803D; --green-bg:#DCFCE7;
+    --radius:10px; --shadow:0 1px 3px rgba(31,41,51,.08),0 4px 12px rgba(31,41,51,.06);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
+  .crest-header{background:var(--panel);border-bottom:1px solid var(--border);padding:14px 24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .crest-logo{display:flex;align-items:center;gap:10px}
+  .crest-logo-mark{width:38px;height:38px;background:var(--teal);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px}
+  .crest-logo small{display:block;font-size:10px;letter-spacing:.14em;color:var(--muted)}
+  .header-note{font-size:12px;color:var(--muted);max-width:520px;margin-left:auto}
+  .stepper-wrap{background:var(--panel);border-bottom:1px solid var(--border);padding:12px 24px 0}
+  .stepper{display:flex;gap:4px;overflow-x:auto}
+  .step{flex:1;min-width:120px;padding:10px 12px;border-radius:8px 8px 0 0;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--muted)}
+  .step.active{background:var(--teal);color:#fff;font-weight:600}
+  .step .num{width:24px;height:24px;border-radius:50%;background:#E5E7EB;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .step.active .num{background:rgba(255,255,255,.25);color:#fff}
+  .layout{display:flex;gap:20px;padding:20px 24px;align-items:flex-start}
+  @media(max-width:900px){.layout{flex-direction:column}}
+  .sidebar{width:250px;flex-shrink:0}
+  .dam-list{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .dam-item{padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer}
+  .dam-item.sel{background:var(--teal-light);border-left:4px solid var(--teal)}
+  .btn-new{width:100%;margin-top:10px;padding:10px;background:var(--teal);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer}
+  .card{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin-bottom:18px}
+  .card h2{font-size:17px;margin-bottom:4px}
+  .card .sub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+  #map{height:420px;border-radius:8px;border:1px solid var(--border)}
+  .note{background:#FFFDF0;border:1px solid #F2E2A0;border-left:4px solid #D4A017;border-radius:8px;padding:10px 14px;font-size:12.5px;margin-bottom:14px;color:#5B4A0F}
+</style>
+</head>
+<body>
+<header class="crest-header">
+  <div class="crest-logo">
+    <div class="crest-logo-mark">▲</div>
+    <div><b>Crest</b><small>DAM BREACH DESK</small></div>
+  </div>
+  <div class="header-note">Static preview — open this file directly in a browser. Drawing tools work offline after the first load (Leaflet is loaded from CDN).</div>
+</header>
+
+<div class="stepper-wrap"><nav class="stepper">
+  <div class="step active"><div class="num">1</div><div>Dam info</div></div>
+  <div class="step"><div class="num">2</div><div>Breach</div></div>
+  <div class="step"><div class="num">3</div><div>Flood</div></div>
+  <div class="step"><div class="num">4</div><div>Screening</div></div>
+  <div class="step"><div class="num">5</div><div>Report</div></div>
+</nav></div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <h3 style="font-size:12px;letter-spacing:.08em;color:var(--muted);margin-bottom:8px">DAMS</h3>
+    <div class="dam-list">
+      <div class="dam-item sel"><b>Swan Buffalo Detention 12</b><span style="font-size:12px;color:var(--muted)">ND00199</span></div>
+      <div class="dam-item"><b>Local-datum sample</b><span style="font-size:12px;color:var(--muted)">SAMPLE-4031</span></div>
+    </div>
+    <button class="btn-new">＋ New dam</button>
+  </aside>
+
+  <main style="flex:1;min-width:0">
+    <div class="note"><b>Static preview:</b> This file works without npm or a build. The map below uses Leaflet (loaded from CDN) so you can draw a dam line, place points, and outline an AOI. Full science and exports live in the React app.</div>
+
+    <div class="card">
+      <h2>Layout (draw features)</h2>
+      <div class="sub">Use the tools on the map: polyline for the dam, markers for reservoir then breach, polygon for the downstream area.</div>
+      <div id="map"></div>
+    </div>
+
+    <div class="card">
+      <h2>Desk screen — quick hazard check</h2>
+      <div class="sub">How the buildings and roads downstream would fare if the dam failed. This is a fast estimate for planning, not an official rating.</div>
+      <div style="display:flex;align-items:center;gap:14px;background:var(--red-bg);border:1px solid #FCA5A5;border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="background:var(--red);color:#fff;border-radius:8px;padding:8px 18px;font-weight:700;font-size:18px">HIGH</div>
+        <p style="font-size:13px;max-width:560px"><b>In plain terms:</b> in this scenario, homes and the township road would be hit by water over 6 ft deep. People would need to leave well before the flood arrives.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+  const map = L.map('map').setView([46.8, -100.8], 10);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  const drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+
+  const drawControl = new L.Control.Draw({
+    position: 'topright',
+    draw: {
+      polyline: { shapeOptions: { color: '#8B5E3C', weight: 4 } },
+      polygon: { shapeOptions: { color: '#0E768A', fillOpacity: 0.15 } },
+      marker: true,
+      circle: false,
+      rectangle: false,
+      circlemarker: false
+    },
+    edit: { featureGroup: drawnItems, remove: true }
+  });
+  map.addControl(drawControl);
+
+  map.on(L.Draw.Event.CREATED, function (e) {
+    drawnItems.addLayer(e.layer);
+  });
+</script>
+</body>
+</html>

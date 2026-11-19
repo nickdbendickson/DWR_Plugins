@@ -1,0 +1,30 @@
+{
+  "_comment": "Files that must match line for line between crest (src/lib/crest) and damit (damit_crest/src/lib/crest), and the only line pairs allowed to differ. Keep this file identical in both repos. Checked by scripts/check-engine-sync.mjs.",
+  "files": ["engine.ts", "spread.ts", "outline.ts", "routing.ts", "warnings.ts"],
+  "allow": [
+    {
+      "file": "engine.ts",
+      "crest": "import { vertconShiftFt } from \"./vertcon_nd.ts\";",
+      "damit": "import { vertconShiftFt } from \"./vertcon.ts\";",
+      "why": "crest ships the ND-only VERTCON grid (vertcon_nd.ts); DamIT ships the national one (vertcon.ts)."
+    },
+    {
+      "file": "engine.ts",
+      "crest": "  reasons.push(\"This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.\");",
+      "damit": "  reasons.push(\"This is a desk screen on a schematic valley. It is not an official hazard classification of record.\");",
+      "why": "Disclaimer wording: crest is an ND Dam Safety tool, DamIT is jurisdiction-neutral."
+    },
+    {
+      "file": "warnings.ts",
+      "crest": " * The warning catalogue (2026-11-08). Until now only the two NID height checks had codes (W-H1, W-H2 in nd-dams.ts);",
+      "damit": " * The warning catalogue (2026-11-08). Until now only the two NID height checks had codes (W-H1, W-H2 in nid-dams.ts);",
+      "why": "Comment only: crest's NID loader is nd-dams.ts, DamIT's is nid-dams.ts."
+    },
+    {
+      "file": "warnings.ts",
+      "crest": " *   W-H1/H2   nd-dams.ts NID height checks               warn",
+      "damit": " *   W-H1/H2   nid-dams.ts NID height checks               warn",
+      "why": "Comment only: crest's NID loader is nd-dams.ts, DamIT's is nid-dams.ts."
+    }
+  ]
+}
