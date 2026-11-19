@@ -52,6 +52,7 @@ from . import terrain
 from . import grid_default as griddef
 from . import crestburn
 from . import lisflood as lfmod
+from . import sgc as sgcmod
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
@@ -348,6 +349,21 @@ class RunSettings:
             self.lisflood_solver = lfmod.SOLVER_ACC   # run_dam refuses (lisflood_solver_error)
             self.lisflood_solver_error = str(e)
         self.lisflood_limit_slopes = True
+        # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; off by default). On, every
+        # LISFLOOD-FP pass of the main run gets channels built from its own DEM: cells draining
+        # sgc_min_area_km2 or more, bankfull width / depth from drainage area (W = a A^b,
+        # D = c A^f, sgc_curve, Bieger et al. 2015 by default), Manning n sgc_channel_n.
+        # sgc_upstream_sqmi = the drainage area at the dam (sq mi; 0 = not known), added at the
+        # breach inflow so the channel below the dam is sized for its watershed. sgc_start:
+        # "auto" (channels on hydro-flattened water start full, the rest empty), "empty", "full".
+        # ACC only; needs the patched LISFLOOD-FP (scripts/patch_lisflood.py edit 4).
+        self.lisflood_sgc = os.environ.get("NDBREACH_LISFLOOD_SGC", "0").strip().lower() in (
+            "1", "true", "yes", "on")
+        self.sgc_min_area_km2 = sgcmod.DEFAULT_MIN_AREA_KM2
+        self.sgc_upstream_sqmi = 0.0
+        self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
+        self.sgc_start = "auto"
+        self.sgc_curve = list(sgcmod.BIEGER_2015_US)
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -542,6 +558,33 @@ def _check_solver(st, model_dir, log=None):
         raise brmod.BreachInputError(
             "LISFLOOD-FP solver '{}' cannot be used for the main run - choose ACC, FV2 or "
             "MWDG2".format(solver))
+    if getattr(st, "lisflood_sgc", False):
+        # 3.26.0: sub-grid channels: LISFLOOD-FP's SGC model is local inertial (ACC only) and
+        # the built-in engine has none
+        if solver != lfmod.SOLVER_ACC:
+            raise brmod.BreachInputError(
+                "Sub-grid channels run with the ACC solver only (LISFLOOD-FP's SGC model is local "
+                "inertial); choose ACC or turn sub-grid channels off.")
+        if lfmod.is_builtin(st.lisflood_exe):
+            raise brmod.BreachInputError(
+                "Sub-grid channels need LISFLOOD-FP; the built-in engine has none. Set the "
+                "LISFLOOD-FP executable or turn sub-grid channels off.")
+        if str(getattr(st, "sgc_start", "auto")) not in sgcmod.START_MODES:
+            raise brmod.BreachInputError("Sub-grid channel start must be auto, empty or full.")
+        key = (os.path.abspath(str(st.lisflood_exe or "")), "sgc")
+        chk = _SOLVER_CHECKED.get(key)
+        if chk is None:
+            if log:
+                log("Checking that this LISFLOOD-FP runs sub-grid channels with the arrival-depth "
+                    "patch...")
+            chk = lfmod.check_lisflood(st.lisflood_exe, os.path.join(model_dir, "solver_check_sgc"),
+                                       lfmod.SOLVER_ACC, sgc=True)
+            if chk.get("ok") and chk.get("patched"):
+                _SOLVER_CHECKED[key] = chk
+        if not (chk.get("ok") and chk.get("patched")):
+            raise brmod.BreachInputError(
+                "LISFLOOD-FP sub-grid channels cannot be used: {}".format(
+                    chk.get("message", "") if not chk.get("ok") else lfmod.SGC_PATCH_MISSING_MSG))
     if solver == lfmod.SOLVER_ACC:
         return
     name = lfmod.SOLVER_SHORT.get(solver, solver)
@@ -592,6 +635,11 @@ def key_settings(st):
         for k in _REFINE_KEYS:
             d.pop(k, None)
     d.pop("lisflood_solver_error", None)
+    # 3.26.0: the sub-grid channel settings change the flood only while channels are on
+    if not getattr(st, "lisflood_sgc", False):
+        for k in ("lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n",
+                  "sgc_start", "sgc_curve"):
+            d.pop(k, None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -2867,11 +2915,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             lfmod.wall_limit_s(getattr(st, "max_wall_s", 0.0))
         return float(st.max_iterations) * float(first)
 
+    sgc_cache = {}
+
+    def sgc_for(dem, tag=""):
+        """3.26.0: the sub-grid channels of this pass's DEM (None while they are off). Built once
+        per grid (the stability re-run and a resume reuse them)."""
+        if not getattr(st, "lisflood_sgc", False) or getattr(st, "near_dam_fv1", False):
+            return None
+        key = (dem.x0, dem.y0, dem.dx, dem.data.shape)
+        ch = sgc_cache.get(key)
+        if ch is None:
+            up_km2 = float(getattr(st, "sgc_upstream_sqmi", 0.0) or 0.0) * 2.589988110336
+            ch = sgcmod.build(dem, inflow_rc=dem.rc(*inflow_xy), upstream_km2=up_km2 or None,
+                              min_area_km2=float(st.sgc_min_area_km2),
+                              curve=tuple(float(v) for v in st.sgc_curve),
+                              channel_n=float(st.sgc_channel_n), start=str(st.sgc_start))
+            sgc_cache[key] = ch
+            line = sgcmod.describe(ch.info)
+            log(line + " (lisflood{})".format(tag))
+            report["sgc"] = dict(ch.info)
+            if not ch.info.get("upstream_km2") and line not in warnings:
+                warnings.append(line)
+        return ch
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
         init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
         gl = gauge_list(bnds, gauges)
+        chans = sgc_for(dem, tag)
 
         def settings():
             return lfmod.LisfloodSettings(
@@ -2885,6 +2957,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 limit_slopes=getattr(st, "lisflood_limit_slopes", True),
                 max_wall_s=getattr(st, "max_wall_s", 0.0) or 0.0,          # audit P2
                 rate=getattr(st, "lisflood_rate", None) or lfmod.known_rate(st.lisflood_exe),
+                sgc=chans,
                 **stable_kw())
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
@@ -2977,6 +3050,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
                                      closed_edges=closed_edges(),
                                      limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                                     sgc=sgc_for(dem, tag),
                                      **stable_kw())
         env = lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd)
 
