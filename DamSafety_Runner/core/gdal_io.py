@@ -486,7 +486,7 @@ class GdalTerrain:
     """terrain_src for workflow.run_dam."""
 
     def __init__(self, dem_path, work_srs, z_choice=Z_AUTO, manning_path=None,
-                 default_n=0.06, resample=None, manning_lut=None, cache_entries=None):
+                 default_n=0.05, resample=None, manning_lut=None, cache_entries=None):
         gdal, _ = _gdal()
         self.dem_path = _file(dem_path)   # 3.10.89: a QGIS 'x.tif|option:...' source
         self.work_srs = work_srs          # "EPSG:26914" or WKT

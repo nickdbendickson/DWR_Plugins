@@ -1803,7 +1803,7 @@ def manning_source_text(rep):
         if cov.get("default_cells") is not None and cov.get("total_cells"):
             base += " ({:,} of {:,} cells took the default n = {} where the raster did not " \
                     "cover them)".format(int(cov["default_cells"]), int(cov["total_cells"]),
-                                         fmt_val(cov.get("default_n", st.get("manning_n", 0.06))))
+                                         fmt_val(cov.get("default_n", st.get("manning_n", 0.05))))
         return base
     n = st.get("manning_n")
     return "single Manning's n = {}".format(fmt_val(n)) if n is not None else "not recorded"
