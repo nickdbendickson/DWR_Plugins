@@ -9,6 +9,7 @@ from .tokens import TOKENS
 TITLE = "DamSafety Screening"
 SCOPE = "NDDamScreening"          # QgsProject entry scope
 ENTRY = "state"
+EXE_KEY = "NDDamScreening/exe"     # QgsSettings (per computer): the solver program is never saved in a project
 STATE_TEXT = {"done": "\u2713 done", "stale": "\u21bb out of date", "ready": "\u25cf ready",
               "waiting": "\u2026 waiting", "optional": "\u25cb optional"}
 DISCLAIMER = ("Screening-level results for prioritising reviews. Every threshold is a screening "

@@ -877,7 +877,7 @@ class PackReader(object):
     def _decode(rows, rect):
         out = []
         for (blob,) in rows:
-            f = json.loads(zlib.decompress(blob).decode("utf-8"))
+            f = json.loads(_inflate(blob).decode("utf-8"))
             if intersects_rect(f.get("geometry"), rect):
                 out.append(f)
         return out
@@ -970,6 +970,14 @@ def _safe_member(name):
     # A colon in ANY segment (not just the first) is a Windows drive-relative escape, e.g.
     # "packroot/sub/D:evil.gpkg" collapses to "D:evil.gpkg" under ntpath.join and lands off the folder.
     return not (n.startswith("/") or any(":" in seg for seg in n.split("/")) or ".." in n.split("/"))
+
+
+def _inflate(blob):
+    """A pack feature row, zlib-inflated with a size cap (zipsafe.inflate: refuses with
+    zipsafe.TooLarge, a ValueError, past zipsafe.MAX_ROW_BYTES). A pack is a file someone may
+    have handed the user, so one crafted row must not run QGIS out of memory."""
+    from . import zipsafe
+    return zipsafe.inflate(blob)
 
 
 def _check_pack_size(z, target, skip=None):

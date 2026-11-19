@@ -18,7 +18,8 @@ STUB_CMAKE = """#!/bin/bash
 echo "cmake $*" >> "$PWD/cmake_calls.log"
 if [ "$1" = "--build" ]; then
   mkdir -p "$2"
-  { echo BINARY; grep -h inittm_depth pars.cpp 2>/dev/null; } > "$2/lisflood"
+  { echo BINARY; grep -h inittm_depth pars.cpp 2>/dev/null
+    grep -ho "nd-breach-runner: SGC arrival depth" lisflood2/lisflood_processing.cpp 2>/dev/null; } > "$2/lisflood"
 fi
 """
 
@@ -55,6 +56,7 @@ def linux_build_script_applies_the_arrival_depth_patch():
     i_patch, i_cmake = text.find("patch_lisflood.py"), text.find("cmake -S")
     assert 0 < i_patch < i_cmake, "patch_lisflood.py must run before cmake"
     assert "grep -q inittm_depth" in text
+    assert "nd-breach-runner: SGC arrival depth" in text      # the sub-grid channel edit too
     if os.name != "posix" or shutil.which("bash") is None:
         return                      # a Linux script; on Windows `bash` is WSL's launcher
     work = tempfile.mkdtemp(prefix="ndbreach_buildlinux_")

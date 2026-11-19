@@ -2164,6 +2164,15 @@ class Cards(unittest.TestCase):
             back = list(csv.DictReader(fh))
         self.assertNotIn("review_order", back[0])
         self.assertEqual([r["find_id"] for r in back], [r["find_id"] for r in rows])
+        # a fill on a pond-outlet line (line_source "DEM pool outlet") counts four bands lower:
+        # the 0.95 fill as a pond outlet is looked at as band 0.5, after 0.91 and 0.84 and still
+        # before the fills of band 0.3
+        outl = [dict(r, line_source=self.f.LINE_POOL if i == 0 else self.f.LINE_STREAM) for i, r in enumerate(rows)]
+        fl4 = self.layer("outlet.gpkg", outl, self.fields + [("conseq", "float"), ("bld_1mi", "int"),
+                                                             ("line_source", "str")])
+        ev4 = self.f.run_evidence(fl4, os.path.join(self.tmp, "ev4.gpkg"), log=said.append)
+        self.assertEqual([r["review_order"] for r in ev4["rows"]], [3, 1, 2, 5, 6, 4, 7])
+        self.assertTrue(any("pond-outlet line 4 bands lower" in m for m in said))
 
     def test_layers_are_read_through_their_index(self):
         # the buildings and roads of the consequence pass: the same features as a whole read

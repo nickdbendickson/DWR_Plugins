@@ -31,6 +31,11 @@ TRIGGER_TIME = "time"          # trigger_value hours after the start of the infl
 TRIGGER_WSE = "wse"            # when the pool first reaches trigger_value (ft)
 TRIGGERS = (TRIGGER_PEAK, TRIGGER_TIME, TRIGGER_WSE)
 METHOD_NO_BREACH = "no breach (routed flood outflow)"     # Hydrograph.method of a no-breach flood
+# Broad-crested weir discharge coefficient C for the embankment crest, US units, in the
+# overtopping weir Q = C * L * H**1.5 (flood.route_flood static_q; adequacy.py). 2.6 is the low,
+# broad / flat embankment-crest value (Chow, V.T. (1959). Open-Channel Hydraulics. McGraw-Hill;
+# it is also HEC-RAS's default weir coefficient for a broad-crested / embankment overflow, cf.
+# hecras_model.STRUCT_WEIR_COEF = 2.6). State a site value where a rating supports one.
 CREST_C_US = 2.6               # broad-crested weir coefficient for the embankment crest (US)
 AUX_C_US = 2.6                 # the same for an auxiliary spillway given as a weir (a starting
 #                                value: an earth/grass channel control section; state your own)

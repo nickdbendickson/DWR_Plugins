@@ -245,13 +245,12 @@ def _v1_features(db, name):
     """A function giving the features of data set `name` of a format-1 pack database, in
     fid order (no box test: the whole data set)."""
     OP = _op()
-    import zlib
 
     def it():
         con = sqlite3.connect(OP.sqlite_ro_uri(_abs(db)), uri=True)
         try:
             for (blob,) in con.execute("SELECT feat FROM {} ORDER BY fid".format(OP._table(name))):
-                yield json.loads(zlib.decompress(blob).decode("utf-8"))
+                yield json.loads(OP._inflate(blob).decode("utf-8"))
         finally:
             con.close()
     return it

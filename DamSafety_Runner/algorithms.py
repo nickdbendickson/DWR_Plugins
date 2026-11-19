@@ -29,6 +29,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .core.lisflood import MAIN_SOLVERS as lfmod_order, SOLVER_LABELS as lfmod_labels  # 3.16.0
 from .core import lisflood as lfmod_wall        # audit P2: the wall-clock limit defaults
+from .core import sgc as sgc_defaults                # 3.26.0: sub-grid channel defaults
 from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
@@ -44,9 +45,26 @@ SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 SET_ALLOW_UNPATCHED = "NDBREACH_ALLOW_UNPATCHED"   # opt in to an unpatched LISFLOOD-FP build
 SET_SOLVER = "NDBREACH_LISFLOOD_SOLVER"           # 3.16.0: default LISFLOOD-FP solver (text)
+# 3.26.0: sub-grid channels (core/sgc.py); labels in sgc.START_MODES order
+SGC_START_LABELS = ("Auto (full on hydro-flattened water, else empty)", "Empty", "Full")
+SQMI_KM2 = 2.589988110336
 SET_CREST_DEM = "NDBREACH_CREST_BURN_DEM"         # 3.15.0: the 1 m DEM (VRT) the crest burn reads
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
+
+
+def _xz_overrides(alg, parameters, context):
+    """3.21.0: the Xu & Zhang (2009) dam type and erodibility, when the algorithm has them."""
+    out = {}
+    if alg.parameterDefinition("XZ_DAM_TYPE") is not None:
+        i = alg.parameterAsEnum(parameters, "XZ_DAM_TYPE", context)
+        out["xz_dam_type"] = brmod.XZ_DAM_TYPES[i] if 0 <= i < len(brmod.XZ_DAM_TYPES) \
+            else brmod.XZ_DAM_TYPES[0]
+    if alg.parameterDefinition("XZ_ERODIBILITY") is not None:
+        i = alg.parameterAsEnum(parameters, "XZ_ERODIBILITY", context)
+        out["xz_erodibility"] = brmod.XZ_ERODIBILITY[i] if 0 <= i < len(brmod.XZ_ERODIBILITY) \
+            else "medium"
+    return out
 from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
@@ -626,6 +644,15 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                       minimum=0.05, advanced=True)
             self._bool("VTG_ERODIBLE", "Von Thun & Gillette: erodible embankment (else "
                        "resistant)", True, advanced=True)
+            for pid, desc, opts in (
+                    ("XZ_DAM_TYPE", "Xu & Zhang: dam type",
+                     [brmod.XZ_DAM_TYPE_TEXT[k] for k in brmod.XZ_DAM_TYPES]),
+                    ("XZ_ERODIBILITY", "Xu & Zhang: embankment erodibility",
+                     list(brmod.XZ_ERODIBILITY))):
+                p = QgsProcessingParameterEnum(pid, desc, opts, defaultValue=(
+                    0 if pid == "XZ_DAM_TYPE" else 1))
+                set_advanced(p)
+                self.addParameter(p)
             self._num("PARTIAL_DEPTH", "Partial breach: breach depth as a share of the dam "
                       "height (0.1-1; empty = full depth)", optional=True, minimum=0.1,
                       maximum=1.0, advanced=True)
@@ -930,6 +957,33 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "MWDG2 run the tool checks that the LISFLOOD-FP build does both, and stops if "
                   "not. The ACC stability re-run and the near-dam refine apply to ACC runs only.")
         self.addParameter(set_advanced(p))
+        # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py)
+        self._bool("SGC", "Sub-grid river channels (LISFLOOD-FP SGC, ACC only)", False,
+                   advanced=True,
+                   help="Put the creeks and rivers the grid cannot resolve into the model as "
+                   "LISFLOOD-FP sub-grid channels: every cell draining at least the smallest "
+                   "channel area gets a rectangular channel inside the cell, with bankfull width "
+                   "and depth from drainage area (Bieger et al. 2015, US). The channel carries "
+                   "water the grid cannot, so depths are reported ABOVE THE BANK and a flood "
+                   "that stays in the channel is not flooded ground. Channels on hydro-flattened "
+                   "water start full, the rest empty. Needs a LISFLOOD-FP built with the "
+                   "Runner's current patch; off by default.")
+        self._num("SGC_UPSTREAM_SQMI", "Sub-grid channels: drainage area at the dam (sq mi; 0 = "
+                  "not known, the channel below the dam is then sized from the model domain "
+                  "only)", 0.0, minimum=0.0, advanced=True)
+        self._num("SGC_MIN_AREA_SQMI", "Sub-grid channels: smallest drainage area that has a "
+                  "channel (sq mi; starting value 0.77 = 2 km2 is the engineer's, a screening "
+                  "value you choose)", round(sgc_defaults.DEFAULT_MIN_AREA_KM2 / SQMI_KM2, 2),
+                  minimum=0.01, advanced=True)
+        self._num("SGC_N", "Sub-grid channels: channel Manning's n", sgc_defaults.DEFAULT_CHANNEL_N,
+                  minimum=0.005, maximum=0.5, advanced=True)
+        p = QgsProcessingParameterEnum(
+            "SGC_START", "Sub-grid channels: water in the channels at the start",
+            list(SGC_START_LABELS), defaultValue=0, optional=True)
+        _set_help(p, "Auto: channels on hydro-flattened water (LiDAR shows a water surface there) "
+                  "start full to the bank, every other channel starts empty. Empty: all start "
+                  "empty (the breach water fills them first). Full: all start full.")
+        self.addParameter(set_advanced(p))
         self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
                    False, advanced=True,
                    help="Accept an edge where the flood's depth (or its rise over the no-breach "
@@ -1184,7 +1238,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                 self._opt(parameters, "FORMATION_HR", context),
                 self._opt(parameters, "SIDE_SLOPE", context),
                 pipe_time_fraction=g("PIPE_FRACTION"), pipe_initial_dia_ft=g("PIPE_DIA_FT"),
-                vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
+                vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context),
+                **_xz_overrides(self, parameters, context))
         if self.parameterDefinition("BASELINE") is not None:
             st.baseline = self.parameterAsBool(parameters, "BASELINE", context)
             st.incr_thresholds_ft = _floats(self._str(parameters, "INCR_FT", context),
@@ -1250,6 +1305,16 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                 st.lisflood_solver = _lf.MAIN_SOLVERS[i - 1]
             elif not os.environ.get(_lf.SOLVER_ENV, "").strip():
                 st.lisflood_solver = _lf.solver_from_text(_setting(SET_SOLVER, ""))
+        if self.parameterDefinition("SGC") is not None:                # 3.26.0
+            st.lisflood_sgc = self.parameterAsBool(parameters, "SGC", context)
+            st.sgc_upstream_sqmi = float(g("SGC_UPSTREAM_SQMI") or 0.0)
+            if g("SGC_MIN_AREA_SQMI"):
+                st.sgc_min_area_km2 = float(g("SGC_MIN_AREA_SQMI")) * SQMI_KM2
+            if g("SGC_N"):
+                st.sgc_channel_n = float(g("SGC_N"))
+            if parameters.get("SGC_START") not in (None, ""):
+                st.sgc_start = sgc_defaults.START_MODES[min(2, max(0, self.parameterAsEnum(
+                    parameters, "SGC_START", context)))]
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
@@ -2270,7 +2335,7 @@ class SensitivityAlgorithm(RunDamAlgorithm):
         # 3.14.6 (GUI check 2026-11-04): short labels, the detail in the help (1270-1400 px wide)
         self._bool("SENS_METHODS", "Also run the other parameter methods", True,
                    help="Also run the other parameter methods: Froehlich 2008 overtopping, "
-                   "Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60.")
+                   "Froehlich 1995, MacDonald, Von Thun & Gillette, Xu & Zhang piping, TR-60.")
         self._bool("SENS_CELL", "Cell-size convergence check (half the cell size)", True,
                    help="Run the base case again at half the cell size on the same domain and "
                    "report the fit index between the two depth rasters and whether the Runner's "
@@ -2821,6 +2886,10 @@ class BatchAlgorithm(_Base):
         return None
 
     def processAlgorithm(self, parameters, context, feedback):
+        from .core import chain as _chain                    # 3.24.1: many dams, one process
+        note = _chain.open_files_note(_chain.raise_open_files())
+        if note:
+            feedback.pushInfo(note)
         src_layer = self.parameterAsSource(parameters, "DAMS", context)
         if src_layer is None:
             raise QgsProcessingException("No dams layer")
@@ -3261,7 +3330,8 @@ class HydrographAlgorithm(_Base):
             o("BREACH_WIDTH"), o("FORMATION_HR"), o("SIDE_SLOPE"),
             pipe_time_fraction=self.parameterAsDouble(parameters, "PIPE_FRACTION", context),
             pipe_initial_dia_ft=self.parameterAsDouble(parameters, "PIPE_DIA_FT", context),
-            vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context))
+            vtg_erodible=self.parameterAsBool(parameters, "VTG_ERODIBLE", context),
+            **_xz_overrides(self, parameters, context))
         method = METHODS[self.parameterAsEnum(parameters, "METHOD", context)][0]
         try:
             if o("START_WSE_FT") is not None:                # 3.19.0

@@ -136,6 +136,41 @@ class RunnerReadsIt(unittest.TestCase):
                             str(round(q_cms)) in wrote["bdy"] or out["q_cms"] == q_cms)
             self.assertEqual(out["q_cms"], q_cms)
 
+    def test_run_applies_the_stability_cure_on_a_mass_balance_blowup(self):
+        """reach.run mirrors the Runner: a default ACC run that loses mass balance is repeated
+        with the stable settings (theta 0.7 / CFL 0.5) rather than scored as-is."""
+        import importlib
+        lf = importlib.import_module("DamSafety_Runner.core.lisflood")
+        from DamSafety_Runner.core.grid import Grid
+        with tempfile.TemporaryDirectory() as d:
+            self._reach(d)
+            orig_run, orig_rr = lf.run, lf.read_results
+            settings = []
+
+            def fake_run(workdir, par, st, **kw):
+                settings.append((st.theta, st.cfl))
+                os.makedirs(os.path.join(workdir, "results"), exist_ok=True)
+                dem = Grid.read_asc(os.path.join(workdir, "run.dem.asc"))
+                Grid(np.zeros_like(dem.data), dem.x0, dem.y0, dem.dx).write_asc(
+                    os.path.join(workdir, "results", "run.max"), fmt="%.3f")
+
+            errs = iter([5.0, 0.1])            # the default run blows up; the stable re-run is clean
+
+            class Env:
+                def __init__(self, err):
+                    self.stats = {"max_volume_error_pct": err}
+
+            lf.run = fake_run
+            lf.read_results = lambda *a, **k: Env(next(errs))
+            try:
+                out = reach.run(d, n=0.045, say=lambda *a: None)
+            finally:
+                lf.run, lf.read_results = orig_run, orig_rr
+            self.assertEqual(settings, [(1.0, None), (lf.STABLE_THETA, lf.STABLE_CFL)])
+            self.assertTrue(out["stable_rerun"])
+            self.assertEqual(out["acc_theta"], lf.STABLE_THETA)
+            self.assertAlmostEqual(out["volume_error_pct"], 0.1)
+
 
 class NhdFallback(unittest.TestCase):
     """When the whole-envelope NHD query times out (long rivers make a heavy query the service

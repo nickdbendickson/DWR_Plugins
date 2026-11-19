@@ -20,7 +20,7 @@ from nd_breach_runner.core import gmsh_mesher as GM  # noqa: E402
 from nd_breach_runner.core import workflow as W  # noqa: E402
 from nd_breach_runner.core.grid import Grid  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
-from nd_breach_runner.tests.registry import test  # noqa: E402
+from nd_breach_runner.tests.registry import test, Skip  # noqa: E402
 from nd_breach_runner.tests.test_gmsh_mesher import _case  # noqa: E402
 
 try:
@@ -128,8 +128,7 @@ def gmsh_gate_is_relative_to_the_smallest_intended_size():
 @test
 def gmsh_culvert_area_option_refines_the_points_and_keeps_the_gate():
     if not HAVE_GMSH:
-        print("skip: gmsh not importable")
-        return
+        raise Skip("gmsh not importable")
     L = 3000.0
     base = dict(outer=[[0, 0], [L, 0], [L, L], [0, L]], lines=[], channel=[],
                 points=[[1500.0, 1500.0]], max_area_m2=5000.0)

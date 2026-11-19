@@ -24,7 +24,7 @@ from nd_breach_runner.core import gmsh_mesher as GM  # noqa: E402
 from nd_breach_runner.core import breach as br  # noqa: E402
 from nd_breach_runner.core.grid import Grid  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
-from nd_breach_runner.tests.registry import test  # noqa: E402
+from nd_breach_runner.tests.registry import test, Skip  # noqa: E402
 
 try:
     import gmsh  # noqa: F401
@@ -169,8 +169,7 @@ def _spec():
 @test
 def gmsh_mesh_meets_the_quality_gate_and_is_coarser_than_uniform():
     if not HAVE_GMSH:
-        print("skip: gmsh not importable")
-        return
+        raise Skip("gmsh not importable")
     m = GM.build_mesh(_spec())
     s = m["stats"]
     assert s["min_angle_deg"] >= 20.0, s
@@ -206,8 +205,7 @@ def gmsh_quality_gate_rejects_small_triangles():
 @test
 def gmsh_mesher_runs_as_a_script_and_reaches_the_job():
     if not HAVE_GMSH:
-        print("skip: gmsh not importable")
-        return
+        raise Skip("gmsh not importable")
     d = tempfile.mkdtemp(prefix="gmshrun_")
     st = AM.AnugaSettings(sys.executable)
     st.mesher = "gmsh"
@@ -257,10 +255,9 @@ def gmsh_mesh_builds_an_anuga_domain_when_anuga_is_installed():
     try:
         import anuga
     except Exception:
-        print("skip: anuga not importable")
-        return
+        raise Skip("anuga not importable")
     if not HAVE_GMSH:
-        return
+        raise Skip("gmsh not importable")
     m = GM.build_mesh(_spec())
     bnd = {(int(t), int(e)): "outflow" for t, e in m["boundary"]}
     dom = anuga.Domain(m["points"].tolist(), m["triangles"].tolist(), bnd,
