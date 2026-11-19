@@ -2821,6 +2821,10 @@ class BatchAlgorithm(_Base):
         return None
 
     def processAlgorithm(self, parameters, context, feedback):
+        from .core import chain as _chain                    # 3.24.1: many dams, one process
+        note = _chain.open_files_note(_chain.raise_open_files())
+        if note:
+            feedback.pushInfo(note)
         src_layer = self.parameterAsSource(parameters, "DAMS", context)
         if src_layer is None:
             raise QgsProcessingException("No dams layer")
