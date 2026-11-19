@@ -233,6 +233,13 @@ MODEL_KEYS = {
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
+    "lisflood_sgc": ("lisflood_sgc", ("bool",)),
+    "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
+    "sgc_upstream_sqmi": ("sgc_upstream_sqmi", ("num", 0.0, None)),
+    "sgc_channel_n": ("sgc_channel_n", ("num", 0.005, 0.5)),
+    "sgc_start": ("sgc_start", ("enum", ("auto", "empty", "full"))),
+    "sgc_curve": ("sgc_curve", ("nums",)),
     # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
     # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
     "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
@@ -1134,6 +1141,11 @@ def build_settings(cfg, opts, need_models=True):
                 v = None                                   # 0 = automatic, as in QGIS
             if key == "arrival_contours_hr":
                 v = tuple(v)
+            if key == "sgc_curve":                         # 3.26.0: a, b, c, f
+                if len(v) != 4 or min(v) <= 0:
+                    raise CliError("model.sgc_curve needs four positive numbers a, b, c, f "
+                                   "(W = a A^b, D = c A^f; A km2, W and D m)")
+                v = [float(x) for x in v]
             if key == "crest_burn_dem":
                 v = v or ""
             if key == "lisflood_rate" and not v:           # audit P2: 0 / null = unknown
