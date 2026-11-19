@@ -64,6 +64,49 @@ def reconnect_drains_a_blocked_channel():
 
 
 @test
+def burn_channel_refuses_frozen_cell():
+    """burn_channel raises LOUDLY if the path crosses a frozen (embankment / dam-crest) cell -
+    burning through a dam crest is the catastrophe the mask exists to prevent (pure numpy)."""
+    z = cases.pitted_plane(ny=30, nx=40)
+    path = [(15, c) for c in range(5, 35)]
+    freeze = np.zeros(z.shape, bool)
+    freeze[15, 20] = True                             # one frozen cell on the path
+    try:
+        B.burn_channel(z, path, depth=0.5, freeze_mask=freeze)
+    except RuntimeError as e:
+        assert "frozen" in str(e), str(e)
+    else:
+        assert False, "burn_channel did not refuse the frozen cell"
+    # with no freeze on the path, the same burn succeeds
+    out = B.burn_channel(z, path, depth=0.5, freeze_mask=np.zeros(z.shape, bool))
+    assert (out <= z + 1e-9).all()
+
+
+@test
+def reconnect_respects_freeze_mask():
+    """A freeze mask over the road fill makes reconnect REFUSE the carve (never breach a frozen
+    embankment): the barrier is not lowered, and the refusal is recorded loudly for review."""
+    _need_cpu_build()
+    z = cases.channel_with_barrier(ny=50, nx=120, chan_depth=3.0, sill=1.0)
+    # without a mask, the crossing is carved
+    out_free, recs_free = B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu")
+    carved = [r for r in recs_free if "refused" not in r]
+    assert carved, "baseline carve did not happen"
+    # freeze the road fill: cells sitting notably above both their east and west neighbours
+    raised = z - np.minimum(np.roll(z, 1, axis=1), np.roll(z, -1, axis=1))
+    freeze = raised > 1.0
+    assert freeze.any(), "could not locate the barrier to freeze"
+    out_mask, recs_mask = B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu",
+                                                freeze_mask=freeze)
+    # no frozen cell was lowered
+    assert (out_mask[freeze] >= z[freeze] - 1e-9).all(), "a frozen embankment cell was lowered"
+    # and at least one crossing is recorded as refused-for-freeze (loud, not silent)
+    refused = [r for r in recs_mask if r.get("refused") == "freeze"]
+    assert refused, "freeze refusal was not recorded"
+    assert all(r["frozen_cells"] for r in refused)
+
+
+@test
 def reconnect_leaves_a_clean_dem_alone():
     """A plane with no dammed channel gets no carves (nothing to reconnect)."""
     _need_cpu_build()
@@ -78,6 +121,7 @@ if __name__ == "__main__":
     import sys
     fails = 0
     for fn in (burn_channel_enforces_monotone_fall, reconnect_drains_a_blocked_channel,
+               burn_channel_refuses_frozen_cell, reconnect_respects_freeze_mask,
                reconnect_leaves_a_clean_dem_alone):
         try:
             fn()
