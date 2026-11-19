@@ -233,7 +233,7 @@ jobs:
           done
       - name: Keep the scores
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lake-delhi-2010-roughness
           if-no-files-found: warn
