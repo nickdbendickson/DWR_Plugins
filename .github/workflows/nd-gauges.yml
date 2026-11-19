@@ -7,11 +7,16 @@ name: Manning's n at ND streamgages
 # compared with the stage measured with that discharge. The table is in the summary of the
 # "score" job. By hand from the Actions tab, or on a pull request that changes the study.
 #
-# Each (gauge, run) is its OWN job on its own runner, one sim at a single thread. The three big
-# basins (05117500, 06335500, 06336000) need more than 5 h for a single run when four sims share
-# one 4-core runner's memory bandwidth, so they were cancelled at the old 300-min cap. One sim per
-# runner keeps the method identical (single thread, same sim, same cells) and fits the budget.
-# A workflow_dispatch "gauges" filter (space- or comma-separated ids, blank = all) re-runs a subset.
+# Each (gauge, run) is its OWN job on its own runner, one sim at a single thread. Four single-thread
+# sims sharing one 4-core runner's memory bandwidth pushed the big basins past the old 300-min cap;
+# one sim per runner keeps the method identical (single thread, same sim, same cells) and fits the
+# budget. The run set is every gauge in gauges.json not marked "exclude": true -- the two Little
+# Missouri badlands gauges (06335500, 06336000) are excluded: steep supercritical canyons at the edge
+# of LISFLOOD-FP's local-inertial validity (their steady runs lost mass balance) and unrepresentative
+# of the prairie/cropland dam-tailwater reaches the default-n decision targets. In the score table a
+# cell whose run did not reach steady state (outflow/inflow outside 1.00 +/- 0.10) is marked n/c and
+# left out of the mean. A workflow_dispatch "gauges" filter (space- or comma-separated ids, blank =
+# all) re-runs a subset; a pull request that touches the study runs one light gauge as a smoke check.
 on:
   workflow_dispatch:
     inputs:
@@ -36,15 +41,22 @@ jobs:
     outputs:
       combos: ${{ steps.gen.outputs.combos }}
     steps:
+      - uses: actions/checkout@v4
       - id: gen
         env:
           GAUGES: ${{ inputs.gauges }}
+          EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
-          all_g = ["USGS-05116000", "USGS-05117500", "USGS-05120000", "USGS-06335500",
-                   "USGS-06336000", "USGS-06348300", "USGS-05090000"]
+          with open("tools/validation/nd_gauges/gauges.json", encoding="utf-8") as f:
+              catalog = json.load(f)["gauges"]
+          all_g = [x["id"] for x in catalog if not x.get("exclude")]
           runs = ["n035", "n040", "n050", "n060", "nlcd"]
+          # A pull request runs one light gauge end-to-end as a smoke check; the full matrix is a
+          # deliberate workflow_dispatch (optionally narrowed by the "gauges" input).
+          if os.environ.get("EVENT") == "pull_request":
+              all_g, runs = ["USGS-05090000"], ["nlcd"]
           sel = os.environ.get("GAUGES", "").replace(",", " ").split()
           g = [x for x in all_g if (not sel or x in sel)]
           combos = [{"gauge": x, "run": r} for x in g for r in runs]
