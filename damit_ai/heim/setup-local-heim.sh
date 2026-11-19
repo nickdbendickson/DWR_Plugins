@@ -2255,7 +2255,7 @@ SCRIPT_EOF_SUITE
 
   cat > "$LOCAL_AI/dam_chain.py" << 'SCRIPT_EOF_CHAIN'
 #!/usr/bin/env python3
-# dam_chain.py v1.5.3 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
+# dam_chain.py v1.5.4 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
 #
 #   dam_chain.py setup                       one-time: batch profiles that point at your QGIS
 #                                            profiles "nd" and "damsafety", plugins enabled
@@ -3034,7 +3034,30 @@ def audit_passthrough(argv):
     sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-heim.sh")
 
 
+def more_open_files(want=10240):
+    """v1.5.4: lift the open-file limit before qgis_process starts (it inherits it). macOS
+    starts at 256; the DamSafety chain runs every dam in one qgis_process and a 1 m VRT keeps
+    up to 100 tiles open, so batch-44 run1118 stopped with 'Too many open files' after 4 dams."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except Exception:
+        return
+    if soft == resource.RLIM_INFINITY or soft >= want:
+        return
+    for target in (want, 4096):
+        t = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if t <= soft:
+            continue
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (t, hard))
+            return
+        except (ValueError, OSError):
+            continue
+
+
 def main():
+    more_open_files()
     # The literature assistant is `vor`; `research` stays as an alias so anything written
     # before the rename keeps working.
     if len(sys.argv) > 1 and sys.argv[1] in ("vor", "research"):
@@ -3805,7 +3828,7 @@ SCRIPT_EOF_REPOAUDIT
   for f in rag_index rag_query audit_plugin suite_check dam_chain repo_audit; do
     "$HEIM_PY" -m py_compile "$LOCAL_AI/$f.py" || die "$f.py did not compile"
   done
-  ok "rag_index 2.8, rag_query 2.5, audit_plugin 1.3, suite_check 1.0, dam_chain 1.5.3, repo_audit 1.0 written and compiled"
+  ok "rag_index 2.8, rag_query 2.5, audit_plugin 1.3, suite_check 1.0, dam_chain 1.5.4, repo_audit 1.0 written and compiled"
   # run results (heim runs): copied, not generated, like the damit installer
   for f in run_results; do
     if [[ -f "${0:A:h}/tools/$f.py" ]]; then
