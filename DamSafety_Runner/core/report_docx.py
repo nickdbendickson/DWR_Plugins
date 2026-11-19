@@ -3159,7 +3159,7 @@ class _Report(object):
             "in the raster or as assumed and warned in the run report.",
             "Roughness is a single Manning's n ({}) or values from a land-cover raster; these "
             "are typical floodplain values and have not been calibrated.".format(
-                fmt_val(st.get("manning_n", 0.06))),
+                fmt_val(st.get("manning_n", 0.05))),
             "The inertial solver in {} is not meant for supercritical flow, so velocities "
             "within a few cells of the breach are the least reliable part of the result. "
             "Culverts are open cuts through the embankment in {} (no roof, no inlet "

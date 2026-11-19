@@ -307,7 +307,7 @@ def scenario_start_pool_starts_from_the_shared_defaults_file():
 
     def st(**k):
         s = types.SimpleNamespace(scenario=workflow.SCENARIO_SUNNY, breach_method=br.METHOD_PIPING,
-                                  manning_n=0.06, flood=None)
+                                  manning_n=0.05, flood=None)
         s.__dict__.update(k)
         return s
 
