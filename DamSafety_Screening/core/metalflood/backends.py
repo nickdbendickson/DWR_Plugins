@@ -54,9 +54,37 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
             ("vxf", f, ny * (nx + 1)), ("vyf", f, (ny + 1) * nx)]
 
 
-def _source_hash():
+class Spec:
+    """What tells the generic Metal/CPU backend which kernels to run: one engine's kernel
+    source, its C++-build source and shim, the kernel names, the ctypes Params for that
+    source, and a plan(params) -> [(kernel_name, (w, h, d))] giving the dispatch order and
+    grid size of one step. core/metalterrain (BoannGrid) reuses this backend with its own
+    Spec; the default is this flood engine, so existing callers are unchanged."""
+
+    def __init__(self, name, kernel_source, shim, cpu_source, kernels, params_cls, plan):
+        self.name = name
+        self.kernel_source = kernel_source
+        self.shim = shim
+        self.cpu_source = cpu_source
+        self.kernels = tuple(kernels)
+        self.params_cls = params_cls
+        self.plan = plan
+
+
+def _flood_plan(p):
+    one = (1, 1, 1)
+    faces = (p.wc + 1, p.wr + 1, 1)
+    cells = (p.wc, p.wr, 1)
+    return [("k_begin", one), ("k_faces", faces), ("k_scale", cells), ("k_limit", faces),
+            ("k_cont", cells), ("k_speed", cells), ("k_end", one)]
+
+
+FLOOD_SPEC = Spec("mf", KERNEL_SOURCE, SHIM, CPU_SOURCE, KERNELS, Params, _flood_plan)
+
+
+def _source_hash(spec):
     h = hashlib.sha256()
-    for p in (KERNEL_SOURCE, SHIM, CPU_SOURCE):
+    for p in (spec.kernel_source, spec.shim, spec.cpu_source):
         with open(p, "rb") as f:
             h.update(f.read())
     return h.hexdigest()[:16]
@@ -83,10 +111,10 @@ def find_compiler():
     return None
 
 
-def build_cpu_library(log=None):
+def build_cpu_library(spec=FLOOD_SPEC, log=None):
     """The CPU build of the kernels (compiled once per source version), its path."""
     ext = ".dylib" if sys.platform == "darwin" else (".dll" if os.name == "nt" else ".so")
-    out = os.path.join(_cache_dir(), "mf_cpu_{}{}".format(_source_hash(), ext))
+    out = os.path.join(_cache_dir(), "{}_cpu_{}{}".format(spec.name, _source_hash(spec), ext))
     if os.path.isfile(out):
         return out
     cxx = find_compiler()
@@ -94,8 +122,12 @@ def build_cpu_library(log=None):
         raise BackendError("no C++ compiler (c++, clang++ or g++) for the engine's CPU build")
     fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
     os.close(fd)
+    inc = []
+    for d in dict.fromkeys(os.path.dirname(p) for p in
+                           (spec.cpu_source, spec.shim, spec.kernel_source)):
+        inc += ["-I", d]
     cmd = [cxx, "-O3", "-std=c++14", "-fno-strict-aliasing", "-shared", "-fPIC",
-           "-I", HERE, "-x", "c++", CPU_SOURCE, "-o", tmp]
+           *inc, "-x", "c++", spec.cpu_source, "-o", tmp]
     if log:
         log("Building the engine's CPU kernels: " + " ".join(cmd))
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -110,14 +142,15 @@ def build_cpu_library(log=None):
 class CpuBackend:
     kind = "cpu"
 
-    def __init__(self, log=None):
-        self.lib = ctypes.CDLL(build_cpu_library(log))
-        self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(Params),
+    def __init__(self, spec=FLOOD_SPEC, log=None):
+        self.spec = spec
+        self.lib = ctypes.CDLL(build_cpu_library(spec, log))
+        self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(spec.params_cls),
                                           ctypes.c_int]
         self.lib.mf_run_batch.restype = ctypes.c_int
-        if self.lib.mf_params_size() != ctypes.sizeof(Params):
+        if self.lib.mf_params_size() != ctypes.sizeof(spec.params_cls):
             raise BackendError("the CPU kernels' Params is {} bytes, Python's {}".format(
-                self.lib.mf_params_size(), ctypes.sizeof(Params)))
+                self.lib.mf_params_size(), ctypes.sizeof(spec.params_cls)))
         self.device = "CPU (one core, C++ build of the Metal kernels)"
         self.arrays = {}
 
@@ -232,7 +265,8 @@ def metal_available():
 class MetalBackend:
     kind = "metal"
 
-    def __init__(self, log=None):
+    def __init__(self, spec=FLOOD_SPEC, log=None):
+        self.spec = spec
         if sys.platform != "darwin":
             raise BackendError("Metal needs macOS")
         try:
@@ -248,7 +282,7 @@ class MetalBackend:
                 raise BackendError("this Mac reports no Metal GPU")
             self.device = o.text(o(self.dev, "name"))
             self.queue = o(self.dev, "newCommandQueue")
-            with open(KERNEL_SOURCE, encoding="utf-8") as f:
+            with open(spec.kernel_source, encoding="utf-8") as f:
                 src = f.read()
             opts = o(o(o.cls("MTLCompileOptions"), "alloc"), "init")
             # IEEE math (no fast-math), so the GPU follows the CPU build closely
@@ -267,7 +301,7 @@ class MetalBackend:
                 raise BackendError("Metal did not compile the kernels: " + o.error_text(err.value))
             self.pso = {}
             self.tg = {}
-            for name in KERNELS:
+            for name in spec.kernels:
                 fn = o(self.library, "newFunctionWithName:", o.nsstring(name),
                        argtypes=[ctypes.c_void_p])
                 if not fn:
@@ -325,16 +359,13 @@ class MetalBackend:
               len(self.buffers), restype=None,
               argtypes=[ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong])
             one = _MTLSize(1, 1, 1)
-            faces = _MTLSize(params.wc + 1, params.wr + 1, 1)
-            cells = _MTLSize(params.wc, params.wr, 1)
-            plan = (("k_begin", one), ("k_faces", faces), ("k_scale", cells),
-                    ("k_limit", faces), ("k_cont", cells), ("k_speed", cells), ("k_end", one))
+            plan = [(name, _MTLSize(w, h, d)) for name, (w, h, d) in self.spec.plan(params)]
             set_pso = ("setComputePipelineState:", [ctypes.c_void_p])
             disp_args = [_MTLSize, _MTLSize]
             for _ in range(int(nsteps)):
                 for name, grid in plan:
                     o(enc, set_pso[0], self.pso[name], restype=None, argtypes=set_pso[1])
-                    tg = self.tg[name] if grid is not one else one
+                    tg = self.tg[name] if (grid.width * grid.height * grid.depth) > 1 else one
                     o(enc, "dispatchThreads:threadsPerThreadgroup:", grid, tg, restype=None,
                       argtypes=disp_args)
             o(enc, "endEncoding", restype=None)
@@ -359,20 +390,20 @@ class MetalBackend:
             setattr(self, obj, None)
 
 
-def make_backend(which="auto", log=None):
+def make_backend(which="auto", log=None, spec=FLOOD_SPEC):
     """'metal', 'cpu' or 'auto' (Metal when this Mac has it, else the CPU build). The
     DAMSAFETY_MF_BACKEND environment variable overrides 'auto'."""
     which = (which or "auto").lower()
     if which == "auto":
         which = os.environ.get("DAMSAFETY_MF_BACKEND", "auto").lower()
     if which == "metal":
-        return MetalBackend(log)
+        return MetalBackend(spec, log)
     if which == "cpu":
-        return CpuBackend(log)
+        return CpuBackend(spec, log)
     if sys.platform == "darwin":
         try:
-            return MetalBackend(log)
+            return MetalBackend(spec, log)
         except BackendError as e:
             if log:
                 log("Metal not used ({}); the CPU build runs instead.".format(e))
-    return CpuBackend(log)
+    return CpuBackend(spec, log)
