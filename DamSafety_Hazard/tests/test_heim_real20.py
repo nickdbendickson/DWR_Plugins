@@ -138,6 +138,25 @@ def test_xt2_invalid_crs_warned():
     assert c.intersects_geometry(QgsGeometry.fromPointXY(QgsPointXY(1, 1)))
 
 
+def test_xt3_transform_that_cannot_be_built_is_warned():
+    # 2026-11-20 audit: QgsCoordinateTransform raising in transform_from was swallowed without a word
+    logs = []
+    c = _clip(logs)
+    real = XT.QgsCoordinateTransform
+
+    def _boom(*a, **k):
+        raise RuntimeError("no PROJ grid")
+    XT.QgsCoordinateTransform = _boom
+    try:
+        src = QgsCoordinateReferenceSystem("EPSG:4326")
+        assert c.transform_from(src) is None
+        c.transform_from(src)                                   # cached: said once
+    finally:
+        XT.QgsCoordinateTransform = real
+    hits = [m for m in logs if "no transform from EPSG:4326" in m]
+    assert len(hits) == 1 and "no PROJ grid" in hits[0] and "untransformed" in hits[0], logs
+
+
 def test_sm2_sm6_zip_atomic_and_readme_line():
     out = R18B._outputs(multi=False)
     r = SB.build(out, dam_name="Test", zip_it=True)
