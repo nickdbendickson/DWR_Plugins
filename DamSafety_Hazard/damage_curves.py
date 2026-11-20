@@ -55,10 +55,6 @@ occupancy,kind,depth_ft,percent
 """
 
 
-class CurveError(Exception):
-    pass
-
-
 def _matches(occ, prefix):
     if not occ.startswith(prefix):
         return False

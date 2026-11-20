@@ -332,11 +332,6 @@ def write_values_csv(output_folder, out_path=None, values=None):
     return path
 
 
-def key_list_lines():
-    """'{{KEY}} - description' lines (for the dialog's help / a starter template)."""
-    return ["{{{{{}}}}} - {}".format(k, d) for k, d in FORM_KEYS]
-
-
 # ------------------------------------------------------------------ filling --
 class _Filler(object):
     def __init__(self, values, missing_text, escape=None):
@@ -484,24 +479,6 @@ def _fill_docx(template_path, out_path, filler):
                         data = new.encode("utf-8")
                 zout.writestr(info, data, compress_type=info.compress_type)
     os.replace(tmp, out_path)
-
-
-def placeholders_in(template_path):
-    """Sorted KEYs of the placeholders a template holds (a .docx: per paragraph,
-    across Word's runs)."""
-    names = set()
-    ext = os.path.splitext(template_path)[1].lower()
-    if ext == ".docx":
-        with zipfile.ZipFile(template_path) as z:
-            for n in z.namelist():
-                if _DOCX_PARTS.match(n):
-                    xml = z.read(n).decode("utf-8")
-                    probe = _Filler({}, None)
-                    fill_docx_xml(xml, probe)
-                    names |= probe.unknown
-        return sorted(names)
-    text, _b, _e = _read_template_text(template_path)
-    return sorted({m.group(1).upper() for m in PLACEHOLDER_RE.finditer(text)})
 
 
 def fill_template(template_path, values, out_path, missing_text=None):

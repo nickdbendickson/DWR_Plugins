@@ -130,10 +130,6 @@ def _square(x0, y0, x1, y1):
     return QgsGeometry.fromRect(QgsRectangle(x0, y0, x1, y1))
 
 
-def _features_by(layer, field):
-    return {f[field]: f for f in layer.getFeatures()}
-
-
 def _line_layer(name, crs, fields, rows):
     lyr = create_memory_layer(name, WKB_LINESTRING, crs, fields)
     feats = []

@@ -4,13 +4,11 @@ rasters (Hazard_Foundations / Hazard_MobileHomes / Hazard_Vehicles)."""
 
 import os
 import re
-import math
 
 import numpy as np
 
 from qgis.core import (
-    QgsProject, QgsVectorLayer, QgsRasterLayer, QgsRectangle, QgsWkbTypes,
-    QgsCoordinateTransform, QgsCsException,
+    QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
 )
 
 from osgeo import gdal
@@ -22,7 +20,7 @@ from .constants import (
 from .helpers import (
     log_message, get_layer_path, classify_values, curve_pair,
     log_threshold_verification, apply_acer11_style, add_layer_to_project,
-    RasterSampler, buffer_distance_in_layer_units, gdal_exceptions,
+    RasterSampler, gdal_exceptions,
     prepare_output_path, layer_file_path,
 )
 
@@ -120,43 +118,6 @@ def point_from_geometry(geom):
             return pts[0] if pts else None
         return geom.asPoint()
     except Exception:
-        return None
-
-
-def safe_transform_point(xform, pt):
-    """Transform a QgsPointXY; None if it lies outside the CRS's valid area."""
-    if pt is None:
-        return None
-    if xform is None or xform.isShortCircuited():
-        return pt
-    try:
-        return xform.transform(pt)
-    except QgsCsException:
-        return None
-
-
-def raster_filter_rect(raster_layer, grow_ft, target_crs, transform_ctx):
-    """Raster extent grown by `grow_ft` feet, expressed in `target_crs`
-    (None means: do not filter). v1.1 transformed this rectangle in the
-    wrong direction, which failed when point and raster CRSs differed."""
-    try:
-        rect = QgsRectangle(raster_layer.extent())
-        rect.grow(buffer_distance_in_layer_units(grow_ft, raster_layer.crs()))
-        xf = QgsCoordinateTransform(raster_layer.crs(), target_crs, transform_ctx)
-        if xf.isShortCircuited():
-            return rect
-        out = xf.transformBoundingBox(rect)
-        if out is None or out.isEmpty():
-            return None
-        if not all(math.isfinite(v) for v in (out.xMinimum(), out.yMinimum(),
-                                                out.xMaximum(), out.yMaximum())):
-            return None
-        return out
-    except QgsCsException:
-        return None
-    except Exception as e:
-        log_message("Could not build spatial filter ({}); reading all features".format(e),
-                    MSG_WARNING)
         return None
 
 

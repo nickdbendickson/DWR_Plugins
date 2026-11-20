@@ -152,14 +152,6 @@ def has_data(structs):
     return any(rec.get("_dv") is not None for rec in structs)
 
 
-def strip_dv(structs):
-    """Drop the kept cell arrays (before caching / pickling a state that does
-    not need them)."""
-    for rec in structs:
-        rec.pop("_dv", None)
-    return structs
-
-
 # ---------------------------------------------------------- structures scaling --
 def _labels(zone):
     return ZONE_LABELS.get(zone, "") if zone is not None else ""

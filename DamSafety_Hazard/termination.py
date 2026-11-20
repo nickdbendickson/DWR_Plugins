@@ -301,20 +301,6 @@ def analyze(line, depth_sampler, analysis_crs, transform_ctx, lat=None, *,
     return res
 
 
-def from_travel(tt_result, rise_ft=DEFAULT_RISE_FT, depth_ft=DEFAULT_DEPTH_FT,
-                confirm=DEFAULT_CONFIRM, base_rows=None):
-    """find() on the station rows of traveltime.build() (breach depth only, or
-    with base_rows - the rows of the same table made on the baseline depth
-    raster and centerline - the rise). No extent information (see
-    stations_from_rows)."""
-    st = stations_from_rows((tt_result or {}).get("rows"))
-    if base_rows:
-        base = stations_from_rows(base_rows)
-        for s, b in zip(st, base):
-            s["base_depth"] = b["depth"]
-    return find(st, rise_ft, depth_ft, confirm)
-
-
 # ------------------------------------------------------------------------ output --
 def _num(v, n=2):
     return "" if v is None else round(float(v), n)

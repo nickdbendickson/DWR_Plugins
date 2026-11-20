@@ -39,9 +39,9 @@ from .tokens import TOKENS
 from .tool_dialog import exec_tool_dialog
 from .ui_widgets import CheckPanel, Collapsible, InfoBanner, StageStrip
 
-from .dialog_consts import (  # noqa: F401 - re-exported: tests and the plugin read them here
-    TITLE, SCOPE, ENTRY, STATE_TEXT, DISCLAIMER, SCREEN_WHAT, HELP_FILE, PRESETS_DIR,
-    REVIEW_COLUMNS, HINT_STYLE, EXE_KEY,
+from .dialog_consts import (
+    TITLE, SCOPE, ENTRY, STATE_TEXT, DISCLAIMER, SCREEN_WHAT, HELP_FILE,
+    HINT_STYLE, EXE_KEY,
 )
 from .settings_tab import SettingsTabMixin
 from .review_tab import ReviewTabMixin
