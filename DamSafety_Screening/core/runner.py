@@ -35,7 +35,14 @@ from .gridutil import xy_to_rc, rc_to_xy, rasterize_lines, rasterize_polygons, N
 # program it starts opens its own window, and closing that window kills the run)
 NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
 
-ENGINES = ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir")
+# 0.21.0: "gpu" (appended) = the GPU engine (core/metalflood, a copy of the Runner's): the
+# LISFLOOD-FP ACC deck run in-process on the Apple GPU, or on the CPU build of its kernels
+ENGINES = ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir", "gpu")
+
+
+def deck_engine(engine):
+    """True for the engines that run the LISFLOOD-FP deck (LISFLOOD-FP itself, the GPU engine)."""
+    return str(engine).startswith("lisflood") or engine == "gpu"
 BUILDING_MODES = ("none", "raise", "manning")
 M3S_PER_CFS = 0.3048 ** 3                  # 1 ft3/s = 0.028316846592 m3/s
 FT = 0.3048
@@ -113,6 +120,39 @@ def run_lisflood(exe, par, cwd, timeout_s, cancel=None, threads=1):
         raise RuntimeError(f"solver exit {p.returncode}: {_tail(log_path)}")
 
 
+def run_gpu(par, cwd, timeout_s, cancel=None):
+    """Run Boann (the GPU engine) on `par` in `cwd` (in this process). Its log goes to <cwd>/lisflood.log;
+    a timeout stops it like LISFLOOD-FP's."""
+    from . import metalflood as mf
+    t0 = time.time()
+    lines = []
+
+    def stop():
+        if cancel is not None and cancel():
+            return True
+        if time.time() - t0 > timeout_s:
+            raise TimeoutError(f"Boann exceeded {timeout_s / 60:.0f} min")
+        return False
+    try:
+        from ..damsuite.keepawake import keep_awake
+    except ImportError:                          # tests import core/ on its own (no damsuite)
+        import contextlib
+
+        def keep_awake(*_a, **_k):
+            return contextlib.nullcontext()
+    try:
+        with keep_awake("Boann, the GPU flood engine", log=None):
+            mf.run_par(os.path.join(cwd, par), cancel=stop, log=lines.append,
+                       backend=os.environ.get("DAMSAFETY_MF_BACKEND") or "auto")
+    except mf.Cancelled:
+        raise Cancelled("cancelled")
+    except mf.EngineError as e:
+        raise RuntimeError(f"Boann: {e}")
+    finally:
+        with open(os.path.join(cwd, "lisflood.log"), "w", encoding="utf-8") as f:
+            f.write(mf.NAME + " " + mf.VERSION + "\n" + "\n".join(lines) + "\n")
+
+
 def _lisflood_case(dem, gt, cell, sources, man, sim_s, o, cancel, tag):
     ny, nx = dem.shape
     xll, yll = gt[0], gt[3] + ny * gt[5]
@@ -129,7 +169,10 @@ def _lisflood_case(dem, gt, cell, sources, man, sim_s, o, cancel, tag):
         save = o["fv1_save_s"] if solver == "fv1" else sim_s
         sio.write_par(os.path.join(run, "run.par"), "dem.asc", "run", "out", sim_s, save, solver,
                       o["manning_default"] * o["n_mult"], "n.asc" if man is not None else None)
-        run_lisflood(o["exe"], "run.par", run, o["timeout_s"], cancel, o["threads_per_run"])
+        if o["engine"] == "gpu":
+            run_gpu("run.par", run, o["timeout_s"], cancel)
+        else:
+            run_lisflood(o["exe"], "run.par", run, o["timeout_s"], cancel, o["threads_per_run"])
         res = sio.read_results(os.path.join(run, "out"), "run", solver, save)
         return res
     finally:
@@ -250,7 +293,7 @@ def simulate(case, load_dem, load_manning=None, opts=None, log=None, cancel=None
                     t_end + max([s["start_s"] for s in extra] or [0.0]), path_len)
             eng = None
             while True:
-                if o["engine"].startswith("lisflood"):
+                if deck_engine(o["engine"]):
                     out = _lisflood_case(dem_m, gt, cell, sources, man, sim_s, o, cancel,
                                          str(case["dam_id"]).replace("/", "_"))
                 else:
@@ -422,7 +465,7 @@ def _baseline(dem_m, gt, cell, man, main, rset, case, sim_s, o, cancel, t_start,
     in_grid = bool(rset and not isinstance(rset, str))
     eng = None
     while True:
-        if o["engine"].startswith("lisflood"):
+        if deck_engine(o["engine"]):
             src["t"] = [0.0, t_run]
             out = _lisflood_case(dem_m, gt, cell, [src], man, t_run, o, cancel,
                                  str(case["dam_id"]).replace("/", "_") + "_base")

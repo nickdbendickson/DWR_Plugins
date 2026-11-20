@@ -838,8 +838,13 @@ def workflow_anuga_agrees_with_lisflood():
         return
     from nd_breach_runner.core import workflow
     d = tempfile.mkdtemp()
+    # manning_n pinned to 0.06: this ANUGA/LISFLOOD agreement check was tuned so the 2 h run keeps
+    # its water inside the 2 mi domain (the mass-in-domain sanity assert below). The suite default
+    # moved to 0.05 (Runner 3.27.0), which drains the synthetic valley faster and lets ~5% reach
+    # the outflow boundary; pin the roughness this scenario was validated against. The default
+    # move itself is covered by the fast-suite tests, not here.
     st = workflow.RunSettings(tier=workflow.TIER_BOTH, cell_size_m=20.0, initial_length_mi=2.0,
-                              half_width_mi=0.5, max_iterations=1, sim_time_hr=2.0,
+                              half_width_mi=0.5, max_iterations=1, sim_time_hr=2.0, manning_n=0.06,
                               lisflood_exe=_exe(), anuga_python=py, threads=2,
                               anuga_fine_area_m2=400, anuga_coarse_area_m2=4000,
                               anuga_near_field_mi=0.5)

@@ -68,8 +68,11 @@ def _to(x, y, src, dst):
         return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
 
 
-def _crs_dem(folder, name, crs, value, unit="", n=60, nodata=-9999.0):
-    """An n x n GeoTIFF in `crs` (compound allowed) covering 600 m around (CX, CY), all `value`."""
+def _crs_dem(folder, name, crs, value, unit="", n=60, nodata=-9999.0, relief=0.0):
+    """An n x n GeoTIFF in `crs` (compound allowed) covering 600 m around (CX, CY), centred on `value`.
+    `relief` (default 0 -> a constant tile) adds a symmetric west-east ramp of +/- that many `value`
+    units, so the tile has real ground (median still `value`) rather than one flat value - dem_refill's
+    check_tile refuses a one-flat-value tile as a wrong-CRS 0 m pit."""
     horiz = crs.split("+")[0]
     x0, y1 = _to(CX - 300.0, CY + 300.0, "EPSG:26914", horiz)
     x1, y0 = _to(CX + 300.0, CY - 300.0, "EPSG:26914", horiz)
@@ -80,7 +83,10 @@ def _crs_dem(folder, name, crs, value, unit="", n=60, nodata=-9999.0):
     ds.SetProjection(s.ExportToWkt())
     ds.SetGeoTransform((x0, (x1 - x0) / n, 0.0, y1, 0.0, -(y1 - y0) / n))
     b = ds.GetRasterBand(1)
-    b.WriteArray(np.full((n, n), value, dtype="float32"))
+    arr = np.full((n, n), value, dtype="float32")
+    if relief:
+        arr = arr + np.linspace(-relief, relief, n, dtype="float32")[None, :]
+    b.WriteArray(arr)
     b.SetNoDataValue(nodata)
     if unit:
         b.SetUnitType(unit)

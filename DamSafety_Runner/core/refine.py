@@ -105,7 +105,16 @@ def decide(st, final_model, receptors, structures, breach_xy):
         info["reason"] = "off (REFINE_NEAR not set)"
         return info
     if final_model != "LISFLOOD-FP":
-        if lfmod.is_builtin(getattr(st, "lisflood_exe", "")):
+        if lfmod.is_gpu_fv(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used Boann, shock-capturing (HLLC finite volume), "
+                              "which already resolves hydraulic jumps across the whole grid, so a "
+                              "separate near-dam FV1 refinement is not needed; confirm a final "
+                              "classification with a LISFLOOD-FP run")
+        elif lfmod.is_gpu(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used Boann (ACC / local inertial), which has no FV1 "
+                              "shock-capturing solver, so the near-dam velocities cannot be "
+                              "refined; install LISFLOOD-FP for a near-dam FV1 velocity check")
+        elif lfmod.is_builtin(getattr(st, "lisflood_exe", "")):
             # The built-in engine is itself local-inertial and has no FV1 shock-capturing
             # solver, so near-dam velocities ARE in question here and simply cannot be refined.
             # Do not imply they are trustworthy (M5 safety: reviewers' near-dam concern).
@@ -211,6 +220,7 @@ def fine_settings(st, dist_mi, cell_m, sim_time_s, hy, hy_nb):
     f.cell_size_m = float(cell_m)
     f.lisflood_solver = lfmod.SOLVER_FV1
     f.near_dam_fv1 = True                 # 3.16.0: FV1 allowed here only (workflow._check_solver)
+    f.lisflood_sgc = False                # 3.26.0: sub-grid channels go with ACC (the main run)
     f.tier = "lisflood"
     f.initial_length_mi = dist_mi * (1.0 + MARGIN)
     f.half_width_mi = min(float(st.half_width_mi), max(MIN_HALF_WIDTH_MI, 0.5 * dist_mi))

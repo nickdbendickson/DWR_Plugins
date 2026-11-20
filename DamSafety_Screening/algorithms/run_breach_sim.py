@@ -121,7 +121,9 @@ def clip_edge_warning(edge, tsrc):
 
 ENGINES = ["LISFLOOD-FP ACC (fast, local inertial)", "LISFLOOD-FP FV1 (full shallow water)",
            "Built-in (no install; hydrograph injection)",
-           "Built-in, reservoir in the grid (gradual breach, like DSS-WISE)"]
+           "Built-in, reservoir in the grid (gradual breach, like DSS-WISE)",
+           # 0.21.0, appended (indices 0-3 unchanged)
+           "GPU engine (LISFLOOD-FP's ACC scheme on the Apple GPU; CPU build elsewhere)"]
 TERRAIN = ["Cached clips only (tool 2)", "USGS 3DEP service", "Local DEM folder"]
 SCENARIOS = ["td - top of dam (ND standard)", "sd - sunny day"]
 EXE_FILTER = "All files (*)"     # the LISFLOOD-FP binary has no extension on macOS / Linux
@@ -342,6 +344,9 @@ class RunBreachSim(UnitAlgorithm):
     def shortHelpString(self):
         return ("Runs a 2D dam-break flood for every dam, several dams at once.\n"
                 "ENGINES: LISFLOOD-FP ACC (fastest; needs the LISFLOOD-FP program), LISFLOOD-FP FV1, "
+                "the GPU engine (LISFLOOD-FP 8.3's ACC scheme as GPU kernels: on the Apple GPU of a Mac, "
+                "elsewhere on the CPU build of the same kernels, which needs a C++ compiler; nothing to "
+                "download; it matched LISFLOOD-FP within millimetres on the test cases), "
                 "the built-in engine (nothing to install; explicit finite-volume shallow-water "
                 "solver like DSS-WISE, exact maximum depth x velocity), or the built-in engine with "
                 "the reservoir in the grid: the reservoir starts full at the top of dam, its bed "
@@ -504,6 +509,13 @@ class RunBreachSim(UnitAlgorithm):
             feedback.pushInfo(f"No-breach baseline on: steady ambient flow {base_cfs:g} cfs at the dam site "
                               "(screening approximation of ND's flood-scenario comparison; roughly doubles "
                               "the run time)")
+        if engine == "gpu":
+            from ..core import metalflood as _mf
+            _ok, _why = _mf.available()
+            if not _ok:
+                raise QgsProcessingException("The GPU engine cannot run here: {}. Choose another "
+                                             "engine.".format(_why))
+            feedback.pushInfo("GPU engine: {}".format(_why))
         if engine.startswith("lisflood") and not (exe and os.path.exists(exe)):
             raise QgsProcessingException("The LISFLOOD-FP engines need the LISFLOOD-FP executable; "
                                          "choose a built-in engine or give the executable.")

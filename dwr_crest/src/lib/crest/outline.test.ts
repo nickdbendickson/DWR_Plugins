@@ -1,0 +1,511 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, it } from "node:test";
+import { gunzipSync } from "node:zlib";
+
+import { analyze } from "./engine.ts";
+import { floodStrip } from "./floodstrip.ts";
+import { exportFloodGeoJson, exportFloodKml, fetchNd911, nd911State, nd911Table } from "./nd911.ts";
+import {
+  buildOutline,
+  corridorHalfM,
+  DEM_ATTRIBUTION,
+  DEM_SERVICE,
+  type DemGrid,
+  demRequest,
+  demTiles,
+  demUrl,
+  fetchDem,
+  lookupArea,
+  openEdgeOf,
+  OUTLINE_LABEL,
+  OUTLINE_OFFLINE,
+  findToe,
+  outlineAcresNote,
+  outlineInputs,
+  extentOf,
+  outlineState,
+  parseBsq,
+  pasteTile,
+  pitsExcludedNote,
+  TRACE_VERSION,
+  traceStartNote,
+} from "./outline.ts";
+import { bboxContains, type PlssCache, plssState, plssTable, stripBbox } from "./plss.ts";
+import { SAMPLE_DAMS } from "./samples.ts";
+import type { DamRecord } from "./types.ts";
+
+const ND = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+const RESULT = analyze(ND);
+const STRIP = floodStrip(ND, RESULT).strip!;
+const fx = (name: string) => new URL(`./__fixtures__/${name}`, import.meta.url);
+/**
+ * The real 3DEP terrain for the ND00199 outline box, fetched once on 2026-10-30 with the desk's own exportImage
+ * request at 30 m (the desk asks for 10 m; 30 m keeps the fixture small). Stored as uint16 cm above 250 m (±0.5 cm).
+ */
+const META = JSON.parse(readFileSync(fx("dem3dep_nd00199_30m.json"), "utf8"));
+const U16 = new Uint16Array(new Uint8Array(gunzipSync(readFileSync(fx("dem3dep_nd00199_30m.u16cm.gz")))).buffer);
+const DEM: DemGrid = { bbox: META.bbox, width: META.width, height: META.height, cellM: META.cellM, z: Float32Array.from(U16, (v) => v / 100 + 250) };
+const PLSS = JSON.parse(readFileSync(fx("plss_nd00199.json"), "utf8")) as PlssCache;
+const PAGE911 = JSON.parse(readFileSync(fx("nd911_nd00199.json"), "utf8"));
+const NOW = new Date("2026-10-30T15:30:00Z");
+const INP = (() => {
+  const io = outlineInputs(ND, RESULT);
+  assert.ok(io.ok);
+  return io.inputs;
+})();
+const BUILT = await buildOutline(ND, RESULT, DEM, { builtAt: NOW });
+assert.ok(BUILT.ok, BUILT.ok ? "" : BUILT.reason);
+const CACHE = BUILT.cache;
+const OUTLINE = CACHE.outline;
+
+const ringsOf = (o: typeof OUTLINE) =>
+  o.features.flatMap((f) => (f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates));
+const signedArea = (r: number[][]) => {
+  let s = 0;
+  for (let i = 0; i + 1 < r.length; i++) s += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1];
+  return s / 2;
+};
+
+describe("accuracy envelope guard", () => {
+  it("docs/accuracy-envelope.md is scored on the code's trace version (else re-score the envelope)", () => {
+    const doc = readFileSync(new URL("../../../docs/accuracy-envelope.md", import.meta.url), "utf8");
+    const m = doc.match(/Scored on trace-version (\d+)/);
+    assert.ok(m, 'docs/accuracy-envelope.md needs a "Scored on trace-version N" line');
+    assert.equal(
+      Number(m![1]),
+      TRACE_VERSION,
+      `re-score the envelope: outline.ts TRACE_VERSION is ${TRACE_VERSION} but docs/accuracy-envelope.md was scored on trace-version ${m![1]}. ` +
+        "Run score-routed.mjs on the four baselines, update the tables and the line (see the page's \"Keeping this current\").",
+    );
+  });
+});
+
+describe("3DEP request", () => {
+  it("ND00199 at 10 m: 1090 × 996 cells (4.3 MB of float32) over the corridor box plus the 500 m trace margin", () => {
+    const r = demRequest(INP);
+    assert.equal(r.width, 1090);
+    assert.equal(r.height, 996);
+    assert.equal(r.cellM, 10);
+    assert.equal(r.width * r.height * 4, 4_342_560);
+    assert.deepEqual(r.bbox, [-97.39979801, 46.90014443, -97.25626988, 46.99021985]);
+  });
+  it("the fixture is the same request at 30 m", () => {
+    const r = demRequest(INP, 30);
+    assert.deepEqual([r.bbox, r.width, r.height, r.cellM], [META.bbox, META.width, META.height, META.cellM]);
+    assert.equal(demUrl(r), META.url);
+  });
+  it("asks the 3DEP ImageServer for raw float32, WGS 84, bilinear, with a no-data value", () => {
+    const u = new URL(demUrl(demRequest(INP)));
+    assert.equal(`${u.origin}${u.pathname}`, `${DEM_SERVICE}/exportImage`);
+    for (const [k, v] of Object.entries({ format: "bsq", pixelType: "F32", bboxSR: "4326", imageSR: "4326", noData: "-9999", f: "image", size: "1090,996", adjustAspectRatio: "false" }))
+      assert.equal(u.searchParams.get(k), v, k);
+  });
+  it("keeps a long reach within the cell budget (coarser cells), or shortens it to keep the cell size", () => {
+    const r = demRequest(INP, 10, 300);
+    assert.ok(r.width * r.height <= 300 * 300 * 1.05, `${r.width}x${r.height}`);
+    assert.ok(r.cellM > 10);
+    const s = demRequest(INP, 10, 300, { shorten: true });
+    assert.ok(Math.abs(s.cellM - 10) < 1e-6 || s.cellM <= r.cellM);
+    assert.ok(s.width * s.height <= 300 * 300 * 1.05);
+  });
+  it("corridor: three half-widths, at least 300 m, at most 2 km", () => {
+    assert.deepEqual([corridorHalfM(20), corridorHalfM(200), corridorHalfM(900)], [300, 600, 2000]);
+  });
+});
+
+describe("reading and fetching the raster (fetch is faked)", () => {
+  it("parses little-endian float32 and ignores a trailing mask", () => {
+    const buf = new ArrayBuffer(4 * 4 + 2);
+    const v = new DataView(buf);
+    [301.5, 302.25, -9999, 299].forEach((z, i) => v.setFloat32(i * 4, z, true));
+    assert.deepEqual([...parseBsq(buf, 2, 2)], [301.5, 302.25, -9999, 299]);
+    assert.throws(() => parseBsq(new ArrayBuffer(8), 2, 2), /returned 8 bytes; expected 16/);
+  });
+  it("one request, the grid back; a failure says it needs a connection", async () => {
+    const req = demRequest(INP, 30);
+    const raw = new Float32Array(DEM.z);
+    const urls: string[] = [];
+    const ok = async (url: string) => {
+      urls.push(url);
+      return { ok: true, status: 200, arrayBuffer: async () => raw.buffer };
+    };
+    const g = await fetchDem(req, ok);
+    assert.equal(urls.length, 1);
+    assert.equal(g.z.length, req.width * req.height);
+    const down = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await assert.rejects(fetchDem(req, down), (e: Error) => e.message.includes(OUTLINE_OFFLINE));
+    let calls = 0;
+    const bad = async () => {
+      calls++;
+      return { ok: false, status: 503, arrayBuffer: async () => new ArrayBuffer(0) };
+    };
+    await assert.rejects(fetchDem(req, bad, [0, 0]), /answered 503/);
+    assert.equal(calls, 3, "a 5xx is retried twice");
+    calls = 0;
+    const flaky = async () => (++calls < 3 ? { ok: false, status: 502, arrayBuffer: async () => new ArrayBuffer(0) } : { ok: true, status: 200, arrayBuffer: async () => raw.buffer });
+    assert.equal((await fetchDem(req, flaky, [0, 0])).z.length, req.width * req.height);
+    calls = 0;
+    const missing = async () => {
+      calls++;
+      return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
+    };
+    await assert.rejects(fetchDem(req, missing, [0, 0]), /answered 404/);
+    assert.equal(calls, 1, "a 4xx is not retried");
+  });
+});
+
+describe("tiled terrain reads", () => {
+  it("demTiles covers the box exactly, edge to edge, on its own lattice", () => {
+    const req = { bbox: [-100, 46, -99.9, 46.05] as [number, number, number, number], width: 4500, height: 2100, cellM: 2 };
+    const tiles = demTiles(req, 2000);
+    assert.equal(tiles.length, 3 * 2);
+    let cells = 0;
+    const dlon = (req.bbox[2] - req.bbox[0]) / req.width;
+    for (const t of tiles) {
+      cells += t.req.width * t.req.height;
+      assert.ok(t.req.width <= 2000 && t.req.height <= 2000);
+      assert.ok(Math.abs(t.req.bbox[0] - (req.bbox[0] + t.i0 * dlon)) < 1e-7);
+    }
+    assert.equal(cells, req.width * req.height);
+    assert.deepEqual(demTiles({ ...req, width: 1500, height: 900 }, 2000).map((t) => [t.i0, t.j0]), [[0, 0]]);
+  });
+  it("pasteTile puts a tile's rows at its offset", () => {
+    const z = new Float32Array(4 * 3);
+    pasteTile(z, 4, Float32Array.from([1, 2, 3, 4]), 2, 2, 2, 1);
+    assert.deepEqual([...z], [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 4]);
+  });
+  it("a box larger than one tile is read tile by tile and pasted back into one grid", async () => {
+    const req = { bbox: [-100, 46, -99.9, 46.05] as [number, number, number, number], width: 2500, height: 30, cellM: 5 };
+    const urls: string[] = [];
+    const g = await fetchDem(req, async (url: string) => {
+      urls.push(url);
+      const q = new URL(url).searchParams;
+      const [w, h] = (q.get("size") ?? "0,0").split(",").map(Number);
+      const west = Number((q.get("bbox") ?? "").split(",")[0]);
+      // Each cell holds its own column number, read from where the tile sits.
+      const i0 = Math.round((west - req.bbox[0]) / ((req.bbox[2] - req.bbox[0]) / req.width));
+      const z = new Float32Array(w * h);
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) z[j * w + i] = i0 + i;
+      return { ok: true, status: 200, arrayBuffer: async () => z.buffer };
+    });
+    assert.equal(urls.length, 2);
+    assert.equal(g.z.length, req.width * req.height);
+    for (const i of [0, 1999, 2000, 2499]) assert.equal(g.z[7 * req.width + i], i);
+  });
+});
+
+describe("ND00199 outline on the real 3DEP terrain (30 m fixture)", () => {
+  const s = CACHE.stats;
+  it("follows the creek from the breach, wet ground under the desk water surface", () => {
+    assert.equal(s.dem.missing, 0);
+    // The traced outline measures these (they are null only on the routed/spread layer).
+    assert.ok(s.reachKm != null && s.bedTopFt != null && s.bedEndFt != null, "outline path measures bed and reach");
+    assert.ok(s.channelKm > s.reachKm, "the traced creek bends, so it is longer than the straight reach");
+    assert.ok(s.reachKm > 10 && s.reachKm <= RESULT.flood.lengthM / 1000 + 0.05, String(s.reachKm));
+    // Bed: starts at the toe, 1046.2 ft, next to the record streambed (1043.59 ft) and below the crest (1071.09 ft);
+    // ~950 ft at the end. Before 2026-11-03 it started at 1070.6 ft on the upland: the DEM sat ~1.5× stretched
+    // north–south (the ImageServer widened the latitude extent) and the start was a fixed 60 m step down the bearing.
+    assert.equal(s.traceStart?.how, "toe");
+    assert.ok(Math.abs(s.bedTopFt - 1046.2) < 1, String(s.bedTopFt));
+    assert.ok(s.bedTopFt < ND.crestFt - ND.heightFt / 2);
+    assert.ok(s.bedEndFt < 960 && s.bedEndFt > 940, String(s.bedEndFt));
+    assert.ok(s.outlineAc > 1200 && s.outlineAc < 1500, String(s.outlineAc));
+    assert.equal(s.engineAc, STRIP.properties.engine_wet_area_ac);
+    assert.ok(s.outlineAc <= s.wetCellAc && s.outlineAc > 0.9 * s.wetCellAc);
+  });
+  it("bands add up to the outline and every band is a real depth band", () => {
+    const sum = s.bands.reduce((t, b) => t + b.ac, 0);
+    assert.ok(Math.abs(sum - s.outlineAc) < 0.01);
+    assert.deepEqual(
+      OUTLINE.features.map((f) => f.properties.band),
+      s.bands.map((b) => b.band),
+    );
+    for (const f of OUTLINE.features) assert.ok(f.properties.depth_min_ft >= 0.1 && f.properties.depth_max_ft >= f.properties.depth_min_ft);
+  });
+  it("valid GeoJSON rings: closed, outer counter-clockwise, holes clockwise, inside the DEM box", () => {
+    let n = 0;
+    for (const poly of ringsOf(OUTLINE))
+      poly.forEach((r, i) => {
+        n++;
+        assert.deepEqual(r[0], r[r.length - 1]);
+        assert.ok(r.length >= 4);
+        assert.equal(signedArea(r) > 0, i === 0);
+        for (const [x, y] of r) assert.ok(x >= DEM.bbox[0] - 1e-7 && x <= DEM.bbox[2] + 1e-7 && y >= DEM.bbox[1] - 1e-7 && y <= DEM.bbox[3] + 1e-7);
+      });
+    assert.equal(n, s.rings);
+  });
+  it("is labelled as approximate and carries the 3DEP source", () => {
+    assert.equal(OUTLINE.properties.disclaimer, OUTLINE_LABEL);
+    assert.equal(OUTLINE_LABEL, "Approximate inundation outline from 3DEP terrain and desk depths, not a hydraulic model");
+    assert.equal(OUTLINE.properties.kind, "terrain_outline");
+    assert.equal(OUTLINE.properties.outline_area_ac, s.outlineAc);
+    assert.equal(CACHE.attribution, DEM_ATTRIBUTION);
+    assert.equal(CACHE.source, DEM_SERVICE);
+    assert.equal(CACHE.builtAt, "2026-10-30T15:30:00.000Z");
+  });
+  it("the acres note compares with the engine and says why", () => {
+    const note = outlineAcresNote(s);
+    assert.match(note, /^Outline \d+\.\d ac against the engine's 2358\.3 wet ac \(-\d+%\)\./);
+    assert.match(note, /schematic valley/);
+    assert.match(note, /not from the terrain/);
+  });
+  it("chunked: yields to the page and builds the same outline", async () => {
+    let yields = 0;
+    const again = await buildOutline(ND, RESULT, DEM, {
+      builtAt: NOW,
+      yieldFn: async () => {
+        yields++;
+      },
+    });
+    assert.ok(again.ok);
+    assert.ok(yields > 3, String(yields));
+    assert.deepEqual(again.cache, CACHE);
+  });
+  it("no terrain under the water surface: says so", async () => {
+    const high = { ...DEM, z: new Float32Array(DEM.z.length).fill(-9999) };
+    const r = await buildOutline(ND, RESULT, high);
+    assert.equal(r.ok, false);
+  });
+});
+
+describe("state: built on request, saved on the dam, offline after", () => {
+  it("not built: build online, the connection note offline", () => {
+    assert.equal(outlineState(ND, RESULT, true).state, "build");
+    const off = outlineState(ND, RESULT, false);
+    assert.equal(off.state, "offline");
+    assert.equal(off.message, OUTLINE_OFFLINE);
+  });
+  it("saved with the same inputs: ready, online or not", () => {
+    const dam: DamRecord = { ...ND, outline: CACHE };
+    for (const online of [true, false]) {
+      const st = outlineState(dam, RESULT, online);
+      assert.equal(st.state, "ready");
+      if (st.state === "ready") assert.equal(st.stats.outlineAc, CACHE.stats.outlineAc);
+    }
+  });
+  it("desk inputs changed: asks to build again (offline: needs a connection)", () => {
+    const changed: DamRecord = { ...ND, storageAcFt: ND.storageAcFt * 2, outline: CACHE };
+    const r2 = analyze(changed);
+    assert.notEqual(outlineInputs(changed, r2).ok && (outlineInputs(changed, r2) as { inputs: { fingerprint: string } }).inputs.fingerprint, INP.fingerprint);
+    assert.match(outlineState(changed, r2, true).message ?? "", /changed since the terrain outline was built/);
+    assert.equal(outlineState(changed, r2, false).state, "offline");
+  });
+  it("a layer saved before the 2026-11-03 terrain fix (no trace start) is rebuilt, and says why", () => {
+    const { traceStart: _t, ...oldStats } = CACHE.stats;
+    const old: DamRecord = { ...ND, outline: { ...CACHE, fingerprint: "old", stats: oldStats } };
+    const st = outlineState(old, RESULT, true);
+    assert.equal(st.state, "build");
+    assert.match(st.message ?? "", /before the 2026-11-03 terrain fix/);
+  });
+});
+
+describe("trace start: the toe below the dam (the Breach Runner's inflow rule)", () => {
+  // A 41 × 41 grid of 10 m cells, dam point at the centre, downstream = east. Ground 100 m (the dam at 100 m, height
+  // 10 m: the toe must be at or below 95 m).
+  const W = 41;
+  const mk = (z: (x: number, y: number) => number) => {
+    const g: DemGrid = { bbox: [0, 0, 1, 1], width: W, height: W, cellM: 10, z: new Float32Array(W * W) };
+    const along = new Float32Array(W * W);
+    const dom = new Uint8Array(W * W);
+    const cellX = (i: number) => (i - 20) * 10;
+    const cellY = (j: number) => (20 - j) * 10;
+    for (let j = 0; j < W; j++)
+      for (let i = 0; i < W; i++) {
+        const k = j * W + i;
+        g.z[k] = z(cellX(i), cellY(j));
+        along[k] = cellX(i);
+        dom[k] = cellX(i) >= 0 ? 1 : 0;
+      }
+    const t = { W, H: W, cellX, cellY, along, dom, a0: 0, cellM: 10, valid: () => true };
+    const xy = (k: number) => [cellX(k % W), cellY(Math.floor(k / W))];
+    return { g, t, xy };
+  };
+  const dam = { heightFt: 10 / 0.3048 };
+  const crestFt = 100 / 0.3048;
+  it("the lowest qualifying ground within the usual radius, not the cell on the axis", () => {
+    // A creek 50 m north of the axis, parallel to it; everything else is upland at 100 m.
+    const { g, t, xy } = mk((x, y) => (y === 50 && x > 0 ? 94 - x / 1000 : 100));
+    const r = findToe(g, dam, crestFt, t);
+    assert.equal(r.start.how, "toe");
+    assert.deepEqual(xy(r.k), [70, 50], "lowest within max(90 m, 8 × 10 m) = 90 m: the farthest creek cell inside it");
+  });
+  it("no qualifying ground within 90 m: the nearest out to 400 m", () => {
+    const { g, t, xy } = mk((x, y) => (y === -150 && x > 0 ? 90 : 100));
+    const r = findToe(g, dam, crestFt, t);
+    assert.equal(r.start.how, "toe-wide");
+    assert.deepEqual(xy(r.k), [10, -150]);
+    assert.match(traceStartNote({ ...CACHE.stats, traceStart: r.start }) ?? "", /outside the usual search radius/);
+  });
+  it("upstream ground never counts, and none at all falls back to the axis", () => {
+    const { g, t } = mk((x) => (x < 0 ? 50 : 100));
+    const r = findToe(g, dam, crestFt, t);
+    assert.equal(r.k, -1);
+    assert.equal(r.start.how, "axis");
+    assert.match(traceStartNote({ ...CACHE.stats, traceStart: r.start }) ?? "", /Check the dam point/);
+  });
+  it("no crest: the top of dam is the ground at the dam point", () => {
+    const { g, t, xy } = mk((x, y) => (y === 0 && x > 0 ? 94 : 100));
+    const r = findToe(g, dam, Number.NaN, t);
+    assert.deepEqual(xy(r.k), [10, 0]);
+    assert.equal(r.start.belowTopFt, Math.round((6 / 0.3048) * 1000) / 1000);
+  });
+});
+
+describe("PLSS and 911 lists against the outline", async () => {
+  const fake = async () => ({ ok: true, status: 200, json: async () => PAGE911 });
+  const c911 = await fetchNd911(STRIP, fake, NOW);
+  it("the saved 911 points inside the outline (4 at 30 m), with depth bands from the outline", () => {
+    const t = nd911Table(ND, OUTLINE, c911, "terrain outline");
+    assert.equal(t.against, "terrain outline");
+    assert.equal(t.total, 45);
+    assert.deepEqual(
+      t.rows.map((r) => r.address.split(",")[0]),
+      ["14751 30TH ST SE", "3118 150TH AVE SE", "3298 151ST AVE SE", "15134 33RD ST SE"],
+    );
+  });
+  it("PLSS sections carry the outline's acres; the lookup box covers the strip and the outline together", () => {
+    const t = plssTable(ND, OUTLINE, PLSS);
+    assert.equal(t.stripAc, CACHE.stats.outlineAc);
+    assert.ok(t.rows.length >= 10);
+    const both = stripBbox(lookupArea(STRIP, OUTLINE));
+    assert.ok(bboxContains(both, stripBbox(STRIP)) && bboxContains(both, stripBbox(OUTLINE)));
+    // The strip-only lookup does not reach the outline's south-east corner here, so the desk asks again with both.
+    const strip911 = nd911State({ ...ND, nd911: c911 }, OUTLINE, false, "terrain outline");
+    const plssOnly = plssState({ ...ND, plss: PLSS }, OUTLINE, false);
+    assert.equal(bboxContains(PLSS.bbox, stripBbox(OUTLINE)), plssOnly.state === "ready");
+    assert.equal(bboxContains(c911.bbox, stripBbox(OUTLINE)), strip911.state === "ready");
+  });
+  it("exports: the outline GeoJSON / KML with the lists and the label", () => {
+    const t911 = nd911Table(ND, OUTLINE, c911, "terrain outline");
+    const plss = plssTable(ND, OUTLINE, PLSS);
+    const gj = JSON.parse(exportFloodGeoJson(OUTLINE, plss, t911));
+    assert.equal(gj.properties.kind, "terrain_outline");
+    assert.equal(gj.properties.disclaimer, OUTLINE_LABEL);
+    assert.equal(gj.features.filter((f: { geometry: { type: string } }) => f.geometry.type === "Point").length, 4);
+    const kml = exportFloodKml(OUTLINE, plss, t911);
+    assert.match(kml, /ND00199 terrain outline \(approximate\)/);
+    assert.ok(kml.includes(OUTLINE_LABEL));
+    assert.ok(kml.includes("ND GIS Hub NG911"));
+  });
+});
+
+describe("pits and ponds off the channel are not flood storage (Docs & QA on #57, 2026-11-03)", () => {
+  // A ground point inside one of the outline's shallow bands (0.1–2 ft), well away from the traced channel.
+  const inside = (pt: [number, number], ring: number[][]) => {
+    let c = false;
+    for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+      const [xa, ya] = ring[a];
+      const [xb, yb] = ring[b];
+      if (ya > pt[1] !== yb > pt[1] && pt[0] < ((xb - xa) * (pt[1] - ya)) / (yb - ya) + xa) c = !c;
+    }
+    return c;
+  };
+  const shallow = OUTLINE.features.filter((f) => ["d0", "d1", "d2"].includes(f.properties.band));
+  const inShallow = (pt: [number, number]) =>
+    shallow.some((f) => (f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates).some((p) => inside(pt, p[0]) && !p.slice(1).some((h) => inside(pt, h))));
+  const lonOf = (i: number) => DEM.bbox[0] + ((i + 0.5) / DEM.width) * (DEM.bbox[2] - DEM.bbox[0]);
+  const latOf = (j: number) => DEM.bbox[3] - ((j + 0.5) / DEM.height) * (DEM.bbox[3] - DEM.bbox[1]);
+  const spot = (() => {
+    for (let j = 3; j < DEM.height - 3; j += 2)
+      for (let i = 3; i < DEM.width - 3; i += 2) {
+        let ok = true;
+        for (let dj = -2; dj <= 2 && ok; dj++) for (let di = -2; di <= 2 && ok; di++) ok = inShallow([lonOf(i + di), latOf(j + dj)]);
+        if (ok) return { i, j };
+      }
+    return null;
+  })();
+
+  it("a 5 m pothole dug in the shallow floodplain adds no water and no depth", async () => {
+    assert.ok(spot, "found a shallow floodplain spot");
+    const z = Float32Array.from(DEM.z);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) z[(spot.j + dj) * DEM.width + spot.i + di] -= 5;
+    const dug = await buildOutline(ND, RESULT, { ...DEM, z }, { builtAt: NOW });
+    assert.ok(dug.ok);
+    const before = CACHE.stats;
+    const after = dug.cache.stats;
+    // The pit holds 9 × 900 m² × 5 m ≈ 33 ac-ft. Measured from its spill level, it adds next to nothing (within the 3 × 3 smoothing of the ground it replaced).
+    assert.ok(Math.abs((after.laidAcFt ?? 0) - (before.laidAcFt ?? 0)) < 3, `${before.laidAcFt} → ${after.laidAcFt}`);
+    // The extent moves only by the band polygons' smoothing around the dug cells.
+    assert.ok(Math.abs(after.outlineAc - before.outlineAc) < 10, `${before.outlineAc} → ${after.outlineAc}`);
+    assert.equal(after.bands.find((b) => b.band === "d5")?.ac, before.bands.find((b) => b.band === "d5")?.ac);
+    // The desk's pit note is driven by pitsExcluded, which every terrain outline that re-measured a cell carries.
+    assert.ok(after.pitsExcluded && after.pitsExcluded.acFt > 0, JSON.stringify(after.pitsExcluded));
+    assert.ok(pitsExcludedNote(after));
+  });
+
+  it("says how much pit and low-basin storage it left out", () => {
+    const n = pitsExcludedNote({ pitsExcluded: { cells: 1234, acFt: 840.4 } });
+    assert.match(n!, /At least 840 ac-ft of pit, pond and low-basin storage \(1,234 cells\) is left out/);
+    assert.equal(pitsExcludedNote({}), null);
+  });
+});
+
+describe("flood extent line (option 3 of the 2026-11-05 outline mock-up)", () => {
+  it("the ND00199 outline carries one extent line around its bands, inside the DEM box", () => {
+    const e = OUTLINE.extent;
+    assert.ok(e, "extent built");
+    assert.equal(e.properties.kind, "flood_extent");
+    assert.equal(e.geometry.type, "MultiLineString");
+    for (const line of e.geometry.coordinates) {
+      assert.deepEqual(line[0], line[line.length - 1], "closed");
+      for (const [x, y] of line) assert.ok(x >= DEM.bbox[0] - 1e-7 && x <= DEM.bbox[2] + 1e-7 && y >= DEM.bbox[1] - 1e-7 && y <= DEM.bbox[3] + 1e-7);
+    }
+    // The line closes gaps and drops slivers, so it encloses at least most of what the bands cover, never far more.
+    assert.ok(e.properties.area_ac > 0.9 * CACHE.stats.outlineAc && e.properties.area_ac < 1.6 * CACHE.stats.outlineAc, String(e.properties.area_ac));
+    assert.ok(!OUTLINE.features.some((f) => (f.properties as { kind?: string }).kind === "flood_extent"), "kept out of the band features");
+  });
+
+  it("bridges a gap narrower than the closing width and drops an island under EXTENT_MIN_AC", () => {
+    // 10 m cells: two 30 × 30 blocks 4 cells (40 m) apart, plus a 3 × 3 island far off (0.2 ac).
+    const W = 100;
+    const H = 60;
+    const wet = new Uint8Array(W * H);
+    const block = (i0: number, j0: number, n: number) => {
+      for (let j = j0; j < j0 + n; j++) for (let i = i0; i < i0 + n; i++) wet[j * W + i] = 1;
+    };
+    block(5, 15, 30);
+    block(39, 15, 30);
+    block(90, 2, 3);
+    const e = extentOf(wet, W, H, 10, 100, ([x, y]) => [x, y], "test");
+    assert.ok(e);
+    assert.equal(e.geometry.coordinates.length, 1, "one ring: the gap is bridged, the island dropped");
+    assert.equal(extentOf(new Uint8Array(W * H), W, H, 10, 100, ([x, y]) => [x, y], "dry"), null);
+  });
+
+  it("goes out as one more feature in the GeoJSON export", () => {
+    const gj = JSON.parse(exportFloodGeoJson(OUTLINE, null, null));
+    assert.equal(gj.extent, undefined, "not left as a foreign member");
+    const ext = gj.features.filter((f: { properties: { kind?: string } }) => f.properties.kind === "flood_extent");
+    assert.equal(ext.length, 1);
+    assert.equal(gj.features.length, OUTLINE.features.length + 1);
+  });
+});
+
+describe("openEdgeOf", () => {
+  const ll = (p: [number, number]): [number, number] => [p[0], p[1]];
+  it("draws the wet cells' edges on the DEM border, joined into runs", () => {
+    // 4 × 3, the middle row wet across: its west and east ends touch the border.
+    const wet = (k: number) => k >= 4 && k < 8;
+    const f = openEdgeOf(4, 3, wet, undefined, undefined, ll, 10, "x", 0);
+    assert.ok(f);
+    assert.deepEqual(f.geometry.coordinates, [
+      [[0, -1], [0, -2]],
+      [[4, -1], [4, -2]],
+    ]);
+    assert.equal(f.properties.edge_km, 0.02);
+  });
+  it("adds the edge of held ground facing ground the spread never reached; nothing when it stops inside", () => {
+    const ground = Uint8Array.from([0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0]);
+    const held = Uint8Array.from([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    const wet = (k: number) => k === 5 || k === 6;
+    const f = openEdgeOf(4, 3, wet, ground, held, ll, 10, "x", 1234);
+    assert.ok(f);
+    // Cell 5 (i 1, j 1) is held: its north, south and west sides face cells off the ground; cell 6 is not held.
+    assert.equal(f.geometry.coordinates.length, 3);
+    assert.equal(f.properties.held_ac_ft, 1234);
+    assert.equal(openEdgeOf(4, 3, wet, ground, new Uint8Array(12), ll, 10, "x", 0), null);
+  });
+});

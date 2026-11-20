@@ -130,6 +130,50 @@ class Cancelled(Exception):
     pass
 
 
+def raise_open_files(want=10240, resource_mod=None):
+    """3.24.1: lift this process's soft limit on open files towards `want` (never above the
+    hard limit; 4096 when the system refuses `want`). macOS starts every process at 256, and
+    the whole chain runs in one qgis_process: a statewide 1 m VRT keeps up to 100 tiles open
+    (GDAL's dataset pool) and each dam's Hazard layers add more, so batch-44 run1118 stopped
+    with 'Too many open files' after four dams and every later DEM warp failed. Child programs
+    started after this inherit the new limit. Returns (before, after) or None when the limit
+    cannot be read (Windows has no resource module)."""
+    try:
+        R = resource_mod
+        if R is None:
+            import resource as R
+        soft, hard = R.getrlimit(R.RLIMIT_NOFILE)
+    except Exception:                                            # noqa - best effort
+        return None
+    inf = getattr(R, "RLIM_INFINITY", -1)
+    if soft == inf or (soft >= want):
+        return (soft, soft)
+    for target in (want, 4096):
+        t = target if hard == inf else min(target, hard)
+        if t <= soft:
+            continue
+        try:
+            R.setrlimit(R.RLIMIT_NOFILE, (t, hard))
+            return (soft, t)
+        except (ValueError, OSError):
+            continue
+    return (soft, soft)
+
+
+def open_files_note(res):
+    """The log line for raise_open_files' result ('' when there is nothing to say)."""
+    if not res:
+        return ""
+    before, after = res
+    if after > before:
+        return "Open-file limit raised from {} to {} for this run".format(before, after)
+    if after < 1024:
+        return ("WARNING: the open-file limit is {} and could not be raised; a long batch on "
+                "a VRT of many tiles can stop with 'Too many open files' (run `ulimit -n 10240` "
+                "in the Terminal first)").format(after)
+    return ""
+
+
 def now():
     return datetime.datetime.now().replace(microsecond=0).isoformat()
 

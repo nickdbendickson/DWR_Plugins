@@ -601,3 +601,45 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
             assert ops.run("hazard_import", dam)["hazard_depth_basis"] == ""
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+class _FakeRlimit:
+    """resource stand-in for raise_open_files (3.24.1)."""
+    RLIMIT_NOFILE = 8
+    RLIM_INFINITY = -1
+
+    def __init__(self, soft, hard, refuse_above=None):
+        self.lim, self.refuse_above, self.calls = (soft, hard), refuse_above, []
+
+    def getrlimit(self, which):
+        return self.lim
+
+    def setrlimit(self, which, lim):
+        self.calls.append(lim)
+        if self.refuse_above is not None and lim[0] > self.refuse_above:
+            raise ValueError("not allowed")
+        self.lim = lim
+
+
+@test
+def chain_raises_open_file_limit():
+    # batch-44 run1118: macOS 256 -> 'Too many open files' after four dams
+    r = _FakeRlimit(256, -1)
+    assert CH.raise_open_files(resource_mod=r) == (256, 10240)
+    assert r.lim == (10240, -1)
+    assert "raised from 256 to 10240" in CH.open_files_note((256, 10240))
+    # a hard limit below the wish: up to the hard limit
+    r = _FakeRlimit(256, 2048)
+    assert CH.raise_open_files(resource_mod=r) == (256, 2048)
+    # the system refuses 10240 (macOS OPEN_MAX): 4096
+    r = _FakeRlimit(256, -1, refuse_above=4096)
+    assert CH.raise_open_files(resource_mod=r) == (256, 4096)
+    # already high enough: untouched
+    r = _FakeRlimit(65536, -1)
+    assert CH.raise_open_files(resource_mod=r) == (65536, 65536) and r.calls == []
+    assert CH.open_files_note((65536, 65536)) == ""
+    # stuck low: a warning that names the Terminal fix
+    r = _FakeRlimit(256, 256)
+    assert CH.raise_open_files(resource_mod=r) == (256, 256)
+    assert "ulimit -n 10240" in CH.open_files_note((256, 256))
+    assert CH.open_files_note(None) == ""

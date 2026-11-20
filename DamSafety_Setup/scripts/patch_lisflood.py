@@ -13,6 +13,13 @@
    other than MSVC / Intel, so it builds with MinGW-w64 (posix_memalign does not exist
    there). Guarded by _WIN32: the Linux and macOS builds are unchanged.
 
+4. (3.26.0, 2026-11-19) The arrival-depth keyword also in the sub-grid channel (SGC) solver
+   (lisflood2/sgm_fast.cpp), which keeps its own .inittm and otherwise records the first
+   wetting (depth_thresh, about 1 mm) - and inside a channel the depth from the channel bed,
+   so a channel filled to its bank would be "arrived" at t = 0. Patched, an SGC cell arrives
+   when the water stands inittm_depth above the BANK (the DEM). The binary prints
+   "nd-breach-runner: SGC arrival depth" when an SGC run starts (SGC_PATCH_MARKER).
+
 Safe to run twice (already-applied edits are skipped). Stops with a clear
 message if the source does not look as expected. Line endings are kept."""
 import os
@@ -55,6 +62,39 @@ EDITS = [
      "\t\ttarget_compile_definitions(lisflood-base INTERFACE LISFLOOD_HAVE_NUMA=1)\n"
      "\tendif()\nendif()",
      "LISFLOOD_HAVE_NUMA"),
+    # 3.26.0: the arrival-depth keyword in the sub-grid channel (SGC) solver. sgm_fast.cpp keeps
+    # its own inundation bookkeeping (SGC2_Inundation_block): floodplain cells compare the
+    # depth above the bank with depth_thresh, channel cells the depth above the BED. Both now
+    # record the arrival only when the water stands inittm_depth above the bank (h_grid is the
+    # depth above the bank in that solver), read from a file-scope copy of Parptr->inittm_depth
+    # that Fast_MainStart sets before the first step.
+    ("lisflood2/sgm_fast.cpp",
+     '#include "sgm_fast.h"\n',
+     '#include "sgm_fast.h"\n'
+     '// nd-breach-runner patch: arrival depth of the sub-grid channel solver (set by Fast_MainStart)\n'
+     'NUMERIC_TYPE ndbreach_sgc_inittm_depth = C(0.0);\n',
+     "ndbreach_sgc_inittm_depth = C(0.0)"),
+    ("lisflood2/sgm_fast.cpp",
+     "if (initHtm_grid[index] == NULLVAL)\n",
+     "if (initHtm_grid[index] == NULLVAL && h_grid[index] > ndbreach_sgc_inittm_depth)\n",
+     "initHtm_grid[index] == NULLVAL && h_grid[index] > ndbreach_sgc_inittm_depth"),
+    ("lisflood2/sgm_fast.cpp",
+     "if (initHtm_grid[grid_index] == NULLVAL)\n",
+     "if (initHtm_grid[grid_index] == NULLVAL && h_grid[grid_index] > ndbreach_sgc_inittm_depth)\n",
+     "initHtm_grid[grid_index] == NULLVAL && h_grid[grid_index] > ndbreach_sgc_inittm_depth"),
+    ("lisflood2/lisflood_processing.cpp",
+     '#include "sgm_fast.h"\n',
+     '#include "sgm_fast.h"\n'
+     'extern NUMERIC_TYPE ndbreach_sgc_inittm_depth; // nd-breach-runner patch (sgm_fast.cpp)\n',
+     "extern NUMERIC_TYPE ndbreach_sgc_inittm_depth"),
+    ("lisflood2/lisflood_processing.cpp",
+     "\tSolverptr->itrn_time_now = Solverptr->itrn_time;\n\n\t// Populating Tstep variables",
+     "\tSolverptr->itrn_time_now = Solverptr->itrn_time;\n"
+     "\t// nd-breach-runner patch: the SGC solver records arrival at inittm_depth above the bank\n"
+     "\tndbreach_sgc_inittm_depth = Parptr->inittm_depth;\n"
+     "\tprintf(\"nd-breach-runner: SGC arrival depth %.4f m\\n\", (double)ndbreach_sgc_inittm_depth);\n"
+     "\n\t// Populating Tstep variables",
+     "ndbreach_sgc_inittm_depth = Parptr->inittm_depth"),
     # 3.16.11: builds with MinGW-w64 (the Windows executable of the GitHub release is
     # cross-compiled with it): aligned allocation through _aligned_malloc / _aligned_free.
     ("utility.cpp",

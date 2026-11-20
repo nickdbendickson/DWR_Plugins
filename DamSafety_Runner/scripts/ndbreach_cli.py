@@ -233,6 +233,13 @@ MODEL_KEYS = {
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
+    "lisflood_sgc": ("lisflood_sgc", ("bool",)),
+    "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
+    "sgc_upstream_sqmi": ("sgc_upstream_sqmi", ("num", 0.0, None)),
+    "sgc_channel_n": ("sgc_channel_n", ("num", 0.005, 0.5)),
+    "sgc_start": ("sgc_start", ("enum", ("auto", "empty", "full"))),
+    "sgc_curve": ("sgc_curve", ("nums",)),
     # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
     # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
     "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
@@ -486,7 +493,7 @@ TEMPLATE = {
     "manning": {
         "_help": "n where there is no raster; raster of n values, or an NLCD class raster "
                  "(nlcd, with nlcd_n overrides like {\"82\": 0.05}).",
-        "n": 0.06, "raster": None, "nlcd": None, "nlcd_n": None},
+        "n": 0.05, "raster": None, "nlcd": None, "nlcd_n": None},
     "model": {
         "_help": "tier: lisflood or lisflood+anuga. Paths left empty are auto-detected "
                  "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places). qa_maps: "
@@ -818,7 +825,7 @@ class AscTerrain(object):
     sampling onto the requested grid (nearest for Manning's n); the whole file is in memory,
     so this is for small DEMs and tests; use GDAL for anything big."""
 
-    def __init__(self, dem_path, z_choice=gdal_io.Z_AUTO, manning_path=None, default_n=0.06,
+    def __init__(self, dem_path, z_choice=gdal_io.Z_AUTO, manning_path=None, default_n=0.05,
                  manning_lut=None):
         try:
             self.grid = Grid.read_asc(dem_path)
@@ -927,7 +934,7 @@ class Setup(object):
 
 def manning_options(cfg):
     m = cfg.section("manning")
-    n = m.get("n", 0.06)
+    n = m.get("n", 0.05)
     raster, nlcd = cfg.path_of(m.get("raster")), cfg.path_of(m.get("nlcd"))
     kw = {}
     if raster and nlcd:
@@ -1104,8 +1111,12 @@ def breach_overrides(cfg):
 
 def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     """(lisflood exe, anuga python): command line, then the configuration, then auto-detect."""
-    exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
-           or nd_data.detect_lisflood())
+    raw = str(getattr(opts, "lisflood", "") or cfg.get("model", "lisflood_exe", "") or "")
+    if raw.strip().lower() in lfmod.BUILTIN_WORDS + lfmod.GPU_WORDS:
+        exe = lfmod.resolve_exe(raw)          # 3.22.0: "builtin" / "gpu" name an engine
+    else:
+        exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
+               or nd_data.detect_lisflood())
     py = (getattr(opts, "anuga_python", "") or cfg.get_path("model", "anuga_python")
           or nd_data.detect_anuga_python())
     tier = cfg.get("model", "tier", workflow.TIER_LISFLOOD)
@@ -1134,6 +1145,11 @@ def build_settings(cfg, opts, need_models=True):
                 v = None                                   # 0 = automatic, as in QGIS
             if key == "arrival_contours_hr":
                 v = tuple(v)
+            if key == "sgc_curve":                         # 3.26.0: a, b, c, f
+                if len(v) != 4 or min(v) <= 0:
+                    raise CliError("model.sgc_curve needs four positive numbers a, b, c, f "
+                                   "(W = a A^b, D = c A^f; A km2, W and D m)")
+                v = [float(x) for x in v]
             if key == "crest_burn_dem":
                 v = v or ""
             if key == "lisflood_rate" and not v:           # audit P2: 0 / null = unknown

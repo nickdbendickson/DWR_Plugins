@@ -322,7 +322,8 @@ def build(gid, out, say=print, gauge=None):
 
 
 # -------------------------------------------------------------------------------- run
-def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print):
+def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
+        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto"):
     from DamSafety_Runner.core import lisflood as lf
     from DamSafety_Runner.core import nd_data
     from DamSafety_Runner.core.breach import Hydrograph
@@ -331,6 +332,8 @@ def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print)
         meta = json.load(f)
     dem = Grid.read_asc(os.path.join(folder, "dem.asc"))
     tag = "nlcd" if nlcd else "n{:.3f}".format(n)
+    if sgc:
+        tag += "+sgc"
     man = None
     if nlcd:
         codes = np.load(os.path.join(folder, "nlcd.npy")).astype(float)
@@ -339,17 +342,59 @@ def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print)
     length = meta["up_m"] + meta["down_m"]
     sim_s = (sim_hr or max(24.0, length / 1000.0 * 1.6)) * 3600.0
     hyd = Hydrograph(t_s=np.array([0.0, sim_s + 3600.0]), q_cms=np.array([q, q]), method="steady")
-    st = lf.LisfloodSettings(exe or os.environ.get("LISFLOOD_EXE", "lisflood"), threads,
-                             manning_n=n if n else 0.06, manning_grid=man, sim_time_s=sim_s)
     wd = os.path.join(folder, "runs", tag)
     line = [tuple(p) for p in meta["inflow"]["line"]]
-    par = lf.write_inputs(wd, dem, tuple(meta["inflow"]["xy"]), hyd, st, inflow_line=line)
+    inflow_xy = tuple(meta["inflow"]["xy"])
+    exe_path = exe or os.environ.get("LISFLOOD_EXE", "lisflood")
+    mann = n if n else 0.06
+
+    # optional sub-grid river channel (core/sgc.py, Runner 3.26.0) - the same one a dam run gets
+    # with lisflood_sgc on. The channel below the inflow is sized for the river's own watershed (the
+    # gauge's drainage area), so the reach can carry flow in a below-water prism the bare 10 m
+    # LiDAR cell has no record of. This is the knob for "does a channel remove the reach-scale
+    # stage bias?". Needs the SGC-patched LISFLOOD-FP (scripts/patch_lisflood.py edit 4); an
+    # unpatched build refuses the run.
+    channels = None
+    if sgc:
+        from DamSafety_Runner.core import sgc as sgcmod
+        da_mi2 = meta["gauge"].get("drainage_mi2")
+        up_km2 = float(da_mi2) * 2.589988110336 if da_mi2 else None
+        channels = sgcmod.build(
+            dem, inflow_rc=dem.rc(*inflow_xy), upstream_km2=up_km2,
+            min_area_km2=float(sgc_min_area_km2 or sgcmod.DEFAULT_MIN_AREA_KM2),
+            channel_n=float(sgc_channel_n or sgcmod.DEFAULT_CHANNEL_N), start=sgc_start)
+        say("{} {}: {}{}".format(
+            meta["gauge"]["id"], tag, sgcmod.describe(channels.info),
+            "" if up_km2 else "  (no drainage area on this gauge; channel sized from the "
+            "reach DEM alone)"))
+
+    def once(theta, cfl):
+        s = lf.LisfloodSettings(exe_path, threads, manning_n=mann, manning_grid=man,
+                                sim_time_s=sim_s, theta=theta, cfl=cfl, sgc=channels)
+        p = lf.write_inputs(wd, dem, inflow_xy, hyd, s, inflow_line=line)
+        lf.run(wd, p, s, log=lambda m: None)
+        return s
+
     t0 = time.time()
-    lf.run(wd, par, st, log=lambda m: None)
+    st = once(1.0, None)                               # LISFLOOD-FP's own ACC settings
+    verr = _volume_error_pct(lf, wd, dem, st, hyd)
+    stable = False
+    # Mirror the Runner's cure (workflow.py): if the default ACC run loses mass balance (the
+    # solver "makes water"), repeat with the stable settings rather than score a blown-up run.
+    # Converged runs never trigger it, so results already published do not move.
+    if verr is not None and verr > lf.STABILITY_RETRY_PCT:
+        say("{} {}: default run lost mass balance ({:.1f}% of injected); repeating with "
+            "theta {:g} / CFL {:g}".format(meta["gauge"]["id"], tag, verr,
+                                           lf.STABLE_THETA, lf.STABLE_CFL))
+        stable = True
+        st = once(lf.STABLE_THETA, lf.STABLE_CFL)
+        verr = _volume_error_pct(lf, wd, dem, st, hyd)
     hmax = Grid.read_asc(os.path.join(wd, "results", "run.max")).data
     wse = np.where(hmax > 0.05, dem.data + hmax, np.nan)
     out = {"tag": tag, "n": n, "nlcd": bool(nlcd), "q_cms": q, "sim_hr": sim_s / 3600.0,
-           "wall_s": round(time.time() - t0, 1)}
+           "wall_s": round(time.time() - t0, 1), "volume_error_pct": verr,
+           "stable_rerun": stable, "acc_theta": st.theta, "acc_cfl": st.cfl,
+           "sgc": dict(channels.info) if channels is not None else None}
     out.update(read_gauge(meta, dem, wse))
     out.update(balance(os.path.join(wd, "results", "run.mass")))
     with open(os.path.join(wd, "result.json"), "w", encoding="utf-8") as f:
@@ -390,6 +435,15 @@ def balance(mass):
         return {"qout_over_qin": round(float(qo[tail].mean() / max(qi[tail].mean(), 1e-9)), 3)}
     except (OSError, ValueError, IndexError):
         return {}
+
+
+def _volume_error_pct(lf, wd, dem, st, hyd):
+    """LISFLOOD-FP's max volume error (% of injected), or None if it can't be read. Used only to
+    decide the stability re-run; the gauge WSE still comes from run.max exactly as before."""
+    try:
+        return lf.read_results(wd, dem, st, hyd).stats.get("max_volume_error_pct")
+    except Exception:  # noqa: BLE001 -- a partial/limited run can't be assessed, so skip the cure
+        return None
 
 
 # ------------------------------------------------------------------------------ score
@@ -457,6 +511,12 @@ def main(argv=None):
     r.add_argument("--lisflood", default=None)
     r.add_argument("--threads", type=int, default=1)
     r.add_argument("--hours", type=float, default=None)
+    r.add_argument("--sgc", action="store_true",
+                   help="add a sub-grid river channel below the inflow (needs the SGC-patched "
+                        "LISFLOOD-FP); the run is written to a separate n<..>+sgc folder")
+    r.add_argument("--sgc-min-area-km2", type=float, default=None)
+    r.add_argument("--sgc-channel-n", type=float, default=None)
+    r.add_argument("--sgc-start", default="auto", choices=["auto", "empty", "full"])
     s = sub.add_parser("score")
     s.add_argument("root")
     sub.add_parser("list")
@@ -466,7 +526,9 @@ def main(argv=None):
     elif a.cmd == "run":
         if not a.nlcd and not a.n:
             ap.error("give --n or --nlcd")
-        run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours)
+        run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours,
+            sgc=a.sgc, sgc_min_area_km2=a.sgc_min_area_km2,
+            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start)
     elif a.cmd == "score":
         score(a.root)
     else:
