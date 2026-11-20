@@ -25,10 +25,14 @@ SHIM = os.path.join(HERE, "mf_shim.h")
 CPU_SOURCE = os.path.join(HERE, "cpu_kernels.cpp")
 FV_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv.metal")
 FV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv.cpp")
+FV2_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv2.metal")
+FV2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv2.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
 FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
+FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_slopes_fv2", "k_faces_fv2", "k_cont_fv2",
+               "k_stage_c_fv2", "k_end_fv2")
 
 
 class BackendError(RuntimeError):
@@ -71,6 +75,17 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf)]
 
 
+def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
+    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..32: the FV1
+    layout (0..23) plus the previous-step state h0/hu0/hv0 and the six minmod slope buffers."""
+    cells = ny * nx
+    f = np.float32
+    base = fv_buffer_layout(ny, nx, n_src, n_series, n_values)
+    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells),
+                   ("sxe", f, cells), ("sye", f, cells), ("sxu", f, cells),
+                   ("syu", f, cells), ("sxv", f, cells), ("syv", f, cells)]
+
+
 class Spec:
     """What tells the generic Metal/CPU backend which kernels to run: one engine's kernel
     source, its C++-build source and shim, the kernel names, the ctypes Params for that
@@ -107,6 +122,20 @@ def _fv_plan(p):
 
 
 FV_SPEC = Spec("fv", FV_KERNEL_SOURCE, SHIM, FV_CPU_SOURCE, FV_KERNELS, Params, _fv_plan)
+
+
+def _fv2_plan(p):
+    one = (1, 1, 1)
+    faces = (p.wc + 1, p.wr + 1, 1)
+    cells = (p.wc, p.wr, 1)
+    # one SSP-RK2 step: predictor sweep (stage 0), then corrector sweep (stage 1), then close
+    return [("k_stage_p_fv2", one), ("k_begin_fv2", one), ("k_slopes_fv2", cells),
+            ("k_faces_fv2", faces), ("k_cont_fv2", cells),
+            ("k_stage_c_fv2", one), ("k_begin_fv2", one), ("k_slopes_fv2", cells),
+            ("k_faces_fv2", faces), ("k_cont_fv2", cells), ("k_end_fv2", one)]
+
+
+FV2_SPEC = Spec("fv2", FV2_KERNEL_SOURCE, SHIM, FV2_CPU_SOURCE, FV2_KERNELS, Params, _fv2_plan)
 
 
 def _source_hash(spec):
