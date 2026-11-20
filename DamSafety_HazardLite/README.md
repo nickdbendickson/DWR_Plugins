@@ -77,7 +77,7 @@ FEMA "Agriculture" out-buildings are excluded by default (5.2.1.1); on Absaraka 
 ## Window
 
 Plugins menu > DamSafety Hazard Lite > DamSafety Hazard Lite… opens a one-window form built from the
-shared `shared/ui` widgets (info banner, stage pills, CheckPanel, bold Classify beside Check inputs,
+shared `DamSafety_Core/ui` widgets (info banner, stage pills, CheckPanel, bold Classify beside Check inputs,
 ▸ Log fold, ⚙ gear), so it matches the other DamSafety windows (docs/gui-grammar.md, checked by
 tools/gui_lint.py). The Processing tool stays, so the same run also works headless.
 
