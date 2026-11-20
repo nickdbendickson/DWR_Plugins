@@ -899,6 +899,15 @@ def sgc_engine_is_a_runner_engine_choice():
         assert algs.FLOOD_ENGINES[5] == "gpu-sgc"
         assert algs.FLOOD_ENGINES[4] == "gpu-dg2"       # the others did not move
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        # Runner 3.39.0: find_lisflood delegates the FLOOD_ENGINE dropdown to resolve_exe, so every
+        # engine the dropdown offers must map to a distinct engine exe. gpu-sgc was missing from the
+        # inlined mapping (#446), so picking "Boann, sub-grid channels" ran LISFLOOD-FP. This guards
+        # that drift for every entry, not just sgc.
+        exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
+                   "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE}
+        for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            assert lf.resolve_exe(_w) == exe_for[_w], _w
+        assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
 
 
 @test
