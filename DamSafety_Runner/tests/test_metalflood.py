@@ -611,6 +611,42 @@ def fv_engine_is_a_runner_engine_choice():
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
 
 
+def fv2_engine_is_a_runner_engine_choice():
+    """Runner 3.33.0: 'fv2' (or 'gpu-fv2' / 'muscl') selects Boann's 2nd-order shock-capturing
+    solver (MUSCL + SSP-RK2); it runs in-process, is labelled as not LISFLOOD-FP everywhere, is
+    distinct from the 1st-order and ACC engines, and is a FLOOD_ENGINE choice of its own."""
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.damsuite import record
+    for w in ("fv2", "FV2", " gpu-fv2 ", "muscl"):
+        assert lf.resolve_exe(w) == lf.GPU_FV2_EXE, w
+    assert os.path.isfile(lf.GPU_FV2_EXE)
+    assert lf.is_gpu_fv2(lf.GPU_FV2_EXE) and lf.is_inprocess(lf.GPU_FV2_EXE)
+    assert lf.is_gpu_fv_any(lf.GPU_FV2_EXE) and lf.is_gpu_any(lf.GPU_FV2_EXE)
+    # distinct file from the 1st-order and ACC engines; the FV1/ACC predicates must not match it
+    assert not lf.is_gpu_fv(lf.GPU_FV2_EXE) and not lf.is_gpu(lf.GPU_FV2_EXE)
+    assert not lf.is_gpu_fv2(lf.GPU_FV_EXE) and not lf.is_gpu_fv2(lf.GPU_EXE)
+    assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_FV2_EXE)
+    assert "2nd order" in lf.engine_label(lf.GPU_FV2_EXE)
+    assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_FV2_EXE)
+    assert lf.engine_name(lf.GPU_FV2_EXE) == "Boann (shock-capturing, 2nd order)"
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_FV2_EXE}}})
+    assert blk["model"].startswith("Boann, shock-capturing 2nd order"), blk
+    assert not blk["built_in"]
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {
+        "path": "C:\\x\\core\\metalflood\\engine_fv2.py"}}})
+    assert blk["model"].startswith("Boann, shock-capturing 2nd order"), blk
+    # the 1st-order FV engine must still label as 1st order, not 2nd
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_FV_EXE}}})
+    assert blk["model"].startswith("Boann, shock-capturing") and "2nd order" not in blk["model"], blk
+    try:                                                    # the Processing layer needs QGIS
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[3] == "gpu-fv2"
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+
+
 @model_test
 def metalflood_matches_lisflood_fp():
     """The same deck through LISFLOOD-FP (NDBREACH_LISFLOOD) and this engine."""
@@ -653,7 +689,8 @@ if __name__ == "__main__":
                metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
                metalflood_fv2_lake_at_rest_is_well_balanced,
                metalflood_fv2_reproduces_the_ritter_dam_break, metalflood_fv2_conserves_water,
-               fv_engine_is_a_runner_engine_choice):
+               fv_engine_is_a_runner_engine_choice,
+               fv2_engine_is_a_runner_engine_choice):
         try:
             fn()
             print("ok    ", fn.__name__)
