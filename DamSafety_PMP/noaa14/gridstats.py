@@ -11,8 +11,10 @@ import re
 import numpy as np
 from osgeo import gdal, ogr, osr
 
-gdal.UseExceptions()
-ogr.UseExceptions()
+from . import atlas14 as A
+
+# audit 2026-11-20: no gdal / ogr.UseExceptions() at import (process-wide, it changed GDAL for QGIS and every other
+# plugin); the two GDAL readers below raise inside A.gdal_raising() only.
 
 # e.g. mw100yr24ha.asc, orb_100yr24ha.tif, sw1000yr60da_ams.asc, mw100yr48hau.asc (upper 90% bound)
 _NAME = re.compile(r"^(?P<region>[a-z]+)_?(?P<freq>\d+)yr(?P<dur>\d+)(?P<unit>[mhd])a(?P<ulm>[lu])?(?P<ams>_ams)?", re.I)
@@ -56,6 +58,7 @@ def grid_scale(path, default=0.001):
     return default
 
 
+@A.gdal_raising("gdal", "ogr")
 def point_value(raster_path, x, y, crs_wkt, scale=0.001):
     """Value (in inches) of the grid cell containing x, y (a point in the CRS ``crs_wkt``); None if outside / empty."""
     ds = gdal.Open(raster_path)
@@ -82,6 +85,7 @@ def point_value(raster_path, x, y, crs_wkt, scale=0.001):
     return round(v * scale, 4)
 
 
+@A.gdal_raising("gdal", "ogr")
 def basin_stats(raster_path, basin_wkt, basin_epsg_wkt, scale=0.001):
     ds = gdal.Open(raster_path)
     band = ds.GetRasterBand(1)
