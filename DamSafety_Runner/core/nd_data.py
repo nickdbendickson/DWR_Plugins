@@ -54,7 +54,7 @@ NLCD_NAMES = {
     95: "Emergent herbaceous wetlands"}
 
 
-def manning_lut(overrides=None, default=0.06):
+def manning_lut(overrides=None, default=0.05):
     """{NLCD code: n}; `overrides` may be a dict or a JSON string of one."""
     lut = dict(NLCD_N)
     if isinstance(overrides, str) and overrides.strip():
@@ -77,7 +77,7 @@ def nlcd_to_manning(codes, lut=None, counts=None):
     import numpy as np
     lut = lut or manning_lut()
     a = np.asarray(codes, dtype=float)
-    default_n = float(lut.get("default", 0.06))
+    default_n = float(lut.get("default", 0.05))
     out = np.full(a.shape, default_n)
     ok = np.isfinite(a)
     ai = np.where(ok, a, -1).astype(int)

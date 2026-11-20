@@ -1,0 +1,160 @@
+{
+  "plss_attribution": "PLSS sections: BLM National PLSS CadNSDI (Bureau of Land Management), gis.blm.gov. Public data, provided as is; not a legal survey or land record.",
+  "plss_source": "https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer/2",
+  "plss_fetched_at": "2026-10-30T14:57:43.643Z",
+  "plss_sliver_ac": 0.1,
+  "plss_slivers_ignored": 0,
+  "plss_uncovered_ac": 0,
+  "plss_sections": [
+    {
+      "order": 1,
+      "label": "T141N R53W Sec 33 (5th PM)",
+      "first_division_id": "ND051410N0530W0SN330",
+      "township_id": "ND051410N0530W0",
+      "wet_ac": 4.397,
+      "max_depth_band": "5–10 ft",
+      "from_km": 0,
+      "to_km": 0.274
+    },
+    {
+      "order": 2,
+      "label": "T141N R53W Sec 34 (5th PM)",
+      "first_division_id": "ND051410N0530W0SN340",
+      "township_id": "ND051410N0530W0",
+      "wet_ac": 32.283,
+      "max_depth_band": "5–10 ft",
+      "from_km": 0.19,
+      "to_km": 1.15
+    },
+    {
+      "order": 3,
+      "label": "T140N R53W Sec 4 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN040",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 129.478,
+      "max_depth_band": "5–10 ft",
+      "from_km": 0.866,
+      "to_km": 2.637
+    },
+    {
+      "order": 4,
+      "label": "T140N R53W Sec 3 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN030",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 163.159,
+      "max_depth_band": "5–10 ft",
+      "from_km": 2.204,
+      "to_km": 3.927
+    },
+    {
+      "order": 5,
+      "label": "T140N R53W Sec 10 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN100",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 178.78,
+      "max_depth_band": "2–5 ft",
+      "from_km": 3.168,
+      "to_km": 4.887
+    },
+    {
+      "order": 6,
+      "label": "T140N R53W Sec 11 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN110",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 303.448,
+      "max_depth_band": "2–5 ft",
+      "from_km": 4.212,
+      "to_km": 6.358
+    },
+    {
+      "order": 7,
+      "label": "T140N R53W Sec 14 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN140",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 166.037,
+      "max_depth_band": "2–5 ft",
+      "from_km": 5.46,
+      "to_km": 7.094
+    },
+    {
+      "order": 8,
+      "label": "T140N R53W Sec 12 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN120",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 6.484,
+      "max_depth_band": "0.5–1 ft",
+      "from_km": 6.225,
+      "to_km": 6.551
+    },
+    {
+      "order": 9,
+      "label": "T140N R53W Sec 13 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN130",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 431.984,
+      "max_depth_band": "0.5–1 ft",
+      "from_km": 6.358,
+      "to_km": 8.604
+    },
+    {
+      "order": 10,
+      "label": "T140N R53W Sec 24 (5th PM)",
+      "first_division_id": "ND051400N0530W0SN240",
+      "township_id": "ND051400N0530W0",
+      "wet_ac": 145.65,
+      "max_depth_band": "0.5–1 ft",
+      "from_km": 7.771,
+      "to_km": 9.295
+    },
+    {
+      "order": 11,
+      "label": "T140N R52W Sec 18 (5th PM)",
+      "first_division_id": "ND051400N0520W0SN180",
+      "township_id": "ND051400N0520W0",
+      "wet_ac": 49.128,
+      "max_depth_band": "0.5–1 ft",
+      "from_km": 8.242,
+      "to_km": 9.148
+    },
+    {
+      "order": 12,
+      "label": "T140N R52W Sec 19 (5th PM)",
+      "first_division_id": "ND051400N0520W0SN190",
+      "township_id": "ND051400N0520W0",
+      "wet_ac": 479.02,
+      "max_depth_band": "0.1–0.5 ft",
+      "from_km": 8.604,
+      "to_km": 10.731
+    },
+    {
+      "order": 13,
+      "label": "T140N R52W Sec 20 (5th PM)",
+      "first_division_id": "ND051400N0520W0SN200",
+      "township_id": "ND051400N0520W0",
+      "wet_ac": 126.558,
+      "max_depth_band": "0.1–0.5 ft",
+      "from_km": 10.06,
+      "to_km": 11.068
+    },
+    {
+      "order": 14,
+      "label": "T140N R52W Sec 30 (5th PM)",
+      "first_division_id": "ND051400N0520W0SN300",
+      "township_id": "ND051400N0520W0",
+      "wet_ac": 78.878,
+      "max_depth_band": "0.1–0.5 ft",
+      "from_km": 10.091,
+      "to_km": 11.068
+    },
+    {
+      "order": 15,
+      "label": "T140N R52W Sec 29 (5th PM)",
+      "first_division_id": "ND051400N0520W0SN290",
+      "township_id": "ND051400N0520W0",
+      "wet_ac": 28.164,
+      "max_depth_band": "0.1–0.5 ft",
+      "from_km": 10.731,
+      "to_km": 11.068
+    }
+  ]
+}
