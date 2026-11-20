@@ -151,7 +151,7 @@ class NlcdManningAlgorithm(_ToolBase):
             "LIKE", "Match this raster's grid (e.g. the DEM); empty = the NLCD grid",
             optional=True))
         self._text("NLCD_N", "Your own n for some classes, JSON like {\"82\": 0.05}")
-        self._num("DEFAULT_N", "n for classes not in the table", 0.06, minimum=0.005, maximum=1)
+        self._num("DEFAULT_N", "n for classes not in the table", 0.05, minimum=0.005, maximum=1)
         self.addParameter(QgsProcessingParameterFileDestination("OUTPUT", "Manning's n raster",
                                                                 "GeoTIFF (*.tif)"))
         self.addOutput(QgsProcessingOutputFile("MANNING", "Manning's n"))

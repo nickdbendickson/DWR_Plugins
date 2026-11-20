@@ -128,6 +128,13 @@ class Deck:
             raise EngineError("cfl and theta must be in (0, 1] (cfl {}, theta {})".format(
                 self.cfl, self.theta))
         self.fric2d = "1dfriction" not in par
+        # The point source enters in LISFLOOD-FP's order by default (the donor-cell limiter /
+        # DryCheck runs before the source is added), so the breach-inflow cell and its near field
+        # match LISFLOOD-FP to the mm. "physicalinflow" in the .par keeps the mass-conserving order
+        # instead - the source is available to flow out the same step, a lower, CFL-independent
+        # breach-cell depth. Only the inflow cell and its near field (within ~300 m) differ between
+        # the two; the rest of the domain agrees to ~0.2 mm.
+        self.inflow_lf_order = "physicalinflow" not in par
         self.valid = np.isfinite(z) & (z != NODATA)
         self.z = np.where(self.valid, z, 0.0)
         self.n = np.where(self.valid, n, 0.0)
@@ -175,6 +182,7 @@ class Engine:
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
+        p.inflow_lf_order = int(d.inflow_lf_order)
         p.dry, p.maxhflow, p.velmin, p.arr_depth = DRY_M, MAX_HFLOW, VEL_MIN_DEPTH_M, d.arr_depth
         self.win = self._window_from(self.h2() > 0)
 
@@ -334,7 +342,9 @@ def _run(d, bk, progress, cancel, say):
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
             # never cut a step to land on a time (as LISFLOOD-FP): a cut step is short, and the
-            # Runner reads a short step in the .mass file as a collapsing solver
+            # Runner reads a short step in the .mass file as a collapsing solver. The kernels'
+            # clip_end Param is reserved for that cut and is deliberately held False here (not dead
+            # plumbing): enabling it would reintroduce the .mass dt-collapse false positive above.
             clip = False
             want = int(math.ceil((t_event - t) / max(mean_dt, 1e-3))) + 1
             n = max(1, min(BATCH_STEPS, want))

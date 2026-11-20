@@ -48,9 +48,12 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 Per step: `dt = min(initial_tstep, cfl dx / sqrt(g h_max))`; every face
 `q = (θ q + (1-θ)/2 (q_up + q_down) - g h_f dt dS) / (1 + g dt n² |q_vec| / h_f^(7/3))` with
 `h_f = max(η) - max(z)` (no flow at 1 mm or less, `h_f` capped at 10 m); FREE edges as
-LISFLOOD-FP's with no slope given; continuity; then the running maxima. What it takes from
-LISFLOOD-FP 8.3's source (`fp_acc.cpp`, `iterateq.cpp`, `boundary.cpp`, `util.cpp`), where the
-numpy built-in engine (`core/builtin_lisflood.py`) differs:
+LISFLOOD-FP's with no slope given; continuity; then the running maxima. This is the published
+local-inertial (ACC) scheme - Bates, Horritt & Fewtrell (2010), *J. Hydrol.* 387:33-45, with the
+theta-weighted flux of de Almeida et al. (2012), *Water Resour. Res.* 48:W05528 - here read directly
+from LISFLOOD-FP 8.3's source (`fp_acc.cpp`, `iterateq.cpp`, `boundary.cpp`, `util.cpp`) so the
+kernels reproduce 8.3's exact behaviour. Where the numpy built-in engine
+(`core/builtin_lisflood.py`) differs:
 
 - **2-D friction** (`|q_vec|` from the face's discharge and the mean of the four crossing faces),
   LISFLOOD-FP's default since version 8; `1Dfriction` in the `.par` turns it off.
@@ -85,14 +88,15 @@ bit for bit (test).
 | DWR-2801, 30 m, 24 h | CSI 1.000, depth MAE 0.001 ft, P99 velocity equal, arrival MAE 0.001 h | CSI 0.92, MAE 0.080 ft, max velocity 247 ft/s |
 | Lake Delhi 2010, whole Runner, 30 m, 48 h | 8 USGS high-water marks: mean +2.06 ft, largest +3.69 ft, as LISFLOOD-FP; max depths within 0.003 ft | |
 
-The breach inflow cell differs from LISFLOOD-FP on purpose (2801 at peak: 3.32 m there, 2.09 m
-here; the next cells by up to 0.2 m, under 4 mm beyond about 300 m). LISFLOOD-FP's DryCheck caps a
-cell's outflow at the water it held at the start of the step and adds the point source after, so
-the breach cell empties and refills every step: its depth is Q dt / dx^2, which with the CFL step
-is (cfl Q / (dx sqrt(g)))^(2/3) and changes with cfl (3.32 m at 0.7, 2.65 m at 0.5). This engine's
-limiter (k_scale) counts the step's inflow as available water, so the cell settles where outflow
-balances inflow, the same at any cfl. Dropping `src[i] * dt` from `avail` in k_scale reproduces
-LISFLOOD-FP to the mm.
+The breach inflow cell matches LISFLOOD-FP by default (2801 at peak: 3.32 m, the same to the mm).
+LISFLOOD-FP's DryCheck caps a cell's outflow at the water it held at the start of the step and adds
+the point source after, so the breach cell empties and refills every step: its depth is Q dt / dx^2,
+which with the CFL step is (cfl Q / (dx sqrt(g)))^(2/3) and changes with cfl (3.32 m at 0.7, 2.65 m
+at 0.5). This engine follows that order unless `physicalinflow` is set in the `.par`: then k_scale
+counts the step's inflow as available water (the `inflow_lf_order` Param gates the `src[i] * dt`
+term in `avail`), the cell settles where outflow balances inflow (2.09 m here) the same at any cfl -
+a mass-conserving order that differs from LISFLOOD-FP at the breach cell and its next cells by up to
+0.2 m, under 4 mm beyond about 300 m.
 
 ## Not done (phase 2 and later)
 

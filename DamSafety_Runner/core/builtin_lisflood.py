@@ -180,7 +180,13 @@ def read_gauges(path):
 # -- the model -----------------------------------------------------------------------------
 
 class Model:
-    def __init__(self, z, n, h0, dx, free, sources, xll, yll):
+    def __init__(self, z, n, h0, dx, free, sources, xll, yll, inflow_lf_order=True):
+        # inflow_lf_order (default): the donor-cell limiter runs before the point source is added
+        # (LISFLOOD-FP's DryCheck-then-source order), so the breach-inflow cell matches LISFLOOD-FP
+        # to the mm; False keeps the mass-conserving order (the source is available to flow out the
+        # same step, a lower, CFL-independent breach-cell depth). Only the inflow cell and its near
+        # field (~300 m) differ; the rest of the domain agrees to ~0.2 mm.
+        self.inflow_lf_order = bool(inflow_lf_order)
         self.valid = np.isfinite(z) & (z != NODATA)
         self.z = np.where(self.valid, z, 0.0)
         self.n2 = np.where(self.valid, n, 0.0) ** 2
@@ -289,7 +295,10 @@ class Model:
         # donor-cell limiter: a cell sends at most the water it holds
         out = (np.maximum(qx[:, 1:], 0) + np.maximum(-qx[:, :-1], 0)
                + np.maximum(qy[1:, :], 0) + np.maximum(-qy[:-1, :], 0)) * dt * dx
-        avail = h * dx * dx + src * dt
+        # LISFLOOD-FP order (inflow_lf_order): this step's inflow is withheld from the limiter, so
+        # outflow is capped at the water the cell held at step start (LISFLOOD's DryCheck); the
+        # source is added below. Otherwise count the inflow as available (mass-conserving).
+        avail = h * dx * dx + (0.0 if self.inflow_lf_order else src * dt)
         scale = np.where(out > avail, avail / np.where(out > 0, out, 1.0), 1.0)
         if (scale < 1.0).any():
             sx = np.ones_like(qx)
@@ -443,7 +452,8 @@ def run_par(par_path, progress=None, cancel=None, log=None):
     solver = "fv1" if "fv1" in par else "acceleration"
     if solver == "fv1":
         say("The built-in engine runs 'fv1' with its local-inertial scheme.")
-    m = Model(z, n, h0, dx, free, sources, xll, yll)
+    m = Model(z, n, h0, dx, free, sources, xll, yll,
+              inflow_lf_order="physicalinflow" not in par)
 
     res = os.path.join(wd, str(par.get("dirroot", "results")))
     os.makedirs(res, exist_ok=True)
