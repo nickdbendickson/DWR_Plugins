@@ -82,6 +82,10 @@ CLASS_NAMES = {
 REFUSE_FREEZE_ACTION = "REFUSE_FREEZE"
 
 
+class ExportRefused(RuntimeError):
+    """A conditioned DEM still has unresolved freeze-refusals, so it must not be exported."""
+
+
 @dataclass
 class Edit:
     class_: EditClass
@@ -169,6 +173,34 @@ class DeltaLog:
             "SELECT fid, class, action, evidence, review_reason FROM delta_log WHERE run_id=?"
             " AND action=? ORDER BY fid", (self.run_id, REFUSE_FREEZE_ACTION)).fetchall()
 
+    def unresolved_freeze_refusals(self):
+        """Freeze-refusals still FLAGGED. REVIEWED or REJECTED are resolved and no longer block
+        export. The Bottom line of summary() is this list, not the historical one."""
+        return self._db.execute(
+            "SELECT fid, class, action, evidence, review_reason FROM delta_log WHERE run_id=?"
+            " AND action=? AND review_status='FLAGGED' ORDER BY fid",
+            (self.run_id, REFUSE_FREEZE_ACTION)).fetchall()
+
+    def assert_export_allowed(self, acknowledge=None):
+        """Refuse to export a conditioned DEM while freeze-refusals are unresolved.
+
+        `acknowledge` must be a non-empty string. It is written onto each still-FLAGGED
+        refusal as a REVIEWED reason (the override is in the ledger, not a silent flag).
+        """
+        rows = self.unresolved_freeze_refusals()
+        if not rows:
+            return
+        note = str(acknowledge).strip() if acknowledge is not None else ""
+        if note:
+            for r in rows:
+                self.review(r[0], "REVIEWED", reviewer="export-ack",
+                            reason="export acknowledged: {}".format(note))
+            return
+        raise ExportRefused(
+            "conditioned DEM export blocked: {} unresolved freeze-refusal(s) "
+            "(delta-log Bottom line, fids {}). Review or reject each, or pass an explicit "
+            "acknowledge string.".format(len(rows), ", ".join(str(r[0]) for r in rows)))
+
     def to_dataframe(self):
         import pandas as pd            # optional; notebook / QGIS inspection
         return pd.read_sql_query("SELECT * FROM delta_log WHERE run_id=?", self._db,
@@ -186,7 +218,7 @@ class DeltaLog:
         # Dam-safety refusals belong in the Bottom line, not only the assumption register: a
         # whole-DEM sweep that silently left frozen embankments uncarved must not read as
         # "no interventions". This line is blocking - the run is not final until each is resolved.
-        refusals = self.freeze_refusals()
+        refusals = self.unresolved_freeze_refusals()
         if refusals:
             out.append("- **⚠ {} crossing(s) NOT carved: a frozen embankment / dam-crest cell "
                        "lies on the carve path (depression fid {}).** The conditioner refused them "
@@ -210,9 +242,12 @@ class DeltaLog:
                 "produced it; an edit without algorithm provenance is a defect, not a style choice."]
         return "\n".join(out)
 
-    def export_edit_class_raster(self, edit_class, out_path, transform):
-        """Write the per-cell EDIT_CLASS int16 raster (GDAL). Returns False and skips, rather than
-        failing a run, when GDAL is unavailable; the ledger stays the authoritative record."""
+    def export_edit_class_raster(self, edit_class, out_path, transform, acknowledge=None):
+        """Write the per-cell EDIT_CLASS int16 raster (GDAL). Refused, before any file is
+        written, while unresolved freeze-refusals remain — the raster review is not a substitute
+        for the Bottom line. Returns False and skips, rather than failing a run, when GDAL is
+        unavailable; the ledger stays the authoritative record."""
+        self.assert_export_allowed(acknowledge=acknowledge)
         try:
             from osgeo import gdal
         except Exception:               # noqa: BLE001 - GDAL absent
@@ -228,6 +263,23 @@ class DeltaLog:
         b.FlushCache()
         ds = None
         return True
+
+    def export_conditioned_dem(self, dem, out_path, dx=1.0, xll=0.0, yll=0.0, nodata=-9999.0,
+                               acknowledge=None):
+        """Write the conditioned DEM as an ESRI ASCII grid. Blocked while summary()'s Bottom
+        line still lists unresolved FLAGGED freeze-refusals. `acknowledge` is the explicit
+        override (recorded on each refusal); a missing or blank acknowledgment does not export."""
+        self.assert_export_allowed(acknowledge=acknowledge)
+        import numpy as np
+        a = np.asarray(dem, dtype=np.float64)
+        if a.ndim != 2:
+            raise ValueError("conditioned DEM must be 2-D")
+        ny, nx = a.shape
+        out = np.where(np.isfinite(a), a, nodata)
+        header = ("ncols {:d}\nnrows {:d}\nxllcorner {:.6f}\nyllcorner {:.6f}\n"
+                  "cellsize {:.6f}\nNODATA_value {:g}".format(nx, ny, xll, yll, dx, nodata))
+        np.savetxt(out_path, out, fmt="%.4f", header=header, comments="")
+        return out_path
 
     def close(self):
         self._db.close()

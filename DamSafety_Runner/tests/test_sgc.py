@@ -290,3 +290,55 @@ def sgc_runs_on_the_real_lisflood():
     # the channel carries the breach water: in the same hour the flood reaches further down the
     # valley (the synthetic valley runs east) and stands no deeper above the ground
     assert out[True][0] > out[False][0] and out[True][1] <= out[False][1], out
+
+
+@test
+def sgc_from_boanngrid_honors_the_notch_and_refuses_a_frozen_crest():
+    """Step 3a: SGC from the BoannGrid network (D4 + reconnection), not raw-DEM D8.
+
+    The carved crossing lowers the bank the channel is built on; the raw path does not.
+    A freeze mask on the road crest refuses the carve, leaves the crest standing, and the
+    delta-log then blocks export of that DEM. build() itself is not this path, so the
+    published raw-DEM SGC numbers are unchanged."""
+    import os
+    import tempfile
+    from nd_breach_runner.core.grid import Grid
+    from nd_breach_runner.core import sgc
+    from nd_breach_runner.core.metalterrain import cases as C
+    from nd_breach_runner.core.metalterrain import delta_log as DL
+    from nd_breach_runner.core.metalflood import backends as mfb
+    from nd_breach_runner.tests.registry import Skip
+    if os.name == "nt" or not mfb.find_compiler():
+        raise Skip("no C++ compiler for the BoannGrid CPU build")
+    dx = 10.0
+    z = C.channel_with_barrier(ny=40, nx=80, dx=dx, seed=0)
+    ny, nx = z.shape
+    g = Grid(z, 0.0, ny * dx, dx)
+    cr, bc = ny // 2, nx // 2
+    raw = sgc.build(g, min_area_km2=0.001, start="empty")
+    cond = sgc.from_boanngrid(g, min_area_km2=0.001, start="empty", backend="cpu",
+                              min_accum_cells=5)
+    assert cond.info["source"] == "boanngrid-d4" and cond.info["conn"] == 4
+    assert cond.info["flow_converged"], cond.info
+    assert cond.info["freeze_refusals"] == 0
+    assert cond.info["crossings_carved"] >= 1, cond.info
+    assert cond.dem.data[cr, bc] < z[cr, bc] - 0.2, (cond.dem.data[cr, bc], z[cr, bc])
+    assert abs(float(raw.dem.data[cr, bc]) - float(z[cr, bc])) < 1e-9
+    freeze = np.zeros(z.shape, bool)
+    freeze[cr, bc:bc + 2] = True
+    log = DL.DeltaLog(run_id="SGC-FREEZE")
+    held = sgc.from_boanngrid(g, min_area_km2=0.001, start="empty", backend="cpu",
+                              min_accum_cells=5, freeze_mask=freeze, delta_log=log)
+    assert held.info["freeze_refusals"] >= 1, held.info
+    assert float(held.dem.data[cr, bc]) >= float(z[cr, bc]) - 1e-6
+    d = tempfile.mkdtemp()
+    try:
+        try:
+            log.export_conditioned_dem(held.dem.data, os.path.join(d, "no.asc"), dx=dx)
+            raise AssertionError("a frozen-crest conditioned DEM was exported")
+        except DL.ExportRefused:
+            pass
+        assert not os.path.exists(os.path.join(d, "no.asc"))
+    finally:
+        shutil.rmtree(d, True)
+        log.close()
