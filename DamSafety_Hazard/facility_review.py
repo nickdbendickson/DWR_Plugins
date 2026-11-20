@@ -53,17 +53,16 @@ import time
 import numpy as np
 
 from qgis.core import (
-    QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY, QgsGeometry, QgsFeature,
-    QgsField,
+    QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY,
 )
 
-from .compat import MSG_WARNING, WKB_POINT, FT_STRING
+from .compat import MSG_WARNING
 from .constants import (
     CLASS_HIGH, CLASS_JUDGMENT, DEFAULT_VEHICLE_OCCUPANCY, DEFAULT_VEHICLE_SPEED_MPH,
     LIFELINE_CATEGORIES, ND_AADT_LOW_BELOW, ND_HIGH, ND_MEDIUM, ZONE_LABELS,
     vehicle_curve_available,
 )
-from .helpers import log_message, buffer_distance_in_layer_units, create_memory_layer
+from .helpers import log_message, buffer_distance_in_layer_units
 from . import facilities as FAC
 from . import linear as LN
 
@@ -947,35 +946,5 @@ def apply_to_run(results, store, analysis_crs, transform_ctx, occupancy=None, sp
 
 
 # -------------------------------------------------------------- output ---
-EXCLUDED_FIELDS = [("Item", FT_STRING), ("Kind", FT_STRING), ("Name", FT_STRING),
-                   ("Decision", FT_STRING), ("Note", FT_STRING), ("Reviewer", FT_STRING),
-                   ("Date", FT_STRING), ("Detail", FT_STRING)]
-
-
-def excluded_layer(res, crs, name="Facility_Review_Excluded"):
-    """Point layer of the items the review left out of a scenario (marked
-    'Excluded by review' / 'Not overtopped'), or None when there are none."""
-    items = ((res or {}).get(RESULT_KEY) or {}).get("excluded") or []
-    if not items:
-        return None
-    lyr = create_memory_layer(name, WKB_POINT, crs, [QgsField(n, t) for n, t in EXCLUDED_FIELDS])
-    feats = []
-    for it in items:
-        pt = item_point(it["kind"], it["rec"])
-        if pt is None:
-            continue
-        f = QgsFeature(lyr.fields())
-        f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(pt[0], pt[1])))
-        f.setAttributes([it["key"], it["kind"], item_name(it["kind"], it["rec"]) or "unnamed",
-                         "Not overtopped (deck above the water)"
-                         if it["decision"] == DEC_OVERTOPPED_NO else "Excluded by review",
-                         it.get("note") or "", it.get("reviewer") or "", it.get("date") or "",
-                         _detail(it["kind"], it["rec"])])
-        feats.append(f)
-    lyr.dataProvider().addFeatures(feats)
-    lyr.updateExtents()
-    return lyr
-
-
 def zone_label(v):
     return ZONE_LABELS.get(v, "") if v is not None else ""

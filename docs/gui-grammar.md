@@ -10,11 +10,11 @@ style.
 - **Shared files.** The window widgets (`ui_widgets.py`), the colours (`tokens.py`), window
   sizing (`ui_fit.py`), the settings grid (`suite_settings*.py`), the map styles
   (`suite_styles.py`) and the Dam suite home (`suite_home.py`) each have one canonical copy in
-  `shared/ui/`. The plugins install separately, so each ships its own copy. **Edit
-  `shared/ui/` only**, then run `python3 tools/sync_ui.py`. `tools/sync_ui.py` lists which
-  plugin carries which file.
-- **Fast CI check** (`tools/ci_checks.py`, no QGIS needed): every plugin copy must match
-  `shared/ui/`, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
+  `DamSafety_Core/ui/` (Core 1.0.0 and later). Each other plugin carries only a three-line shim
+  that loads the Core copy, so **edit `DamSafety_Core/ui/` only**. `UI_SHIMS` in
+  `tools/ci_checks.py` lists which plugin carries which shim.
+- **Fast CI check** (`tools/ci_checks.py`, no QGIS needed): every plugin's shim must point at
+  `DamSafety_Core/ui/`, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
 - **GUI lint** (`tools/gui_lint.py`, real QGIS, offscreen): opens every window and checks the
   rules below. Its one source rule - no `QMessageBox.warning` / `.critical` inside a run handler
   (`_on_run*`, `_run_*`, `_launch_*`, `_start_*`) of a window file, because a check belongs in

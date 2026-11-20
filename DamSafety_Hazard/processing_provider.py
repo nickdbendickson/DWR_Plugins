@@ -153,13 +153,6 @@ def _read_worker_file(path):
     return good, ignored, target
 
 
-def read_worker_settings(path):
-    """(settings, ignored keys) of a CONFIG_JSON file. Raises ValueError /
-    OSError when the file cannot be read or is not a JSON object."""
-    good, ignored, _target = _read_worker_file(path)
-    return good, ignored
-
-
 def write_worker_result(path, cfg, res):
     """The result of a worker's classification as JSON (RESULT_KEY)."""
     import json

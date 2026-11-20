@@ -29,7 +29,7 @@
 #                damchain run --set dwr ... --out ~/DamSafety/Dams --ids 2801,2865,4031
 #
 # Report: ~/local-ai/reports/audit_<repo>_<time>.md and .json. Exit status 1 when anything is HIGH.
-import argparse, ast, hashlib, json, os, re, shutil, subprocess, sys, time, urllib.request, zipfile
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, time, urllib.request, zipfile
 from datetime import datetime
 
 REPORTS = os.path.expanduser(os.environ.get("DAMAUDIT_REPORTS", "~/local-ai/reports"))

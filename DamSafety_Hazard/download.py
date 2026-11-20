@@ -46,9 +46,9 @@ from .helpers import log_message, CancelledByUser
 # v2.6.1: the Overpass queries / parsing live in osm_parse.py (shared with the
 # offline data pack builder); the names stay importable from here
 from .osm_parse import (  # noqa: F401
-    overpass_query, overpass_to_features, crossing_category, camp_features, camps_query,
-    place_features, crossings_query, crossing_features, places_query, _circle_ll,
-    _DEAD_RAIL, trailer_parks_query, trailer_park_features,
+    overpass_query, overpass_to_features, camp_features, camps_query,
+    place_features, crossings_query, crossing_features, places_query,
+    trailer_parks_query, trailer_park_features,
 )
 
 NSI_MAX_TILES = 400          # 0.2 deg tiles: ~4 x 4 degrees, far beyond any dam-break model

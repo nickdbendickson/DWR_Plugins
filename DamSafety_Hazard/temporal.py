@@ -225,15 +225,6 @@ def apply_arrival_animation(layer, hours_field, breach_start=None, units="hours"
         return False, "{}: animation not set: {}".format(name, e)
 
 
-def clear_animation(layer):
-    """Switch a layer's temporal filtering off again; (ok, message)."""
-    try:
-        layer.temporalProperties().setIsActive(False)
-        return True, "{}: temporal filtering off".format(layer.name())
-    except Exception as e:                          # noqa: BLE001
-        return False, "animation not cleared: {}".format(e)
-
-
 def max_field_value(layer, field):
     """Largest finite value of a numeric field (None when there is none)."""
     try:

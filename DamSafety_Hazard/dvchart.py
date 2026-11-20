@@ -90,10 +90,6 @@ class ChartSkipped(Exception):
     pass
 
 
-def _tm11():
-    return TM11
-
-
 # ----------------------------------------------------------------- 911 / review --
 def _text(v):
     if v is None:

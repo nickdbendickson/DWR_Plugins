@@ -1,6 +1,6 @@
 """Mesh-only prototype: current-style (near-field 100 m2 / coarse 1000 m2) vs gmsh breakline-graded mesh.
 Synthetic 32 x 32 km (20 x 20 mi) domain, dam at (3000,16000)."""
-import sys, time, json, numpy as np, gmsh
+import time, json, numpy as np, gmsh
 L=32186.9
 def h_of_area(a): return np.sqrt(4*a/np.sqrt(3))   # equilateral edge for area a
 x=np.linspace(3000,L-500,400); chan=np.column_stack([x,16000+1500*np.sin(x/3000)])   # meandering flow path

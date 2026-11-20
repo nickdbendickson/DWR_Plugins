@@ -1124,27 +1124,3 @@ def run(out_path, nbi=(), osm=(), nddot=(), streams=(), roads=(), rails=(), para
         log(ln)
     return {"path": gpkg, "csv": csv_path, "placed": len(placed), "not_placed": len(not_placed),
             "by_kind": by_kind, "lines": lines}
-
-
-def from_source(out_path, source, extent=None, params=None, log=None, nddot=()):
-    """The job on an offline data pack / downloads folder (suiteexport.open_source):
-    NBI_bridges, OSM_crossings, NHD_flowlines, ND_roads_NG911 (else the newest HPMS year),
-    NARN_rail_lines. nddot: [(feature, geometry)] of an NDDOT layer, when given."""
-    from .suiteexport import projected, HPMS_SETS
-    from .offline_pack import ND_BBOX
-    extent = tuple(extent or ND_BBOX)
-    got, sources = {}, {}
-    for key, names in (("nbi", ("NBI_bridges",)), ("osm", ("OSM_crossings",)),
-                       ("streams", ("NHD_flowlines",)),
-                       ("roads", ("ND_roads_NG911",) + HPMS_SETS),
-                       ("rails", ("NARN_rail_lines",))):
-        name = next((n for n in names if source.has(n)), None)
-        if name is None:
-            got[key] = []
-            sources[key] = "not in the source"
-            continue
-        feats = source.features(name, extent) or []
-        got[key] = projected(feats)
-        sources[key] = "{} ({} features, {})".format(name, len(feats), source.note(name, extent))
-    return run(out_path, got["nbi"], got["osm"], nddot, got["streams"], got["roads"],
-               got["rails"], params, sources, log)
