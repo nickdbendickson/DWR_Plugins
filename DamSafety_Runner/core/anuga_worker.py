@@ -1141,12 +1141,20 @@ def checkpoint_path(ckdir, t):
     return os.path.join(ckdir, DOMAIN_NAME) + "_" + str(float(t)) + ".pickle"
 
 
+def _tmp_name(path):
+    """<path>.<pid>.<thread>.tmp, in the same folder: unique per writer (audit 2026-11-20). A fixed
+    <path>.tmp let two drivers of one folder write the same temp file and rename each other's half
+    documents into place."""
+    import threading
+    return "{}.{}.{}.tmp".format(path, os.getpid(), threading.get_ident())
+
+
 def save_checkpoint(domain, ckdir, t):
     """3.12.4: pickle the domain under ANUGA's own checkpoint name (as Domain.evolve does,
     with the same pickler), via <name>.tmp + rename so a kill never leaves half a pickle.
     '' when saved, else the error (the run goes on without checkpoints)."""
     path = checkpoint_path(ckdir, t)
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     try:
         with open(tmp, "wb") as f:
             pickler().dump(domain, f)
@@ -1176,18 +1184,25 @@ def sign_checkpoint(path):
 
 
 def write_json_atomic(path, obj):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    tmp = _tmp_name(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def savez_atomic(path, **arrays):
     """np.savez_compressed to <path>.tmp, fsync, then rename over `path`: a reader (or a
     kill at any moment) sees the old file or the new one, never half of one."""
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     try:
         with open(tmp, "wb") as f:
             np.savez_compressed(f, **arrays)
