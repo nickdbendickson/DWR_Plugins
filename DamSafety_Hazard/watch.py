@@ -410,11 +410,6 @@ class WorkerUnavailable(Exception):
     install ...): the watch / batch falls back to the sequential mode."""
 
 
-def default_workers():
-    """Suggested number of parallel workers: min(3, CPU count)."""
-    return max(1, min(3, os.cpu_count() or 1))
-
-
 def _real_qgis():
     """True in a real QGIS (the test harness' fake QGIS has no prefixPath)."""
     try:

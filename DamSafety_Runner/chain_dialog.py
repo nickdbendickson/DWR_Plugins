@@ -374,9 +374,3 @@ class ChainDialog(QDialog):
         from qgis import processing
         from .tool_dialog import exec_tool_dialog
         return exec_tool_dialog(processing, "ndbreach:chainbatch", self.params(), self)
-
-
-def open_dialog(iface=None, parent=None):
-    d = ChainDialog(parent, iface)
-    d.show()
-    return d

@@ -1268,10 +1268,6 @@ def _dl(url, dest, refresh, log, max_age=86400):
     return _download(url, dest, refresh, log, max_age=max_age)   # _download looked up per call
 
 
-def _readme_meta(text):
-    return A.readme_meta(text)
-
-
 def abi_rows(t, dest, refresh=False, log=None):
     """(header, rows, provenance) of one Aquatic Barrier Inventory layer for North Dakota
     (damsuite.abi.abi_rows; the files go through _download)."""

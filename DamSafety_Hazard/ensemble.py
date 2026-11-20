@@ -390,12 +390,6 @@ def find_study(folder, max_runs=DEFAULT_MAX_RUNS):
             "unfinished": unfinished}
 
 
-def find_runs(folder, max_runs=DEFAULT_MAX_RUNS):
-    """(runs, notes) of find_study."""
-    st = find_study(folder, max_runs)
-    return st["runs"], st["notes"]
-
-
 def _qa(dam_folder):
     return os.path.join(dam_folder, OUTPUT_FOLDER_NAME, SUBDIR_QA)
 

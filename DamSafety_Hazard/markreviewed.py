@@ -30,7 +30,6 @@ Nothing here was run in a real QGIS (simulated QGIS / Qt only). Pure Python.
 """
 
 import csv
-import datetime
 import hashlib
 import os
 import zipfile
@@ -227,7 +226,3 @@ def summary_line(rec):
     return "Reviewed {} by {}: {}, {} open item(s)".format(
         _day(f["review_when"]), f["reviewer"] or "?", f["review_decision"] or "?",
         f["open_review_items"])
-
-
-def now_iso():
-    return datetime.datetime.now().replace(microsecond=0).isoformat()
