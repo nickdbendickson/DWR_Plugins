@@ -1,0 +1,1006 @@
+import { AXES, rankReceptor } from "./acer.ts";
+import { type AoiExtent, aoiExtent, downstreamDirection, fmtAc, fmtKm, hasAoi, readAoi } from "./aoi.ts";
+import { isGenericSeed } from "./samples.ts";
+import { vertconShiftFt } from "./vertcon_nd.ts";
+import { warning, warningTexts, type Warning } from "./warnings.ts";
+import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, Reservoir, routedHydrograph, thin } from "./breach.ts";
+import type {
+  Analysis,
+  BreachMethod,
+  DamRecord,
+  EngineName,
+  FailureMode,
+  GeoJSONFeature,
+  ReceptorSeed,
+  ScreenLevel,
+  StartPool,
+} from "./types.ts";
+
+const TIE_BAND = 100;
+
+/**
+ * Desk engine METHOD version, carried in every export beside the build version (version.ts CREST_VERSION) and mixed
+ * into the terrain layer's fingerprint (outline.ts outlineInputs), so a saved layer is rebuilt when the numerics
+ * change. It MUST change whenever analyze() changes its numbers: the breach equations, the hydrograph routing, the
+ * schematic valley (stations, half-width, depth), the receptor depth/velocity/arrival, the datum rules or the ACER
+ * ranking. A wording-only change does not move it. Date of the last numeric change, yyyy.mm.dd.
+ */
+/** A routed breach peak past this multiple of the Froehlich (1995) check gets a note (see analyze). */
+export const BREACH_CHECK_RATIO = 1.5;
+
+export const ENGINE_VERSION = "crest-desk-engine 2026.11.12";
+
+export const STEPS = [
+  { id: "setup", label: "Guided setup" },
+  { id: "record", label: "Record" },
+  { id: "breach", label: "Breach" },
+  { id: "flood", label: "Flood" },
+  { id: "results", label: "Results" },
+  { id: "dashboard", label: "Dashboard" },
+  { id: "screen", label: "Screen" },
+  { id: "report", label: "Report" },
+] as const;
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function finite(n: number, fallback: number) {
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function isLocalElev(ft: number) {
+  return Number.isFinite(ft) && ft >= 0 && ft <= 300;
+}
+
+function signed(n: number) {
+  return `${n >= 0 ? "+" : "-"}${Math.abs(n).toFixed(2)}`;
+}
+
+/** The desk range of each breach input (ft, ac-ft, ft): outside it bounded() clamps and warns (W-V1). The Record
+ * step's number fields carry the same limits as min/max and show the field's own warning (desk.tsx inputRange). */
+export const INPUT_RANGE = {
+  heightFt: { lo: 4, hi: 200, fallback: 10, unit: "ft", label: "Height" },
+  storageAcFt: { lo: 1, hi: 500000, fallback: 10, unit: "ac-ft", label: "Storage" },
+  lengthFt: { lo: 40, hi: 20000, fallback: 100, unit: "ft", label: "Length" },
+} as const;
+
+/** The W-V1 text for one input, or null inside the range: the same sentence bounded() pushes, for the field's own tag. */
+export function inputRangeWarning(field: keyof typeof INPUT_RANGE, v: number): string | null {
+  const r = INPUT_RANGE[field];
+  if (!Number.isFinite(v)) return `${r.label} is missing. Using ${r.fallback.toLocaleString("en-US")} ${r.unit} as a placeholder.`;
+  if (v < r.lo || v > r.hi) {
+    const c = clamp(v, r.lo, r.hi);
+    return `${r.label} ${v.toLocaleString("en-US")} ${r.unit} is outside the desk range ${r.lo.toLocaleString("en-US")}–${r.hi.toLocaleString("en-US")} ${r.unit}. Using ${c.toLocaleString("en-US")} ${r.unit}.`;
+  }
+  return null;
+}
+
+/** Clamp an input to the desk range and say so (W-V1), instead of clamping silently. */
+function bounded(warnings: Warning[], field: keyof typeof INPUT_RANGE, v: number) {
+  const r = INPUT_RANGE[field];
+  const text = inputRangeWarning(field, v);
+  if (text) warnings.push(warning("W-V1", text, Number.isFinite(v) ? "warn" : "info"));
+  return Number.isFinite(v) ? clamp(v, r.lo, r.hi) : r.fallback;
+}
+
+function pointOf(f: GeoJSONFeature | undefined): { lon: number; lat: number } | null {
+  if (!f) return null;
+  let c: unknown = f.geometry.coordinates;
+  while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+  if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])) return { lon: c[0] as number, lat: c[1] as number };
+  return null;
+}
+
+/**
+ * Breach location: the drawn breach point first (NID points are often not at the breach), then
+ * the entered lat/lon, then the dam line or reservoir point.
+ */
+export function damLocation(dam: DamRecord): { lon: number; lat: number; source: string } | null {
+  const g = dam.geometry;
+  const bp = pointOf(g?.breachPoint);
+  if (bp) return { ...bp, source: "breach point" };
+  if (Number.isFinite(dam.lat) && Number.isFinite(dam.lon)) return { lat: dam.lat!, lon: dam.lon!, source: "record" };
+  for (const [f, source] of [
+    [g?.damLine, "dam line"],
+    [g?.reservoirPoint, "reservoir point"],
+  ] as const) {
+    const p = pointOf(f);
+    if (p) return { ...p, source };
+  }
+  return null;
+}
+
+function fmtFt(n: number) {
+  return n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+type Tied = { navd: number | null; warning: string | null };
+
+function tieValue(
+  label: string,
+  stated: number,
+  offset: number | null,
+  crestNavd: number,
+  localRecord: boolean,
+): Tied {
+  if (!Number.isFinite(stated)) return { navd: null, warning: null };
+  if (localRecord && offset != null) {
+    const navd = stated + offset;
+    if (Math.abs(navd - crestNavd) > TIE_BAND) {
+      // tieValue only runs for Streambed / Spillway / Normal pool (never "Top of dam"), so a tie more than the
+      // 100 ft guard from the DEM crest is always left out. The old code gated this on a `label === "Top of dam"`
+      // branch that could never be true, with an implicit fall-through that would have kept such a value unwarned.
+      return {
+        navd: null,
+        warning: `${label} ${fmtFt(stated)} ft ties to ${fmtFt(navd)} ft, ${fmtFt(Math.abs(navd - crestNavd))} ft from the DEM crest. Left out (100 ft guard).`,
+      };
+    }
+    return { navd, warning: null };
+  }
+  if (!localRecord && isLocalElev(stated)) {
+    return {
+      navd: null,
+      warning: `${label} ${fmtFt(stated)} ft is in the 0–300 ft band on a real-datum record. Not used as given.`,
+    };
+  }
+  if (!localRecord && offset != null) {
+    return { navd: stated + offset, warning: null };
+  }
+  return { navd: stated, warning: null };
+}
+
+/** Embankment cross-section at the breach (ft²), trapezoid (Runner core/breach.py embankment_area_ft2). */
+function embankmentAreaFt2(heightFt: number, crestWidthFt: number, usH: number, dsH: number) {
+  return heightFt * (crestWidthFt + 0.5 * (usH + dsH) * heightFt);
+}
+
+/**
+ * MacDonald & Langridge-Monopolis (1984), earthfill, as Runner core/breach.py mlm_1984: SI only.
+ * Ver = 0.0261 (Vw·hw)^0.769 in m³ (Vw m³, hw m); tf = 0.0179 Ver^0.364 hours; average width =
+ * Ver / embankment cross-section (m²); side slope 1H:1V. The old desk form fed ac-ft·ft to the SI
+ * regression and read the result as ac-ft (about 13× the eroded volume on DWR-2801).
+ */
+function macdonald(volumeM3: number, hwM: number, heightFt: number, lengthFt: number) {
+  const erodedM3 = 0.0261 * (volumeM3 * Math.max(hwM, 0.01)) ** 0.769;
+  const timeHr = 0.0179 * erodedM3 ** 0.364;
+  const areaM2 = embankmentAreaFt2(heightFt, 12, 3, 3) * FT * FT;
+  let widthFt = erodedM3 / Math.max(areaM2, 1e-6) / FT;
+  const capped = widthFt > lengthFt;
+  widthFt = Math.min(widthFt, lengthFt);
+  return { widthFt, timeHr, erodedAcFt: erodedM3 / ACFT, capped };
+}
+
+function tr60(heightFt: number, lengthFt: number, mode: FailureMode) {
+  const mult = mode === "overtopping" ? 3 : 2;
+  let widthFt = mult * heightFt;
+  const capped = widthFt > lengthFt;
+  widthFt = Math.min(widthFt, lengthFt);
+  const timeHr = clamp(heightFt / 90, 0.15, 3);
+  return { widthFt, timeHr, capped };
+}
+
+/** Decay rates of the schematic valley. These are desk curves, not runs of any 2D model. */
+const ENGINE_DECAY: Record<EngineName, { k: number; label: string }> = {
+  lisflood: { k: 1.85, label: "Slow decay (schematic valley, not a LISFLOOD-FP run)" },
+  anuga: { k: 2.25, label: "Medium decay (schematic valley, not an ANUGA run)" },
+  routing: { k: 3.15, label: "Fast decay (schematic valley, not a routing model)" },
+};
+
+export const VELOCITY_BASIS =
+  "Estimate: continuity on the schematic section, V = Q(x) / (valley width × depth), with Q(x) the routed peak decayed like the depth; limited to 0.1–14 ft/s. Not a hydraulic model velocity.";
+
+/** Longest desk reach (km). Structures past the reach are reported unresolved. */
+export const MAX_REACH_KM = 100;
+
+const METHOD_LABEL: Record<BreachMethod, string> = {
+  froehlich: "Froehlich 2008",
+  macdonald: "MacDonald & Langridge-Monopolis",
+  tr60: "TR-60 screening width",
+};
+
+/**
+ * Why the record cannot be screened yet, or null. A record filled from the NID has no elevations or datum (the NID
+ * carries none), so its crest and breach bottom are NaN and its datum unset until the user enters them.
+ */
+export function elevationsMissing(dam: DamRecord): string | null {
+  const miss: string[] = [];
+  if (!Number.isFinite(dam.crestFt)) miss.push("crest");
+  if (!Number.isFinite(dam.streambedFt)) miss.push("breach bottom");
+  if (!dam.statedDatum) miss.push("datum");
+  return miss.length ? miss.join(", ") : null;
+}
+
+/**
+ * Crest as feet NAVD88. When the stated value was shifted, or the record says it was converted, the label says so.
+ */
+export function crestNavdLabel(dam: DamRecord, datum: { crestNavdFt: number; offsetFt: number | null }): string {
+  if (!Number.isFinite(datum.crestNavdFt)) return "—";
+  const ft = `${datum.crestNavdFt.toFixed(2)} ft NAVD88`;
+  if (dam.statedDatum === "NGVD29" && datum.offsetFt != null) return `${ft}, converted from NGVD 29`;
+  if (datum.offsetFt != null && dam.statedDatum !== "NAVD88") return `${ft}, converted from local`;
+  if (/converted/i.test(`${dam.datumNote ?? ""} ${dam.provenance?.crestFt?.note ?? ""}`)) return `${ft}, converted`;
+  return ft;
+}
+
+/** Engine guard: no flood and a Review screen until the crest, breach bottom and datum are entered. */
+function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
+  const msg = `Elevations missing (${missing}). Enter the top-of-dam (crest) and breach-bottom elevations and their datum; nothing is computed until then.`;
+  return {
+    datum: {
+      rule: "Elevations missing: no crest, breach bottom or datum yet.",
+      offsetFt: null,
+      crestNavdFt: Number.NaN,
+      streambedNavdFt: null,
+      spillwayNavdFt: null,
+      poolNavdFt: null,
+      warnings: [msg],
+      flags: [warning("W-D1", msg, "stop")],
+    },
+    breach: {
+      label: METHOD_LABEL[dam.method],
+      widthFt: Number.NaN,
+      timeHr: Number.NaN,
+      capped: false,
+      headFt: Number.NaN,
+      startPool: "top",
+      startPoolNavdFt: Number.NaN,
+      startPoolLabel: START_POOL_LABEL.top,
+      bottomWidthFt: Number.NaN,
+      sideSlope: Number.NaN,
+      empiricalPeakCfs: Number.NaN,
+      peakCfs: Number.NaN,
+      timeToPeakHr: Number.NaN,
+      durationHr: Number.NaN,
+      storageExponent: Number.NaN,
+      volumeAcFt: Number.NaN,
+      series: [],
+      notes: [msg],
+    },
+    flood: {
+      engineLabel: "not run (elevations missing)",
+      maxDepthFt: 0,
+      maxVelocityFps: 0,
+      acres: 0,
+      lengthM: 0,
+      reachSource: "wet",
+      aoi: null,
+      warnings: [],
+      flags: [],
+      velocityBasis: "not run",
+      stations: [],
+      receptors: [],
+    },
+    screen: {
+      level: "Review",
+      label: "Review (elevations missing)",
+      judgmentAsProbable: dam.judgmentAsProbable ?? false,
+      classOfRecord: dam.classOfRecord ?? null,
+      acerLevel: null,
+      reasons: [msg],
+      judgment: [],
+    },
+  };
+}
+
+export const START_POOL_LABEL: Record<StartPool, string> = {
+  top: "top of dam",
+  normal: "normal pool",
+  elevation: "entered elevation",
+};
+
+/** The least water over the breach bottom a starting pool must have to be used (ft). */
+const START_POOL_MIN_HEAD_FT = 0.5;
+
+/**
+ * The pool level the breach starts from (m NAVD88). "top" (the default, ND 5.1.1 sunny day) is the top of dam.
+ * "normal" is the record's tied normal pool; "elevation" is DamRecord.startPoolFt, tied the same way as the other
+ * stated elevations. A choice that cannot be used falls back to the top of dam with a warning, so a half-typed
+ * elevation never gives a silent, smaller breach.
+ */
+function startingPool(
+  dam: DamRecord,
+  pool: Tied,
+  g: { topM: number; breachBottomM: number; offsetFt: number | null; crestNavd: number; localRecord: boolean },
+): { basis: StartPool; wse0M: number; label: string; warnings: string[] } {
+  const top = { basis: "top" as const, wse0M: g.topM, label: START_POOL_LABEL.top };
+  const choice: StartPool = dam.startPool === "normal" || dam.startPool === "elevation" ? dam.startPool : "top";
+  if (choice === "top") return { ...top, warnings: [] };
+  const name = choice === "normal" ? "normal pool" : "entered starting pool";
+  const fallback = (why: string) => ({ ...top, warnings: [`Starting pool: ${why} The breach starts at the top of dam instead.`] });
+  let tied: Tied;
+  if (choice === "normal") {
+    if (!Number.isFinite(dam.normalPoolFt)) return fallback("the record has no normal pool elevation.");
+    tied = pool;
+  } else {
+    const stated = dam.startPoolFt ?? Number.NaN;
+    if (!Number.isFinite(stated)) return fallback("no elevation is entered.");
+    tied = tieValue("Starting pool", stated, g.offsetFt, g.crestNavd, g.localRecord);
+  }
+  if (tied.navd == null) return fallback(`the ${name} could not be tied to NAVD88${tied.warning && choice === "elevation" ? ` (${tied.warning})` : ""}.`);
+  const wse0M = tied.navd * FT;
+  if (wse0M > g.topM + 1e-9)
+    return fallback(`the ${name} ${fmtFt(tied.navd)} ft NAVD88 is above the top of dam ${fmtFt(g.topM / FT)} ft.`);
+  if (wse0M < g.breachBottomM + START_POOL_MIN_HEAD_FT * FT)
+    return fallback(`the ${name} ${fmtFt(tied.navd)} ft NAVD88 is not above the breach bottom ${fmtFt(g.breachBottomM / FT)} ft, so there is nothing to release.`);
+  // A pool at the top of dam is the default case: same numbers, same wording.
+  if (g.topM - wse0M < 1e-9) return { ...top, warnings: [] };
+  return { basis: choice, wse0M, label: START_POOL_LABEL[choice], warnings: [] };
+}
+
+export function analyze(dam: DamRecord): Analysis {
+  const missing = elevationsMissing(dam);
+  if (missing) return reviewMissingElevations(dam, missing);
+  // Every flag carries its catalogue code (warnings.ts); `warnings` below is the same list as text.
+  const warnings: Warning[] = [];
+  const heightFt = bounded(warnings, "heightFt", dam.heightFt);
+  const storage = bounded(warnings, "storageAcFt", dam.storageAcFt);
+  const lengthFt = bounded(warnings, "lengthFt", dam.lengthFt);
+  const heightM = heightFt * FT;
+  const volumeM3 = storage * ACFT;
+
+  const localCrest = isLocalElev(dam.crestFt);
+  let offsetFt: number | null = null;
+  let crestNavd = finite(dam.crestFt, 1000);
+  let rule = "Stated elevations used as NAVD88.";
+
+  if (localCrest) {
+    // A local (0–300 ft) crest only ties to NAVD88 through an entered DEM crest. Guard that it is actually present and
+    // in range BEFORE using it: a missing DEM crest must not fall back to a fabricated value (1000 ft sits inside the
+    // 500–3,600 band, so the old fallback silently invented an offset and fed it to the breach, depths and screen with
+    // no warning). Not finite, or out of band, lands in the flagged branch, which forces the screen to Review below.
+    const dem = finite(dam.demCrestFt, NaN);
+    if (!Number.isFinite(dem) || dem < 500 || dem > 3600) {
+      rule = Number.isFinite(dem)
+        ? "0–300 ft crest, but the DEM crest is outside 500–3,600 ft. Flagged for review."
+        : "0–300 ft crest, but no DEM crest was entered to tie it. Flagged for review.";
+      warnings.push(warning("W-D1", "No DEM tie. Crest left unconverted.", "stop"));
+      // Leave the crest genuinely unconverted — the stated local value, offset null — in BOTH the missing and the
+      // out-of-band case. Keeping an out-of-band DEM value here (the old behaviour) made the "Crest left unconverted"
+      // warning untrue and fed that discarded value into exports and reports; the Review hold only guards the screen.
+      crestNavd = dam.crestFt;
+    } else {
+      offsetFt = dem - dam.crestFt;
+      crestNavd = dem;
+      rule = `0–300 ft is local. Offset ${fmtFt(offsetFt)} ft from the DEM crest. Datum choice is not applied.`;
+    }
+  } else if (dam.statedDatum === "NGVD29") {
+    const loc = damLocation(dam);
+    const manual = finite(dam.datumOffsetFt ?? NaN, NaN);
+    const grid = loc ? vertconShiftFt(loc.lon, loc.lat) : null;
+    if (Number.isFinite(manual) && manual !== 0) {
+      offsetFt = manual;
+      rule = `NGVD29 to NAVD88 by the offset you entered, ${signed(manual)} ft.`;
+      if (grid != null && Math.abs(grid - manual) > 0.2) {
+        warnings.push(warning("W-D1", `Entered NGVD29 offset ${signed(manual)} ft differs from VERTCON here (${signed(grid)} ft).`));
+      }
+    } else if (grid != null && loc) {
+      offsetFt = grid;
+      rule = `NGVD29 to NAVD88 by VERTCON at ${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)} (${loc.source}): ${signed(grid)} ft.`;
+    } else {
+      offsetFt = null;
+      rule = "NGVD29 stated, but no location inside the ND VERTCON grid and no offset entered. Elevations left unconverted.";
+      warnings.push(warning("W-D1", "NGVD29 offset unknown: enter the dam location or an offset. Elevations left in NGVD29."));
+    }
+    crestNavd += offsetFt ?? 0;
+  } else if (dam.statedDatum === "Local" && !localCrest) {
+    rule = "Marked Local, but the crest is outside 0–300 ft. Treated as NAVD88 and flagged.";
+    warnings.push(warning("W-D1", "Stated datum Local does not match a 0–300 ft crest."));
+    crestNavd = dam.crestFt;
+  } else {
+    crestNavd = dam.crestFt;
+    rule = "Elevations treated as NAVD88.";
+    if (dam.datumNote) rule += ` ${dam.datumNote}`;
+  }
+
+  const demCrest = finite(dam.demCrestFt ?? NaN, NaN);
+  if (!localCrest && Number.isFinite(demCrest) && Math.abs(demCrest - crestNavd) > 0.5) {
+    warnings.push(
+      warning(
+        "W-D1",
+        `DEM crest ${demCrest.toFixed(2)} ft differs from the tied crest ${crestNavd.toFixed(2)} ft NAVD88 by ${Math.abs(demCrest - crestNavd).toFixed(2)} ft. Check that the DEM crest is NAVD88 (an NGVD29 value differs by about the VERTCON shift).`,
+      ),
+    );
+  }
+  const localRecord = localCrest && offsetFt != null;
+  const bed = tieValue("Streambed", dam.streambedFt, offsetFt, crestNavd, localRecord);
+  if (!localRecord && isLocalElev(dam.streambedFt)) {
+    const toe = crestNavd - heightFt;
+    bed.navd = toe;
+    bed.warning = `Streambed was in the 0–300 ft band. Replaced with the desk toe, ${fmtFt(toe)} ft NAVD88 (crest minus height).`;
+  }
+  const spill = tieValue("Spillway", dam.spillwayFt, offsetFt, crestNavd, localRecord);
+  const pool = tieValue("Normal pool", dam.normalPoolFt, offsetFt, crestNavd, localRecord);
+  for (const w of [bed.warning, spill.warning, pool.warning]) {
+    if (w) warnings.push(warning("W-D1", w));
+  }
+
+  // Breach geometry (DamSafety_Runner core/breach.py _common): the reservoir bottom is the top of
+  // dam minus the dam height; the breach bottom is the tied streambed when it lies between them.
+  const topM = crestNavd * FT;
+  const resBottomM = topM - heightM;
+  let breachBottomM = resBottomM;
+  if (bed.navd != null && bed.navd * FT > resBottomM && bed.navd * FT < topM - FT) {
+    breachBottomM = bed.navd * FT;
+  }
+  // Starting pool. ND 5.1.1 sunny day: the pool at the top of dam, unless the record asks for the normal pool or a typed
+  // elevation (DamRecord.startPool). A pool that cannot be used (missing, untied, at or below the breach bottom, above
+  // the top of dam) falls back to the top of dam and says so. The default path is untouched: wse0M = topM, Vw = storage.
+  const sa = finite(dam.surfaceAreaAc ?? NaN, NaN);
+  const saTopM2 = sa > 0 ? sa * ACRE : null;
+  const start = startingPool(dam, pool, { topM, breachBottomM, offsetFt, crestNavd, localRecord });
+  for (const w of start.warnings) warnings.push(warning("W-V1", w));
+  const wse0M = start.wse0M;
+  const headM = wse0M - breachBottomM;
+  const hbM = topM - breachBottomM;
+  // Vw in the breach equations: the storage at the starting pool (the maximum storage at the top of dam).
+  const vwM3 = start.basis === "top" ? volumeM3 : new Reservoir(resBottomM, topM, volumeM3, saTopM2).volume(wse0M);
+  const notes: string[] = [];
+  const mode = dam.failureMode === "overtopping" ? "overtopping" : "piping";
+  const fr = froehlich2008(vwM3, hbM, mode);
+  let widthFt = fr.bAvg / FT;
+  let timeHr = fr.tf / 3600;
+  let z: number = fr.z;
+  let capped = false;
+
+  if (dam.method === "macdonald") {
+    const m = macdonald(vwM3, headM, heightFt, lengthFt);
+    widthFt = m.widthFt;
+    timeHr = m.timeHr;
+    capped = m.capped;
+    z = 1;
+    notes.push(
+      `Eroded embankment about ${m.erodedAcFt.toFixed(1)} ac-ft, MacDonald & Langridge-Monopolis (1984) earthfill in SI (Ver = 0.0261 (Vw·hw)^0.769 m³, tf = 0.0179 Ver^0.364 h), as the Runner. Width = Ver over an assumed embankment section (12 ft crest, 3H:1V slopes; enter the real geometry in the Runner). Side slope taken as 1H:1V.`,
+    );
+  } else if (dam.method === "tr60") {
+    const t = tr60(heightFt, lengthFt, dam.failureMode);
+    widthFt = t.widthFt;
+    timeHr = t.timeHr;
+    capped = t.capped;
+    z = 0;
+    notes.push("TR-60 width is a screening multiple of height (rectangular opening), routed through the same weir.");
+  } else {
+    notes.push(`Froehlich (2008) ${mode}: average width, formation time and side slope ${z}H:1V in SI, shown in feet.`);
+  }
+
+  if (widthFt > lengthFt) {
+    widthFt = lengthFt;
+    capped = true;
+  }
+  if (capped) notes.push("Breach width was capped at the dam length.");
+
+  const routed = routedHydrograph({
+    topM,
+    resBottomM,
+    breachBottomM,
+    wse0M,
+    storageTopM3: volumeM3,
+    surfaceAreaTopM2: saTopM2,
+    bAvgM: widthFt * FT,
+    tfS: Math.max(timeHr, 0.05) * 3600,
+    z,
+  });
+  timeHr = routed.tfS / 3600;
+  const peakCfs = routed.peakCms / CFS;
+  const empiricalPeakCfs = froehlich1995Peak(routed.storageAtFailureM3, headM) / CFS;
+  const thinned = thin(routed.t, routed.q);
+  const series = thinned.t.map((t, i) => ({ tHr: t / 3600, qCfs: thinned.q[i] / CFS }));
+  notes.push(
+    "Outflow is routed through the opening (Runner core/breach.py): a trapezoidal weir, Q = 3.1·b·h^1.5 + 2.45·z·h^2.5 (US units), whose crest lowers from the top of dam to the breach bottom and whose bottom width grows linearly over the formation time, with the pool drawing down by level-pool routing until it is drained.",
+  );
+  notes.push(
+    start.basis === "top"
+      ? `Head on the breach ${fmtFt(headM / FT)} ft (top of dam to breach bottom). The Froehlich (1995) peak check uses that head, not the dam height.`
+      : `Starting pool ${fmtFt(wse0M / FT)} ft NAVD88 (${start.label}), ${fmtFt((topM - wse0M) / FT)} ft below the top of dam. Head on the breach ${fmtFt(headM / FT)} ft (starting pool to breach bottom); the breach equations and the Froehlich (1995) check use the storage at that pool, ${fmtFt(vwM3 / ACFT)} ac-ft of ${fmtFt(volumeM3 / ACFT)} ac-ft.`,
+  );
+  notes.push(...routed.notes);
+  // The routed peak against the Froehlich (1995) regression (Nick, 2026-11-18). Level-pool routing draws the whole
+  // reservoir down together, as if the water at the far end reached the breach at once. A long, narrow reservoir
+  // cannot feed the opening that fast, so its real peak is lower: Edenville (2020) at its 680.1 ft failure pool routes
+  // 274,000 cfs here against 152,700 cfs in the ASCE 2-D reconstruction and 135,000 cfs from Froehlich (1995). Most
+  // dams route within 1.0–1.35× the regression; past BREACH_CHECK_RATIO the note says so, and the result is unchanged.
+  if (empiricalPeakCfs > 0 && peakCfs > BREACH_CHECK_RATIO * empiricalPeakCfs)
+    notes.push(
+      `The routed peak (${Math.round(peakCfs).toLocaleString("en-US")} cfs) is ${(peakCfs / empiricalPeakCfs).toFixed(1)}× the Froehlich (1995) check (${Math.round(empiricalPeakCfs).toLocaleString("en-US")} cfs). The routing draws the whole pool down at once; a long or narrow reservoir cannot feed the breach that fast, so its peak may be nearer the check. Edenville (2020): routed 274,000 cfs, 2-D reconstruction 152,700 cfs, check 135,000 cfs.`,
+    );
+
+  // Schematic valley. L0 sets the decay scale; the reach runs until the desk depth falls below
+  // the 0.1 ft wet threshold (or the reach the user sets), up to MAX_REACH_KM.
+  const decay = ENGINE_DECAY[dam.engine] ?? ENGINE_DECAY.lisflood;
+  const maxDepthFt = clamp(heightFt * 0.42 * (peakCfs / 8000) ** 0.18, 0.4, heightFt * 0.9);
+  const baseM = 900 + Math.sqrt(storage) * 80;
+  const wetReachM = (baseM * Math.log(Math.max(maxDepthFt / 0.1, 1.0001))) / decay.k;
+  const userReachKm = finite(dam.reachKm ?? NaN, NaN);
+  let reachSource: Analysis["flood"]["reachSource"] = userReachKm > 0 ? "user" : "wet";
+  const naturalLengthM = clamp(userReachKm > 0 ? userReachKm * 1000 : wetReachM, 500, MAX_REACH_KM * 1000);
+  const depthAt = (xM: number) => maxDepthFt * Math.exp((-decay.k * xM) / baseM);
+  const floodWarnings: Warning[] = [];
+
+  // Drawn area of interest (Nick 2026-10-29; round 3 fixes). The schematic valley is laid along the
+  // downstream direction from the record's geometry (aoi.ts downstreamDirection). The reach stops
+  // where it leaves the AOI (nearest downstream exit); the wet area is the schematic strip clipped
+  // to the AOI polygon; receptors outside are unresolved (outside drawn area) but, inside the
+  // un-clipped reach, still ranked as "would be" so a known High is never hidden. No AOI drawn:
+  // everything below runs as before.
+  let lengthM = naturalLengthM;
+  let aoiOut: Analysis["flood"]["aoi"] = null;
+  let aoi: AoiExtent | null = null;
+  const notApplied = (w: string) => {
+    floodWarnings.push(warning("W-V1", w, "warn"));
+    aoiOut = {
+      applied: false,
+      nearKm: 0,
+      farKm: 0,
+      areaAc: 0,
+      direction: "",
+      directionBasis: "none",
+      reachBasis: null,
+      areaBasis: null,
+      upstreamFrac: null,
+      maxDepthInsideFt: 0,
+      limitsReach: false,
+      edgeDepthFt: 0,
+      wetAtEdge: false,
+      label: w,
+    };
+  };
+  if (hasAoi(dam.geometry?.aoi)) {
+    const loc = damLocation(dam);
+    const shape = loc ? readAoi(dam.geometry?.aoi, loc) : null;
+    if (!loc) notApplied("Drawn area not applied: no breach location. Draw the breach point or enter the dam latitude and longitude.");
+    else if (shape && !shape.ok) notApplied(shape.reason);
+    // The downstream direction is computed once, here, and reused below.
+    const dir = loc && shape?.ok ? downstreamDirection(dam.geometry, loc) : null;
+    if (shape && shape.ok && dir) {
+      aoi = aoiExtent(shape, dir);
+      floodWarnings.push(...aoi.warnings.map((w) => warning("W-V1", w, "warn")));
+    }
+    if (aoi?.unplacedReason) {
+      // No direction and the breach outside the AOI: it cannot be placed, so it is not applied.
+      notApplied(aoi.unplacedReason);
+      aoi = null;
+    } else if (aoi && dir) {
+      const limitsReach = aoi.coversDownstream && aoi.farM < naturalLengthM;
+      if (limitsReach) {
+        lengthM = Math.max(aoi.farM, 50);
+        reachSource = "aoi";
+      }
+      const maxDepthInsideFt = aoi.coversDownstream && aoi.nearM < lengthM ? depthAt(aoi.nearM) : 0;
+      if (!aoi.breachInside && aoi.coversDownstream) {
+        floodWarnings.push(
+          warning(
+            "W-V1",
+            `The breach location is outside the drawn area; the valley enters it ${fmtKm(aoi.nearM)} downstream. Only the valley from there on is counted. The flood's max depth (${fmtFt(maxDepthFt)} ft) is at the breach, outside the drawn area; inside it the schematic depth peaks at ${fmtFt(maxDepthInsideFt)} ft.`,
+            "warn",
+          ),
+        );
+      }
+      const edgeDepthFt = aoi.coversDownstream ? depthAt(aoi.farM) : 0;
+      const wetAtEdge = limitsReach && edgeDepthFt >= 0.1;
+      if (wetAtEdge) {
+        // Nearest-boundary fallback: the direction is unknown, so the distance is not "downstream".
+        const where =
+          aoi.reachBasis === "nearest-boundary"
+            ? `at the drawn area's nearest edge (${fmtKm(aoi.farM)} from the breach, direction unknown`
+            : `where the valley leaves the drawn area (${fmtKm(aoi.farM)} downstream`;
+        floodWarnings.push(
+          warning(
+            "W-R1",
+            `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where}; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
+          ),
+        );
+      }
+      aoiOut = {
+        applied: true,
+        nearKm: aoi.nearM / 1000,
+        farKm: aoi.farM / 1000,
+        areaAc: aoi.areaAc,
+        direction: dir.note,
+        directionBasis: dir.basis,
+        reachBasis: aoi.reachBasis === "unplaced" ? null : aoi.reachBasis,
+        areaBasis: aoi.axis ? "clipped" : "band",
+        upstreamFrac: aoi.upstreamFrac,
+        maxDepthInsideFt,
+        limitsReach,
+        edgeDepthFt,
+        wetAtEdge,
+        label: "",
+      };
+    }
+  }
+  const halfAt = (xM: number) => 28 + 340 * (xM / baseM) ** 0.72;
+  const NST = 81;
+  const stations = Array.from({ length: NST }, (_, i) => {
+    const s = i / (NST - 1);
+    const xM = s * lengthM;
+    return { s, xKm: xM / 1000, halfM: halfAt(xM), depthFt: depthAt(xM) };
+  });
+
+  const clipFromM = aoi ? aoi.nearM : 0;
+  const SUB = 16;
+  let areaM2 = 0;
+  for (let i = 1; i < stations.length; i++) {
+    const a = stations[i - 1];
+    const b = stations[i];
+    if (a.depthFt > 0.1 || b.depthFt > 0.1) {
+      const seg = (b.s - a.s) * lengthM * (a.halfM + b.halfM);
+      const xa = a.s * lengthM;
+      const xb = b.s * lengthM;
+      if (!aoi) areaM2 += seg;
+      else if (!aoi.coversDownstream) continue;
+      else if (aoi.axis) {
+        // Schematic strip laid along the downstream direction, clipped to the AOI polygon.
+        for (let k = 0; k < SUB; k++) {
+          const f = (k + 0.5) / SUB;
+          const x = xa + f * (xb - xa);
+          if (x < clipFromM) continue;
+          const h = a.halfM + f * (b.halfM - a.halfM);
+          areaM2 += ((xb - xa) / SUB) * 2 * h * (aoi.crossFrac(x, h) ?? 1);
+        }
+      } else {
+        const frac = clamp((xb - Math.max(xa, clipFromM)) / Math.max(xb - xa, 1e-9), 0, 1);
+        areaM2 += seg * frac;
+      }
+    }
+  }
+  let acres = areaM2 / ACRE;
+  if (aoi && aoiOut) {
+    const o = aoiOut as NonNullable<Analysis["flood"]["aoi"]>;
+    // Direction unknown: the strip cannot be placed on the polygon; it cannot exceed the polygon's area.
+    if (!aoi.axis) acres = Math.min(acres, aoi.areaAc);
+    const parts = aoi.parts > 1 ? `, ${aoi.parts} parts` : "";
+    o.label = !aoi.coversDownstream
+      ? `Drawn area: does not reach the valley downstream of the breach (${fmtAc(aoi.areaAc)} ac${parts})`
+      : o.limitsReach
+        ? `Limited by drawn area: ${fmtKm(aoi.farM)} / ${fmtAc(aoi.areaAc)} ac${parts}`
+        : `Drawn area: ${fmtKm(aoi.farM)} / ${fmtAc(aoi.areaAc)} ac${parts} (the ${reachSource === "user" ? "reach you set" : "0.1 ft wet limit"} ends first, at ${(lengthM / 1000).toFixed(1)} km)`;
+  }
+  warnings.push(...floodWarnings);
+
+  // The desk depth curve only resolves out to the 0.1 ft wet limit. A user reach past that limit
+  // extends the drawn valley, but structures beyond the wet limit stay unresolved, not dry.
+  const resolvedM = Math.min(lengthM, Math.max(wetReachM, 500));
+  const naturalResolvedM = Math.min(naturalLengthM, Math.max(wetReachM, 500));
+  const rankAt = (r: ReceptorSeed, xM: number) => {
+    const depth = Math.max(0, depthAt(xM) - r.padFt);
+    const flooded = depth >= 0.1;
+    const widthFt = halfAt(xM) * 2 * 3.28084;
+    const qHere = peakCfs * Math.exp((-decay.k * xM) / baseM);
+    // Cap above both chart axes (house 25 ft/s, mobile 16). A velocity past an axis is high danger;
+    // a cap of 14 hid that and screened a fast shallow flood as Low.
+    const velocity = flooded && depth > 0.05 ? clamp(qHere / (widthFt * depth), 0.1, AXES.house[0] + 1) : 0;
+    const arrival = flooded ? timeHr * 0.85 + xM / Math.max(velocity * FT, 0.3) / 3600 : null;
+    const depthFt = flooded ? depth : 0;
+    const velocityFps = flooded ? velocity : 0;
+    const rank = rankReceptor({
+      kind: r.kind,
+      depthFt,
+      velocityFps,
+      aadt: r.aadt,
+      roadClass: r.roadClass,
+      habitable: r.habitable,
+      judgmentAsProbable: dam.judgmentAsProbable ?? false,
+    });
+    return { depthFt, velocityFps, arrival, flooded, rank };
+  };
+  const receptors = dam.receptors.map((r) => {
+    // A receptor seeded with only a station fraction (no distanceKm) sits at that fraction of the
+    // reach, not of the decay scale baseM. station is a 0..1 position along the valley strip (it is
+    // reported back as xM / lengthM below), so station * lengthM round-trips it. Using baseM (~the
+    // flow-width scale, often a few hundred metres) collapsed every generic seed to just below the
+    // breach, where the desk curve is deepest and fastest, over-ranking its TM 11 zone.
+    const xM =
+      r.distanceKm != null && Number.isFinite(r.distanceKm)
+        ? Math.max(0, r.distanceKm * 1000)
+        : Math.max(0, r.station) * lengthM;
+    const outsideAoi = aoi != null && (!aoi.coversDownstream || xM > aoi.farM || xM < aoi.nearM);
+    const unresolved = outsideAoi || xM > resolvedM;
+    const base = {
+      id: r.id,
+      name: r.name,
+      kind: r.kind,
+      station: Math.min(1, xM / lengthM),
+      distanceKm: xM / 1000,
+      lateral: r.lateral,
+    };
+    if (unresolved) {
+      let wouldBe: RankedReceptor["wouldBe"] = null;
+      let wbText = "";
+      if (outsideAoi && xM <= naturalResolvedM) {
+        const w = rankAt(r, xM);
+        wouldBe = { ndClass: w.rank.class, zone: w.rank.zone, depthFt: w.depthFt, velocityFps: w.velocityFps };
+        wbText = w.rank.class
+          ? `; without the drawn area it would be ${w.rank.class} (${w.rank.reason}; ${w.depthFt.toFixed(2)} ft at ${w.velocityFps.toFixed(2)} ft/s)`
+          : `; without the drawn area it would not count (${w.rank.reason})`;
+      }
+      const where = !outsideAoi
+        ? ""
+        : !aoi!.coversDownstream
+          ? "the drawn area does not reach the valley downstream of the breach"
+          : xM > aoi!.farM
+            ? `${(xM / 1000).toFixed(1)} km is past where the valley leaves the drawn area, ${fmtKm(aoi!.farM)} downstream`
+            : `${(xM / 1000).toFixed(1)} km is before the valley enters the drawn area, ${fmtKm(aoi!.nearM)} downstream`;
+      return {
+        ...base,
+        depthFt: 0,
+        velocityFps: 0,
+        arrivalHr: null,
+        flooded: false,
+        unresolved: true,
+        outsideAoi,
+        wouldBe,
+        zone: null,
+        ndClass: null,
+        rankReason: outsideAoi
+          ? `unresolved (outside drawn area): ${where}; not screened${wbText}`
+          : xM > lengthM
+            ? `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`
+            : `unresolved: ${(xM / 1000).toFixed(1)} km is past the desk curve's 0.1 ft wet limit (${(resolvedM / 1000).toFixed(1)} km), inside the ${(lengthM / 1000).toFixed(1)} km user reach; the desk cannot call it dry`,
+        needsJudgment: true,
+      };
+    }
+    const { depthFt, velocityFps, arrival, flooded, rank } = rankAt(r, xM);
+    return {
+      ...base,
+      depthFt,
+      velocityFps,
+      arrivalHr: arrival,
+      flooded,
+      unresolved: false,
+      outsideAoi: false,
+      wouldBe: null,
+      zone: rank.zone,
+      ndClass: rank.class,
+      rankReason: rank.reason,
+      needsJudgment: rank.judgment,
+    };
+  });
+
+  const maxVelocityFps = receptors.reduce((m, r) => Math.max(m, r.velocityFps), 0);
+  const screen = screenReceptors(receptors, dam.receptors, {
+    judgmentAsProbable: dam.judgmentAsProbable ?? false,
+  });
+  // Full test 2026-10-30: a record placed on the map (e.g. a new record from NID) with no dam line and no
+  // reservoir point has no downstream direction, so no flood strip. When its receptors are still only the
+  // generic valley seeds nothing about this site was screened, so the Screen step gives no class. Receptors
+  // the engineer entered are screened in full as before (a known High is never hidden).
+  const site = damLocation(dam);
+  const siteDir = site ? downstreamDirection(dam.geometry, site) : null;
+  const onlyGeneric = dam.receptors.length > 0 && dam.receptors.every(isGenericSeed);
+  if (siteDir && !siteDir.u && onlyGeneric) {
+    const would = screen.label;
+    screen.level = "Review";
+    screen.label = "Not assessed (downstream direction unknown)";
+    screen.reasons.unshift(
+      `Not assessed. ${siteDir.note} With no flood strip the generic receptor seeds are not placed on this site's valley: they would screen ${would}, which is not a screen of this site. Enter the real receptors too.`,
+    );
+  }
+  const aoiNotApplied = aoiOut as Analysis["flood"]["aoi"];
+  if (aoiNotApplied && !aoiNotApplied.applied) {
+    // Shown in the Screen step's reasons and carried into the Report's JSON export notes.
+    const full = "This screen is for the full flood and every receptor, with no drawn-area limit.";
+    screen.reasons.unshift(
+      aoiNotApplied.label.includes("screened in full") ? aoiNotApplied.label : `${aoiNotApplied.label} ${full}`,
+    );
+  }
+  if (dam.classOfRecord) {
+    screen.classOfRecord = dam.classOfRecord;
+    screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
+  }
+  if (dam.receptorSource === "nd911" && !dam.nd911AutoAdded && screen.level !== "Review") {
+    // No structures yet because the 911 points are not looked up: do not let an empty list read Low. A Review
+    // already set (for example Not assessed, no strip to look up in) is more specific and stays.
+    screen.level = "Review";
+    screen.label = "Review (911 points not looked up)";
+    screen.reasons.unshift(
+      "Structures for this dam come from ND 911 address points inside the flood strip. Look them up on the Flood step before relying on the class.",
+    );
+  }
+  const n911 = dam.receptors.filter((r) => r.source === "nd911");
+  const noPad = n911.filter((r) => r.padSource == null);
+  const estPad = n911.filter((r) => r.padSource === "estimated");
+  if (dam.receptorSource === "nd911" && noPad.length > 0 && screen.level !== "Review") {
+    // 911 seeds sit on the channel bed (pad 0) until their ground height is read: hold rather than over-screen.
+    screen.level = "Review";
+    screen.label = "Review (911 ground heights not looked up)";
+    screen.reasons.unshift(
+      `${noPad.length} structure${noPad.length === 1 ? "" : "s"} from 911 address points still sit on the channel bed (pad 0). Their ground height above the bed is read from 3DEP terrain on the Flood step.`,
+    );
+  }
+  if (estPad.length > 0) {
+    // Two reasons leave a pad estimated and they call for different things: a failed terrain request (3DEP 502, a
+    // timeout) means look the pads up again; no terrain at the point means enter the pad by hand. The seed's padNote
+    // says which (nd911-pads.ts); without one, the older "no terrain" wording stands.
+    const failed = estPad.filter((r) => /terrain request failed/.test(r.padNote ?? ""));
+    const noData = estPad.filter((r) => !failed.includes(r));
+    const why = failed.length
+      ? `the terrain request failed for ${failed.map((r) => r.name).join(", ")} (${failed[0].padNote!.replace(/^pad estimated: terrain request failed \((.*?)\);.*$/, "$1")}), so look the pads up again${noData.length ? `; no terrain at the point for ${noData.map((r) => r.name).join(", ")}, so enter that pad height` : ""}`
+      : "no terrain at the point, so enter the real pad height";
+    const t = `Pad estimated for ${estPad.map((r) => r.name).join(", ")}, kept on the channel bed (pad 0): ${why}.`;
+    screen.judgment.push(t);
+    if (screen.level !== "Review") {
+      screen.reasons.unshift(`Held at Review: ${t}`);
+      screen.label = `Review (${screen.label}; pad estimated)`;
+      screen.level = "Review";
+    }
+  }
+  if (warnings.some((w) => w.text.startsWith("No DEM tie"))) {
+    screen.level = "Review";
+    screen.label = "Review (crest not tied)";
+    screen.reasons.unshift("The crest could not be tied. Screening waits on a usable DEM crest.");
+  }
+
+  return {
+    datum: {
+      rule,
+      offsetFt,
+      crestNavdFt: crestNavd,
+      streambedNavdFt: bed.navd,
+      spillwayNavdFt: spill.navd,
+      poolNavdFt: pool.navd,
+      warnings: warningTexts(warnings),
+      flags: warnings,
+    },
+    breach: {
+      label: METHOD_LABEL[dam.method],
+      widthFt,
+      timeHr,
+      capped,
+      headFt: headM / FT,
+      startPool: start.basis,
+      startPoolNavdFt: wse0M / FT,
+      startPoolLabel: start.label,
+      bottomWidthFt: routed.bottomWidthM / FT,
+      sideSlope: z,
+      empiricalPeakCfs,
+      peakCfs,
+      timeToPeakHr: routed.timeToPeakS / 3600,
+      durationHr: routed.t[routed.t.length - 1] / 3600,
+      storageExponent: routed.storageExponent,
+      volumeAcFt: routed.releasedM3 / ACFT,
+      series,
+      notes,
+    },
+    flood: {
+      engineLabel: decay.label,
+      maxDepthFt,
+      maxVelocityFps,
+      acres,
+      lengthM,
+      reachSource,
+      aoi: aoiOut,
+      warnings: warningTexts(floodWarnings),
+      flags: floodWarnings,
+      velocityBasis: VELOCITY_BASIS,
+      stations,
+      receptors,
+    },
+    screen,
+  };
+}
+
+type RankedReceptor = Analysis["flood"]["receptors"][number];
+
+const CLASS_ORDER: Record<"High" | "Medium" | "Low", number> = { High: 3, Medium: 2, Low: 1 };
+const ZONE_ORDER = { low: 1, judgment: 2, high: 3 } as const;
+
+/** ND class from ranked receptors (damsuite classify_nd): the worst receptor class governs. */
+export function screenReceptors(
+  receptors: (Pick<RankedReceptor, "name" | "kind" | "depthFt" | "velocityFps" | "zone" | "ndClass" | "rankReason" | "needsJudgment"> & {
+    unresolved?: boolean;
+    outsideAoi?: boolean;
+    wouldBe?: RankedReceptor["wouldBe"];
+  })[],
+  seeds: Pick<ReceptorSeed, "kind" | "habitable" | "source">[] = [],
+  opts: { judgmentAsProbable?: boolean } = {},
+): Analysis["screen"] {
+  const judgmentAsProbable = opts.judgmentAsProbable ?? false;
+  let level: ScreenLevel = "Low";
+  let acerLevel: Analysis["screen"]["acerLevel"] = null;
+  const reasons: string[] = [];
+  const judgment: string[] = [];
+  receptors.forEach((r, i) => {
+    const habitable = seeds[i]?.habitable ?? (r.kind === "house" || r.kind === "mobile");
+    if (habitable && r.zone && r.ndClass) {
+      if (acerLevel == null || ZONE_ORDER[r.zone] > ZONE_ORDER[acerLevel]) acerLevel = r.zone;
+    }
+    if (r.unresolved) {
+      reasons.push(`${r.name}: ${r.rankReason}. The class could be higher than shown.`);
+    } else if (r.ndClass) {
+      reasons.push(`${r.name}: ${r.ndClass} (${r.rankReason}; ${r.depthFt.toFixed(2)} ft at ${r.velocityFps.toFixed(2)} ft/s).`);
+      if (level === "Low" || CLASS_ORDER[r.ndClass] > CLASS_ORDER[level as "High" | "Medium" | "Low"]) level = r.ndClass;
+    } else if (r.depthFt > 0 && r.rankReason !== "dry") {
+      reasons.push(`${r.name}: not counted (${r.rankReason}).`);
+    }
+    if (r.needsJudgment) {
+      judgment.push(`${r.name}: ${r.rankReason}.`);
+    }
+    // Added from a 911 address point (nd911.ts) and not classified yet: counted as a home until the user says.
+    if (seeds[i]?.source === "nd911" && seeds[i]?.habitable == null) {
+      judgment.push(`${r.name}: added from a 911 address point; classify it habitable or not (counted as habitable until you do).`);
+    }
+  });
+  if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
+  const outside = receptors.filter((r) => r.unresolved && r.outsideAoi).length;
+  const unresolved = receptors.filter((r) => r.unresolved).length - outside;
+  if (unresolved > 0) {
+    reasons.push(
+      `${unresolved} receptor${unresolved === 1 ? " is" : "s are"} past the desk reach and unresolved. Extend the reach or model the valley before relying on this class.`,
+    );
+  }
+  if (outside > 0) {
+    reasons.push(
+      `${outside} receptor${outside === 1 ? " is" : "s are"} outside the drawn area and unresolved. Enlarge the drawn area before relying on this class.`,
+    );
+  }
+  reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
+  // Nick (2026-10-30): a home in the judgment zone is Medium by rule. Only the old option (judgment zone counted as
+  // probable loss of life) can make a High from judgment-zone structures alone; that High reads "High (flagged: judgment zone)".
+  const highDrivers = receptors.filter((r) => r.ndClass === "High");
+  const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
+  let label: string = judgmentDriven ? "High (flagged: judgment zone)" : level;
+  if (judgmentDriven) {
+    reasons.unshift(
+      "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (old option, 5.3). By rule a judgment-zone home is Medium; switch \"Judgment zone\" back to the default to see that.",
+    );
+  }
+  // Nick (2026-10-29): a home or road past the modeled reach forces Review. It is never Low and never dropped.
+  // A resolved High stays High (it cannot go higher) but the label says what is unresolved.
+  // Same rule for a receptor outside the drawn area (Nick 2026-10-29): unresolved, forces Review.
+  const counting = receptors.filter((r, i) => {
+    if (!r.unresolved) return false;
+    const habitable = seeds[i]?.habitable ?? (r.kind === "house" || r.kind === "mobile");
+    return habitable || r.kind === "road";
+  });
+  const unresolvedCounting = counting.length;
+  if (unresolvedCounting > 0) {
+    const outsideCounting = counting.filter((r) => r.outsideAoi).length;
+    const n =
+      outsideCounting === 0
+        ? `${unresolvedCounting} unresolved`
+        : outsideCounting === unresolvedCounting
+          ? `${unresolvedCounting} unresolved (outside drawn area)`
+          : `${unresolvedCounting} unresolved (${outsideCounting} outside drawn area)`;
+    const where = outsideCounting === 0 ? "past the reach" : outsideCounting === unresolvedCounting ? "outside the drawn area" : "past the reach or outside the drawn area";
+    const what = unresolvedCounting === 1 ? "home or road" : "homes or roads";
+    // Never hide a known High (Nick 2026-10-29, round 3): a receptor outside the drawn area but inside the
+    // un-clipped reach is still ranked; if it would screen above the resolved receptors, the label says so.
+    const would = counting.filter((r) => r.outsideAoi && r.wouldBe?.ndClass);
+    const wbClass = would.reduce<"High" | "Medium" | "Low" | null>(
+      (m, r) => (m == null || CLASS_ORDER[r.wouldBe!.ndClass!] > CLASS_ORDER[m] ? r.wouldBe!.ndClass! : m),
+      null,
+    );
+    const resolvedRank = (level as ScreenLevel) === "Low" ? 1 : CLASS_ORDER[level as "High" | "Medium" | "Low"];
+    if (wbClass && CLASS_ORDER[wbClass] > resolvedRank) {
+      const resolvedAs = level;
+      const top = would.filter((r) => r.wouldBe!.ndClass === wbClass);
+      const flagged = wbClass === "High" && top.every((r) => r.wouldBe!.zone === "judgment") ? " (flagged: judgment zone)" : "";
+      const names = top.length <= 2 ? top.map((r) => r.name).join(" and ") : `${top[0].name} and ${top.length - 1} more`;
+      const rest = unresolvedCounting - top.length;
+      level = "Review";
+      label = `Review (would be ${wbClass}${flagged}: ${names} outside drawn area${rest > 0 ? `; ${rest} more unresolved` : ""})`;
+      reasons.unshift(
+        `Held at Review: ${top.length === 1 ? `${top[0].name} is` : `${top.length} receptors are`} outside the drawn area but inside the desk reach and would screen ${wbClass}${flagged} without it. Resolved receptors alone screen ${resolvedAs}. Enlarge the drawn area or model the valley before relying on a lower class.`,
+      );
+    } else if ((level as ScreenLevel) === "High") {
+      const tag = outsideCounting === 0 ? `${n} past the reach` : n.replace(" (", ", ").replace(")", "");
+      label = label.endsWith(")") ? `${label.slice(0, -1)}; ${tag})` : `${label} (${tag})`;
+    } else {
+      const resolvedAs = level;
+      level = "Review";
+      label = `Review (${resolvedAs} on resolved receptors; ${n})`;
+      reasons.unshift(
+        `Held at Review: resolved receptors screen ${resolvedAs}, but ${unresolvedCounting} unresolved ${what} ${where === "past the reach" ? "past the modeled reach" : where} could raise it. ${outsideCounting > 0 ? "Enlarge the drawn area, extend the reach," : "Extend the reach"} or model the valley.`,
+      );
+    }
+  }
+  reasons.push(
+    `ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone is High; in the judgment zone it is ${
+      judgmentAsProbable
+        ? "counted as probable loss of life (High, flagged; old option)"
+        : "Medium by rule (not probable loss of life)"
+    }; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.`,
+  );
+  reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");
+  return { level, label, judgmentAsProbable, classOfRecord: null, acerLevel, reasons, judgment };
+}

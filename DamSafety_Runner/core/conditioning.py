@@ -554,7 +554,7 @@ class ConditionedTerrain:
     """Terrain source that applies `edits` to whatever the models read. `default_n` is the
     Manning's n used where there is no roughness raster (v3.4.0 roughness footprints)."""
 
-    def __init__(self, base, edits, default_n=0.06):
+    def __init__(self, base, edits, default_n=0.05):
         self.base = base
         self.edits = edits
         self.default_n = default_n

@@ -1,0 +1,620 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
+import L from "leaflet";
+import { extentLine, openEdgeLine } from "./extent-layer";
+import { layerKey, mountFloodLayer } from "./flood-layer";
+import "leaflet/dist/leaflet.css";
+import "leaflet-draw/dist/leaflet.draw.css";
+import "leaflet-draw";
+import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
+import iconUrl from "leaflet/dist/images/marker-icon.png";
+import shadowUrl from "leaflet/dist/images/marker-shadow.png";
+import { basemaps } from "@/lib/crest/basemap";
+import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
+import { initialView, ND_CENTER } from "@/lib/crest/mapview";
+import { ND911_ATTRIBUTION_SHORT, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
+import { DEM_ATTRIBUTION_SHORT, OUTLINE_LABEL, type TerrainOutline } from "@/lib/crest/outline";
+import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
+import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
+
+const LAYERS = basemaps(import.meta.env);
+
+// Marker icons are bundled (no CDN), so the map and drawing tools work offline; only basemap tiles need the network.
+delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
+L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
+
+type Props = {
+  geometry?: DamGeometry;
+  /** Record lat/lon, used to open the map on the dam when nothing is drawn yet. */
+  lat?: number;
+  lon?: number;
+  onChange: (g: DamGeometry) => void;
+  /** Approximate flooded strip from the current result (null: none, see `stripMessage`). */
+  strip?: FloodStrip | null;
+  stripMessage?: string | null;
+  /** PLSS sections the strip touches (null: not looked up / not available, see `plssMessage`). */
+  plss?: PlssRow[] | null;
+  plssMessage?: string | null;
+  /** 911 address points: inside the strip (listed) and the rest of the looked-up box (null: not looked up). */
+  nd911?: { inside: Nd911Row[]; outside: Nd911Point[] } | null;
+  nd911Message?: string | null;
+  /** Terrain outline from 3DEP (null: not built, see `outlineMessage`). */
+  outline?: TerrainOutline | null;
+  outlineMessage?: string | null;
+  /** Click-to-place: the next map click puts the breach or reservoir point there (replacing the old one). */
+  placing?: PointRole | null;
+  onPlaced?: () => void;
+};
+
+export type PointRole = "breach" | "reservoir";
+
+type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
+
+/**
+ * Which drawn marker is which: a marker that carries a role (placed by click or by "pick automatically") is that
+ * point; the others keep the old order (first unassigned marker = reservoir, second = breach).
+ */
+function pointRoles(layers: GeoLayer[]): Map<GeoLayer, PointRole> {
+  const out = new Map<GeoLayer, PointRole>();
+  const pts = layers.filter((l) => l.toGeoJSON().geometry.type === "Point");
+  for (const l of pts) {
+    const r = l.toGeoJSON().properties?.role;
+    if (r === "breach" || r === "reservoir") out.set(l, r);
+  }
+  const taken = new Set(out.values());
+  for (const l of pts) {
+    if (out.has(l)) continue;
+    const r: PointRole | null = !taken.has("reservoir") ? "reservoir" : !taken.has("breach") ? "breach" : null;
+    if (!r) continue;
+    out.set(l, r);
+    taken.add(r);
+  }
+  return out;
+}
+
+function DrawControl({ geometry, lat, lon, onChange, placing, onPlaced }: Props) {
+  const map = useMap();
+  const groupRef = useRef<L.FeatureGroup>(null);
+  const placingRef = useRef(placing ?? null);
+  placingRef.current = placing ?? null;
+  const placedRef = useRef(onPlaced);
+  placedRef.current = onPlaced;
+  // The saved geometry seeds the layer once; later edits come from the map itself.
+  // Re-running the effect on every save would re-add the same layers and controls.
+  const initial = useRef({ geometry, lat, lon });
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
+
+  useEffect(() => {
+    if (!groupRef.current) return;
+    const group = groupRef.current;
+
+    const drawControl = new L.Control.Draw({
+      position: "topright",
+      draw: {
+        polyline: { shapeOptions: { color: "#8B5E3C", weight: 4 }, metric: true },
+        polygon: { shapeOptions: { color: "#0E768A", fillOpacity: 0.15 }, metric: true },
+        marker: {},
+        circle: false,
+        rectangle: false,
+        circlemarker: false,
+      },
+      edit: { featureGroup: group, remove: true },
+    });
+    map.addControl(drawControl);
+
+    const layers = () => {
+      const all: GeoLayer[] = [];
+      group.eachLayer((l) => void all.push(l as GeoLayer));
+      return all;
+    };
+
+    function save() {
+      const next: DamGeometry = {};
+      const roles = pointRoles(layers());
+      group.eachLayer((layer) => {
+        const geo = (layer as GeoLayer).toGeoJSON();
+        if (geo.geometry.type === "Point") {
+          const r = roles.get(layer as GeoLayer);
+          if (r === "reservoir") next.reservoirPoint = geo;
+          else if (r === "breach") next.breachPoint = geo;
+        } else if (geo.geometry.type === "LineString") {
+          next.damLine = geo;
+        } else if (geo.geometry.type === "Polygon") {
+          next.aoi = geo;
+        }
+      });
+      changeRef.current(next);
+    }
+
+    const onCreated = (e: L.LeafletEvent) => {
+      group.addLayer((e as L.DrawEvents.Created).layer);
+      save();
+    };
+    const onEdited = () => save();
+    const onDeleted = () => save();
+    // Click-to-place: the clicked spot becomes the breach (or reservoir) point, replacing the one there was.
+    const onClick = (e: L.LeafletMouseEvent) => {
+      const role = placingRef.current;
+      if (!role) return;
+      for (const [l, r] of pointRoles(layers())) if (r === role) group.removeLayer(l);
+      const m = L.marker(e.latlng) as L.Marker & { feature?: GeoJSON.Feature };
+      m.feature = { type: "Feature", properties: { role, source: "clicked on the map" }, geometry: { type: "Point", coordinates: [e.latlng.lng, e.latlng.lat] } };
+      group.addLayer(m);
+      save();
+      placedRef.current?.();
+    };
+    map.on("click", onClick);
+
+    map.on(L.Draw.Event.CREATED, onCreated);
+    map.on(L.Draw.Event.EDITED, onEdited);
+    map.on(L.Draw.Event.DELETED, onDeleted);
+
+    // Load existing geometry, then open on the dam / breach point (not a fixed regional view).
+    const { geometry: g, lat: lat0, lon: lon0 } = initial.current;
+    if (g) {
+      const feats = [g.reservoirPoint, g.breachPoint, g.damLine, g.aoi].filter(
+        (f): f is GeoJSONFeature => Boolean(f),
+      );
+      for (const feat of feats) {
+        L.geoJSON(feat as unknown as GeoJSON.Feature).eachLayer((l) => group.addLayer(l));
+      }
+    }
+    const view = initialView(g, lat0, lon0);
+    if ("fit" in view) {
+      const bounds = L.geoJSON(view.fit as unknown as GeoJSON.Feature[]).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { maxZoom: 15, padding: [24, 24] });
+    } else {
+      map.setView(view.center, view.zoom);
+    }
+
+    return () => {
+      map.removeControl(drawControl);
+      map.off(L.Draw.Event.CREATED, onCreated);
+      map.off(L.Draw.Event.EDITED, onEdited);
+      map.off(L.Draw.Event.DELETED, onDeleted);
+      map.off("click", onClick);
+      group.clearLayers();
+    };
+  }, [map]);
+
+  return <FeatureGroup ref={groupRef} />;
+}
+
+const STRIP_PANE = "crest-flood-strip";
+
+/**
+ * A legend toggle that works from the keyboard: a real button (Tab reaches it in legend order, Space/Enter flips it)
+ * with aria-pressed for the state and a drawn box for the eye. The old checkbox-in-a-label pairs had no focus ring
+ * over the map and read as "checkbox" without the layer's name on some readers.
+ */
+function LegendToggle({ on, setOn, label, children }: { on: boolean; setOn: (v: boolean) => void; label: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      className="crest-legend-toggle"
+      aria-pressed={on}
+      aria-label={label}
+      tabIndex={0}
+      onClick={() => setOn(!on)}
+      style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, background: "none", border: 0, padding: 0, font: "inherit", color: "inherit", cursor: "pointer", textAlign: "left", width: "100%" }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ width: 12, height: 12, border: "1.5px solid #1f2a30", borderRadius: 2, background: on ? "#1f2a30" : "#fff", display: "inline-block", flex: "none" }}
+      />
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The flood strip as a read-only overlay: its own pane under the drawn shapes (overlayPane is 400) with pointer
+ * events off, so it never catches a click meant for drawing or editing. Rebuilt when the strip's content changes
+ * (layerKey), not when the result object is merely new; drawn on the shared canvas, simplified to the zoom.
+ */
+function FloodStripLayer({ strip, on, dashed }: { strip: FloodStrip | null | undefined; on: boolean; dashed: boolean }) {
+  const map = useMap();
+  const key = strip ? layerKey(strip) : "";
+  const ref = useRef(strip);
+  ref.current = strip;
+  useEffect(() => {
+    if (!map.getPane(STRIP_PANE)) {
+      const pane = map.createPane(STRIP_PANE);
+      pane.style.zIndex = "350";
+      pane.style.pointerEvents = "none";
+    }
+    const fc = ref.current;
+    if (!fc || !on) return;
+    const mounted = mountFloodLayer(map, fc, {
+      pane: STRIP_PANE,
+      // Under a terrain outline the strip is only the fallback: a dashed edge and a faint fill.
+      style: (f) =>
+        dashed
+          ? { stroke: true, color: "#1d5f8f", weight: 1.2, dashArray: "6 4", opacity: 0.8, fill: true, fillColor: "#2a7fbf", fillOpacity: 0.06 }
+          : {
+              stroke: false,
+              fill: true,
+              fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
+              fillOpacity: 0.45,
+            },
+    });
+    return () => mounted.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the strip's content
+  }, [map, key, on, dashed]);
+  return null;
+}
+
+const OUTLINE_PANE = "crest-terrain-outline";
+
+/**
+ * The terrain outline: depth-band fills with a thin edge, above the strip and under the PLSS lines, not interactive.
+ * Rebuilt when the layer's content changes (its trace version and band fingerprint, layerKey), not on every render
+ * that hands down the same layer as a new object; drawn on the shared canvas, simplified to the zoom.
+ */
+function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefined; on: boolean }) {
+  const map = useMap();
+  const key = outline ? layerKey(outline) : "";
+  const ref = useRef(outline);
+  ref.current = outline;
+  useEffect(() => {
+    if (!map.getPane(OUTLINE_PANE)) {
+      const pane = map.createPane(OUTLINE_PANE);
+      pane.style.zIndex = "355";
+      pane.style.pointerEvents = "none";
+    }
+    const fc = ref.current;
+    if (!fc || !on) return;
+    // A layer built with the generalized extent line (trace version 8 on) draws the bands without their own edges and one
+    // dark line around the flood (option 3 of the 2026-11-05 mock-up); an older saved layer keeps its band edges.
+    const extent = fc.extent;
+    const mounted = mountFloodLayer(map, fc, {
+      pane: OUTLINE_PANE,
+      attribution: DEM_ATTRIBUTION_SHORT,
+      style: (f) => {
+        const color = (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf";
+        return { stroke: !extent, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
+      },
+    });
+    const edge = extentLine(fc, OUTLINE_PANE)?.addTo(map) ?? null;
+    const open = openEdgeLine(fc, OUTLINE_PANE)?.addTo(map) ?? null;
+    return () => {
+      mounted.remove();
+      edge?.remove();
+      open?.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the outline's content
+  }, [map, key, on]);
+  return null;
+}
+
+const PLSS_PANE = "crest-plss";
+
+const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Touched PLSS sections: outlines and labels (section number; T/R once per township) in their own pane above the strip and
+ * under the drawn shapes, pointer events off and nothing interactive, so drawing and editing are unaffected.
+ */
+function PlssLayer({ rows, on }: { rows: PlssRow[] | null | undefined; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(PLSS_PANE)) {
+      const pane = map.createPane(PLSS_PANE);
+      pane.style.zIndex = "360";
+      pane.style.pointerEvents = "none";
+    }
+    if (!rows || rows.length === 0 || !on) return;
+    const group = L.featureGroup([], { attribution: PLSS_ATTRIBUTION_SHORT } as L.LayerOptions);
+    const townships = new Map<string, L.LatLngBounds>();
+    const label = (at: L.LatLng, html: string, w: number, h: number) =>
+      L.marker(at, {
+        pane: PLSS_PANE,
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({ className: "crest-plss-label", iconSize: [w, h], iconAnchor: [w / 2, h / 2], html }),
+      });
+    for (const r of rows) {
+      const outline = L.geoJSON(
+        { type: "Feature", properties: {}, geometry: { type: "MultiPolygon", coordinates: r.coordinates } } as GeoJSON.Feature,
+        { pane: PLSS_PANE, interactive: false, style: () => ({ color: "#7a3b12", weight: 1.6, dashArray: "5 3", fill: false }) },
+      );
+      group.addLayer(outline);
+      const b = outline.getBounds();
+      const key = `${r.township} ${r.range}`;
+      townships.set(key, townships.has(key) ? townships.get(key)!.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast()));
+      group.addLayer(
+        label(
+          b.getCenter(),
+          `<div data-testid="plss-label" style="text-align:center;font-weight:700;font-size:13px;line-height:20px;color:#5a2a0a;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">Sec ${escHtml(r.section)}</div>`,
+          64,
+          20,
+        ),
+      );
+    }
+    // Township/range once per township, on the north edge of the sections it has in this list.
+    for (const [tr, b] of townships) {
+      group.addLayer(
+        label(
+          L.latLng(b.getNorth(), b.getCenter().lng),
+          `<div data-testid="plss-township-label" style="display:inline-block;padding:0 4px;border:1px solid #7a3b12;border-radius:2px;background:rgba(255,250,240,.92);font-size:11px;line-height:16px;font-style:italic;color:#5a2a0a;white-space:nowrap">${escHtml(tr)}</div>`,
+          88,
+          18,
+        ),
+      );
+    }
+    group.addTo(map);
+    return () => {
+      group.remove();
+    };
+  }, [map, rows, on]);
+  return null;
+}
+
+const ND911_PANE = "crest-nd911";
+const ND911_IN = "#b3261e";
+const ND911_OUT = "#6b6b6b";
+
+/**
+ * 911 address points: small circles in their own pane above the drawn shapes' fill. Points inside the strip are red
+ * and larger, the others grey. They are interactive only for the hover tooltip (address, place type, placement).
+ */
+function Nd911Layer({ pts, on, against }: { pts: Props["nd911"]; on: boolean; against: string }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(ND911_PANE)) {
+      const pane = map.createPane(ND911_PANE);
+      pane.style.zIndex = "420";
+    }
+    if (!pts || !on) return;
+    const group = L.featureGroup([], { attribution: ND911_ATTRIBUTION_SHORT } as L.LayerOptions);
+    const tip = (address: string, placeType: string, placement: string, extra: string) =>
+      `<div data-testid="nd911-tip" style="font-size:12px;line-height:1.35"><b>${escHtml(address)}</b><br/>Place type: ${escHtml(placeType || "not given")}; placement: ${escHtml(placement || "not given")}${extra}</div>`;
+    for (const p of pts.outside) {
+      group.addLayer(
+        L.circleMarker([p.lat, p.lon], { pane: ND911_PANE, radius: 3.5, color: "#fff", weight: 1, fillColor: ND911_OUT, fillOpacity: 0.9 }).bindTooltip(
+          tip(p.address, p.placeType, p.placement, `<br/>Outside the ${against}`),
+        ),
+      );
+    }
+    for (const r of pts.inside) {
+      group.addLayer(
+        L.circleMarker([r.lat, r.lon], { pane: ND911_PANE, radius: 6, color: "#fff", weight: 1.5, fillColor: ND911_IN, fillOpacity: 1 }).bindTooltip(
+          tip(r.address, r.placeType, r.placement, `<br/>Inside: ${escHtml(r.bandLabel)}, ${r.downstreamKm.toFixed(2)} km downstream${r.added ? "<br/>Added for review" : ""}`),
+        ),
+      );
+    }
+    group.addTo(map);
+    return () => {
+      group.remove();
+    };
+  }, [map, pts, on, against]);
+  return null;
+}
+
+function StripLegend({
+  strip,
+  message,
+  on,
+  setOn,
+  onZoom,
+  plss,
+  plssMessage,
+  plssOn,
+  setPlssOn,
+  nd911,
+  nd911Message,
+  nd911On,
+  setNd911On,
+  outline,
+  outlineMessage,
+  outlineOn,
+  setOutlineOn,
+}: {
+  strip: FloodStrip | null | undefined;
+  message?: string | null;
+  on: boolean;
+  setOn: (v: boolean) => void;
+  onZoom: () => void;
+  plss?: PlssRow[] | null;
+  plssMessage?: string | null;
+  plssOn: boolean;
+  setPlssOn: (v: boolean) => void;
+  nd911?: Props["nd911"];
+  nd911Message?: string | null;
+  nd911On: boolean;
+  setNd911On: (v: boolean) => void;
+  outline?: TerrainOutline | null;
+  outlineMessage?: string | null;
+  outlineOn: boolean;
+  setOutlineOn: (v: boolean) => void;
+}) {
+  const showOutline = !!outline && outlineOn;
+  const used = new Set((showOutline ? outline : strip)?.features.map((f) => f.properties.band) ?? []);
+  return (
+    <div
+      data-testid="flood-strip-legend"
+      role="group"
+      aria-label="Map layers"
+      style={{
+        position: "absolute",
+        left: 8,
+        bottom: 8,
+        zIndex: 1000,
+        maxWidth: 260,
+        background: "rgba(255,255,255,0.92)",
+        border: "1px solid #c9c2b4",
+        borderRadius: 6,
+        padding: "6px 8px",
+        fontSize: 12,
+        lineHeight: 1.35,
+        color: "#1f2a30",
+      }}
+    >
+      {strip ? (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <LegendToggle on={on} setOn={setOn} label="Show the flood strip">
+              Flood strip
+            </LegendToggle>
+            <button
+              type="button"
+              className="crest-legend-toggle"
+              onClick={onZoom}
+              style={{ marginLeft: "auto", fontWeight: 400, textDecoration: "underline", background: "none", border: 0, cursor: "pointer", font: "inherit", color: "inherit", whiteSpace: "nowrap" }}
+            >
+              zoom to
+            </button>
+          </div>
+          <div style={{ marginTop: 2, color: "#5c5a52" }}>
+            {FLOOD_STRIP_DISCLAIMER}.{showOutline && on ? " Dashed: the fallback under the terrain outline." : ""}
+          </div>
+          {outline ? (
+            <>
+              <div style={{ marginTop: 4 }}>
+                <LegendToggle on={outlineOn} setOn={setOutlineOn} label="Show the terrain outline">
+                  Terrain outline (approximate)
+                </LegendToggle>
+              </div>
+              <div data-testid="outline-legend-note" style={{ marginTop: 2, color: "#5c5a52" }}>
+                {OUTLINE_LABEL}; {outline.properties.outline_area_ac.toFixed(0)} ac.
+              </div>
+            </>
+          ) : (
+            <div data-testid="outline-legend-note" style={{ marginTop: 4, color: "#5c5a52" }}>
+              {outlineMessage ?? "Terrain outline: not built."}
+            </div>
+          )}
+          {on || showOutline ? (
+            <div style={{ marginTop: 4 }}>
+              {DEPTH_BANDS.filter((b) => used.has(b.id))
+                .reverse()
+                .map((b) => (
+                  <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 14, height: 10, background: b.color, opacity: 0.75, display: "inline-block" }} />
+                    {b.label}
+                  </div>
+                ))}
+              <div style={{ color: "#5c5a52" }}>
+                {showOutline ? "Desk depth over the terrain; not a model run." : "Schematic desk depth; not a model run."}
+              </div>
+            </div>
+          ) : null}
+          <div style={{ marginTop: 6, borderTop: "1px solid #e2dccf", paddingTop: 4 }}>
+            {plss && plss.length > 0 ? (
+              <LegendToggle on={plssOn} setOn={setPlssOn} label="Show the PLSS sections">
+                <span style={{ width: 14, height: 0, borderTop: "2px dashed #7a3b12", display: "inline-block" }} />
+                PLSS sections ({plss.length})
+              </LegendToggle>
+            ) : (
+              <div data-testid="plss-legend-note" style={{ color: "#5c5a52" }}>
+                {plssMessage ?? "PLSS sections: not looked up."}
+              </div>
+            )}
+            {nd911 ? (
+              <div style={{ marginTop: 2 }}>
+                <LegendToggle on={nd911On} setOn={setNd911On} label="Show the 911 address points">
+                  <span style={{ width: 9, height: 9, borderRadius: 9, background: ND911_IN, display: "inline-block" }} />
+                  911 address points ({nd911.inside.length} inside of {nd911.inside.length + nd911.outside.length})
+                </LegendToggle>
+              </div>
+            ) : (
+              <div data-testid="nd911-legend-note" style={{ color: "#5c5a52" }}>
+                {nd911Message ?? "911 address points: not looked up."}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ color: "#5c5a52" }}>{message ?? "No flood strip placed on the map yet — draw the dam line to place it. The schematic estimate below is computed from the record and still applies."}</div>
+      )}
+    </div>
+  );
+}
+
+export function MapDraw({
+  geometry,
+  lat,
+  lon,
+  onChange,
+  strip,
+  stripMessage,
+  plss,
+  plssMessage,
+  nd911,
+  nd911Message,
+  outline,
+  outlineMessage,
+  placing,
+  onPlaced,
+}: Props) {
+  const view = initialView(geometry, lat, lon);
+  const center: [number, number] = "center" in view ? view.center : ND_CENTER;
+  const [on, setOn] = useState(true);
+  const [plssOn, setPlssOn] = useState(true);
+  const [nd911On, setNd911On] = useState(true);
+  const [outlineOn, setOutlineOn] = useState(true);
+  const mapRef = useRef<L.Map | null>(null);
+  const zoom = () => {
+    const map = mapRef.current;
+    if (!map || !strip) return;
+    const b = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection).getBounds();
+    if (outline) b.extend(L.geoJSON(outline as unknown as GeoJSON.FeatureCollection).getBounds());
+    if (b.isValid()) map.fitBounds(b, { padding: [24, 24] });
+  };
+  return (
+    <div
+      style={{
+        position: "relative",
+        height: 480,
+        width: "100%",
+        cursor: placing ? "crosshair" : undefined,
+        borderRadius: 8,
+        overflow: "hidden",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <StripLegend
+        strip={strip}
+        message={stripMessage}
+        on={on}
+        setOn={setOn}
+        onZoom={zoom}
+        plss={plss}
+        plssMessage={plssMessage}
+        plssOn={plssOn}
+        setPlssOn={setPlssOn}
+        nd911={nd911}
+        nd911Message={nd911Message}
+        nd911On={nd911On}
+        setNd911On={setNd911On}
+        outline={outline}
+        outlineMessage={outlineMessage}
+        outlineOn={outlineOn}
+        setOutlineOn={setOutlineOn}
+      />
+      <MapContainer
+        ref={mapRef}
+        center={center}
+        zoom={"zoom" in view ? view.zoom : 10}
+        // Vector layers on canvas by default (the strip, the outline, the PLSS lines, the 911 points); the drawn shapes
+        // leaflet-draw edits stay SVG on their own renderer, as the plugin needs.
+        preferCanvas
+        style={{ height: "100%", width: "100%" }}
+      >
+        <LayersControl position="topright">
+          {LAYERS.map((b, i) => (
+            <LayersControl.BaseLayer key={b.id} name={b.name} checked={i === 0}>
+              <TileLayer url={b.url} attribution={b.attribution} maxZoom={19} maxNativeZoom={b.maxZoom} />
+            </LayersControl.BaseLayer>
+          ))}
+        </LayersControl>
+        <FloodStripLayer strip={strip} on={on} dashed={!!outline && outlineOn} />
+        <OutlineLayer outline={outline} on={outlineOn} />
+        <PlssLayer rows={plss} on={plssOn} />
+        <Nd911Layer pts={nd911} on={nd911On} against={outline ? "terrain outline" : "strip"} />
+        <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} placing={placing} onPlaced={onPlaced} />
+      </MapContainer>
+    </div>
+  );
+}

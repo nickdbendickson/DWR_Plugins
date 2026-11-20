@@ -952,7 +952,7 @@ def _classes():
             self.n.setDecimals(3)
             self.n.setRange(0.005, 1.0)
             self.n.setSingleStep(0.005)
-            self.n.setValue(0.06)
+            self.n.setValue(0.05)
             box, self.folder = path_row(self, folder=True)
             form.addRow("DEM", self.dem)
             # the live coverage line: does the chosen DEM cover the dam point?
@@ -1093,7 +1093,7 @@ def _classes():
             fill_layers(self.nlcd, "raster", True, a.get("nlcd_id", ""))
             fill_layers(self.manning, "raster", True, a.get("manning_id", ""))
             self.z.setCurrentIndex(max(self.z.findData(a.get("z_units", "auto")), 0))
-            self.n.setValue(a.get("manning_n", 0.06))
+            self.n.setValue(a.get("manning_n", 0.05))
             dams = a.get("dams_folder") or ""
             if wl._in_suite_pack(dams):        # the pack is read-only: never default to it
                 dams = ""
