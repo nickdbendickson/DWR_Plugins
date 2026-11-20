@@ -226,6 +226,14 @@ GPU_FV_WORDS = ("gpu-fv", "metal-fv", "shock", "hllc", "gpu shock", "shock-captu
 GPU_FV2_EXE = os.path.join(HERE, "metalflood", "engine_fv2.py")
 GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2", "shock 2nd order",
                  "second order")
+# 3.34.0: Boann's 2nd-order discontinuous-Galerkin solver (core/metalflood/engine_dg2): the
+# "slope-decoupled" RKDG2 of Kesserwani et al. 2018 (the scheme in LISFLOOD-FP 8.0), which evolves a
+# per-cell planar expansion (element average + x/y slopes) through the Galerkin weak form rather than
+# reconstructing the slopes from the neighbours. Its local slope limiter ("limitslopes") is on by
+# default for float32 rest stability; 'nolimitslopes' in the .par runs it unlimited. By name only.
+GPU_DG2_EXE = os.path.join(HERE, "metalflood", "engine_dg2.py")
+GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
+                 "discontinuous galerkin")
 
 
 def bundled_platform(system=None, machine=None):
@@ -289,14 +297,24 @@ def is_gpu_fv2(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_FV2_EXE
 
 
+def is_gpu_dg2(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_DG2_EXE
+
+
 def is_gpu_fv_any(exe):
     """Either shock-capturing finite-volume scheme (FV1 1st order or FV2 2nd order)."""
     return is_gpu_fv(exe) or is_gpu_fv2(exe)
 
 
+def is_gpu_shock(exe):
+    """Any of Boann's shock-capturing solvers: FV1, FV2 (finite volume) or DG2 (discontinuous
+    Galerkin) - as opposed to the diffusive ACC scheme or the built-in engine."""
+    return is_gpu_fv(exe) or is_gpu_fv2(exe) or is_gpu_dg2(exe)
+
+
 def is_gpu_any(exe):
-    """Any GPU engine: the ACC scheme or either shock-capturing FV scheme (1st or 2nd order)."""
-    return is_gpu(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe)
+    """Any GPU engine: the ACC scheme or any shock-capturing scheme (FV1, FV2 or DG2)."""
+    return is_gpu(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe) or is_gpu_dg2(exe)
 
 
 def is_inprocess(exe):
@@ -327,6 +345,8 @@ def resolve_exe(exe):
     v = (str(exe).strip() if exe else "")
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
+    if v.lower() in GPU_DG2_WORDS:
+        return GPU_DG2_EXE
     if v.lower() in GPU_FV2_WORDS:
         return GPU_FV2_EXE
     if v.lower() in GPU_FV_WORDS:
@@ -342,6 +362,9 @@ def describe_exe(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_dg2(exe):
+        return ("Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on the GPU; "
+                "NOT LISFLOOD-FP)")
     if is_gpu_fv2(exe):
         return ("Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite-volume shallow "
                 "water on the GPU; NOT LISFLOOD-FP)")
@@ -361,6 +384,8 @@ def engine_label(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_dg2(exe):
+        return "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
     if is_gpu_fv2(exe):
         return "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; NOT LISFLOOD-FP)"
     if is_gpu_fv(exe):
@@ -370,6 +395,8 @@ def engine_label(exe):
 
 def engine_name(exe):
     """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
+    if is_gpu_dg2(exe):
+        return "Boann (discontinuous Galerkin, 2nd order)"
     if is_gpu_fv2(exe):
         return "Boann (shock-capturing, 2nd order)"
     if is_gpu_fv(exe):
@@ -927,13 +954,16 @@ def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
 def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
     """Run core/metalflood in-process: on the Apple GPU when there is one, else the CPU build of
     the same kernels. The scheme is chosen from st.exe: the local-inertial ACC engine, the 1st-order
-    shock-capturing FV engine, or the 2nd-order FV2 engine. Writes lisflood.log whose first line is
-    the engine name."""
+    shock-capturing FV engine, the 2nd-order FV2 engine, or the 2nd-order DG2 (discontinuous
+    Galerkin) engine. Writes lisflood.log whose first line is the engine name."""
     from . import metalflood as mf
     t0 = time.time()
     lines = []
     exe = st.exe
-    if is_gpu_fv2(exe):
+    if is_gpu_dg2(exe):
+        runner, name, version = mf.run_par_dg2, mf.DG2_NAME, mf.DG2_VERSION
+        tag = "Boann (discontinuous Galerkin, 2nd order)"
+    elif is_gpu_fv2(exe):
         runner, name, version = mf.run_par_fv2, mf.FV2_NAME, mf.FV2_VERSION
         tag = "Boann (shock-capturing, 2nd order)"
     elif is_gpu_fv(exe):
@@ -1338,6 +1368,7 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
     who = ("The built-in engine" if is_builtin(exe)
+           else "Boann (discontinuous Galerkin, 2nd order)" if is_gpu_dg2(exe)
            else "Boann (shock-capturing, 2nd order)" if is_gpu_fv2(exe)
            else "Boann (shock-capturing)" if is_gpu_fv(exe)
            else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
@@ -1354,6 +1385,9 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     if is_gpu_fv2(exe):
         msg += (" This is Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite-volume "
                 "shallow water on {}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
+    if is_gpu_dg2(exe):
+        msg += (" This is Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on "
+                "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "
