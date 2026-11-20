@@ -135,6 +135,11 @@ class Deck:
         # breach-cell depth. Only the inflow cell and its near field (within ~300 m) differ between
         # the two; the rest of the domain agrees to ~0.2 mm.
         self.inflow_lf_order = "physicalinflow" not in par
+        # DG2 only: the local slope limiter (LISFLOOD-FP's "limitslopes" family). On by default -
+        # Boann's float32 DG2 needs it to hold a lake at rest (the unlimited scheme slowly amplifies
+        # slope round-off at a standing water body). "nolimitslopes" in the .par runs the raw,
+        # unlimited scheme (sharper on dynamic flows; not for long near-rest ponding).
+        self.dg2_limiter = "nolimitslopes" not in par
         self.valid = np.isfinite(z) & (z != NODATA)
         self.z = np.where(self.valid, z, 0.0)
         self.n = np.where(self.valid, n, 0.0)

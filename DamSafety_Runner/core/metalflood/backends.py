@@ -27,12 +27,16 @@ FV_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv.metal")
 FV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv.cpp")
 FV2_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv2.metal")
 FV2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv2.cpp")
+DG2_KERNEL_SOURCE = os.path.join(HERE, "kernels_dg2.metal")
+DG2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_dg2.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
 FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
 FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
                "k_stage_c_fv2", "k_end_fv2")
+DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_faces_dg2",
+               "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2")
 
 
 class BackendError(RuntimeError):
@@ -86,6 +90,25 @@ def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
     return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells)]
 
 
+def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
+    """[(name, dtype, count)] in the order of kernels_dg2.metal's buffer indices 0..26. The three
+    conserved variables (Uh, Uhu, Uhv) and their previous-step RK2 copy (Uh0, Uhu0, Uhv0) are stored
+    packed, three modal coefficients per cell (3*cells floats): [3 i + 0] element average, [3 i + 1]
+    x-slope, [3 i + 2] y-slope. The bed z is piecewise constant (one float per cell). 27 buffers keep
+    DG2 inside Metal's 31-slot argument-table cap (slopes are modal unknowns, not separate buffers)."""
+    cells = ny * nx
+    xf, yf = ny * (nx + 1), (ny + 1) * nx
+    f, u = np.float32, np.uint32
+    return [("z", f, cells), ("n2", f, cells), ("Uh", f, 3 * cells), ("Uhu", f, 3 * cells),
+            ("Uhv", f, 3 * cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
+            ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
+            ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
+            ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf),
+            ("Uh0", f, 3 * cells), ("Uhu0", f, 3 * cells), ("Uhv0", f, 3 * cells)]
+
+
 class Spec:
     """What tells the generic Metal/CPU backend which kernels to run: one engine's kernel
     source, its C++-build source and shim, the kernel names, the ctypes Params for that
@@ -137,6 +160,22 @@ def _fv2_plan(p):
 
 
 FV2_SPEC = Spec("fv2", FV2_KERNEL_SOURCE, SHIM, FV2_CPU_SOURCE, FV2_KERNELS, Params, _fv2_plan)
+
+
+def _dg2_plan(p):
+    one = (1, 1, 1)
+    faces = (p.wc + 1, p.wr + 1, 1)
+    cells = (p.wc, p.wr, 1)
+    # one SSP-RK2 step: predictor sweep (stage 0), then corrector sweep (stage 1), then close.
+    # k_save_dg2 copies U^n once at stage 0; k_limit_dg2 is a no-op when Params.limiter is 0.
+    return [("k_stage_p_dg2", one), ("k_begin_dg2", one), ("k_save_dg2", cells),
+            ("k_limit_dg2", cells), ("k_faces_dg2", faces), ("k_cont_dg2", cells),
+            ("k_stage_c_dg2", one), ("k_begin_dg2", one), ("k_save_dg2", cells),
+            ("k_limit_dg2", cells), ("k_faces_dg2", faces), ("k_cont_dg2", cells),
+            ("k_end_dg2", one)]
+
+
+DG2_SPEC = Spec("dg2", DG2_KERNEL_SOURCE, SHIM, DG2_CPU_SOURCE, DG2_KERNELS, Params, _dg2_plan)
 
 
 def _source_hash(spec):

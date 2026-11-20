@@ -32,6 +32,7 @@ BUILTIN_MARK = "builtin_lisflood.py"      # a run whose engine "binary" is this 
 GPU_MARK = "metalflood/engine.py"         # ... and this is Boann, ACC scheme (Runner 3.22.0)
 FV_MARK = "metalflood/engine_fv.py"       # ... Boann, shock-capturing (Runner 3.23.0)
 FV2_MARK = "metalflood/engine_fv2.py"     # ... Boann, shock-capturing 2nd order (Runner 3.33.0)
+DG2_MARK = "metalflood/engine_dg2.py"     # ... Boann, discontinuous Galerkin 2nd order (Runner 3.34.0)
 
 
 def _digest(body):
@@ -84,12 +85,14 @@ def _engine_block(engine, manifest):
     sha = str(sw.get("sha256") or "")
     norm = path.replace("\\", "/")
     gpu = norm.endswith(GPU_MARK)
+    dg2 = norm.endswith(DG2_MARK)
     fv2 = norm.endswith(FV2_MARK)
     fv = norm.endswith(FV_MARK)
     label = engine if isinstance(engine, str) and engine else (
         "built-in engine (numpy; NOT LISFLOOD-FP)"
         if path.endswith(BUILTIN_MARK) else
         "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)" if gpu else
+        "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)" if dg2 else
         "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; NOT LISFLOOD-FP)"
         if fv2 else
         "Boann, shock-capturing (HLLC finite volume; NOT LISFLOOD-FP)" if fv else

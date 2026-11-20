@@ -38,20 +38,31 @@ MF_FIX = 1.0e-4
 
 
 class Engine:
-    def __init__(self, deck, backend):
+    def __init__(self, deck, backend, limiter=None):
         self.d = d = deck
         self.b = backend
         ny, nx = d.ny, d.nx
         n_values = sum(len(s[1]) for s in d.series)
-        # the 2nd-order (FV2) backend needs the wider layout (previous-step state + slopes)
-        is_fv2 = getattr(backend, "spec", None) is be.FV2_SPEC
-        lay = be.fv2_buffer_layout if is_fv2 else be.fv_buffer_layout
+        spec = getattr(backend, "spec", None)
+        # each 2nd-order scheme needs its own layout: FV2 adds the previous-step state; DG2 stores
+        # the three modal coefficients of each conserved variable packed (and their RK2 copy).
+        self.is_dg2 = spec is be.DG2_SPEC
+        is_fv2 = spec is be.FV2_SPEC
+        self.scheme = "dg2" if self.is_dg2 else ("fv2" if is_fv2 else "fv")
+        lay = (be.dg2_buffer_layout if self.is_dg2 else
+               be.fv2_buffer_layout if is_fv2 else be.fv_buffer_layout)
         layout = lay(ny, nx, len(d.src_cells), len(d.series), n_values)
         a = self.a = backend.allocate(layout)
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
         a["n2"][:] = (d.n ** 2).ravel()
-        a["h"][:] = d.h0.ravel()
+        if self.is_dg2:
+            # DG2: the cell-average depth is modal coefficient 0; the slopes start at 0 (flat within
+            # each cell), which is exact and well balanced for a lake at rest over a piecewise-
+            # constant bed. The discharge modes (Uhu, Uhv) start at 0.
+            a["Uh"][0::3] = d.h0.ravel()
+        else:
+            a["h"][:] = d.h0.ravel()
         a["ok"][:] = d.valid.ravel()
         a["hmax"][:] = 0.0
         a["tmax"][:] = NODATA
@@ -67,7 +78,8 @@ class Engine:
             a["s_cell"][i] = r * nx + c
             a["s_series"][i] = k
         # first step's dt: the still-water wave speed of the deepest cell (velocities start at 0)
-        h0max = float(a["h"].max()) if a["h"].size else 0.0
+        hgrid = self.h2()
+        h0max = float(hgrid.max()) if hgrid.size else 0.0
         w0 = math.sqrt(G * h0max) if h0max > DRY_M else 0.0
         a["st"][S_WMAX] = np.float32(w0).view(np.uint32)
         self.src_rc = (np.array([s[0] for s in d.src_cells], int),
@@ -78,9 +90,17 @@ class Engine:
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.dry, p.arr_depth = DRY_M, d.arr_depth
-        self.win = self._window_from(self.h2() > 0)
+        if self.is_dg2:
+            # the DG2 slope limiter: on by default (float32 rest stability), the deck's
+            # 'nolimitslopes' or an explicit limiter=False turns it off.
+            lim = getattr(deck, "dg2_limiter", True) if limiter is None else bool(limiter)
+            p.fric2d = 1 if lim else 0
+            self.limiter = bool(lim)
+        self.win = self._window_from(hgrid > 0)
 
     def h2(self):
+        if self.is_dg2:
+            return self.a["Uh"][0::3].reshape(self.d.ny, self.d.nx)
         return self.a["h"].reshape(self.d.ny, self.d.nx)
 
     def _bbox(self, rmin, rmax, cmin, cmax):
@@ -125,27 +145,32 @@ class Engine:
         return out
 
 
-def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", order=1):
-    """Run a .par file with the finite-volume scheme. backend: 'auto', 'metal' or 'cpu'.
-    order 1 = first-order HLLC (FV1); order 2 = 2nd-order MUSCL + SSP-RK2 (FV2)."""
+def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", order=1,
+            limiter=None):
+    """Run a .par file with the shock-capturing scheme. backend: 'auto', 'metal' or 'cpu'.
+    order 1 = first-order HLLC (FV1); order 2 = 2nd-order MUSCL + SSP-RK2 (FV2); order 3 = 2nd-order
+    RKDG2 (discontinuous Galerkin). limiter (DG2 only): the local slope limiter; None reads the deck
+    (on unless the .par has 'nolimitslopes'), True/False overrides it."""
     def say(msg):
         if log:
             log(msg)
 
     deck = Deck(par_path)
-    spec = be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC
+    spec = (be.DG2_SPEC if int(order) >= 3 else
+            be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC)
+    lim = getattr(deck, "dg2_limiter", True) if limiter is None else bool(limiter)
     try:
         bk = be.make_backend(backend, spec=spec, log=say)
     except be.BackendError as e:
         raise EngineError(str(e))
     try:
-        return _run(deck, bk, progress, cancel, say)
+        return _run(deck, bk, progress, cancel, say, limiter=lim)
     finally:
         bk.close()
 
 
-def _run(d, bk, progress, cancel, say):
-    eng = Engine(d, bk)
+def _run(d, bk, progress, cancel, say, limiter=False):
+    eng = Engine(d, bk, limiter=limiter)
     a = eng.a
     ny, nx, dx = d.ny, d.nx, d.dx
     xll, yll = d.xll, d.yll
@@ -175,7 +200,7 @@ def _run(d, bk, progress, cancel, say):
         return out
 
     def volume():
-        return float(a["h"].sum(dtype=np.float64)) * dx * dx
+        return float(eng.h2().sum(dtype=np.float64)) * dx * dx
 
     def h_out():
         return eng.h2().astype(np.float64)
@@ -205,7 +230,7 @@ def _run(d, bk, progress, cancel, say):
     def write_mass(tt):
         vol = volume()
         verr = vol - (vol0 + vin - vout)
-        area = float((a["h"] > DRY_M).sum()) * dx * dx
+        area = float((eng.h2() > DRY_M).sum()) * dx * dx
         mass_f.write("{:<12.3f} {:<10.4f} {:<10.4f} {:<12d} {:<12.1f} {:<12.3f} {:<12.4f} "
                      "{:<10.4f} {:<13.4f} {:<14.6f} {:<12.4f} {:<12.4f}\n".format(
                          tt, last_dt, min_dt if steps else last_dt, steps, area, vol, qin,
