@@ -19,9 +19,9 @@ The standalone Crest app in dwr_crest/ is licensed under the PolyForm
 Noncommercial License 1.0.0 — see dwr_crest/LICENSE. This file does not
 override that license.
 
-damit_ai/ is not a QGIS plugin and is not licensed by this file. (In the
-DamIT repository the same tools are licensed under PolyForm Noncommercial
-1.0.0.)
+The standalone AI tools in damit_ai/ (Heim and Vor) are licensed under the
+PolyForm Noncommercial License 1.0.0 — see damit_ai/LICENSE. This file does
+not override that license.
 
 Bundled or downloaded third-party components keep their own licenses.
 
