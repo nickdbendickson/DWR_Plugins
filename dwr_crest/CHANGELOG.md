@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-20
+
+- **Screening uses the dam's own DEM for every clip.** `crest-desktop/crest/qgis_run.py` `_settings_arg()` only wrote
+  the ND offline pack's DEM or `<work>/dem.tif` into `crest_settings.json`, so a DEM typed in the Report step's DEM
+  field, chosen with "Choose DEM", or set in `CREST_DEM` never reached the screening, and its larger clips downloaded
+  USGS 3DEP afresh. The screening now gets the same DEM as the flood model (`dem_path`: the DEM field, `CREST_DEM`,
+  the chosen DEM, `<work>/dem.tif` / `dem.vrt`, then the pack's DEM) as its local DEM folder (`terrain_source` 1,
+  `local_dem`, `larger_clips` 2), and the log names it. Same fix as DamIT Crest (damit #146). Tests:
+  `tests/test_handoff.py` (GateTests).
+
 ## 2026-11-18
 
 - **Security: the browser fallback no longer puts the API token on the browser's command line.** When no pywebview
