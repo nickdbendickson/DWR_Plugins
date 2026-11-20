@@ -497,6 +497,17 @@ class GdalTerrain:
         self.default_n = default_n
         self.resample, self.resample_source = resolve_resample(resample)
         ds = GS.open_raster(self.dem_path)
+        # audit: refuse an untagged terrain source instead of warping it as if it were already
+        # in work_srs. A no-CRS source (an ESRI .asc carries none) warped with dstSRS=work_srs
+        # lands off-map, and a hole refill of that terrain then defaults to EPSG:5070 (the
+        # Edenville-Sanford 2020 storm: a 0 m pit stopped the domain below Midland). #397 caught
+        # that pit downstream on the first refill; this refuses the terrain read itself, so the
+        # case must tag or supply the DEM's CRS and no read is silently reprojected.
+        if not ds.GetProjection():
+            raise ValueError(
+                "the terrain {0} has no coordinate system; a terrain read must not be silently "
+                "reprojected or default to EPSG:5070. Tag the DEM's CRS, e.g. "
+                "gdal_edit.py -a_srs EPSG:26914 {0}".format(self.dem_path))
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
         # audit P3: warped DEM windows, keyed by window / cell / method / z factor; a VRT's
         # own stamp changes when it is rebuilt, which is what a refill or a new mosaic does
