@@ -1,7 +1,7 @@
 """
 Event inflow hydrograph from an nd_pmp hyetograph CSV (pure Python + numpy, no QGIS).
 
-Losses   : SCS Curve Number (optional AMC II->III, Ia ratio)  |  initial + constant
+Losses   : SCS Curve Number (optional AMC II->III, Ia ratio)  |  initial + constant  |  Green-Ampt
 Transform: SCS dimensionless UH (lag or Tc, peak rate factor, optional PMF peaking adjustment)  |  Clark UH
 Baseflow : constant  |  exponential recession Q0 * k**(t/24)
 
@@ -73,6 +73,117 @@ def init_const_excess(precip_incr, dt, initial_in, rate_in_hr):
     return ex, {"initial_in": initial_in, "constant_in_hr": rate_in_hr}
 
 
+# ---------------------------------------------------------------- Green-Ampt
+# Green-Ampt soil parameters by USDA texture class. Each row: wetting-front suction head psi (in),
+# saturated hydraulic conductivity Ks (in/hr), total porosity, effective porosity theta_e.
+# SOURCE: Rawls, Brakensiek & Miller (1983), "Green-Ampt infiltration parameters from soils data",
+# J. Hydraulic Eng. 109(1):62-70, Table 1 (mean values), as reprinted in Chow, Maidment & Mays (1988)
+# Applied Hydrology, Table 4.3.1 (cm and cm/h there; converted here at 2.54 cm/in).
+# VERIFIED = False: typed from the published table, not yet checked against the printed page by a
+# person. A run that uses a texture preset is stamped PROVISIONAL in its outputs until someone checks
+# these rows against Table 4.3.1 and sets GA_TEXTURE_VERIFIED = True. Typed (custom) values are the
+# user's own and are not stamped.
+GA_TEXTURE_SOURCE = ("Rawls, Brakensiek & Miller (1983) Table 1, mean values; reprinted in Chow, Maidment & "
+                     "Mays (1988) Applied Hydrology Table 4.3.1")
+GA_TEXTURE_VERIFIED = False
+_CM = 1.0 / 2.54
+GA_TEXTURES = {          # name: (suction_in, ks_in_hr, porosity, effective_porosity)
+    "sand":            (4.95 * _CM, 11.78 * _CM, 0.437, 0.417),
+    "loamy sand":      (6.13 * _CM, 2.99 * _CM, 0.437, 0.401),
+    "sandy loam":      (11.01 * _CM, 1.09 * _CM, 0.453, 0.412),
+    "loam":            (8.89 * _CM, 0.34 * _CM, 0.463, 0.434),
+    "silt loam":       (16.68 * _CM, 0.65 * _CM, 0.501, 0.486),
+    "sandy clay loam": (21.85 * _CM, 0.15 * _CM, 0.398, 0.330),
+    "clay loam":       (20.88 * _CM, 0.10 * _CM, 0.464, 0.309),
+    "silty clay loam": (27.30 * _CM, 0.10 * _CM, 0.471, 0.432),
+    "sandy clay":      (23.90 * _CM, 0.06 * _CM, 0.430, 0.321),
+    "silty clay":      (29.22 * _CM, 0.05 * _CM, 0.479, 0.423),
+    "clay":            (31.63 * _CM, 0.03 * _CM, 0.475, 0.385),
+}
+GA_TEXTURE_NAMES = list(GA_TEXTURES)
+
+
+def ga_texture(name, initial_saturation=0.0):
+    """(suction_in, ks_in_hr, moisture_deficit) of a texture class at an initial effective saturation
+    Se (0 = dry, 1 = saturated): deficit = theta_e * (1 - Se) (Chow et al. 1988 eq. 4.3.13)."""
+    key = str(name).strip().lower()
+    if key not in GA_TEXTURES:
+        raise ValueError("Unknown Green-Ampt texture %r (one of: %s)" % (name, ", ".join(GA_TEXTURE_NAMES)))
+    if not 0.0 <= initial_saturation <= 1.0:
+        raise ValueError("Initial effective saturation must be 0-1")
+    psi, ks, _, te = GA_TEXTURES[key]
+    return psi, ks, te * (1.0 - initial_saturation)
+
+
+def _ga_ponded_F(F0, dt, ks, pd):
+    """Cumulative infiltration after dt of ponded infiltration from F0: the implicit Green-Ampt
+    F - F0 - pd ln((F + pd) / (F0 + pd)) = Ks dt (Chow et al. 1988 eq. 4.4.4), solved by Newton
+    (the function is convex and increasing in F, so Newton from F0 + Ks dt converges monotonically)."""
+    if pd <= 0.0:
+        return F0 + ks * dt
+    F = F0 + ks * dt
+    for _ in range(100):
+        g = F - F0 - pd * np.log((F + pd) / (F0 + pd)) - ks * dt
+        dg = 1.0 - pd / (F + pd)
+        step = g / dg
+        F -= step
+        if abs(step) < 1e-10:
+            break
+    return max(F, F0)
+
+
+def green_ampt_excess(precip_incr, dt, ks_in_hr, suction_in, moisture_deficit, initial_in=0.0,
+                      impervious_pct=0.0):
+    """Excess rain (in per step) by Green-Ampt with ponding inside a step (Mein & Larson 1973; the
+    step scheme of Chow, Maidment & Mays 1988 sec. 4.4). Rain falls at a constant rate within a step.
+    An initial loss (in) is taken from the pervious area's rain first; the impervious fraction sheds all
+    its rain. Water left on the surface leaves as excess at once (no ponded run-on), as in HEC-HMS."""
+    ks, psi, dth = float(ks_in_hr), float(suction_in), float(moisture_deficit)
+    if ks < 0 or psi < 0 or dth < 0:
+        raise ValueError("Green-Ampt Ks, suction and moisture deficit must be >= 0")
+    if not 0.0 <= impervious_pct <= 100.0:
+        raise ValueError("Percent impervious must be 0-100")
+    imp = impervious_pct / 100.0
+    pd = psi * dth
+    ex = np.zeros(len(precip_incr))
+    F = 0.0
+    ia_left = float(initial_in)
+    ponded = False
+    for k, p in enumerate(np.asarray(precip_incr, float)):
+        p = max(0.0, float(p))
+        take = min(p, ia_left)
+        ia_left -= take
+        pp = p - take                      # rain reaching the pervious soil this step
+        t_left = dt * (1.0 - take / p) if p > 0 else dt
+        F0 = F
+        if pp > 0.0 and ks > 0.0:
+            i = pp / t_left                # rate over the rest of the step
+            if F > 0.0:
+                fcap = ks * (1.0 + pd / F)
+            else:
+                fcap = ks if pd == 0.0 else np.inf
+            if fcap <= i:                  # ponded all step
+                F = _ga_ponded_F(F, t_left, ks, pd)
+                ponded = True
+            else:
+                Ft = F + pp                # all of it infiltrates, unless ponding starts within the step
+                if i > ks and ks * (1.0 + pd / Ft) <= i:
+                    Fp = ks * pd / (i - ks)            # cumulative infiltration at ponding (eq. 4.4.2)
+                    tp = (Fp - F) / i
+                    F = _ga_ponded_F(Fp, t_left - tp, ks, pd)
+                    ponded = True
+                else:
+                    F = Ft
+            F = min(F, F0 + pp)            # never more than the rain that fell
+        elif pp > 0.0 and ks == 0.0:
+            pass                           # no infiltration at all
+        infil = F - F0
+        ex[k] = imp * p + (1.0 - imp) * (pp - infil)
+    info = {"ga_ks_in_hr": ks, "ga_suction_in": psi, "ga_moisture_deficit": dth, "ga_initial_in": float(initial_in),
+            "ga_impervious_pct": float(impervious_pct), "ga_infiltrated_in": (1.0 - imp) * F, "ga_ponded": ponded}
+    return np.maximum(ex, 0.0), info
+
+
 # ---------------------------------------------------------------- unit hydrographs (cfs per inch of excess)
 def scs_uh(area_mi2, dt, lag_hr, prf=484.0, peaking_pct=0.0, sampling="point"):
     """SCS UH. Tp = dt/2 + lag. qp = PRF*A/Tp (cfs/in). The curvilinear DUH is scaled from the tabulated
@@ -128,12 +239,19 @@ def clark_uh(area_mi2, dt, tc_hr, r_hr):
 # ---------------------------------------------------------------- main
 @dataclass
 class HydroConfig:
-    loss: str = "scs_cn"           # scs_cn | init_const
+    loss: str = "scs_cn"           # scs_cn | init_const | green_ampt
     cn: float = 80.0
     amc3: bool = False
     ia_ratio: float = 0.2
     initial_in: float = 1.0
     constant_in_hr: float = 0.1
+    ga_texture: str = None         # Green-Ampt: a texture class (GA_TEXTURES) or None for the values below
+    ga_initial_saturation: float = 0.0   # texture preset: initial effective saturation Se (0-1)
+    ga_ks_in_hr: float = 0.1       # custom: saturated hydraulic conductivity (in/hr)
+    ga_suction_in: float = 4.0     # custom: wetting-front suction head (in)
+    ga_moisture_deficit: float = 0.3     # custom: theta_s - theta_i (fraction)
+    ga_initial_in: float = 0.0     # initial loss before Green-Ampt (in)
+    ga_impervious_pct: float = 0.0
     transform: str = "scs"         # scs | clark
     lag_hr: float = None
     tc_hr: float = None            # SCS: lag = 0.6*Tc if lag not given; Clark: Tc
@@ -161,6 +279,18 @@ def compute(hdr, dt, precip, cfg: HydroConfig):
         ex, linfo = scs_cn_excess(precip, cfg.cn, cfg.ia_ratio, cfg.amc3)
     elif cfg.loss == "init_const":
         ex, linfo = init_const_excess(precip, dt, cfg.initial_in, cfg.constant_in_hr)
+    elif cfg.loss == "green_ampt":
+        if cfg.ga_texture:
+            psi, ks, dth = ga_texture(cfg.ga_texture, cfg.ga_initial_saturation)
+        else:
+            psi, ks, dth = cfg.ga_suction_in, cfg.ga_ks_in_hr, cfg.ga_moisture_deficit
+        ex, linfo = green_ampt_excess(precip, dt, ks, psi, dth, cfg.ga_initial_in, cfg.ga_impervious_pct)
+        linfo = {k[3:]: v for k, v in linfo.items()}          # loss_ga_* -> loss_*
+        linfo["texture"] = cfg.ga_texture or "custom"
+        if cfg.ga_texture:
+            linfo["initial_saturation"] = cfg.ga_initial_saturation
+            linfo["param_source"] = GA_TEXTURE_SOURCE
+            linfo["param_status"] = "PRODUCTION" if GA_TEXTURE_VERIFIED else "PROVISIONAL"
     else:
         raise ValueError(cfg.loss)
     pinfo, cas = {}, None
@@ -240,7 +370,8 @@ def write_hydrograph(out_dir, res, t, p, e, q):
     with open(path, "w", newline="") as fh:
         for k in ("storm_id", "storm_type", "duration_hr", "temporal_distribution", "peak_cfs", "time_to_peak_hr",
                   "runoff_volume_in", "runoff_volume_acft", "area_mi2", "contrib_area_mi2", "dt_hr", "loss",
-                  "transform", "baseflow", "pothole_mode", "excess_before_potholes_in", "pothole_capacity_in"):
+                  "transform", "baseflow", "pothole_mode", "excess_before_potholes_in", "pothole_capacity_in",
+                  "loss_texture", "loss_ks_in_hr", "loss_suction_in", "loss_moisture_deficit", "loss_param_status"):
             if k not in res:
                 continue
             fh.write("# %s: %s\n" % (k, _f(res.get(k), 4)))
@@ -262,7 +393,8 @@ def _write_cas(cd, res, dt, n):
 SUMMARY_COLS = ["storm_id", "storm_type", "duration_hr", "temporal_distribution", "area_mi2", "contrib_area_mi2",
                 "precip_in", "excess_in", "runoff_volume_in", "runoff_volume_acft", "peak_cfs", "time_to_peak_hr",
                 "loss", "transform", "baseflow", "pothole_mode", "excess_before_potholes_in", "pothole_capacity_in",
-                "pothole_stored_end_in", "pothole_min_contrib_fraction", "pothole_max_contrib_fraction", "hydrograph_csv"]
+                "pothole_stored_end_in", "pothole_min_contrib_fraction", "pothole_max_contrib_fraction", "hydrograph_csv",
+                "loss_param_status"]
 
 
 def run_folder(hyeto_paths, out_dir, cfg: HydroConfig, log=print):
@@ -277,6 +409,9 @@ def run_folder(hyeto_paths, out_dir, cfg: HydroConfig, log=print):
             res["cascade_csv"] = _write_cas(cd, res, dt, n)
         res.pop("_cascade", None)
         rows.append(res)
+        if log and res.get("loss_param_status") == "PROVISIONAL":
+            log("%s: Green-Ampt '%s' parameters are PROVISIONAL (texture table not yet checked against %s)"
+                % (res["storm_id"], res["loss_texture"], GA_TEXTURE_SOURCE))
         if log:
             log("%s: peak %.0f cfs at %.2f h, runoff %.2f in" % (res["storm_id"], res["peak_cfs"],
                                                                  res["time_to_peak_hr"], res["runoff_volume_in"]))

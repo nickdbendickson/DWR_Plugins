@@ -11,6 +11,7 @@ Atlas 14 does not cover (e.g. Oregon) raise :class:`CoverageError`.
 No PMP (probable maximum precipitation) value comes from here: Atlas 14 publishes frequency
 estimates up to the 1000-year ARI only.
 """
+import contextlib
 import datetime
 import hashlib
 import json
@@ -290,3 +291,40 @@ def alternating_block(pf, years, storm_minutes, step_minutes):
         c += v
         out.append((step_minutes * (k + 1), round(v, 4), round(c, 4)))
     return out
+
+
+# ------------------------------------------------------------------ GDAL error mode (gisgrid, gridstats, temporal)
+# audit 2026-11-20: gdal.UseExceptions() / ogr.UseExceptions() are process-wide in the GDAL bindings QGIS ships.
+# gridstats called them at import and gisgrid / temporal inside functions, never switching back, so loading or
+# running an Atlas 14 tool changed GDAL for QGIS and every other plugin (code written for the default mode checks
+# `if ds is None` and meets an exception instead). The Atlas 14 core now asks for exceptions only inside
+# gdal_raising(), which puts the previous mode back on the way out. osgeo is imported only when it is entered, so
+# this module stays pure Python.
+def _uses_exceptions(module):
+    try:
+        return bool(module.GetUseExceptions())
+    except Exception:                                            # noqa - an old binding without the getter
+        return False
+
+
+@contextlib.contextmanager
+def gdal_raising(*names):
+    """GDAL Python exceptions on for the enclosed block only, for the osgeo modules named ("gdal", "ogr", "osr";
+    default gdal and ogr); each one switched on here is switched off again on exit (in reverse order: GDAL >= 3.7
+    keeps the error handlers on a stack), so the mode QGIS and the other plugins see never changes. Also a
+    decorator: ``@A.gdal_raising("gdal")`` runs the whole function this way."""
+    import importlib
+    switched = []
+    try:
+        for name in names or ("gdal", "ogr"):
+            module = importlib.import_module("osgeo." + name)
+            if not _uses_exceptions(module):
+                module.UseExceptions()
+                switched.append(module)
+        yield
+    finally:
+        for module in reversed(switched):
+            try:
+                module.DontUseExceptions()
+            except Exception:                                    # noqa - never fails a run
+                pass

@@ -53,6 +53,7 @@ from . import grid_default as griddef
 from . import crestburn
 from . import lisflood as lfmod
 from . import sgc as sgcmod
+from . import pothole_fill as potmod             # 3.35.0
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
@@ -364,6 +365,12 @@ class RunSettings:
         self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
         self.sgc_start = "auto"
         self.sgc_curve = list(sgcmod.BIEGER_2015_US)
+        # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
+        # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
+        # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
+        # spill level. The water is initial water like a pond: it is taken off the depths that
+        # are reported and classified.
+        self.pothole_start_fill = 0.0
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -640,6 +647,9 @@ def key_settings(st):
         for k in ("lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n",
                   "sgc_start", "sgc_curve"):
             d.pop(k, None)
+    # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
+    if not getattr(st, "pothole_start_fill", 0.0):
+        d.pop("pothole_start_fill", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -2280,6 +2290,31 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             warnings.append(_bw)
             log(_bw)
     has_ponds = st.edits is not None and st.edits.has_water()
+    pot_frac = float(getattr(st, "pothole_start_fill", 0.0) or 0.0)
+    if not 0.0 <= pot_frac <= 1.0:
+        raise ValueError("pothole_start_fill must be 0-1, got {}".format(pot_frac))
+    start_cache = {}
+
+    def start_depth(dem, bnds, cell):
+        """3.35.0: the run's initial water (m): the ponds, plus the potholes' start fill, or None.
+        The potholes are found on the model DEM with the ponds' water on it. Built once per grid."""
+        ponds = terrain_src.initial_depth(bnds, cell) if has_ponds else None
+        if pot_frac <= 0.0:
+            return ponds
+        key = (dem.x0, dem.y0, dem.dx, dem.data.shape)
+        if key not in start_cache:
+            z = dem.masked().astype(np.float64)
+            p0 = np.zeros_like(z) if ponds is None else np.nan_to_num(np.where(
+                ponds.valid(), ponds.data, 0.0))
+            extra, pinfo = potmod.start_fill(z + p0, pot_frac, dem.dx)
+            total = p0 + np.nan_to_num(extra)
+            start_cache[key] = dem.like(np.where(dem.valid(), total, dem.nodata))
+            line = potmod.describe(pinfo)
+            log(line)
+            report["pothole_start_fill"] = dict(pinfo)
+            if line not in warnings:
+                warnings.append(line)
+        return start_cache[key]
 
     def manning_for(bnds, cell):
         man = terrain_src.manning(bnds, cell) if hasattr(terrain_src, "manning") else None
@@ -2953,7 +2988,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
-        init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
+        init = start_depth(dem, bnds, cs)
         gl = gauge_list(bnds, gauges)
         chans = sgc_for(dem, tag)
 
@@ -3053,7 +3088,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         """Results of a finished run (resume)."""
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
-        init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
+        init = start_depth(dem, bnds, cs)
         gl = gauge_list(bnds, st.gauges)
         lst = lfmod.LisfloodSettings(st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
