@@ -334,7 +334,9 @@ def _run(d, bk, progress, cancel, say):
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
             # never cut a step to land on a time (as LISFLOOD-FP): a cut step is short, and the
-            # Runner reads a short step in the .mass file as a collapsing solver
+            # Runner reads a short step in the .mass file as a collapsing solver. The kernels'
+            # clip_end Param is reserved for that cut and is deliberately held False here (not dead
+            # plumbing): enabling it would reintroduce the .mass dt-collapse false positive above.
             clip = False
             want = int(math.ceil((t_event - t) / max(mean_dt, 1e-3))) + 1
             n = max(1, min(BATCH_STEPS, want))

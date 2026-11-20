@@ -85,7 +85,8 @@ SCHEMA = collections.OrderedDict([
     ("manning_n", {
         "kind": "number", "label": "Manning's n (where there is no n raster or land cover)",
         "minimum": 0.01, "maximum": 0.3, "decimals": 3,
-        "help": "The roughness used for cells without an n raster / NLCD class.",
+        "help": "The uniform roughness for cells with no n raster / NLCD class. Prefer a "
+                "land-cover (NLCD) raster where you have one; this is only the fallback.",
         "tools": "Screening (run breach simulation), Runner, Crest"}),
 ])
 KEYS = tuple(SCHEMA)

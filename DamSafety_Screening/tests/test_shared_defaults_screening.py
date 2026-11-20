@@ -48,9 +48,10 @@ bh = BreachHydrograph()
 bh.initAlgorithm()
 applied, bad = ST.apply_shared_defaults(bh, "ndscreen")
 assert dict(applied) == {"MODE": 1, "METHOD": BreachHydrograph.METHODS.index("MLM")}, (applied, bad)
-# the shipped values give tool 7 Manning's n 0.06 (Nick 2026-11-13; was 0.05)
+# the shipped values give tool 7 Manning's n 0.05 (uniform fallback moved 0.06 -> 0.05,
+# prefer NLCD land cover; Runner 3.27.0)
 use({})
 sim = RunBreachSim()
 sim.initAlgorithm()
-assert dict(ST.apply_shared_defaults(sim, "ndscreen")[0])["NDEF"] == 0.06
+assert dict(ST.apply_shared_defaults(sim, "ndscreen")[0])["NDEF"] == 0.05
 print("test_shared_defaults_screening: ok")

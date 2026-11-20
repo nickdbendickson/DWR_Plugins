@@ -48,9 +48,12 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 Per step: `dt = min(initial_tstep, cfl dx / sqrt(g h_max))`; every face
 `q = (θ q + (1-θ)/2 (q_up + q_down) - g h_f dt dS) / (1 + g dt n² |q_vec| / h_f^(7/3))` with
 `h_f = max(η) - max(z)` (no flow at 1 mm or less, `h_f` capped at 10 m); FREE edges as
-LISFLOOD-FP's with no slope given; continuity; then the running maxima. What it takes from
-LISFLOOD-FP 8.3's source (`fp_acc.cpp`, `iterateq.cpp`, `boundary.cpp`, `util.cpp`), where the
-numpy built-in engine (`core/builtin_lisflood.py`) differs:
+LISFLOOD-FP's with no slope given; continuity; then the running maxima. This is the published
+local-inertial (ACC) scheme - Bates, Horritt & Fewtrell (2010), *J. Hydrol.* 387:33-45, with the
+theta-weighted flux of de Almeida et al. (2012), *Water Resour. Res.* 48:W05528 - here read directly
+from LISFLOOD-FP 8.3's source (`fp_acc.cpp`, `iterateq.cpp`, `boundary.cpp`, `util.cpp`) so the
+kernels reproduce 8.3's exact behaviour. Where the numpy built-in engine
+(`core/builtin_lisflood.py`) differs:
 
 - **2-D friction** (`|q_vec|` from the face's discharge and the mean of the four crossing faces),
   LISFLOOD-FP's default since version 8; `1Dfriction` in the `.par` turns it off.

@@ -484,7 +484,7 @@ def the_carve_and_the_refill_keep_the_values_in_a_compound_crs():
         assert abs(got["max_m"] - 2.0) < 1e-6, got
         g = Grid(np.full((20, 20), np.nan), BOX[0], BOX[3], 10.0,
                  crs_wkt=_srs("EPSG:26914+6360").ExportToWkt())
-        tile = _crs_dem(d, "tile.tif", "EPSG:26914", 396.24)
+        tile = _crs_dem(d, "tile.tif", "EPSG:26914", 396.24, relief=2.0)   # real ground, median 396.24
         out = rf.fill_grid(g, tile)
         assert abs(float(np.nanmedian(out.data)) - 396.24) < 1e-3, float(np.nanmedian(out.data))
     finally:

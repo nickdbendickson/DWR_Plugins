@@ -638,7 +638,7 @@ def conditioning_preview_tool_shows_the_buildings_and_writes_the_manning_grid():
         assert "Buildings: Manning's n = 0.12 inside 1 footprint(s)" in r["RESULT"], r["RESULT"]
         assert r["MANNING_OUT"].endswith("cond_manning_n.tif")
         n = np.load(os.path.splitext(r["MANNING_OUT"])[0] + ".npy")
-        assert abs(np.nanmax(n) - 0.12) < 1e-9 and abs(np.nanmin(n) - 0.06) < 1e-9
+        assert abs(np.nanmax(n) - 0.12) < 1e-9 and abs(np.nanmin(n) - 0.05) < 1e-9
         r = a.processAlgorithm({"DEM": _FakeRaster(), "DAM_POINT": fq.QgsPointXY(0, 0),
                                 "RADIUS_MI": 0.6, "CELL": 20.0, "RECEPTOR_POINTS": src,
                                 "BUILDINGS": 1, "OUTPUT": out},

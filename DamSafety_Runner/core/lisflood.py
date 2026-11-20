@@ -207,7 +207,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
-# 3.22.0: the GPU engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
+# 3.29.0: the GPU engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (one
 # core, needs a C++ compiler). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.

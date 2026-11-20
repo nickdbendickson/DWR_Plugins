@@ -169,7 +169,7 @@ class RunSettings:
         self.user_hydrograph = None
         self.cell_size_m = 10.0
         self.planning_cell_m = 30.0
-        self.manning_n = 0.06
+        self.manning_n = 0.05            # uniform fallback where there is no n raster / NLCD class (shared default, Core defaults.json); prefer a land-cover raster
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
@@ -3070,8 +3070,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if lfmod.is_gpu(st.lisflood_exe):
         gmsg = ("This run uses the GPU engine (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
                 "kernels, on {}), not LISFLOOD-FP itself. It matched LISFLOOD-FP 8.3 within "
-                "millimetres on the test cases (DWR-2801 at 30 m, Lake Delhi 2010), but it is new: "
-                "confirm a final hazard classification with a LISFLOOD-FP run."
+                "millimetres across the test cases (DWR-2801 at 30 m, Lake Delhi 2010) EXCEPT at "
+                "the breach-inflow cell, where its depth differs from LISFLOOD-FP's by up to ~1 m "
+                "at the hydrograph peak (a mass-conserving inflow limiter, not a solver error; see "
+                "the engine README) - depths beyond ~300 m from the breach match within 4 mm. It "
+                "is new: confirm a final hazard classification with a LISFLOOD-FP run."
                 .format(lfmod.gpu_backend_note()))
         if gmsg not in warnings:
             warnings.append(gmsg)
@@ -3209,7 +3212,19 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 else:
                     tile = os.path.join(model_dir, "dem_refill.tif")
                     try:
-                        dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
+                        # audit (fix I): a 3DEP refill reprojects the fetched tile into the DEM's
+                        # CRS; an untagged terrain passes crs=None and fetch_3dep then defaults to
+                        # EPSG:5070 - the Edenville-Sanford 2020 storm warped off-map and left a 0 m
+                        # pit below Midland. Refuse at the refill with the real cause (covers the
+                        # no-CRS ASCII path too), rather than defaulting; #397's check_tile still
+                        # guards a tile that carries a CRS but holds no ground.
+                        _dem_crs = getattr(dem, "crs_wkt", None)
+                        if not _dem_crs:
+                            raise ValueError(
+                                "the terrain has no coordinate system, so a 3DEP refill cannot be "
+                                "reprojected into it without silently defaulting to EPSG:5070; tag "
+                                "the DEM's CRS, e.g. gdal_edit.py -a_srs EPSG:26914 <dem>")
+                        dem_refill.fetch_3dep(box, cs, tile, crs=_dem_crs)
                         dem_refill.check_tile(tile)      # 3.20.14: no 0 m pit from a tile of no ground
                         refill_paths.append(tile)
                         refilled = True
@@ -5530,7 +5545,7 @@ def render_report(r):
                   "- {:,} of {:,} cells took the default n = {} because the land-cover "
                   "raster did not cover them.".format(
                       int(mc.get("default_cells", 0)), int(mc["total_cells"]),
-                      mc.get("default_n", 0.06)), ""]
+                      mc.get("default_n", 0.05)), ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
     if r.get("bridge_snap"):
