@@ -209,6 +209,31 @@ def fetch_file(url, cache_dir, download, offline=False, now=None):
     return dest, rec
 
 
+_ZIP_MAX_TOTAL = 400 * 1024 * 1024  # audit 2026-11-19: cap uncompressed bytes
+
+
+def _clear_torn_cache(path):
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _safe_extract_zip(z, dest):
+    """Validated, size-capped extract (audit 2026-11-19): no absolute
+    paths, no '..' traversal, no drive letters, total-size cap; the caller
+    clears a torn cache first so a partial extract self-heals on rerun."""
+    import os, re
+    total = sum(i.file_size for i in z.infolist())
+    if total > _ZIP_MAX_TOTAL:
+        raise RuntimeError("temporal shapefile zip holds %.0f MB uncompressed (cap %d MB)"
+                           % (total / 1e6, _ZIP_MAX_TOTAL // (1024 * 1024)))
+    for n in z.namelist():
+        parts = n.replace("\\", "/").split("/")
+        if n.startswith("/") or ".." in parts or re.match(r"^[A-Za-z]:", n):
+            raise RuntimeError("unsafe path in temporal shapefile zip: " + n)
+    os.makedirs(dest, exist_ok=True)
+    z.extractall(dest)
+
+
 def atlas14_curve(lon, lat, code, hours, quartile, percent, cache_dir, download, area=None, offline=False):
     """Fetch (or reuse) the HDSC file for the point and return (hours, cum fraction, record). ``area`` None = find it from the
     HDSC area shapefile (also cached). The record holds everything needed to cite and reproduce the curve."""
@@ -220,8 +245,9 @@ def atlas14_curve(lon, lat, code, hours, quartile, percent, cache_dir, download,
         d = os.path.join(cache_dir, "temporal_areas_" + code)
         if not os.path.exists(os.path.join(d, SHAPEFILE_NAME[code])):
             import zipfile
+            _clear_torn_cache(d)   # audit 2026-11-19: a half-extracted cache self-heals on rerun
             with zipfile.ZipFile(zp) as z:
-                z.extractall(d)
+                _safe_extract_zip(z, d)
         area = locate_area(lon, lat, os.path.join(d, SHAPEFILE_NAME[code]))
     url = temporal_url(code, area, hours)
     path, rec = fetch_file(url, cache_dir, download, offline)
