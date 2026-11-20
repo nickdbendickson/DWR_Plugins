@@ -169,7 +169,7 @@ class RunSettings:
         self.user_hydrograph = None
         self.cell_size_m = 10.0
         self.planning_cell_m = 30.0
-        self.manning_n = 0.06
+        self.manning_n = 0.05            # uniform fallback where there is no n raster / NLCD class (shared default, Core defaults.json); prefer a land-cover raster
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
@@ -5531,7 +5531,7 @@ def render_report(r):
                   "- {:,} of {:,} cells took the default n = {} because the land-cover "
                   "raster did not cover them.".format(
                       int(mc.get("default_cells", 0)), int(mc["total_cells"]),
-                      mc.get("default_n", 0.06)), ""]
+                      mc.get("default_n", 0.05)), ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
     if r.get("bridge_snap"):

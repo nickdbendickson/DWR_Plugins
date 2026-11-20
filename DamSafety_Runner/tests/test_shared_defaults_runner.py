@@ -78,7 +78,7 @@ def shared_pmf_vw_follows_the_file():
 
 def _st(**k):
     st = types.SimpleNamespace(scenario=wf.SCENARIO_SUNNY, breach_method=br.METHOD_PIPING,
-                               manning_n=0.06, flood=None)
+                               manning_n=0.05, flood=None)
     st.__dict__.update(k)
     return st
 
@@ -89,7 +89,7 @@ def shared_assumptions_record_what_the_run_used():
     with _YourFile(None):
         e = wf._assumptions(_st(), "3.18.0", log.append, warnings)
     assert e["used"] == {"failure_mode": "piping", "breach_method": "froehlich2008",
-                         "manning_n": 0.06, "sunny_day_start_pool": "max_pool"}, e["used"]
+                         "manning_n": 0.05, "sunny_day_start_pool": "max_pool"}, e["used"]
     assert e["differs"] == {} and not warnings and not log, (e["differs"], log)
     json.dumps(e)
     with _YourFile(None):
@@ -131,3 +131,19 @@ def shared_normal_pool_sunny_day_is_a_warning():
         e = wf._assumptions(_st(), "3.18.0", [].append, warnings)
     assert e["differs"]["sunny_day_start_pool"]["used"] == "max_pool"
     assert warnings and "top of dam" in warnings[0], warnings
+
+
+@test
+def suite_default_manning_n_is_0_05():
+    """Default uniform Manning's n (cells with no n raster / NLCD land-cover class) is 0.05
+    (was 0.06). ND land cover under nd_data.NLCD_N is 0.035-0.05, so 0.05 is the NLCD-typical
+    uniform value for the state's tailwaters; prefer a land-cover raster where one is available."""
+    from nd_breach_runner.core import nd_data
+    from nd_breach_runner.core import conditioning as cond
+    with open(SD.shipped_path(), encoding="utf-8") as f:
+        assert json.load(f)["values"]["manning_n"] == 0.05        # DamSafety_Core/defaults.json
+    assert wf.RunSettings().manning_n == 0.05                      # Runner built-in fallback
+    assert nd_data.manning_lut()["default"] == 0.05               # NLCD lookup default
+    assert nd_data.nlcd_to_manning([999])[0] == 0.05              # unclassified cell -> the default
+    assert cond.ConditionedTerrain(None, None).default_n == 0.05  # terrain "no roughness raster"
+    assert nd_data.manning_lut(default=0.08)["default"] == 0.08   # an explicit value still wins
