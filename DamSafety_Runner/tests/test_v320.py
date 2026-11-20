@@ -127,7 +127,9 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
         "lisflood_limit_slopes", "lisflood_solver_error",
         # 3.26.0: the sub-grid channel settings count only while channels are on
         "lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n", "sgc_start",
-        "sgc_curve") and not k.startswith("class_stop")
+        "sgc_curve",
+        # 3.35.0: dry potholes (the default) stay out of the key
+        "pothole_start_fill") and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old
     assert "refine_near" in workflow.key_settings(workflow.RunSettings(refine_near=True))
