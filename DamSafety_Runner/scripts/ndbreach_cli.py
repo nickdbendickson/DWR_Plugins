@@ -240,6 +240,8 @@ MODEL_KEYS = {
     "sgc_channel_n": ("sgc_channel_n", ("num", 0.005, 0.5)),
     "sgc_start": ("sgc_start", ("enum", ("auto", "empty", "full"))),
     "sgc_curve": ("sgc_curve", ("nums",)),
+    # 3.35.0: closed depressions start this share full (core/pothole_fill.py; 0 = dry)
+    "pothole_start_fill": ("pothole_start_fill", ("num", 0.0, 1.0)),
     # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
     # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
     "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
