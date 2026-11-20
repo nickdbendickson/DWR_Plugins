@@ -513,7 +513,7 @@ class Atlas14GridBasinAlgorithm(_GridChoice):
         if grid is not None:
             try:
                 with GS.gdal_exceptions():
-                    from .noaa14 import gridstats            # sets GDAL exceptions at import: inside the block
+                    from .noaa14 import gridstats            # 0.6.2: no longer changes the GDAL mode at import
                     scale = gridstats.grid_scale(grid.source(), self.parameterAsDouble(P, "SCALE", context))
                     st = gridstats.basin_stats(grid.source(), g.asWkt(), src.sourceCrs().toWkt(), scale)
             except (ValueError, RuntimeError) as e:

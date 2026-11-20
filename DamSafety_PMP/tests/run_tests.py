@@ -4,7 +4,7 @@ test_atlas14_qgis.py runs the Atlas 14 tools in real QGIS when there is one, els
 import os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIGHT = ["test_light.py", "test_cascade_connectivity.py", "test_vector_round.py", "test_qt6.py", "test_streamstats.py",
-         "test_atlas14_shared.py", "test_atlas14_core.py", "test_atlas14_grid.py", "test_atlas14_chain.py",
+         "test_atlas14_shared.py", "test_atlas14_gdal_mode.py", "test_atlas14_core.py", "test_atlas14_grid.py", "test_atlas14_chain.py",
          "test_atlas14_qgis.py"]
 DATA = ["validate_pothole.py", "validate_hydro.py", "test_cascade.py", "verify.py", "run_core.py",
         "test_sd_snow.py", "test_hms.py", "e2e_damsafety.py"]
