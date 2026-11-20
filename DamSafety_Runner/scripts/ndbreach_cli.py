@@ -493,7 +493,7 @@ TEMPLATE = {
     "manning": {
         "_help": "n where there is no raster; raster of n values, or an NLCD class raster "
                  "(nlcd, with nlcd_n overrides like {\"82\": 0.05}).",
-        "n": 0.06, "raster": None, "nlcd": None, "nlcd_n": None},
+        "n": 0.05, "raster": None, "nlcd": None, "nlcd_n": None},
     "model": {
         "_help": "tier: lisflood or lisflood+anuga. Paths left empty are auto-detected "
                  "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places). qa_maps: "
@@ -825,7 +825,7 @@ class AscTerrain(object):
     sampling onto the requested grid (nearest for Manning's n); the whole file is in memory,
     so this is for small DEMs and tests; use GDAL for anything big."""
 
-    def __init__(self, dem_path, z_choice=gdal_io.Z_AUTO, manning_path=None, default_n=0.06,
+    def __init__(self, dem_path, z_choice=gdal_io.Z_AUTO, manning_path=None, default_n=0.05,
                  manning_lut=None):
         try:
             self.grid = Grid.read_asc(dem_path)
@@ -934,7 +934,7 @@ class Setup(object):
 
 def manning_options(cfg):
     m = cfg.section("manning")
-    n = m.get("n", 0.06)
+    n = m.get("n", 0.05)
     raster, nlcd = cfg.path_of(m.get("raster")), cfg.path_of(m.get("nlcd"))
     kw = {}
     if raster and nlcd:
@@ -1113,7 +1113,7 @@ def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     """(lisflood exe, anuga python): command line, then the configuration, then auto-detect."""
     raw = str(getattr(opts, "lisflood", "") or cfg.get("model", "lisflood_exe", "") or "")
     if raw.strip().lower() in lfmod.BUILTIN_WORDS + lfmod.GPU_WORDS:
-        exe = lfmod.resolve_exe(raw)          # 3.27.0: "builtin" / "gpu" name an engine
+        exe = lfmod.resolve_exe(raw)          # 3.29.0: "builtin" / "gpu" name an engine
     else:
         exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
                or nd_data.detect_lisflood())

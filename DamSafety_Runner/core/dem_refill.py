@@ -184,6 +184,10 @@ def fill_grid(grid, tif_path):
     ds = gdal.Open(tif_path)
     if ds is None:
         return grid
+    # 3.25.0: run #397's tile check on EVERY reapplication of a saved tile, not only the first
+    # download - a 0 m pit / one-flat-value tile (an ASCII DEM warped in the wrong CRS) is refused on
+    # resumed runs and later passes too, instead of being filled in as sea-level ground.
+    check_tile(tif_path)
     xmin, ymin, xmax, ymax = grid.bounds
     kw = dict(format="MEM", outputBounds=(xmin, ymin, xmax, ymax),
               width=grid.nx, height=grid.ny, resampleAlg="bilinear",
