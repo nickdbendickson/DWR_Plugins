@@ -110,9 +110,11 @@ def sign(path, environ=None):
     key = load_key(create=True, environ=environ)
     if key is None:
         return "no signing key could be read or written at {}".format(key_path(environ))
+    import threading
+    # audit 2026-11-20: a temp name unique per writer (pid + thread), removed when the write fails
+    tmp = "{}.{}.{}.tmp".format(sig_path(path), os.getpid(), threading.get_ident())
     try:
         mac, size = _mac(path, key)
-        tmp = sig_path(path) + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"alg": ALG, "mac": mac, "size": size}, f)
             f.flush()
@@ -120,6 +122,10 @@ def sign(path, environ=None):
         os.replace(tmp, sig_path(path))
         return ""
     except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return "{}: {}".format(type(e).__name__, str(e)[:200])
 
 

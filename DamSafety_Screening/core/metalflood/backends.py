@@ -29,6 +29,8 @@ FV2_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv2.metal")
 FV2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv2.cpp")
 DG2_KERNEL_SOURCE = os.path.join(HERE, "kernels_dg2.metal")
 DG2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_dg2.cpp")
+SGC_KERNEL_SOURCE = os.path.join(HERE, "kernels_sgc.metal")
+SGC_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_sgc.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
@@ -37,6 +39,8 @@ FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_c
                "k_stage_c_fv2", "k_end_fv2")
 DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_faces_dg2",
                "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2")
+SGC_KERNELS = ("k_begin_sgc", "k_faces_sgc", "k_scale_sgc", "k_limit_sgc", "k_cont_sgc",
+               "k_speed_sgc", "k_end_sgc")
 
 
 class BackendError(RuntimeError):
@@ -109,6 +113,24 @@ def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("Uh0", f, 3 * cells), ("Uhu0", f, 3 * cells), ("Uhv0", f, 3 * cells)]
 
 
+def sgc_buffer_layout(ny, nx, n_src, n_series, n_values):
+    """[(name, dtype, count)] in the order of kernels_sgc.metal's buffer indices 0..29. The ACC
+    buffers plus the channel/floodplain discharge split (qxc/qxf and their old qxco/qxfo, likewise
+    y) and the per-cell SGC geometry (width w, bankfull depth Dd so bed = z - Dd, channel n^2 nc2).
+    30 buffers + Params at index 30 = 31 slots, the Metal argument-table cap."""
+    cells = ny * nx
+    xf, yf = ny * (nx + 1), (ny + 1) * nx
+    f, u = np.float32, np.uint32
+    return [("z", f, cells), ("n2", f, cells), ("h", f, cells),
+            ("qxc", f, xf), ("qxf", f, xf), ("qyc", f, yf), ("qyf", f, yf),
+            ("src", f, cells), ("scl", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
+            ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
+            ("st", u, S_WORDS), ("qxco", f, xf), ("qxfo", f, xf), ("qyco", f, yf), ("qyfo", f, yf),
+            ("vxf", f, xf), ("vyf", f, yf), ("w", f, cells), ("Dd", f, cells), ("nc2", f, cells)]
+
+
 class Spec:
     """What tells the generic Metal/CPU backend which kernels to run: one engine's kernel
     source, its C++-build source and shim, the kernel names, the ctypes Params for that
@@ -176,6 +198,18 @@ def _dg2_plan(p):
 
 
 DG2_SPEC = Spec("dg2", DG2_KERNEL_SOURCE, SHIM, DG2_CPU_SOURCE, DG2_KERNELS, Params, _dg2_plan)
+
+
+def _sgc_plan(p):
+    one = (1, 1, 1)
+    faces = (p.wc + 1, p.wr + 1, 1)
+    cells = (p.wc, p.wr, 1)
+    return [("k_begin_sgc", one), ("k_faces_sgc", faces), ("k_scale_sgc", cells),
+            ("k_limit_sgc", faces), ("k_cont_sgc", cells), ("k_speed_sgc", cells),
+            ("k_end_sgc", one)]
+
+
+SGC_SPEC = Spec("sgc", SGC_KERNEL_SOURCE, SHIM, SGC_CPU_SOURCE, SGC_KERNELS, Params, _sgc_plan)
 
 
 def _source_hash(spec):
