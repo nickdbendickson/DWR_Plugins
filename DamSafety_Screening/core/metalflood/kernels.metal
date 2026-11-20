@@ -68,7 +68,12 @@ struct Params {
     uint fric2d;          // 1: friction from the 2-D discharge vector (LISFLOOD-FP 8 default)
     uint clip_end;        // 1: the last step is cut to land on t_end (the end of the run only;
                           // like LISFLOOD-FP, output times are passed, not landed on)
-    uint pad2;
+    uint inflow_lf_order; // 1 (default): a point source's water is withheld from the step's
+                          // donor-cell limiter, so the limiter caps outflow at the water the cell
+                          // held at step start (LISFLOOD-FP's DryCheck-then-source order) and the
+                          // breach-inflow cell matches LISFLOOD-FP to the mm. 0: the source counts
+                          // as available water the same step (mass-conserving, a lower, CFL-
+                          // independent breach-cell depth) - see k_scale.
     float dx;             // cell size (m)
     float dt0;            // initial_tstep: the longest step (s)
     float alpha;          // CFL factor (0.7)
@@ -330,7 +335,10 @@ kernel void k_scale(MF_ARGS) {
     uint fx = r * (nx + 1u) + c;
     float out = (fmax(qx[fx + 1u], 0.0f) + fmax(-qx[fx], 0.0f)
                  + fmax(qy[i + nx], 0.0f) + fmax(-qy[i], 0.0f)) * dt * p.dx;
-    float avail = h[i] * p.dx * p.dx + src[i] * dt;
+    // LISFLOOD-FP order (inflow_lf_order=1): this step's inflow is NOT yet available to flow out,
+    // so the limiter caps outflow at the water the cell held at step start (LISFLOOD-FP's
+    // DryCheck); k_cont adds the source after. 0: count the inflow as available (mass-conserving).
+    float avail = h[i] * p.dx * p.dx + (p.inflow_lf_order ? 0.0f : src[i] * dt);
     scl[i] = (out > avail && out > 0.0f) ? avail / out : 1.0f;
 }
 
