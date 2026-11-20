@@ -267,6 +267,7 @@ This algorithm reads the hyetograph CSVs written by `ndpmp:pmp`, or any CSV with
 - **Losses:**
   - `LOSS=0`: SCS CN. Parameters: `CN`; `AMC3` converts AMC II→III with CN3 = 23·CN/(10+0.13·CN); `IA_RATIO` defaults to 0.2.
   - `LOSS=1`: initial + constant (`INITIAL_IN`, `CONSTANT_IN_HR`).
+  - `LOSS=2`: Green-Ampt (0.7.0), with ponding inside a step (Mein & Larson 1973; Chow, Maidment & Mays 1988 sec. 4.4). `GA_TEXTURE=0` (Custom) uses `GA_KS_IN_HR`, `GA_SUCTION_IN` and `GA_DEFICIT` (θs − θi). A texture (1–11: sand … clay) takes ψ, Ks and effective porosity θe from Rawls, Brakensiek & Miller (1983) as reprinted in Chow et al. Table 4.3.1, with deficit = θe·(1 − `GA_INITIAL_SAT`). `GA_INITIAL_IN` is an initial loss taken first; `GA_IMPERVIOUS_PCT` of the area sheds all its rain. Water left on the surface leaves as excess at once (no run-on), as in HEC-HMS. **The texture table is PROVISIONAL**: it was typed from the published table and has not yet been checked against the printed page, so a texture run logs a warning and writes `loss_param_status: PROVISIONAL` to the hydrograph header and summary. Once someone checks the rows, set `GA_TEXTURE_VERIFIED = True` in `core/hydro.py`. Custom values carry no stamp. `export_hms` refuses Green-Ampt for now.
 - **Transform:**
   - `TRANSFORM=0`: SCS dimensionless UH, with ordinates from the NEH-630 Ch.16 table.
     - Inputs: `LAG_HR`, or `TC_HR` (lag = 0.6·Tc). Tp = Δt/2 + lag.
