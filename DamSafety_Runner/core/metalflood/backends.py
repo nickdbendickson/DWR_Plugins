@@ -31,7 +31,7 @@ FV2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv2.cpp")
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
 FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
-FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_slopes_fv2", "k_faces_fv2", "k_cont_fv2",
+FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
                "k_stage_c_fv2", "k_end_fv2")
 
 
@@ -76,14 +76,14 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
 
 
 def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..32: the FV1
-    layout (0..23) plus the previous-step state h0/hu0/hv0 and the six minmod slope buffers."""
+    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..26: the FV1
+    layout (0..23) plus the previous-step state h0/hu0/hv0 for the RK2 blend. The minmod slopes are
+    not stored (Metal caps the buffer table at 31 slots); they are recomputed inline in the
+    kernels."""
     cells = ny * nx
     f = np.float32
     base = fv_buffer_layout(ny, nx, n_src, n_series, n_values)
-    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells),
-                   ("sxe", f, cells), ("sye", f, cells), ("sxu", f, cells),
-                   ("syu", f, cells), ("sxv", f, cells), ("syv", f, cells)]
+    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells)]
 
 
 class Spec:
@@ -128,10 +128,11 @@ def _fv2_plan(p):
     one = (1, 1, 1)
     faces = (p.wc + 1, p.wr + 1, 1)
     cells = (p.wc, p.wr, 1)
-    # one SSP-RK2 step: predictor sweep (stage 0), then corrector sweep (stage 1), then close
-    return [("k_stage_p_fv2", one), ("k_begin_fv2", one), ("k_slopes_fv2", cells),
+    # one SSP-RK2 step: predictor sweep (stage 0), then corrector sweep (stage 1), then close.
+    # k_save_fv2 copies U^n once at stage 0; the slopes are recomputed inline in faces/cont.
+    return [("k_stage_p_fv2", one), ("k_begin_fv2", one), ("k_save_fv2", cells),
             ("k_faces_fv2", faces), ("k_cont_fv2", cells),
-            ("k_stage_c_fv2", one), ("k_begin_fv2", one), ("k_slopes_fv2", cells),
+            ("k_stage_c_fv2", one), ("k_begin_fv2", one), ("k_save_fv2", cells),
             ("k_faces_fv2", faces), ("k_cont_fv2", cells), ("k_end_fv2", one)]
 
 

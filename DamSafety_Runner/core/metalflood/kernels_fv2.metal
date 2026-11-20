@@ -95,8 +95,10 @@ struct Params {
     float pad4;
 };
 
-// Buffer layout for the FV2 scheme (its own order, 0..32; Params at 33). Extends FV1 with the
-// previous-step state (h0/hu0/hv0) for the RK2 blend and the per-cell limited slopes.
+// Buffer layout for the FV2 scheme (its own order, 0..26; Params at 27). Extends FV1 with just the
+// previous-step state (h0/hu0/hv0) for the RK2 blend. The minmod slopes are NOT stored: Metal caps
+// the buffer argument table at 31 slots (indices 0..30), so the per-cell limited slopes are
+// recomputed inline wherever they are needed (k_faces_fv2, k_cont_fv2).
 #define MF_ARGS_FV2 \
     device const float* z B(0), \
     device const float* n2 B(1), \
@@ -125,13 +127,7 @@ struct Params {
     device float* h0 B(24), \
     device float* hu0 B(25), \
     device float* hv0 B(26), \
-    device float* sxe B(27), \
-    device float* sye B(28), \
-    device float* sxu B(29), \
-    device float* syu B(30), \
-    device float* sxv B(31), \
-    device float* syv B(32), \
-    constant Params& p B(33), \
+    constant Params& p B(27), \
     uint2 gid GID
 
 struct F3 { float h, mn, mt; };   // flux: mass, normal momentum, tangential momentum
@@ -151,6 +147,38 @@ inline float mf_minmod(float a, float b) {
         return fmax(a, b);
     }
     return 0.0f;
+}
+
+// minmod-limited slope of a cell-centred field across cell i, given its low and high neighbours in
+// one direction and whether each exists (a missing neighbour makes that one-sided difference 0, so
+// the slope collapses to 0 there — first order at a boundary or beside a NoData cell). The neighbour
+// index is read only when its flag is set, so an out-of-range index passed with the flag off is safe.
+inline float mf_sl(device const float* a, uint i, uint lo, uint hi, bool hlo, bool hhi) {
+    float c = a[i];
+    float dl = hlo ? (c - a[lo]) : 0.0f;
+    float dh = hhi ? (a[hi] - c) : 0.0f;
+    return mf_minmod(dl, dh);
+}
+
+// the same for the free surface eta = z + h (reconstructing eta, not h, is what keeps rest well
+// balanced at 2nd order).
+inline float mf_sle(device const float* z, device const float* h, uint i, uint lo, uint hi,
+                    bool hlo, bool hhi) {
+    float c = z[i] + h[i];
+    float dl = hlo ? (c - (z[lo] + h[lo])) : 0.0f;
+    float dh = hhi ? ((z[hi] + h[hi]) - c) : 0.0f;
+    return mf_minmod(dl, dh);
+}
+
+struct Slp { float e, u, v; };   // minmod slopes of (eta, hu, hv) in one direction
+
+inline Slp mf_slopes(device const float* z, device const float* h, device const float* hu,
+                     device const float* hv, uint i, uint lo, uint hi, bool hlo, bool hhi) {
+    Slp s;
+    s.e = mf_sle(z, h, i, lo, hi, hlo, hhi);
+    s.u = mf_sl(hu, i, lo, hi, hlo, hhi);
+    s.v = mf_sl(hv, i, lo, hi, hlo, hhi);
+    return s;
 }
 
 // HLLC flux across a face, in the face-normal frame (identical to kernels_fv.metal).
@@ -274,56 +302,20 @@ kernel void k_begin_fv2(MF_ARGS_FV2) {
     st[S_QOUT] = 0u;
 }
 
-// every cell of the window: minmod-limited slopes of eta = z + h, qx = hu, qy = hv in x and y. At a
-// domain edge (or next to a NoData cell) the one-sided neighbour is taken equal to the cell, so the
-// slope there collapses to 0 (first order at the boundary), which keeps the reconstruction safe.
-kernel void k_slopes_fv2(MF_ARGS_FV2) {
+// every cell of the window: at the predictor (stage 0) save U^n into h0/hu0/hv0 for the RK2 blend,
+// before k_cont_fv2 overwrites the state. The minmod slopes are no longer stored (Metal's 31-buffer
+// cap); they are recomputed inline in k_faces_fv2 and k_cont_fv2. A no-op at the corrector.
+kernel void k_save_fv2(MF_ARGS_FV2) {
     device float* sf = (device float*)st;
-    if (sf[S_DT] <= 0.0f) {
+    if (sf[S_DT] <= 0.0f || st[S_STAGE] != 0u) {
         return;
     }
-    uint nx = p.nx;
-    uint ny = p.ny;
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
-    uint i = r * nx + c;
-    if (st[S_STAGE] == 0u) {          // predictor: save U^n for the RK2 blend before cont overwrites
-        h0[i] = h[i];
-        hu0[i] = hu[i];
-        hv0[i] = hv[i];
-    }
-    if (ok[i] == 0) {
-        sxe[i] = 0.0f; sye[i] = 0.0f; sxu[i] = 0.0f;
-        syu[i] = 0.0f; sxv[i] = 0.0f; syv[i] = 0.0f;
-        return;
-    }
-    float eI = z[i] + h[i];
-    float uI = hu[i];
-    float vI = hv[i];
-    // x neighbours (fall back to self at an edge or a NoData neighbour)
-    bool okL = (c > 0u) && ok[i - 1u] != 0;
-    bool okR = (c + 1u < nx) && ok[i + 1u] != 0;
-    float eL = okL ? (z[i - 1u] + h[i - 1u]) : eI;
-    float eR = okR ? (z[i + 1u] + h[i + 1u]) : eI;
-    float uL = okL ? hu[i - 1u] : uI;
-    float uR = okR ? hu[i + 1u] : uI;
-    float vL = okL ? hv[i - 1u] : vI;
-    float vR = okR ? hv[i + 1u] : vI;
-    sxe[i] = mf_minmod(eI - eL, eR - eI);
-    sxu[i] = mf_minmod(uI - uL, uR - uI);
-    sxv[i] = mf_minmod(vI - vL, vR - vI);
-    // y neighbours
-    bool okU = (r > 0u) && ok[i - nx] != 0;
-    bool okD = (r + 1u < ny) && ok[i + nx] != 0;
-    float eU = okU ? (z[i - nx] + h[i - nx]) : eI;
-    float eD = okD ? (z[i + nx] + h[i + nx]) : eI;
-    float uU = okU ? hu[i - nx] : uI;
-    float uD = okD ? hu[i + nx] : uI;
-    float vU = okU ? hv[i - nx] : vI;
-    float vD = okD ? hv[i + nx] : vI;
-    sye[i] = mf_minmod(eI - eU, eD - eI);
-    syu[i] = mf_minmod(uI - uU, uD - uI);
-    syv[i] = mf_minmod(vI - vU, vD - vI);
+    uint i = r * p.nx + c;
+    h0[i] = h[i];
+    hu0[i] = hu[i];
+    hv0[i] = hv[i];
 }
 
 // every face of the window: HLLC flux of the MUSCL-reconstructed, hydrostatically reconstructed
@@ -352,16 +344,21 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
             uint l = r * nx + c - 1u;
             uint rr = l + 1u;
             if (ok[l] != 0 && ok[rr] != 0) {
+                // x-slopes of L and R, computed inline from their own x-neighbours
+                bool hlL = (c > 1u) && ok[l - 1u] != 0;          // L's left neighbour
+                Slp sL = mf_slopes(z, h, hu, hv, l, (c > 1u) ? l - 1u : l, rr, hlL, true);
+                bool hhR = (c + 1u < nx) && ok[rr + 1u] != 0;    // R's right neighbour
+                Slp sR = mf_slopes(z, h, hu, hv, rr, l, (c + 1u < nx) ? rr + 1u : rr, true, hhR);
                 // reconstructed free surface at the shared face: L from its +x edge, R from its -x
-                float etaL = (z[l] + h[l]) + 0.5f * sxe[l];
-                float etaR = (z[rr] + h[rr]) - 0.5f * sxe[rr];
+                float etaL = (z[l] + h[l]) + 0.5f * sL.e;
+                float etaR = (z[rr] + h[rr]) - 0.5f * sR.e;
                 float zf = fmax(z[l], z[rr]);     // first-order face bed (eta-slope is 0 at rest)
                 float hLs = fmax(0.0f, etaL - zf);
                 float hRs = fmax(0.0f, etaR - zf);
-                float uL = mf_vel(hu[l] + 0.5f * sxu[l], fmax(0.0f, etaL - z[l]));
-                float vL = mf_vel(hv[l] + 0.5f * sxv[l], fmax(0.0f, etaL - z[l]));
-                float uR = mf_vel(hu[rr] - 0.5f * sxu[rr], fmax(0.0f, etaR - z[rr]));
-                float vR = mf_vel(hv[rr] - 0.5f * sxv[rr], fmax(0.0f, etaR - z[rr]));
+                float uL = mf_vel(hu[l] + 0.5f * sL.u, fmax(0.0f, etaL - z[l]));
+                float vL = mf_vel(hv[l] + 0.5f * sL.v, fmax(0.0f, etaL - z[l]));
+                float uR = mf_vel(hu[rr] - 0.5f * sR.u, fmax(0.0f, etaR - z[rr]));
+                float vR = mf_vel(hv[rr] - 0.5f * sR.v, fmax(0.0f, etaR - z[rr]));
                 fl = mf_hllc(hLs, uL, vL, hRs, uR, vR, g);
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
@@ -402,15 +399,20 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
             uint u = (r - 1u) * nx + c;
             uint d = u + nx;
             if (ok[u] != 0 && ok[d] != 0) {
-                float etaU = (z[u] + h[u]) + 0.5f * sye[u];
-                float etaD = (z[d] + h[d]) - 0.5f * sye[d];
+                // y-slopes of U and D, computed inline from their own y-neighbours (stride nx)
+                bool hlU = (r > 1u) && ok[u - nx] != 0;          // U's up neighbour
+                Slp sU = mf_slopes(z, h, hu, hv, u, (r > 1u) ? u - nx : u, d, hlU, true);
+                bool hhD = (r + 1u < ny) && ok[d + nx] != 0;     // D's down neighbour
+                Slp sD = mf_slopes(z, h, hu, hv, d, u, (r + 1u < ny) ? d + nx : d, true, hhD);
+                float etaU = (z[u] + h[u]) + 0.5f * sU.e;
+                float etaD = (z[d] + h[d]) - 0.5f * sD.e;
                 float zf = fmax(z[u], z[d]);
                 float hUs = fmax(0.0f, etaU - zf);
                 float hDs = fmax(0.0f, etaD - zf);
-                float nU = mf_vel(hv[u] + 0.5f * syv[u], fmax(0.0f, etaU - z[u]));
-                float tU = mf_vel(hu[u] + 0.5f * syu[u], fmax(0.0f, etaU - z[u]));
-                float nD = mf_vel(hv[d] - 0.5f * syv[d], fmax(0.0f, etaD - z[d]));
-                float tD = mf_vel(hu[d] - 0.5f * syu[d], fmax(0.0f, etaD - z[d]));
+                float nU = mf_vel(hv[u] + 0.5f * sU.v, fmax(0.0f, etaU - z[u]));
+                float tU = mf_vel(hu[u] + 0.5f * sU.u, fmax(0.0f, etaU - z[u]));
+                float nD = mf_vel(hv[d] - 0.5f * sD.v, fmax(0.0f, etaD - z[d]));
+                float tD = mf_vel(hu[d] - 0.5f * sD.u, fmax(0.0f, etaD - z[d]));
                 fl = mf_hllc(hUs, nU, tU, hDs, nD, tD, g);
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side
@@ -473,11 +475,18 @@ kernel void k_cont_fv2(MF_ARGS_FV2) {
 
     float h0c = h[i];
     float etaI = z[i] + h0c;
+    // the cell's own eta-slopes, recomputed inline (consistent with k_faces_fv2's reconstruction)
+    bool hlx = (c > 0u) && ok[i - 1u] != 0;
+    bool hhx = (c + 1u < nx) && ok[i + 1u] != 0;
+    float sxe_i = mf_sle(z, h, i, (c > 0u) ? i - 1u : i, (c + 1u < nx) ? i + 1u : i, hlx, hhx);
+    bool hly = (r > 0u) && ok[i - nx] != 0;
+    bool hhy = (r + 1u < ny) && ok[i + nx] != 0;
+    float sye_i = mf_sle(z, h, i, (r > 0u) ? i - nx : i, (r + 1u < ny) ? i + nx : i, hly, hhy);
     // reconstructed cell-edge depths for the Audusse source, consistent with k_faces_fv2
-    float etaxR = etaI + 0.5f * sxe[i];
-    float etaxL = etaI - 0.5f * sxe[i];
-    float etayD = etaI + 0.5f * sye[i];
-    float etayU = etaI - 0.5f * sye[i];
+    float etaxR = etaI + 0.5f * sxe_i;
+    float etaxL = etaI - 0.5f * sxe_i;
+    float etayD = etaI + 0.5f * sye_i;
+    float etayU = etaI - 0.5f * sye_i;
     float zxR = fmax(z[i], (c + 1u < nx) ? z[i + 1u] : z[i]);
     float zxL = fmax((c > 0u) ? z[i - 1u] : z[i], z[i]);
     float zyD = fmax(z[i], (r + 1u < ny) ? z[i + nx] : z[i]);
