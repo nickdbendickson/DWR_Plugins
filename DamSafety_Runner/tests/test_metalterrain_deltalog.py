@@ -89,12 +89,79 @@ def deltalog_review_clears_the_flag():
     log.close()
 
 
+def _refuse(log, run_ok=True):
+    fid = log.flag(DL.Edit(DL.EditClass.CROSSING_STITCH, DL.REFUSE_FREEZE_ACTION,
+                           evidence="FREEZE_MASK", n_cells=2, algo_ref="CROSSING_RECONNECT_V1"),
+                   reason="carve path crosses a frozen embankment cell")
+    return fid
+
+
+@test
+def deltalog_unresolved_freeze_refusal_blocks_export():
+    """A conditioned DEM with an unresolved FLAGGED freeze-refusal is not exported. Reviewing
+    it, or passing an explicit acknowledgment (which is written into the ledger), allows the
+    export. The EDIT_CLASS raster is under the same gate, not a way around it."""
+    import os
+    import tempfile
+    log = DL.DeltaLog(run_id="FREEZE")
+    fid = _refuse(log)
+    s = log.summary()
+    assert "NOT carved" in s.split("## By class")[0]
+    dem = np.array([[1.0, 2.0], [3.0, 4.0]])
+    try:
+        log.export_conditioned_dem(dem, os.path.join(tempfile.gettempdir(), "should-not-write.asc"))
+        raise AssertionError("export was allowed with an unresolved freeze-refusal")
+    except DL.ExportRefused:
+        pass
+    try:
+        log.export_edit_class_raster(np.zeros((2, 2), np.int16), "no.tif", (0, 1, 0, 0, 0, -1))
+        raise AssertionError("EDIT_CLASS export bypassed the freeze-refusal gate")
+    except DL.ExportRefused:
+        pass
+    # a blank acknowledgment is not an acknowledgment
+    try:
+        log.export_conditioned_dem(dem, "no.asc", acknowledge="   ")
+        raise AssertionError("a blank acknowledgment exported the DEM")
+    except DL.ExportRefused:
+        pass
+    # explicit acknowledgment is recorded, then the Bottom line is clear and the file exists
+    d = tempfile.mkdtemp()
+    try:
+        path = log.export_conditioned_dem(dem, os.path.join(d, "cond.asc"), dx=10.0,
+                                          acknowledge="operator confirmed the mask is wrong")
+        assert os.path.isfile(path)
+        assert log.unresolved_freeze_refusals() == []
+        assert "NOT carved" not in log.summary().split("## By class")[0]
+        row = log.freeze_refusals()
+        assert len(row) == 1 and row[0][0] == fid
+        assert "acknowledged" in (row[0][4] or "")
+    finally:
+        import shutil
+        shutil.rmtree(d, True)
+    log.close()
+
+    # reviewing, rather than acknowledging at export time, also clears the gate
+    log = DL.DeltaLog(run_id="FREEZE2")
+    fid = _refuse(log)
+    log.review(fid, verdict="REVIEWED", reviewer="nick", reason="real culvert, mask lifted")
+    assert "NOT carved" not in log.summary().split("## By class")[0]
+    d = tempfile.mkdtemp()
+    try:
+        path = log.export_conditioned_dem(dem, os.path.join(d, "cond.asc"))
+        assert os.path.isfile(path)
+    finally:
+        import shutil
+        shutil.rmtree(d, True)
+    log.close()
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
     for fn in (deltalog_selftest_passes, deltalog_requires_run_id_and_reason,
                deltalog_summary_is_deterministic, deltalog_census_wiring_flags_pits_and_crossings,
-               deltalog_review_clears_the_flag):
+               deltalog_review_clears_the_flag,
+               deltalog_unresolved_freeze_refusal_blocks_export):
         try:
             fn()
             print("ok    ", fn.__name__)
