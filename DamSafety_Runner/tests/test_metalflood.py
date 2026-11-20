@@ -3,7 +3,13 @@ kernel source, against the numpy built-in engine (same scheme with the 1-D frict
 the same steps, depths within a few mm), conservation of water, the wet window (no effect on
 the answer), the .par options it reads, and, where this computer has an Apple GPU, Metal
 against the CPU build. With NDBREACH_LISFLOOD set (--models) it is also checked against
-LISFLOOD-FP itself."""
+LISFLOOD-FP itself.
+
+The diagnostic cases in cases.py (level-pool lake, nested basin, breach-inflow cell) are
+exercised by metalflood_diagnostic_cases_run (they run and conserve mass) and checked against
+the serial numpy oracle (builtin_lisflood, 1-D friction) by
+metalflood_diagnostic_cases_match_serial_oracle. Metal vs that CPU build is in
+metalflood_gpu_matches_cpu_build, which skips where there is no Apple GPU."""
 import os
 import shutil
 import subprocess
@@ -16,7 +22,9 @@ from nd_breach_runner.core import builtin_lisflood as bl
 from nd_breach_runner.core import metalflood as mf
 from nd_breach_runner.core.metalflood import backends as mfb
 from nd_breach_runner.core.metalflood import engine as mfe
-from nd_breach_runner.core.metalflood.cases import read_asc, valley_deck
+from nd_breach_runner.core.metalflood.cases import (
+    read_asc, valley_deck, level_pool_lake, nested_basin, breach_inflow_cell,
+)
 from nd_breach_runner.tests.registry import Skip, model_test, test
 
 
@@ -171,6 +179,26 @@ def metalflood_gpu_matches_cpu_build():
             m = (x != bl.NODATA) & (y != bl.NODATA)
             assert np.abs(x - y)[m].max() <= tol, (ext, np.abs(x - y)[m].max())
         assert abs(sb["mass_error_m3"]) < 1e-5 * sb["injected_m3"], sb
+        # the same comparison on the diagnostic cases (still pool, short breach, short nest).
+        # These are the Mac half of the reference harness; cloud CI only has the CPU side.
+        diag = (
+            ("still", lambda f: level_pool_lake(
+                f, n=20, sim_s=200.0, free="", inflow_cms=0.0, h0=1.25)),
+            ("breach", lambda f: breach_inflow_cell(f, n=15, sim_s=300.0)),
+            ("nested", lambda f: nested_basin(f, ny=16, nx=32, sim_s=400.0)),
+        )
+        for name, maker in diag:
+            ca = maker(os.path.join(d, name + "c"))
+            cb = maker(os.path.join(d, name + "m"))
+            sc = mf.run_par(ca, backend="cpu")
+            sm = mf.run_par(cb, backend="metal")
+            assert sm["backend"] == "metal", name
+            x = _res(os.path.join(d, name + "c"), "max")
+            y = _res(os.path.join(d, name + "m"), "max")
+            m = (x != bl.NODATA) & (y != bl.NODATA)
+            assert np.abs(x - y)[m].max() <= 0.01, (name, np.abs(x - y)[m].max())
+            assert abs(sc["final_volume_m3"] - sm["final_volume_m3"]) <= \
+                0.01 * max(sc["final_volume_m3"], 1.0), name
     finally:
         shutil.rmtree(d, True)
 
@@ -267,13 +295,96 @@ def metalflood_matches_lisflood_fp():
         shutil.rmtree(d, True)
 
 
+@test
+def metalflood_diagnostic_cases_match_serial_oracle():
+    """CPU build of the kernels against the serial numpy oracle (builtin_lisflood), which is
+    the same local-inertial scheme in float64 with 1-D friction. This is the cloud pass/fail
+    the later number-moving steps (subgrid channels, a near-field FV window) have to point at.
+
+    Still water must match to the millimetre and stay flat. The breach-inflow cell matches
+    over the rising limb (600 s); longer than that the float32 kernels and the float64 oracle
+    separate at the source cell, which is recorded rather than hidden. The nested basin must
+    keep its water in the inner pool (the rim is not an invented wall and not an early spill)
+    and agree on volume. The synthetic valley is metalflood_cpu_build_matches_builtin_engine.
+    """
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        def pair(name, maker):
+            a = maker(os.path.join(d, name + "o"))
+            b = maker(os.path.join(d, name + "c"))
+            so = bl.run_par(a)
+            sc = mf.run_par(b, backend="cpu")
+            ho = _res(os.path.join(d, name + "o"), "max")
+            hc = _res(os.path.join(d, name + "c"), "max")
+            return so, sc, ho, hc
+
+        one_d = ["1Dfriction"]
+        so, sc, ho, hc = pair("still", lambda f: level_pool_lake(
+            f, n=24, sim_s=300.0, free="", inflow_cms=0.0, h0=1.25, extra=one_d))
+        assert np.abs(ho - hc).max() <= 0.001, np.abs(ho - hc).max()
+        assert float(hc.max() - hc.min()) <= 0.001, (hc.min(), hc.max())
+        assert abs(sc["mass_error_m3"]) < 1e-4, sc
+        # a second CPU run is the same grid: the reference is deterministic
+        again = level_pool_lake(os.path.join(d, "still2"), n=24, sim_s=300.0, free="",
+                                inflow_cms=0.0, h0=1.25, extra=one_d)
+        mf.run_par(again, backend="cpu")
+        assert np.array_equal(hc, _res(os.path.join(d, "still2"), "max"))
+
+        _so, _sc, ho, hc = pair("breach", lambda f: breach_inflow_cell(
+            f, n=21, sim_s=600.0, extra=one_d))
+        assert np.abs(ho - hc).max() <= 0.005, np.abs(ho - hc).max()
+
+        so, sc, ho, hc = pair("nested", lambda f: nested_basin(f, extra=one_d))
+        # outer basin is columns [17, 31); water has not reached the outer rim
+        outer = slice(17, 31)
+        assert (ho[1:-1, outer] <= 0.05).all(), ho[1:-1, outer].max()
+        assert (hc[1:-1, outer] <= 0.05).all(), hc[1:-1, outer].max()
+        assert (ho[1:-1, 6:16] > 0.05).all() and (hc[1:-1, 6:16] > 0.05).all()
+        rel = abs(so["final_volume_m3"] - sc["final_volume_m3"]) / so["final_volume_m3"]
+        assert rel < 0.005, (rel, so["final_volume_m3"], sc["final_volume_m3"])
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_diagnostic_cases_run():
+    """Reference harness for the diagnostic cases added in the Boann plan.
+    CPU-build only. Checks that each case runs, conserves mass to a tight tolerance,
+    and produces finite max-depth results. These are the baselines later number-moving
+    steps must not regress."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        cases = [
+            ("lake", level_pool_lake),
+            ("nested", nested_basin),
+            ("breach", breach_inflow_cell),
+        ]
+        for name, maker in cases:
+            folder = os.path.join(d, name)
+            par = maker(folder)
+            s = mf.run_par(par, backend="cpu")
+            assert s["backend"] == "cpu", name
+            assert s["injected_m3"] > 0, name
+            assert abs(s["mass_error_m3"]) < 1e-5 * s["injected_m3"], (name, s)
+            hmax = _res(folder, "max")
+            assert np.isfinite(hmax).all() or (hmax == bl.NODATA).any(), name
+            # at least some wet cells for the cases that have inflow
+            assert (hmax > 0.001).sum() > 0, name
+    finally:
+        shutil.rmtree(d, True)
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
                metalflood_wet_window_does_not_change_the_answer,
                metalflood_reads_lisflood_acc_options, metalflood_params_layout_matches_kernels,
                metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
-               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp):
+               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
+               metalflood_diagnostic_cases_match_serial_oracle,
+               metalflood_diagnostic_cases_run):
         try:
             fn()
             print("ok    ", fn.__name__)
