@@ -140,8 +140,16 @@ def test_xt2_invalid_crs_warned():
 
 def test_xt3_transform_that_cannot_be_built_is_warned():
     # 2026-11-20 audit: QgsCoordinateTransform raising in transform_from was swallowed without a word
+    # EPSG:4326 on both sides: the one CRS every QGIS build resolves (the LTR CI image may not resolve
+    # EPSG:26914, and an invalid CRS takes XT.2's path, never reaching the transform)
     logs = []
-    c = _clip(logs)
+    XT.log_message = lambda m, level=None: logs.append(m)
+    wgs = QgsCoordinateReferenceSystem("EPSG:4326")
+    if not wgs.isValid():
+        print("skip test_xt3: EPSG:4326 is not valid in this QGIS")
+        return
+    c = XT.ExtentClip(None, 0, QgsCoordinateTransformContext(),
+                      rect=QgsRectangle(-100.0, 47.0, -99.9, 47.1), crs=wgs)
     real = XT.QgsCoordinateTransform
 
     def _boom(*a, **k):
