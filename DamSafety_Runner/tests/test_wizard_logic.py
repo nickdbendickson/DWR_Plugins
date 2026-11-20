@@ -101,7 +101,7 @@ def wizard_builds_the_tool_parameters():
     assert p["DAM_POINT"] == "350000.000,5230000.000 [EPSG:26914]"
     assert p["DEM"] == "dem_1" and p["DEM_Z"] == wl.Z_IDS.index("meters")
     assert p["METHOD"] == 0 and p["SCENARIO"] == 0 and p["TIER"] == 0 and p["CELL"] == 10.0
-    assert p["MANNING"] == 0.06 and p["DAMS_FOLDER"] == "/tmp/dams"
+    assert p["MANNING"] == 0.05 and p["DAMS_FOLDER"] == "/tmp/dams"
     for k in ("INFLOW_CSV", "SPILLWAY_CSV", "TRIGGER", "MANNING_RASTER", "NLCD_RASTER", "PMF_FT"):
         assert k not in p, k                                  # not asked: the tool's default
     f = wl.build_rundam_params(valid_answers(
