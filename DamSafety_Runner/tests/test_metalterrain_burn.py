@@ -50,6 +50,63 @@ def burn_channel_enforces_monotone_fall():
 
 
 @test
+def raise_levee_fills_a_notch_to_the_crest():
+    """raise_levee lifts a line to an absolute crest elevation, filling a low notch, and only ever
+    raises - the uphill twin of burn_channel (pure numpy)."""
+    z = cases.pitted_plane(ny=40, nx=60)
+    path = [(20, c) for c in range(5, 55)]            # a west->east crest line
+    crest = max(z[r, c] for r, c in path) + 2.0       # above every cell on the line
+    z[20, 30] -= 5.0                                   # gouge a notch the DEM "misses"
+    out = B.raise_levee(z, path, crest_elev=crest)
+    prof = np.array([out[r, c] for r, c in path])
+    assert np.allclose(prof, crest), "line not lifted to the crest (notch left open)"
+    assert (out >= z - 1e-9).all(), "raise_levee lowered ground somewhere"
+    off = np.ones(z.shape, bool)
+    for r, c in path:
+        off[r, c] = False
+    assert np.array_equal(out[off], z[off]), "raise changed cells off the path"
+
+
+@test
+def raise_levee_height_mode_and_only_raises():
+    """height mode adds freeboard above each cell's own ground; a cell already above the target is
+    left where it is (never lowered)."""
+    z = cases.pitted_plane(ny=30, nx=40)
+    path = [(15, c) for c in range(5, 35)]
+    out = B.raise_levee(z, path, height=1.5)
+    for r, c in path:
+        assert abs(out[r, c] - (z[r, c] + 1.5)) < 1e-9, "freeboard not added"
+    # absolute mode never lowers: a crest below existing ground changes nothing
+    low = B.raise_levee(z, path, crest_elev=float(z.min()) - 10.0)
+    for r, c in path:
+        assert abs(low[r, c] - z[r, c]) < 1e-9, "raise_levee lowered a cell above the crest"
+
+
+@test
+def raise_levee_refuses_channel_cell():
+    """raise_levee raises LOUDLY if the crest line crosses a known channel / thalweg cell - damming a
+    live channel is the mirror of burn_channel breaching a dam crest. And it rejects a bad target."""
+    z = cases.pitted_plane(ny=30, nx=40)
+    path = [(15, c) for c in range(5, 35)]
+    chan = np.zeros(z.shape, bool)
+    chan[15, 20] = True                               # one channel cell on the path
+    try:
+        B.raise_levee(z, path, crest_elev=float(z.max()) + 1.0, channel_mask=chan)
+    except RuntimeError as e:
+        assert "channel" in str(e), str(e)
+    else:
+        assert False, "raise_levee did not refuse the channel cell"
+    # exactly one of crest_elev / height is required
+    for bad in (dict(), dict(crest_elev=1.0, height=1.0)):
+        try:
+            B.raise_levee(z, path, **bad)
+        except ValueError:
+            pass
+        else:
+            assert False, "raise_levee accepted an ambiguous target: {}".format(bad)
+
+
+@test
 def reconnect_drains_a_blocked_channel():
     """A channel dammed by a culvert-less road fill is detected and carved through, so the dammed
     depression drains: the crossing fill volume drops sharply, and the carve only ever lowers
@@ -184,7 +241,9 @@ def reconnect_leaves_a_clean_dem_alone():
 if __name__ == "__main__":
     import sys
     fails = 0
-    for fn in (burn_channel_enforces_monotone_fall, reconnect_drains_a_blocked_channel,
+    for fn in (burn_channel_enforces_monotone_fall, raise_levee_fills_a_notch_to_the_crest,
+               raise_levee_height_mode_and_only_raises, raise_levee_refuses_channel_cell,
+               reconnect_drains_a_blocked_channel,
                burn_channel_refuses_frozen_cell, reconnect_respects_freeze_mask,
                reconnect_freeze_refusal_reaches_the_bottom_line,
                reconnect_raise_mode_aborts_on_frozen_crossing,
