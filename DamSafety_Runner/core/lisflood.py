@@ -234,6 +234,14 @@ GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2"
 GPU_DG2_EXE = os.path.join(HERE, "metalflood", "engine_dg2.py")
 GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
                  "discontinuous galerkin")
+# 3.36.0: Boann's sub-grid-channel solver (core/metalflood/engine_sgc): the ACC local-inertial
+# scheme WITH LISFLOOD-FP's sub-grid channels (Neal et al. 2012) - a rectangular channel narrower
+# than the cell and below the DEM conveys and stores a flood the grid cannot resolve, from the same
+# SGCwidth/SGCbank/SGCbed rasters LISFLOOD-FP reads (or built from the DEM). ACC-family, not
+# shock-capturing. Chosen only by name, never as a fallback.
+GPU_SGC_EXE = os.path.join(HERE, "metalflood", "engine_sgc.py")
+GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid channels",
+                 "sub-grid channels")
 
 
 def bundled_platform(system=None, machine=None):
@@ -301,6 +309,10 @@ def is_gpu_dg2(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_DG2_EXE
 
 
+def is_gpu_sgc(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_SGC_EXE
+
+
 def is_gpu_fv_any(exe):
     """Either shock-capturing finite-volume scheme (FV1 1st order or FV2 2nd order)."""
     return is_gpu_fv(exe) or is_gpu_fv2(exe)
@@ -313,8 +325,10 @@ def is_gpu_shock(exe):
 
 
 def is_gpu_any(exe):
-    """Any GPU engine: the ACC scheme or any shock-capturing scheme (FV1, FV2 or DG2)."""
-    return is_gpu(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe) or is_gpu_dg2(exe)
+    """Any GPU engine: the ACC scheme, the sub-grid-channel ACC scheme, or any shock-capturing
+    scheme (FV1, FV2 or DG2)."""
+    return (is_gpu(exe) or is_gpu_sgc(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe)
+            or is_gpu_dg2(exe))
 
 
 def is_inprocess(exe):
@@ -347,6 +361,8 @@ def resolve_exe(exe):
         return BUILTIN_EXE
     if v.lower() in GPU_DG2_WORDS:
         return GPU_DG2_EXE
+    if v.lower() in GPU_SGC_WORDS:
+        return GPU_SGC_EXE
     if v.lower() in GPU_FV2_WORDS:
         return GPU_FV2_EXE
     if v.lower() in GPU_FV_WORDS:
@@ -362,6 +378,9 @@ def describe_exe(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_sgc(exe):
+        return ("Boann, sub-grid channels (ACC scheme with LISFLOOD-FP sub-grid channels on the "
+                "GPU; NOT LISFLOOD-FP)")
     if is_gpu_dg2(exe):
         return ("Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on the GPU; "
                 "NOT LISFLOOD-FP)")
@@ -384,6 +403,8 @@ def engine_label(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_sgc(exe):
+        return "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels; NOT LISFLOOD-FP)"
     if is_gpu_dg2(exe):
         return "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
     if is_gpu_fv2(exe):
@@ -401,6 +422,8 @@ def engine_name(exe):
         return "Boann (shock-capturing, 2nd order)"
     if is_gpu_fv(exe):
         return "Boann (shock-capturing)"
+    if is_gpu_sgc(exe):
+        return "Boann (sub-grid channels)"
     if is_gpu(exe):
         return "Boann"
     return "the built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
@@ -963,6 +986,9 @@ def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
     if is_gpu_dg2(exe):
         runner, name, version = mf.run_par_dg2, mf.DG2_NAME, mf.DG2_VERSION
         tag = "Boann (discontinuous Galerkin, 2nd order)"
+    elif is_gpu_sgc(exe):
+        runner, name, version = mf.run_par_sgc, mf.SGC_NAME, mf.SGC_VERSION
+        tag = "Boann (sub-grid channels)"
     elif is_gpu_fv2(exe):
         runner, name, version = mf.run_par_fv2, mf.FV2_NAME, mf.FV2_VERSION
         tag = "Boann (shock-capturing, 2nd order)"
