@@ -48,6 +48,9 @@ MIDLAND = {
     "lat": 43.5953047686325,
     "lon": -84.2355439496881,
     "datum_ft": 579.47,
+    # 2,400 sq mi at Midland (geoconnex gage record 6,216 km2 / NHD 6,205.6 km2 = ~2,400 sq mi).
+    # Sizes the sub-grid channel below the inflow when --sgc is used.
+    "drainage_mi2": 2400,
     "measured": {
         "q_cfs": 51800.0,
         "gage_height_ft": 35.14,
@@ -63,9 +66,12 @@ def build(out, say=print):
     return reach.build(MIDLAND["id"], out, say=say, gauge=MIDLAND)
 
 
-def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print):
+def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
+        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto"):
     _use_crs()
-    return reach.run(folder, n, nlcd, exe, threads, sim_hr, say)
+    return reach.run(folder, n, nlcd, exe, threads, sim_hr, say,
+                     sgc=sgc, sgc_min_area_km2=sgc_min_area_km2,
+                     sgc_channel_n=sgc_channel_n, sgc_start=sgc_start)
 
 
 def score(root, say=print):
@@ -118,6 +124,12 @@ def main(argv=None):
     r.add_argument("--lisflood", default=None)
     r.add_argument("--threads", type=int, default=1)
     r.add_argument("--hours", type=float, default=None)
+    r.add_argument("--sgc", action="store_true",
+                   help="add a sub-grid river channel below the inflow (needs the SGC-patched "
+                        "LISFLOOD-FP); the run is written to a separate n<..>+sgc folder")
+    r.add_argument("--sgc-min-area-km2", type=float, default=None)
+    r.add_argument("--sgc-channel-n", type=float, default=None)
+    r.add_argument("--sgc-start", default="auto", choices=["auto", "empty", "full"])
     s = sub.add_parser("score")
     s.add_argument("root")
     a = ap.parse_args(argv)
@@ -126,7 +138,9 @@ def main(argv=None):
     elif a.cmd == "run":
         if not a.nlcd and not a.n:
             ap.error("give --n or --nlcd")
-        run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours)
+        run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours,
+            sgc=a.sgc, sgc_min_area_km2=a.sgc_min_area_km2,
+            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start)
     else:
         score(a.root)
     return 0
