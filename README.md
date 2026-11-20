@@ -22,7 +22,7 @@ history; see [dwr_crest/README.md](dwr_crest/README.md). Its CI is `.github/work
 Install order: **Core → Setup → Data → Runner → Hazard**. DamSafety Core (`DamSafety_Core`) holds the
 code the others share and must be installed first. Screening, PMP, Hazard Lite and Finder are
 optional and can be added at any time. Each plugin checks the versions of the others it works with at
-start-up (`shared/damsuite/versions.py`) and says what it needs.
+start-up (`DamSafety_Core/damsuite/versions.py`) and says what it needs.
 
 ## Installing
 
