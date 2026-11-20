@@ -28,12 +28,12 @@ def test_shipped_file_holds_every_key_with_a_valid_value():
     vals, problems = SD.read(SD.shipped_path())
     assert problems == [], problems
     assert set(vals) == set(SD.KEYS), vals
-    # the suite's decisions as of Core 1.2.0 (Nick 2026-11-13: Manning's n 0.06; pool convention
-    # of ND Runner 3.29.4 / DWR Runner 3.16.4)
+    # the suite's decisions as of Core 1.2.0 (pool convention of ND Runner 3.29.4 / DWR Runner
+    # 3.16.4; Manning's n uniform fallback moved 0.06 -> 0.05, prefer NLCD, Runner 3.27.0)
     assert vals == {"sunny_day_start_pool": "max_pool",
                     "pmf_breach_volume": "storage_at_start_pool",
                     "failure_mode": "piping", "breach_method": "froehlich2008",
-                    "manning_n": 0.06}, vals
+                    "manning_n": 0.05}, vals
 
 
 def test_your_file_overrides_only_its_keys():
@@ -51,7 +51,7 @@ def test_missing_your_file_is_the_suite_values():
 def test_bad_values_are_reported_and_left_out():
     d = SD.load(user=_user("b.json", {"manning_n": 9, "failure_mode": "sideways", "colour": "red",
                                       "breach_method": "Froehlich (1995)"}))
-    assert d.get("manning_n") == 0.06 and d.get("failure_mode") == "piping"
+    assert d.get("manning_n") == 0.05 and d.get("failure_mode") == "piping"   # bad value -> suite default
     assert d.get("breach_method") == "froehlich1995"        # a label is accepted
     text = " ".join(d.problems)
     assert "manning_n" in text and "failure_mode" in text and "colour" in text, d.problems

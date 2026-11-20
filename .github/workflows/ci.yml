@@ -67,6 +67,11 @@ jobs:
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
         run: python3 DamSafety_Core/tests/test_shared_defaults.py
+      - name: Offline pack safety - extraction caps, cache-escaping names, row inflate cap, evaluation cache cap (QGIS-free)
+        run: |
+          python3 DamSafety_Core/tests/test_offline_pack_safety.py
+          python3 DamSafety_Core/tests/test_pack_rows_safety.py
+          python3 DamSafety_Hazard/tests/test_evalcache_size_cap.py
       - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
         run: python3 -W error -m unittest discover -v -s damit_ai/heim/tests
       - name: Vor - catalog, add a document, where the library lives (no Ollama, no QGIS)
@@ -318,7 +323,7 @@ jobs:
         with:
           environment-name: qgis
           create-args: >-
-            python=3.12 qgis numpy<2 scipy gdal
+            python=3.12 qgis numpy<2 scipy gdal python-gmsh
       - name: ANUGA environment (conda-forge)
         run: |
           micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy

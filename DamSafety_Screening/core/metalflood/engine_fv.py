@@ -130,7 +130,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
 
     deck = Deck(par_path)
     try:
-        bk = be.make_backend(backend, be.FV, log=say)
+        bk = be.make_backend(backend, spec=be.FV_SPEC, log=say)
     except be.BackendError as e:
         raise EngineError(str(e))
     try:

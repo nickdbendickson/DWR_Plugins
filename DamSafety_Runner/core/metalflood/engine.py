@@ -1,4 +1,4 @@
-"""Boann: the GPU flood engine (ACC / local-inertial scheme). Runs the LISFLOOD-FP input files the Runner writes (.par,
+"""DamSafety GPU flood engine: runs the LISFLOOD-FP input files the Runner writes (.par,
 .dem.asc, .bci, .bdy, optional .n.asc / .start / .gauge) with the local-inertial scheme of
 LISFLOOD-FP's "acceleration" solver on the Apple GPU (Metal), and writes the result files the
 Runner reads (.max, .maxVc, .inittm, .maxtm, .mxe, .mass, .discharge, depth snapshots).
@@ -23,7 +23,7 @@ import numpy as np
 from . import deckio as bl
 from . import backends as be
 
-NAME = "Boann (ACC / local-inertial scheme, on the GPU via Metal; LISFLOOD-FP compatible)"
+NAME = "DamSafety GPU flood engine (local inertial on Metal, LISFLOOD-FP compatible)"
 VERSION = "0.1.0"
 G = bl.G
 ALPHA = bl.ALPHA
@@ -128,6 +128,13 @@ class Deck:
             raise EngineError("cfl and theta must be in (0, 1] (cfl {}, theta {})".format(
                 self.cfl, self.theta))
         self.fric2d = "1dfriction" not in par
+        # The point source enters in LISFLOOD-FP's order by default (the donor-cell limiter /
+        # DryCheck runs before the source is added), so the breach-inflow cell and its near field
+        # match LISFLOOD-FP to the mm. "physicalinflow" in the .par keeps the mass-conserving order
+        # instead - the source is available to flow out the same step, a lower, CFL-independent
+        # breach-cell depth. Only the inflow cell and its near field (within ~300 m) differ between
+        # the two; the rest of the domain agrees to ~0.2 mm.
+        self.inflow_lf_order = "physicalinflow" not in par
         self.valid = np.isfinite(z) & (z != NODATA)
         self.z = np.where(self.valid, z, 0.0)
         self.n = np.where(self.valid, n, 0.0)
@@ -175,6 +182,7 @@ class Engine:
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
+        p.inflow_lf_order = int(d.inflow_lf_order)
         p.dry, p.maxhflow, p.velmin, p.arr_depth = DRY_M, MAX_HFLOW, VEL_MIN_DEPTH_M, d.arr_depth
         self.win = self._window_from(self.h2() > 0)
 
@@ -248,7 +256,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
 
 def _run(d, bk, progress, cancel, say):
     if d.solver == "fv1":
-        say("Boann runs 'fv1' with its local-inertial (ACC) scheme.")
+        say("The GPU engine runs 'fv1' with its local-inertial scheme.")
     eng = Engine(d, bk)
     a = eng.a
     ny, nx, dx = d.ny, d.nx, d.dx
@@ -334,7 +342,9 @@ def _run(d, bk, progress, cancel, say):
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
             # never cut a step to land on a time (as LISFLOOD-FP): a cut step is short, and the
-            # Runner reads a short step in the .mass file as a collapsing solver
+            # Runner reads a short step in the .mass file as a collapsing solver. The kernels'
+            # clip_end Param is reserved for that cut and is deliberately held False here (not dead
+            # plumbing): enabling it would reintroduce the .mass dt-collapse false positive above.
             clip = False
             want = int(math.ceil((t_event - t) / max(mean_dt, 1e-3))) + 1
             n = max(1, min(BATCH_STEPS, want))
@@ -353,7 +363,7 @@ def _run(d, bk, progress, cancel, say):
                 t = t_event
             else:
                 if not out["steps"] and out["t_local"] < (t_event - t) - 2e-3:
-                    raise EngineError("Boann made no progress at t = {:.1f} s".format(t))
+                    raise EngineError("the GPU engine made no progress at t = {:.1f} s".format(t))
                 t += out["t_local"]
                 if (t_event - t) <= 2e-3:      # float32 rounding just short of the event
                     t = max(t, t_event)
@@ -391,7 +401,7 @@ def _run(d, bk, progress, cancel, say):
              "steps": steps, "batches": batches, "sim_time_s": t, "wall_s": round(wall, 2),
              "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
              "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip}
-    say("Boann ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
+    say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))
     return stats

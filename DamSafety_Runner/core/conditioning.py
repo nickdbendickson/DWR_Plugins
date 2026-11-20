@@ -176,6 +176,44 @@ class ChannelBurn:
         return int(cut.sum())
 
 
+# S6a: ChannelBurn.apply floors the bottom width at one cell
+# (`half = 0.5 * max(self.width_m, grid.dx)`), so at a coarse cell a narrow channel is
+# cut wider than asked. A realized width within this tolerance (m) of the request counts
+# as honoured; beyond it, channel_width_warning flags the run. Report text only.
+BURN_WIDTH_TOL_M = 0.5
+
+
+def channel_width_warning(edits, cell_m):
+    """One run-report warning when the model cell forces any channel burn wider than
+    requested. The realized bottom width is max(width_m, cell_m) - exactly the 2*half
+    that ChannelBurn.apply cuts - so when the cell is coarser than the requested width
+    the channel bottom is floored to one cell. Report text only: the burn geometry, the
+    DEM and every result are unchanged. Returns the warning string, or None when no
+    channel is affected."""
+    if edits is None or not getattr(edits, "channels", None):
+        return None
+    try:
+        cell = float(cell_m)
+    except (TypeError, ValueError):
+        return None
+    if not (cell > 0.0):
+        return None
+    affected = [c for c in edits.channels
+                if cell > float(c.width_m) + BURN_WIDTH_TOL_M]
+    if not affected:
+        return None
+    # every affected channel is floored to one cell, so the realized width is the cell for
+    # all of them; name the narrowest request (the worst overage).
+    narrowest = min(float(c.width_m) for c in affected)
+    extra = (" ({} channel burn(s) affected)".format(len(affected))
+             if len(affected) > 1 else "")
+    return ("Channel burn wider than requested: a {:.1f} ft ({:.2f} m) bottom width was asked "
+            "for, but the model cell is {:.1f} m, so the channel bottom is floored to one cell "
+            "and cut about {:.1f} m ({:.1f} ft) wide{}. The burn depth, profile and all results "
+            "are unchanged; use a finer cell to honour the requested width.".format(
+                narrowest / FT, narrowest, cell, cell, cell / FT, extra))
+
+
 @dataclass
 class PondLower:
     """Lower a pond whose LiDAR surface is the water surface. `polygon` is the
@@ -516,7 +554,7 @@ class ConditionedTerrain:
     """Terrain source that applies `edits` to whatever the models read. `default_n` is the
     Manning's n used where there is no roughness raster (v3.4.0 roughness footprints)."""
 
-    def __init__(self, base, edits, default_n=0.06):
+    def __init__(self, base, edits, default_n=0.05):
         self.base = base
         self.edits = edits
         self.default_n = default_n

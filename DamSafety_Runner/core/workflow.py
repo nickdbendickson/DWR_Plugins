@@ -52,6 +52,7 @@ from . import terrain
 from . import grid_default as griddef
 from . import crestburn
 from . import lisflood as lfmod
+from . import sgc as sgcmod
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
@@ -168,7 +169,7 @@ class RunSettings:
         self.user_hydrograph = None
         self.cell_size_m = 10.0
         self.planning_cell_m = 30.0
-        self.manning_n = 0.06
+        self.manning_n = 0.05            # uniform fallback where there is no n raster / NLCD class (shared default, Core defaults.json); prefer a land-cover raster
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
@@ -348,6 +349,21 @@ class RunSettings:
             self.lisflood_solver = lfmod.SOLVER_ACC   # run_dam refuses (lisflood_solver_error)
             self.lisflood_solver_error = str(e)
         self.lisflood_limit_slopes = True
+        # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; off by default). On, every
+        # LISFLOOD-FP pass of the main run gets channels built from its own DEM: cells draining
+        # sgc_min_area_km2 or more, bankfull width / depth from drainage area (W = a A^b,
+        # D = c A^f, sgc_curve, Bieger et al. 2015 by default), Manning n sgc_channel_n.
+        # sgc_upstream_sqmi = the drainage area at the dam (sq mi; 0 = not known), added at the
+        # breach inflow so the channel below the dam is sized for its watershed. sgc_start:
+        # "auto" (channels on hydro-flattened water start full, the rest empty), "empty", "full".
+        # ACC only; needs the patched LISFLOOD-FP (scripts/patch_lisflood.py edit 4).
+        self.lisflood_sgc = os.environ.get("NDBREACH_LISFLOOD_SGC", "0").strip().lower() in (
+            "1", "true", "yes", "on")
+        self.sgc_min_area_km2 = sgcmod.DEFAULT_MIN_AREA_KM2
+        self.sgc_upstream_sqmi = 0.0
+        self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
+        self.sgc_start = "auto"
+        self.sgc_curve = list(sgcmod.BIEGER_2015_US)
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -447,6 +463,11 @@ class RunSettings:
                     "spillway_schedule": v.spillway_schedule}
                 if v is not None and getattr(v, "aux_spillway", None) is not None:
                     d[k]["aux_spillway"] = v.aux_text       # 3.19.0 (only when one is given)
+                # H12: the embankment-crest weir coefficient, recorded only when it is not the
+                # default (flood.CREST_C_US), so a default run's key and run_report are unchanged
+                if v is not None and abs(float(getattr(v, "crest_c_us", floodmod.CREST_C_US))
+                                         - floodmod.CREST_C_US) > 1e-9:
+                    d[k]["crest_c_us"] = round(float(v.crest_c_us), 3)
             elif k == "receptors":
                 d[k] = None if v is None else len(v)
             elif k == "structures":
@@ -537,6 +558,33 @@ def _check_solver(st, model_dir, log=None):
         raise brmod.BreachInputError(
             "LISFLOOD-FP solver '{}' cannot be used for the main run - choose ACC, FV2 or "
             "MWDG2".format(solver))
+    if getattr(st, "lisflood_sgc", False):
+        # 3.26.0: sub-grid channels: LISFLOOD-FP's SGC model is local inertial (ACC only) and
+        # the built-in engine has none
+        if solver != lfmod.SOLVER_ACC:
+            raise brmod.BreachInputError(
+                "Sub-grid channels run with the ACC solver only (LISFLOOD-FP's SGC model is local "
+                "inertial); choose ACC or turn sub-grid channels off.")
+        if lfmod.is_builtin(st.lisflood_exe):
+            raise brmod.BreachInputError(
+                "Sub-grid channels need LISFLOOD-FP; the built-in engine has none. Set the "
+                "LISFLOOD-FP executable or turn sub-grid channels off.")
+        if str(getattr(st, "sgc_start", "auto")) not in sgcmod.START_MODES:
+            raise brmod.BreachInputError("Sub-grid channel start must be auto, empty or full.")
+        key = (os.path.abspath(str(st.lisflood_exe or "")), "sgc")
+        chk = _SOLVER_CHECKED.get(key)
+        if chk is None:
+            if log:
+                log("Checking that this LISFLOOD-FP runs sub-grid channels with the arrival-depth "
+                    "patch...")
+            chk = lfmod.check_lisflood(st.lisflood_exe, os.path.join(model_dir, "solver_check_sgc"),
+                                       lfmod.SOLVER_ACC, sgc=True)
+            if chk.get("ok") and chk.get("patched"):
+                _SOLVER_CHECKED[key] = chk
+        if not (chk.get("ok") and chk.get("patched")):
+            raise brmod.BreachInputError(
+                "LISFLOOD-FP sub-grid channels cannot be used: {}".format(
+                    chk.get("message", "") if not chk.get("ok") else lfmod.SGC_PATCH_MISSING_MSG))
     if solver == lfmod.SOLVER_ACC:
         return
     name = lfmod.SOLVER_SHORT.get(solver, solver)
@@ -587,6 +635,11 @@ def key_settings(st):
         for k in _REFINE_KEYS:
             d.pop(k, None)
     d.pop("lisflood_solver_error", None)
+    # 3.26.0: the sub-grid channel settings change the flood only while channels are on
+    if not getattr(st, "lisflood_sgc", False):
+        for k in ("lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n",
+                  "sgc_start", "sgc_curve"):
+            d.pop(k, None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -1002,18 +1055,30 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         products.write_gpkg(os.path.join(out_folder, "Breach Products.gpkg"), layers, crs)
 
 
-def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=()):
+def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edits_out=None):
     """The DEM an engine gets: the (conditioned) terrain read at the model's cell size, the
     refill paths, then the structure cuts applied AT THAT CELL SIZE (after any resampling,
-    so an averaged or bilinear read cannot wash a narrow cut out)."""
+    so an averaged or bilinear read cannot wash a narrow cut out).
+
+    S3: when `edits_out` is a dict it receives the DEM-edits record for this grid -
+    edits_out["source"] (the plain source DEM, read before the refill and the cuts),
+    edits_out["model"] (the grid returned) and edits_out["counts"] (the per structure-cut
+    cell counts, which model_dem otherwise throws away). The grid returned is unchanged, so
+    callers that pass no edits_out are unaffected."""
     g = terrain_src.read(bounds, cell)
+    if edits_out is not None:
+        edits_out["source"] = g.like(g.data.copy())
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
             g = dem_refill.fill_grid(g, _p)
     cuts = structmod.structure_edits(structures or [], cell, model)
+    counts = {}
     if cuts:
-        g, _, _ = cond.Edits(notches=cuts).apply(g)
+        g, _, counts = cond.Edits(notches=cuts).apply(g)
+    if edits_out is not None:
+        edits_out["counts"] = {k: int(v) for k, v in counts.items()}
+        edits_out["model"] = g
     return g
 
 
@@ -2087,6 +2152,44 @@ def _amend_report(res, entry, texts):
                 "run report markdown not updated ({}): {}".format(res.report_md, e)]
 
 
+def tailwater_breach_warning(dam_xy, dam, edits):
+    """H12: a disclosure warning when a TAILWATER stage or a cascade downstream reservoir pool
+    stands over the breach point. The breach outflow is routed as free weir / orifice discharge
+    with no tailwater (breach.routed_hydrograph, flood.route_flood), so the submergence of the
+    breach by downstream standing water is not reflected in the breach discharge. Reporting only:
+    it reads nothing from the terrain and changes no computed number. Returns the warning text or
+    None."""
+    if edits is None or dam_xy is None:
+        return None
+    px, py = [float(dam_xy[0])], [float(dam_xy[1])]
+    invert_ft = getattr(dam, "breach_bottom_ft", None)      # the breach bottom, else the dam toe
+    if invert_ft is None:
+        top, h = getattr(dam, "top_of_dam_ft", None), getattr(dam, "dam_height_ft", None)
+        if top is not None and h:
+            invert_ft = top - h
+    stages = list(getattr(edits, "stages", None) or [])
+    pools = [p for p in (getattr(edits, "ponds", None) or [])
+             if getattr(p, "wse_m", None) is not None]
+    for s in stages + pools:
+        poly, wse_m = getattr(s, "polygon", None), getattr(s, "wse_m", None)
+        if poly is None or wse_m is None:
+            continue
+        poly = np.asarray(poly, dtype=float)
+        if poly.ndim != 2 or len(poly) < 3:
+            continue
+        if not bool(cond.points_in_polygon(px, py, poly)[0]):
+            continue
+        if invert_ft is not None and float(wse_m) / FT < invert_ft - 0.01:
+            continue                 # the standing water is below the breach invert: no submergence
+        return ("Tailwater disclosure: a downstream standing-water stage ({}, {:.1f} ft) covers "
+                "the breach point. The breach outflow is routed as free weir / orifice discharge "
+                "with no tailwater, so the submergence of the breach by this standing water is "
+                "not reflected in the breach discharge. Confirm whether the tailwater affects the "
+                "breach outflow for this run.".format(getattr(s, "name", "tailwater"),
+                                                      float(wse_m) / FT))
+    return None
+
+
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
@@ -2156,6 +2259,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     attach_proposed(st, out_folder, dam, warnings, log)
     if st.edits is not None and not st.edits.empty():
         terrain_src = cond.ConditionedTerrain(terrain_src, st.edits, default_n=st.manning_n)
+        # S6a: a channel burn narrower than the model cell is floored to one cell wide
+        try:
+            _bw = cond.channel_width_warning(st.edits, cs)
+        except Exception:                                    # noqa - a disclosure never stops a run
+            _bw = None
+        if _bw:
+            warnings.append(_bw)
+            log(_bw)
     has_ponds = st.edits is not None and st.edits.has_water()
 
     def manning_for(bnds, cell):
@@ -2278,6 +2389,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append(w)
     except Exception as e:                                   # noqa - never stop the run for this
         warnings.append("Elevation datum not checked: {}: {}".format(type(e).__name__, e))
+
+    # H12: a disclosure warning when a tailwater stage or a cascade downstream reservoir pool
+    # stands over the breach point (the breach outflow is routed with no tailwater). Never stops
+    # the run; adds no computed number.
+    if not no_breach:
+        try:
+            tw_warn = tailwater_breach_warning(dam_xy, dam, st.edits)
+        except Exception:                                   # noqa - a disclosure never stops a run
+            tw_warn = None
+        if tw_warn and tw_warn not in warnings:
+            warnings.append(tw_warn)
+            log(tw_warn)
 
     # --- top of dam from the DEM if not given ---------------------------------
     near = terrain_src.read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60),
@@ -2583,8 +2706,17 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         from . import culvert_guess as cgmod
         n_match = sum(1 for c in candidates if c.get("match_m") is not None)
         burn = bool(getattr(st, "culvert_burn_matched", False))
+        # H6-1: flag guessed cuts that cross the dam embankment (DWR dam line, not the point);
+        # mark/report only - on_dam goes to the CSV and the report table, nothing is cut.
+        n_on_dam = cgmod.mark_on_dam(candidates, getattr(dam, "crest_line_xy", None))
         csv_path = cgmod.write_candidates_csv(
             os.path.join(model_dir, "culvert_candidates.csv"), candidates)
+        if n_on_dam:
+            warnings.append(
+                "{} guessed culvert cut(s) cross a DWR dam embankment line (marked on_dam in "
+                "{}). A cut across a dam crest can lower it; review before using them.".format(
+                    n_on_dam, os.path.basename(csv_path)))
+            log(warnings[-1])
         if n_match:
             if burn:
                 burned = cgmod.matched_structures(candidates)
@@ -2625,7 +2757,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     {"name": g.name, "width_m": g.width_m, "height_m": g.height_m,
                      "barrels": g.barrels, "shape": g.shape, "source": "guess",
                      "surveyed": False, "invert_up_m": g.invert_up_m,
-                     "invert_dn_m": g.invert_dn_m} for g in gss]
+                     "invert_dn_m": g.invert_dn_m, "on_dam": bool(c.get("on_dam"))}
+                    for c, g in zip(unmatched, gss)]
                 warnings.append(
                     "{} culvert candidate(s) where a road crosses a channel or the flow path "
                     "were cut into the DEM as GUESSED, UNVERIFIED culverts (one 1.2 x 0.9 m "
@@ -2660,6 +2793,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         report["structures_used"] = [s.to_dict() for s in st.structures]
         json.dump([s.to_dict() for s in st.structures],
                   open(os.path.join(model_dir, "structures.json"), "w", encoding="utf-8"), indent=2)
+
+    # --- S7 (3.22.x): road / rail / STRUCTURES crossings still blocked after the cuts ------
+    # Report only; never fails a run. Walk the flow path on the model DEM AFTER the culvert,
+    # bridge and notch cuts and record where an embankment still walls the channel. This reads
+    # the DEM and writes report["crossing_check"] and one warning only - it cuts nothing and
+    # changes no breach, hydrograph, raster, extent, arrival, storage or routing value.
+    try:
+        _cross_lines = (list(getattr(st, "road_lines", None) or [])
+                        + list(getattr(st, "rail_lines", None) or [])
+                        + [s.line for s in (st.structures or [])])
+        if _cross_lines and len(path) >= 2:
+            _cc = structmod.crossing_barriers(dem_for("lisflood", bounds, cs), path,
+                                              _cross_lines, cs)
+            if _cc:
+                report["crossing_check"] = _cc
+                if _cc["blocked"]:
+                    _cw = ("{} road/rail crossing(s) on the flow path are still blocked after "
+                           "the culvert and bridge cuts (worst residual embankment {:.2f} m "
+                           "above the upstream channel, at {:g} m cells). The model holds that "
+                           "embankment as a wall there; add or widen a culvert, bridge or "
+                           "notch, or model at a finer cell. Report only; the run is "
+                           "unchanged.").format(_cc["blocked"], _cc["worst_height_m"],
+                                                _cc["cell_m"])
+                    warnings.append(_cw)
+                    log(_cw)
+    except Exception as _cc_err:                 # noqa - a report check never stops the run
+        log("crossing check skipped: {}".format(_cc_err))
 
     # --- LISFLOOD-FP run helper -----------------------------------------------------
     def gauge_list(bnds, gauges):
@@ -2755,11 +2915,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             lfmod.wall_limit_s(getattr(st, "max_wall_s", 0.0))
         return float(st.max_iterations) * float(first)
 
+    sgc_cache = {}
+
+    def sgc_for(dem, tag=""):
+        """3.26.0: the sub-grid channels of this pass's DEM (None while they are off). Built once
+        per grid (the stability re-run and a resume reuse them)."""
+        if not getattr(st, "lisflood_sgc", False) or getattr(st, "near_dam_fv1", False):
+            return None
+        key = (dem.x0, dem.y0, dem.dx, dem.data.shape)
+        ch = sgc_cache.get(key)
+        if ch is None:
+            up_km2 = float(getattr(st, "sgc_upstream_sqmi", 0.0) or 0.0) * 2.589988110336
+            ch = sgcmod.build(dem, inflow_rc=dem.rc(*inflow_xy), upstream_km2=up_km2 or None,
+                              min_area_km2=float(st.sgc_min_area_km2),
+                              curve=tuple(float(v) for v in st.sgc_curve),
+                              channel_n=float(st.sgc_channel_n), start=str(st.sgc_start))
+            sgc_cache[key] = ch
+            line = sgcmod.describe(ch.info)
+            log(line + " (lisflood{})".format(tag))
+            report["sgc"] = dict(ch.info)
+            if not ch.info.get("upstream_km2") and line not in warnings:
+                warnings.append(line)
+        return ch
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
         init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
         gl = gauge_list(bnds, gauges)
+        chans = sgc_for(dem, tag)
 
         def settings():
             return lfmod.LisfloodSettings(
@@ -2773,6 +2957,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 limit_slopes=getattr(st, "lisflood_limit_slopes", True),
                 max_wall_s=getattr(st, "max_wall_s", 0.0) or 0.0,          # audit P2
                 rate=getattr(st, "lisflood_rate", None) or lfmod.known_rate(st.lisflood_exe),
+                sgc=chans,
                 **stable_kw())
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
@@ -2865,6 +3050,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
                                      closed_edges=closed_edges(),
                                      limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                                     sgc=sgc_for(dem, tag),
                                      **stable_kw())
         env = lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd)
 
@@ -2884,9 +3070,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if lfmod.is_gpu(st.lisflood_exe):
         gmsg = ("This run uses Boann (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
                 "kernels, on {}), not LISFLOOD-FP itself. It matched LISFLOOD-FP 8.3 within "
-                "millimetres on the test cases (DWR-2801 at 30 m, Lake Delhi 2010), but it is new: "
-                "confirm a final hazard classification with a LISFLOOD-FP run."
-                .format(lfmod.gpu_backend_note()))
+                "millimetres across the test cases (DWR-2801 at 30 m, Lake Delhi 2010), the "
+                "breach-inflow cell included: the point source enters in LISFLOOD-FP's order by "
+                "default ('physicalinflow' in the .par keeps a mass-conserving order instead - a "
+                "lower, CFL-independent breach-cell depth, differing from LISFLOOD-FP only at the "
+                "breach cell and its near field). It is new: confirm a final hazard classification "
+                "with a LISFLOOD-FP run.".format(lfmod.gpu_backend_note()))
         if gmsg not in warnings:
             warnings.append(gmsg)
             log(gmsg)
@@ -3033,7 +3222,19 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 else:
                     tile = os.path.join(model_dir, "dem_refill.tif")
                     try:
-                        dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
+                        # audit (fix I): a 3DEP refill reprojects the fetched tile into the DEM's
+                        # CRS; an untagged terrain passes crs=None and fetch_3dep then defaults to
+                        # EPSG:5070 - the Edenville-Sanford 2020 storm warped off-map and left a 0 m
+                        # pit below Midland. Refuse at the refill with the real cause (covers the
+                        # no-CRS ASCII path too), rather than defaulting; #397's check_tile still
+                        # guards a tile that carries a CRS but holds no ground.
+                        _dem_crs = getattr(dem, "crs_wkt", None)
+                        if not _dem_crs:
+                            raise ValueError(
+                                "the terrain has no coordinate system, so a 3DEP refill cannot be "
+                                "reprojected into it without silently defaulting to EPSG:5070; tag "
+                                "the DEM's CRS, e.g. gdal_edit.py -a_srs EPSG:26914 <dem>")
+                        dem_refill.fetch_3dep(box, cs, tile, crs=_dem_crs)
                         dem_refill.check_tile(tile)      # 3.20.14: no 0 m pit from a tile of no ground
                         refill_paths.append(tile)
                         refilled = True
@@ -3453,6 +3654,24 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                  or terrain_src.last_manning_counts),
             "note": "cell counts are on the last grid the models read; the source DEM is "
                     "never changed"}
+    # --- H9 (v3.22.0): land-cover Manning's n coverage, reporting only (no n value changes) --
+    _mc = getattr(terrain_src, "manning_coverage", None)
+    mcov = None
+    if callable(_mc):
+        try:
+            mcov = _mc()
+        except Exception:                             # noqa: BLE001 - reporting only
+            mcov = None
+    if mcov and mcov.get("total_cells"):
+        report["manning_coverage"] = dict(mcov)
+        _ml = ("Manning's n from the land-cover raster: {:,} of {:,} cells took the default "
+               "n = {} because the raster did not cover them.".format(
+                   int(mcov.get("default_cells", 0)), int(mcov["total_cells"]),
+                   mcov.get("default_n", st.manning_n)))
+        log(_ml)
+        if (mcov.get("default_cells") and mcov["default_cells"] > 0.25 * mcov["total_cells"]
+                and _ml not in warnings):
+            warnings.append(_ml)
     # --- v3.4.0: near-dam refine on a fine FV1 grid -----------------------------------------
     fin = final_arrays
     # M21 (product-write defence, signed off 2026-11-10): a LISFLOOD-FP build that wrote no
@@ -3509,6 +3728,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     # --- final rasters for the classification plugin ------------------------------
     progress(93, "writing rasters")
+    dem_edits_mask = None            # S3: footprint of the DEM edits for the products layer
+    dem_edits_counts = {}            # S3: structure-cut counts kept from model_dem
     if st.write_final:
         # A hazard classification of the previous rasters no longer applies. A rerun that
         # changes scenario (e.g. a sunny-day run into a folder left by a flood run) must not
@@ -3540,6 +3761,33 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
+        # S3: raster + layer record of the DEM edits baked into the published model DEM
+        try:
+            _ei = {}
+            model_dem(terrain_src, st.structures, "lisflood", dem.bounds, dem.dx,
+                      refill_paths, edits_out=_ei)
+            _src = _ei.get("source")
+            dem_edits_counts = _ei.get("counts", {}) or {}
+            if _src is not None and _src.data.shape == dem.data.shape:
+                with np.errstate(invalid="ignore"):
+                    _diff = np.where(dem.valid() & _src.valid(),
+                                     dem.data - _src.data, np.nan)
+                    _diff = np.where(_diff != 0.0, _diff, np.nan)
+                _m = np.isfinite(_diff)
+                if _m.any():
+                    dem_edits_mask = _m
+                    _p = os.path.join(out_folder,
+                                      "{}_dem_edits.tif".format(_safe(dam.dam_id)))
+                    writer(dem.like(_diff, np.nan), _p)
+                    report["dem_edits"] = {
+                        "raster": os.path.basename(_p),
+                        "cells": int(_m.sum()),
+                        "structure_cuts": {k: int(v) for k, v in dem_edits_counts.items()},
+                        "note": "model/engine DEM minus the plain source DEM, in work-CRS "
+                                "metres; a cell differs where the refill and the structure "
+                                "cuts lowered the ground. The source DEM is never changed."}
+        except Exception as _e:          # a record extra; never lose the run for it
+            log("DEM-edits record skipped: {}: {}".format(type(_e).__name__, _e))
     incr = None
     if lf_base_arrays is not None:
         thr_m = [t * FT for t in st.incr_thresholds_ft]
@@ -3743,7 +3991,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             from . import products
             products.write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb,
                                     path, out_folder, model_dir, arrival_m,
-                                    crs=getattr(writer, "work_srs", None))
+                                    crs=getattr(writer, "work_srs", None),
+                                    dem_edits_mask=dem_edits_mask)
         except Exception as e:          # products are extras; never lose the run for them
             warnings.append("Could not write the vector products / map: {}: {}".format(
                 type(e).__name__, e))
@@ -5045,7 +5294,8 @@ def scr_has_final(r):
 
 
 def render_report(r):
-    from .report_docx import pass_number, domain_run_text, peak_inflow_text   # stdlib only
+    from .report_docx import (pass_number, domain_run_text, peak_inflow_text,   # stdlib only
+                              run_assumption_lines, headline_peak_inputs)
     s = r["summary"]
     h = r["hydrograph"]
     lines = ["# Breach model run: {}".format(s["dam_id"]), "",
@@ -5109,6 +5359,14 @@ def render_report(r):
         lines.append("| HEC-RAS wall-clock limit | {} |".format(s["hecras_time_limit"]))
     if s.get("hecras_depth_basis"):
         lines.append("| HEC-RAS depth basis | {} |".format(s["hecras_depth_basis"]))
+    lines.append("")
+    # A5 (v3.22.0): one line naming the inputs behind the headline routed breach peak
+    _peak_inputs = headline_peak_inputs(r)
+    if _peak_inputs:
+        lines += [_peak_inputs, ""]
+    # H4b (v3.22.0): a concrete list of what this run actually used, built from the report
+    lines += ["## Assumptions used in this run", ""]
+    lines += ["- {}: {}".format(k, v) for k, v in run_assumption_lines(r)]
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
@@ -5184,7 +5442,9 @@ def render_report(r):
               "formation_time_hr", "pipe_initial_dia_ft", "pipe_collapse_dia_ft",
               "pipe_phase_hr", "tr60_peak_cfs", "tr60_rule", "breach_factor_br_ac",
               "embankment_area_ft2", "rise_time_hr", "base_time_hr", "shape",
-              "froehlich_1995_peak_cfs", "tr60_peak_cfs_check", "tr60_rule_check", "peak_cfs",
+              "xu_zhang_2009_failure_time_hr", "froehlich_1995_peak_cfs",
+              "mlm_1984_peak_cfs", "xu_zhang_2009_peak_cfs", "tr60_peak_cfs_check",
+              "tr60_rule_check", "regression_peak_range_cfs", "peak_cfs",
               "time_to_peak_hr", "volume_acft", "source",
               "peak_pool_ft", "peak_pool_hr", "freeboard_at_peak_ft", "aux_spillway",
               "aux_spillway_peak_cfs"):
@@ -5290,6 +5550,14 @@ def render_report(r):
         for k, v in sorted(c.get("manning_edits", {}).items()):
             lines.append("- Manning's n {}: {:,} cells".format(k, v))
         lines += ["- " + c["note"], ""]
+    # H9 (v3.22.0): land-cover Manning's n coverage, if n came from a raster
+    mc = r.get("manning_coverage")
+    if isinstance(mc, dict) and mc.get("total_cells"):
+        lines += ["## Manning's n coverage", "",
+                  "- {:,} of {:,} cells took the default n = {} because the land-cover "
+                  "raster did not cover them.".format(
+                      int(mc.get("default_cells", 0)), int(mc["total_cells"]),
+                      mc.get("default_n", 0.05)), ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
     if r.get("bridge_snap"):
@@ -5330,16 +5598,17 @@ def render_report(r):
                   "assumed size. GUESSED: location from the road x channel crossing, size not "
                   "surveyed. Set culvert_burn_guesses (CULVERT_BURN_GUESSES) off to leave them "
                   "out.", "",
-                  "| Guess | Span (ft) | Rise (ft) | Barrels | Shape | Inverts up / down (ft) |",
-                  "|---|---|---|---|---|---|"]
+                  "| Guess | Span (ft) | Rise (ft) | Barrels | Shape | Inverts up / down (ft) "
+                  "| On dam |",
+                  "|---|---|---|---|---|---|---|"]
         for m in r["culvert_guesses_cut"]:
             iu, idn = m.get("invert_up_m"), m.get("invert_dn_m")
             inv = "{:.1f} / {:.1f}".format(iu / FT, idn / FT) if (iu is not None and
                                                                    idn is not None) else ""
-            lines.append("| {} | {:.1f} | {:.1f} | {} | {} | {} |".format(
+            lines.append("| {} | {:.1f} | {:.1f} | {} | {} | {} | {} |".format(
                 str(m.get("name", "")).replace("|", "/"), float(m.get("width_m") or 0.0) / FT,
                 float(m.get("height_m") or 0.0) / FT, m.get("barrels", ""), m.get("shape", ""),
-                inv))
+                inv, "yes" if m.get("on_dam") else "no"))
         lines.append("")
     if r.get("receptors"):
         lines += ["## Receptors", ""]

@@ -268,7 +268,7 @@ def dam_dem_candidates(dams_folder, dam_id, limit=12, point_stem=""):
 def _shared_start():
     """Core 1.2.0: the wizard's starting breach method and Manning's n from the shared defaults
     file (damsuite.shared_defaults); the Runner's own values when Core is older or has none."""
-    method, n = brmod.METHOD_PIPING, 0.06
+    method, n = brmod.METHOD_PIPING, 0.05       # uniform fallback; prefer NLCD (Runner 3.27.0)
     try:
         from .damsuite import shared_defaults as SD
         vals = SD.load().values
@@ -348,7 +348,7 @@ def build_rundam_params(a):
         p["MANNING_RASTER"] = a["manning_id"]
     if a.get("nlcd_id"):
         p["NLCD_RASTER"] = a["nlcd_id"]
-    p["MANNING"] = float(a.get("manning_n", 0.06))
+    p["MANNING"] = float(a.get("manning_n", 0.05))
     p["TIER"] = TIER_IDS.index(a.get("tier", workflow.TIER_LISFLOOD))
     p["CELL"] = float(a.get("cell_m", 10.0))
     if a.get("dams_folder"):
@@ -438,7 +438,7 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
                 warnings.append("The breach starts {:g} ft below the top of dam. ND 5.1.1 has "
                                 "the sunny-day breach start at the top of dam; this run is "
                                 "not that case.".format(float(top) - float(wse)))
-            if a.get("method") in (brmod.METHOD_OVERTOPPING, brmod.METHOD_F95_OVERTOPPING) \
+            if a.get("method") in brmod.OVERTOPPING_METHODS \
                     and wse is not None and top not in (None, "") and float(wse) < float(top):
                 warnings.append("An overtopping breach with the pool below the crest: water "
                                 "cannot overtop from there. Use a flood scenario for an "
@@ -612,7 +612,7 @@ def review_text(a, estimate=None, warnings=()):
         lines.append("  Manning's n raster: {}".format(a.get("manning_name") or a["manning_id"]))
     elif a.get("nlcd_id"):
         lines.append("  NLCD land cover: {}".format(a.get("nlcd_name") or a["nlcd_id"]))
-    lines.append("  Manning's n elsewhere: {:g}".format(a.get("manning_n", 0.06)))
+    lines.append("  Manning's n elsewhere: {:g}".format(a.get("manning_n", 0.05)))
     lines.append("  Dams folder: {}".format(a.get("dams_folder") or "(none)"))
     lines += ["", "Scenario",
               "  Breach: {}".format(brmod.METHOD_LABELS.get(a.get("method"), a.get("method"))),

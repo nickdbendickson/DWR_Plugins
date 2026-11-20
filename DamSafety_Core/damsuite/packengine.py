@@ -721,7 +721,8 @@ def _pack_json(obj):
 
 def _unpack_json(blob):
     try:
-        return json.loads(zlib.decompress(blob).decode("utf-8"))
+        from . import zipsafe
+        return json.loads(zipsafe.inflate(blob).decode("utf-8"))
     except (TypeError, ValueError, zlib.error):
         return None
 

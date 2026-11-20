@@ -2,8 +2,8 @@
 # generated from DamSafety_Runner/scripts/patch_lisflood.py. Apply in the folder that holds LISFLOOD-FP-8.3/:
 #   patch -p1 --forward < lisflood-8.3-ndbreach.patch
 diff -ruN a/LISFLOOD-FP-8.3/source/CMakeLists.txt b/LISFLOOD-FP-8.3/source/CMakeLists.txt
---- a/LISFLOOD-FP-8.3/source/CMakeLists.txt
-+++ b/LISFLOOD-FP-8.3/source/CMakeLists.txt
+--- a/LISFLOOD-FP-8.3/source/CMakeLists.txt	2026-11-19 18:34:13.377758769 +0000
++++ b/LISFLOOD-FP-8.3/source/CMakeLists.txt	2026-11-19 18:34:13.413886082 +0000
 @@ -202,9 +202,12 @@
  endif()
  
@@ -21,8 +21,8 @@ diff -ruN a/LISFLOOD-FP-8.3/source/CMakeLists.txt b/LISFLOOD-FP-8.3/source/CMake
  
  if (_NETCDF)
 diff -ruN a/LISFLOOD-FP-8.3/source/iterateq.cpp b/LISFLOOD-FP-8.3/source/iterateq.cpp
---- a/LISFLOOD-FP-8.3/source/iterateq.cpp
-+++ b/LISFLOOD-FP-8.3/source/iterateq.cpp
+--- a/LISFLOOD-FP-8.3/source/iterateq.cpp	2026-11-19 18:34:13.386097833 +0000
++++ b/LISFLOOD-FP-8.3/source/iterateq.cpp	2026-11-19 18:34:13.412829096 +0000
 @@ -195,7 +195,7 @@
  				ptr = i + j*Parptr->xsz;
  				if (Arrptr->H[ptr] > Solverptr->DepthThresh)
@@ -33,8 +33,8 @@ diff -ruN a/LISFLOOD-FP-8.3/source/iterateq.cpp b/LISFLOOD-FP-8.3/source/iterate
  					//if (Arrptr->H[ptr]>C(0.01)) 
  					Arrptr->totalHtm[ptr] += Solverptr->Tstep / C(3600.0);
 diff -ruN a/LISFLOOD-FP-8.3/source/lisflood.cpp b/LISFLOOD-FP-8.3/source/lisflood.cpp
---- a/LISFLOOD-FP-8.3/source/lisflood.cpp
-+++ b/LISFLOOD-FP-8.3/source/lisflood.cpp
+--- a/LISFLOOD-FP-8.3/source/lisflood.cpp	2026-11-19 18:34:13.386136692 +0000
++++ b/LISFLOOD-FP-8.3/source/lisflood.cpp	2026-11-19 18:34:13.412323655 +0000
 @@ -122,6 +122,7 @@
  	Params.checkfreq = CHKINTERVAL;  // set default checkpointing file output interval
  	Params.nextcheck = C(0.0);
@@ -44,8 +44,8 @@ diff -ruN a/LISFLOOD-FP-8.3/source/lisflood.cpp b/LISFLOOD-FP-8.3/source/lisfloo
  	Params.ch_start_h = C(2.0); // default start water depth for channel
  	Params.steadyQtol = C(0.0005); // tolerance for steady-state definition
 diff -ruN a/LISFLOOD-FP-8.3/source/lisflood.h b/LISFLOOD-FP-8.3/source/lisflood.h
---- a/LISFLOOD-FP-8.3/source/lisflood.h
-+++ b/LISFLOOD-FP-8.3/source/lisflood.h
+--- a/LISFLOOD-FP-8.3/source/lisflood.h	2026-11-19 18:34:13.386162710 +0000
++++ b/LISFLOOD-FP-8.3/source/lisflood.h	2026-11-19 18:34:13.411940393 +0000
 @@ -678,6 +678,7 @@
  	NUMERIC_TYPE InfilTotalLoss, EvapTotalLoss, RainTotalLoss; // cumulative loss
  	NUMERIC_TYPE checkfreq, nextcheck;
@@ -55,9 +55,16 @@ diff -ruN a/LISFLOOD-FP-8.3/source/lisflood.h b/LISFLOOD-FP-8.3/source/lisflood.
  	int zsz; // Water depth dependent porosity
  	int Por_Ident;
 diff -ruN a/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp b/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp
---- a/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp
-+++ b/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp
-@@ -16,7 +16,7 @@
+--- a/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp	2026-11-19 18:34:13.386325044 +0000
++++ b/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp	2026-11-19 18:34:13.418751268 +0000
+@@ -10,13 +10,14 @@
+ #include "../lisflood.h"
+ #include "DataTypes.h"
+ #include "sgm_fast.h"
++extern NUMERIC_TYPE ndbreach_sgc_inittm_depth; // nd-breach-runner patch (sgm_fast.cpp)
+ #include "file_tool.h"
+ #include "../utility.h"
+ #include <omp.h>
  
  #include "../sgc.h"
  
@@ -66,7 +73,7 @@ diff -ruN a/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp b/LISFLOOD-
  #include <sched.h>
  #include <numa.h>
  #endif
-@@ -1726,7 +1726,7 @@
+@@ -1726,7 +1727,7 @@
  	}
  	if (verbose == ON) printf("OMP thread count: %d\n", thread_count);
  
@@ -75,9 +82,49 @@ diff -ruN a/LISFLOOD-FP-8.3/source/lisflood2/lisflood_processing.cpp b/LISFLOOD-
  	int* numa_nodes = (int*)memory_allocate(sizeof(int)*thread_count);
  #pragma omp parallel default(shared)
  	{
+@@ -2178,6 +2179,9 @@
+ 		fflush(stdout);
+ 	}
+ 	Solverptr->itrn_time_now = Solverptr->itrn_time;
++	// nd-breach-runner patch: the SGC solver records arrival at inittm_depth above the bank
++	ndbreach_sgc_inittm_depth = Parptr->inittm_depth;
++	printf("nd-breach-runner: SGC arrival depth %.4f m\n", (double)ndbreach_sgc_inittm_depth);
+ 
+ 	// Populating Tstep variables prior to start of simulation
+ 	if (Statesptr->adaptive_ts == ON)
+diff -ruN a/LISFLOOD-FP-8.3/source/lisflood2/sgm_fast.cpp b/LISFLOOD-FP-8.3/source/lisflood2/sgm_fast.cpp
+--- a/LISFLOOD-FP-8.3/source/lisflood2/sgm_fast.cpp	2026-11-19 18:34:13.386380923 +0000
++++ b/LISFLOOD-FP-8.3/source/lisflood2/sgm_fast.cpp	2026-11-19 18:34:13.417430188 +0000
+@@ -8,6 +8,8 @@
+ #include "../lisflood.h"
+ #include "../utility.h"
+ #include "sgm_fast.h"
++// nd-breach-runner patch: arrival depth of the sub-grid channel solver (set by Fast_MainStart)
++NUMERIC_TYPE ndbreach_sgc_inittm_depth = C(0.0);
+ #include <math.h>
+ #include <omp.h>
+ 
+@@ -3186,7 +3188,7 @@
+ 				index = grid_row_index + i;
+ 				if (h_grid[index] > depth_thresh)
+ 				{
+-					if (initHtm_grid[index] == NULLVAL)
++					if (initHtm_grid[index] == NULLVAL && h_grid[index] > ndbreach_sgc_inittm_depth)
+ 						initHtm_grid[index] = current_time_hours;
+ 
+ 					totalHtm_grid[index] += delta_time_hours;
+@@ -3220,7 +3222,7 @@
+ 				if (h_tmp > depth_thresh) // use depth_thresh as threshhold
+ 					//if (depth > C(0.01)) // used to be hardcoded at 0.01 - maintain consistent output
+ 				{
+-					if (initHtm_grid[grid_index] == NULLVAL)
++					if (initHtm_grid[grid_index] == NULLVAL && h_grid[grid_index] > ndbreach_sgc_inittm_depth)
+ 						initHtm_grid[grid_index] = current_time_hours;
+ 					//only add to time if it hasn't already been added by the flood plain calculation
+ 					if (h_grid[grid_index] <= depth_thresh)
 diff -ruN a/LISFLOOD-FP-8.3/source/pars.cpp b/LISFLOOD-FP-8.3/source/pars.cpp
---- a/LISFLOOD-FP-8.3/source/pars.cpp
-+++ b/LISFLOOD-FP-8.3/source/pars.cpp
+--- a/LISFLOOD-FP-8.3/source/pars.cpp	2026-11-19 18:34:13.386653799 +0000
++++ b/LISFLOOD-FP-8.3/source/pars.cpp	2026-11-19 18:34:13.412632917 +0000
 @@ -572,6 +572,9 @@
  		Statesptr->checkfile = ON;
  		return;
@@ -89,8 +136,8 @@ diff -ruN a/LISFLOOD-FP-8.3/source/pars.cpp b/LISFLOOD-FP-8.3/source/pars.cpp
  	{
  		Statesptr->reset_timeinit = ON;
 diff -ruN a/LISFLOOD-FP-8.3/source/utility.cpp b/LISFLOOD-FP-8.3/source/utility.cpp
---- a/LISFLOOD-FP-8.3/source/utility.cpp
-+++ b/LISFLOOD-FP-8.3/source/utility.cpp
+--- a/LISFLOOD-FP-8.3/source/utility.cpp	2026-11-19 18:34:13.387635399 +0000
++++ b/LISFLOOD-FP-8.3/source/utility.cpp	2026-11-19 18:34:13.419216809 +0000
 @@ -1,4 +1,7 @@
  #include "utility.h"
 +#ifdef _WIN32

@@ -486,7 +486,7 @@ class GdalTerrain:
     """terrain_src for workflow.run_dam."""
 
     def __init__(self, dem_path, work_srs, z_choice=Z_AUTO, manning_path=None,
-                 default_n=0.06, resample=None, manning_lut=None, cache_entries=None):
+                 default_n=0.05, resample=None, manning_lut=None, cache_entries=None):
         gdal, _ = _gdal()
         self.dem_path = _file(dem_path)   # 3.10.89: a QGIS 'x.tif|option:...' source
         self.work_srs = work_srs          # "EPSG:26914" or WKT
@@ -497,6 +497,17 @@ class GdalTerrain:
         self.default_n = default_n
         self.resample, self.resample_source = resolve_resample(resample)
         ds = GS.open_raster(self.dem_path)
+        # audit: refuse an untagged terrain source instead of warping it as if it were already
+        # in work_srs. A no-CRS source (an ESRI .asc carries none) warped with dstSRS=work_srs
+        # lands off-map, and a hole refill of that terrain then defaults to EPSG:5070 (the
+        # Edenville-Sanford 2020 storm: a 0 m pit stopped the domain below Midland). #397 caught
+        # that pit downstream on the first refill; this refuses the terrain read itself, so the
+        # case must tag or supply the DEM's CRS and no read is silently reprojected.
+        if not ds.GetProjection():
+            raise ValueError(
+                "the terrain {0} has no coordinate system; a terrain read must not be silently "
+                "reprojected or default to EPSG:5070. Tag the DEM's CRS, e.g. "
+                "gdal_edit.py -a_srs EPSG:26914 {0}".format(self.dem_path))
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
         # audit P3: warped DEM windows, keyed by window / cell / method / z factor; a VRT's
         # own stamp changes when it is rebuilt, which is what a refill or a new mosaic does
@@ -567,11 +578,28 @@ class GdalTerrain:
             from . import nd_data
             lut = dict(self.manning_lut)
             lut["default"] = self.default_n
-            g.data = nd_data.nlcd_to_manning(g.data, lut)
+            counts = {}
+            g.data = nd_data.nlcd_to_manning(g.data, lut, counts)
+            self._record_manning_coverage(counts)      # H9: reporting only, n unchanged
             return g
         bad = ~np.isfinite(g.data) | (g.data <= 0) | (g.data > 1.0)
         g.data[bad] = self.default_n
         return g
+
+    def _record_manning_coverage(self, counts):
+        """H9: keep the coverage of the land-cover read with the most cells (the largest /
+        final model domain), so the run report can state how many cells took the default n
+        because the raster did not cover them. Does not touch any n value."""
+        if not counts:
+            return
+        prev = getattr(self, "_manning_cov", None)
+        if prev is None or counts.get("total_cells", 0) >= prev.get("total_cells", 0):
+            self._manning_cov = dict(counts)
+
+    def manning_coverage(self):
+        """H9: the recorded land-cover coverage (total_cells, default_cells, nodata_cells,
+        default_n), or None when n did not come from a land-cover raster."""
+        return getattr(self, "_manning_cov", None)
 
 
 def horizontal_wkt(text):

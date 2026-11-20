@@ -50,6 +50,7 @@ cmake --build build-nd -j "$(nproc 2>/dev/null || echo 2)" --target lisflood
 
 # The executable must know the new keyword (otherwise the Runner refuses it again).
 grep -q inittm_depth build-nd/lisflood || { echo "ERROR: the patch is not in the build."; exit 1; }
+grep -aq "nd-breach-runner: SGC arrival depth" build-nd/lisflood || { echo "ERROR: the sub-grid channel (SGC) part of the patch is not in the build."; exit 1; }
 if [ "${LISFLOOD_STATIC:-0}" != 1 ] && command -v ldd >/dev/null && ! ldd build-nd/lisflood | grep -q -E "gomp|omp"; then
   echo "WARNING: not linked against OpenMP; runs will be single-threaded."
 fi

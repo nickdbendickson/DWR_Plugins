@@ -151,7 +151,7 @@ def main():
     mp = w.page(w.pageIds()[3])
     assert mp.cell.toolTip() == WZ.FIELD_TIPS["cell"]
     assert tp.coverage.text().startswith("✓"), tp.coverage.text()
-    assert tp.advanced.title().startswith("Advanced") and "0.060" in tp.advanced.title()
+    assert tp.advanced.title().startswith("Advanced") and "0.050" in tp.advanced.title()
     tp.n.setValue(0.08)
     assert "0.080" in tp.advanced.title(), tp.advanced.title()
     shot(w, "wizard_terrain")

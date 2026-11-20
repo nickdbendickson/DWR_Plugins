@@ -878,7 +878,7 @@ class PackReader(object):
     def _decode(rows, rect):
         out = []
         for (blob,) in rows:
-            f = json.loads(zlib.decompress(blob).decode("utf-8"))
+            f = json.loads(_inflate(blob).decode("utf-8"))
             if intersects_rect(f.get("geometry"), rect):
                 out.append(f)
         return out
@@ -994,6 +994,14 @@ def _unzip_v1_rasters(z, names, src, rasters, target):
         with z.open(prefix + f) as fin, open(dst + ".part", "wb") as fout:
             shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
         os.replace(dst + ".part", dst)
+
+
+def _inflate(blob):
+    """A pack feature row, zlib-inflated with a size cap (zipsafe.inflate: refuses with
+    zipsafe.TooLarge, a ValueError, past zipsafe.MAX_ROW_BYTES). A pack is a file someone may
+    have handed the user, so one crafted row must not run QGIS out of memory."""
+    from .damsuite import zipsafe
+    return zipsafe.inflate(blob)
 
 
 def _check_pack_size(z, target):

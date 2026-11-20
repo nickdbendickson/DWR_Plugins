@@ -370,6 +370,12 @@ Nothing downloads when QGIS or the window opens.
    pick these fields up automatically. Inputs can come from a package exported by ND Dam Hazard.
 1. Prepare dam inventory - ND DWR dams (primary) + NID; metric standard fields.
 2. Cache terrain per dam - USGS 3DEP (once, needs internet) or local ND LiDAR DEM tiles.
+   From 0.20.3 the headless chain (tool 15 *Run the chain*) and the Preflight tool, given no terrain
+   choice in their settings, use the configured offline pack DEM (`<data folder>/dem`, through one VRT in
+   `<work>/terrain_pack/`) for the terrain and the larger clips; `terrain_source = 0` in the settings keeps
+   USGS 3DEP and `offline_pack_terrain = false` turns the pack default off. The window's own terrain
+   setting is unchanged. When the local DEM has no ground at a dam (outside the pack, or a hole such as
+   Fort Berthold), tool 2 downloads that dam's clip from USGS 3DEP and warns.
 3. Estimate reservoir storage - NHD HR waterbody + DEM; calibrated to inventory storage.
 4. Breach point and flow direction - DWR dam line, joined by structure ID.
 5. Breach parameters and hydrograph - Froehlich 2008 (default), Froehlich 1995, Von Thun &
