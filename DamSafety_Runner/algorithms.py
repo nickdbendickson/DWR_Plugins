@@ -72,11 +72,12 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
-FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2")
+FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc")
 FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
                       "Boann, shock-capturing (HLLC finite volume on the Apple GPU)",
                       "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 on the Apple GPU)",
-                      "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)"]
+                      "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)",
+                      "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
