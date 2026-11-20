@@ -7,7 +7,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
                        QgsProcessingParameterString, QgsProcessingException, QgsProcessingOutputFile,
                        QgsProcessingOutputFolder)
 
-from .core.hydro import HydroConfig, run_folder
+from .core.hydro import HydroConfig, run_folder, GA_TEXTURE_NAMES
 from .core import streamstats
 
 D = QgsProcessingParameterNumber.Double
@@ -28,6 +28,9 @@ class InflowHydrographAlgorithm(_UnitParams, QgsProcessingAlgorithm):
         return ("Reads nd_pmp hyetograph CSVs and computes inflow hydrographs (SCS CN or initial+constant losses; "
                 "SCS or Clark UH; constant or recession baseflow). Output: hydrographs/<storm_id>.csv "
                 "(time_hr, flow_cfs, precip_in, excess_in) + inflow_hydrograph_summary.csv. INTERNAL PROTOTYPE.<br><br>"
+                "Green-Ampt loss: give Ks, suction and moisture deficit yourself, or pick a soil texture "
+                "(Rawls, Brakensiek & Miller 1983 table, with the initial saturation setting the deficit). "
+                "A texture run is marked PROVISIONAL until that table is checked against the printed page.<br><br>"
                 "Basin inputs: Plugins ▸ DamSafety PMP ▸ Get basin data from StreamStats… fills the "
                 "drainage area, a suggested non-contributing area and Tc / lag from USGS StreamStats, and sets "
                 "'StreamStats basin values'. With that file set, the largest PMF peak is compared with the ND 0.2% "
@@ -41,12 +44,26 @@ class InflowHydrographAlgorithm(_UnitParams, QgsProcessingAlgorithm):
                                      behavior=QgsProcessingParameterFile.Folder))
         A(QgsProcessingParameterString("PATTERN", "File pattern inside folder", "*.csv"))
         A(QgsProcessingParameterFolderDestination("OUTPUT_FOLDER", "Output folder"))
-        A(QgsProcessingParameterEnum("LOSS", "Loss method", ["SCS Curve Number", "Initial + constant"], defaultValue=0))
+        A(QgsProcessingParameterEnum("LOSS", "Loss method", ["SCS Curve Number", "Initial + constant",
+                                                                 "Green-Ampt"], defaultValue=0))
         A(QgsProcessingParameterNumber("CN", "Curve number (AMC II)", D, 80, minValue=1, maxValue=100))
         A(QgsProcessingParameterBoolean("AMC3", "Convert CN from AMC II to AMC III", False))
         A(QgsProcessingParameterNumber("IA_RATIO", "Initial abstraction ratio Ia/S", D, 0.2, minValue=0))
         A(QgsProcessingParameterNumber("INITIAL_IN", "Initial loss (in)", D, 1.0, minValue=0))
         A(QgsProcessingParameterNumber("CONSTANT_IN_HR", "Constant loss rate (in/hr)", D, 0.1, minValue=0))
+        A(QgsProcessingParameterEnum("GA_TEXTURE", "Green-Ampt soil texture (Custom = the three values below)",
+                                     ["Custom"] + [n.title() for n in GA_TEXTURE_NAMES], defaultValue=0))
+        A(QgsProcessingParameterNumber("GA_INITIAL_SAT", "Green-Ampt initial effective saturation (0-1; texture only)",
+                                       D, 0.0, minValue=0, maxValue=1))
+        A(QgsProcessingParameterNumber("GA_KS_IN_HR", "Green-Ampt saturated conductivity Ks (in/hr; Custom)", D, 0.1,
+                                       minValue=0))
+        A(QgsProcessingParameterNumber("GA_SUCTION_IN", "Green-Ampt wetting-front suction (in; Custom)", D, 4.0,
+                                       minValue=0))
+        A(QgsProcessingParameterNumber("GA_DEFICIT", "Green-Ampt moisture deficit (fraction; Custom)", D, 0.3,
+                                       minValue=0, maxValue=1))
+        A(QgsProcessingParameterNumber("GA_INITIAL_IN", "Green-Ampt initial loss (in)", D, 0.0, minValue=0))
+        A(QgsProcessingParameterNumber("GA_IMPERVIOUS_PCT", "Green-Ampt percent impervious", D, 0.0, minValue=0,
+                                       maxValue=100))
         A(QgsProcessingParameterEnum("TRANSFORM", "Transform", ["SCS dimensionless UH", "Clark UH"], defaultValue=0))
         A(QgsProcessingParameterNumber("LAG_HR", "SCS lag (hr; 0 = use 0.6*Tc)", D, 0, minValue=0))
         A(QgsProcessingParameterNumber("TC_HR", "Time of concentration Tc (hr)", D, 0, minValue=0))
@@ -79,7 +96,12 @@ class InflowHydrographAlgorithm(_UnitParams, QgsProcessingAlgorithm):
         if not files:
             raise QgsProcessingException("No hyetograph CSVs found in %s" % src)
         num = lambda k: self.parameterAsDouble(p, k, context)
-        cfg = HydroConfig(loss=["scs_cn", "init_const"][self.parameterAsEnum(p, "LOSS", context)],
+        tex = self.parameterAsEnum(p, "GA_TEXTURE", context)
+        cfg = HydroConfig(loss=["scs_cn", "init_const", "green_ampt"][self.parameterAsEnum(p, "LOSS", context)],
+                          ga_texture=GA_TEXTURE_NAMES[tex - 1] if tex > 0 else None,
+                          ga_initial_saturation=num("GA_INITIAL_SAT"), ga_ks_in_hr=num("GA_KS_IN_HR"),
+                          ga_suction_in=num("GA_SUCTION_IN"), ga_moisture_deficit=num("GA_DEFICIT"),
+                          ga_initial_in=num("GA_INITIAL_IN"), ga_impervious_pct=num("GA_IMPERVIOUS_PCT"),
                           cn=num("CN"), amc3=self.parameterAsBool(p, "AMC3", context), ia_ratio=num("IA_RATIO"),
                           initial_in=num("INITIAL_IN"), constant_in_hr=num("CONSTANT_IN_HR"),
                           transform=["scs", "clark"][self.parameterAsEnum(p, "TRANSFORM", context)],
