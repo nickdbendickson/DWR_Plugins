@@ -3,7 +3,10 @@ kernel source, against the numpy built-in engine (same scheme with the 1-D frict
 the same steps, depths within a few mm), conservation of water, the wet window (no effect on
 the answer), the .par options it reads, and, where this computer has an Apple GPU, Metal
 against the CPU build. With NDBREACH_LISFLOOD set (--models) it is also checked against
-LISFLOOD-FP itself."""
+LISFLOOD-FP itself.
+
+The diagnostic cases in cases.py (level-pool lake, nested basin, breach-inflow cell) are
+exercised by metalflood_diagnostic_cases_run so later changes have a concrete baseline."""
 import os
 import shutil
 import subprocess
@@ -16,7 +19,9 @@ from nd_breach_runner.core import builtin_lisflood as bl
 from nd_breach_runner.core import metalflood as mf
 from nd_breach_runner.core.metalflood import backends as mfb
 from nd_breach_runner.core.metalflood import engine as mfe
-from nd_breach_runner.core.metalflood.cases import read_asc, valley_deck
+from nd_breach_runner.core.metalflood.cases import (
+    read_asc, valley_deck, level_pool_lake, nested_basin, breach_inflow_cell,
+)
 from nd_breach_runner.tests.registry import Skip, model_test, test
 
 
@@ -267,13 +272,43 @@ def metalflood_matches_lisflood_fp():
         shutil.rmtree(d, True)
 
 
+@test
+def metalflood_diagnostic_cases_run():
+    """Reference harness for the diagnostic cases added in the Boann plan.
+    CPU-build only. Checks that each case runs, conserves mass to a tight tolerance,
+    and produces finite max-depth results. These are the baselines later number-moving
+    steps must not regress."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        cases = [
+            ("lake", level_pool_lake),
+            ("nested", nested_basin),
+            ("breach", breach_inflow_cell),
+        ]
+        for name, maker in cases:
+            folder = os.path.join(d, name)
+            par = maker(folder)
+            s = mf.run_par(par, backend="cpu")
+            assert s["backend"] == "cpu", name
+            assert s["injected_m3"] > 0, name
+            assert abs(s["mass_error_m3"]) < 1e-5 * s["injected_m3"], (name, s)
+            hmax = _res(folder, "max")
+            assert np.isfinite(hmax).all() or (hmax == bl.NODATA).any(), name
+            # at least some wet cells for the cases that have inflow
+            assert (hmax > 0.001).sum() > 0, name
+    finally:
+        shutil.rmtree(d, True)
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
                metalflood_wet_window_does_not_change_the_answer,
                metalflood_reads_lisflood_acc_options, metalflood_params_layout_matches_kernels,
                metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
-               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp):
+               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
+               metalflood_diagnostic_cases_run):
         try:
             fn()
             print("ok    ", fn.__name__)
