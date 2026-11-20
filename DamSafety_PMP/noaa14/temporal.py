@@ -166,10 +166,10 @@ def curve(parsed, quartile, percent):
     return h, np.maximum.accumulate(col)
 
 
+@A.gdal_raising("ogr")                     # audit 2026-11-20: not process-wide any more
 def locate_area(lon, lat, shp_path):
     """The temporal distribution area (1-4) containing a point (degrees, NAD83 ~ WGS84), from the HDSC shapefile."""
     from osgeo import ogr
-    ogr.UseExceptions()
     ds = ogr.Open(shp_path)
     lyr = ds.GetLayer()
     pt = ogr.Geometry(ogr.wkbPoint)

@@ -182,6 +182,7 @@ def zip_metadata(zpath):
     return out
 
 
+@A.gdal_raising("gdal", "ogr")             # audit 2026-11-20: not process-wide any more
 def read_clip(zpath, window=None, mask_wkt=None, mask_wkt_crs=None):
     """Read the Atlas 14 grid in a zip. ``window`` = (xmin, ymin, xmax, ymax) in the grid's geographic
     degrees (None = the whole grid); ``mask_wkt`` (geographic degrees) blanks the cells it does not
@@ -190,8 +191,6 @@ def read_clip(zpath, window=None, mask_wkt=None, mask_wkt_crs=None):
     Returns (array in inches, float32, NODATA_OUT where empty; geotransform; EPSG-wkt)."""
     import numpy as np
     from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
-    ogr.UseExceptions()
     member, _ = _members(zpath)
     ds = gdal.Open("/vsizip/{}/{}".format(zpath, member))
     band = ds.GetRasterBand(1)
@@ -235,9 +234,9 @@ def read_clip(zpath, window=None, mask_wkt=None, mask_wkt_crs=None):
     return arr, out_gt, 4269
 
 
+@A.gdal_raising("gdal")
 def write_geotiff(path, arr, gt, epsg=4269):
     from osgeo import gdal, osr
-    gdal.UseExceptions()
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, gdal.GDT_Float32,
                                               ["COMPRESS=DEFLATE", "PREDICTOR=3", "TILED=YES"])
