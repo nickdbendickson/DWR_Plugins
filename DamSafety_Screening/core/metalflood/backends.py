@@ -36,7 +36,7 @@ class Params(ctypes.Structure):
     """struct Params of kernels.metal, field for field."""
     _fields_ = [(n, ctypes.c_uint32) for n in (
         "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
-        "fric2d", "clip_end", "pad2")] + [(n, ctypes.c_float) for n in (
+        "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
             "theta", "pad4")]
 

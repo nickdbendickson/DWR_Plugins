@@ -3070,12 +3070,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if lfmod.is_gpu(st.lisflood_exe):
         gmsg = ("This run uses the GPU engine (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
                 "kernels, on {}), not LISFLOOD-FP itself. It matched LISFLOOD-FP 8.3 within "
-                "millimetres across the test cases (DWR-2801 at 30 m, Lake Delhi 2010) EXCEPT at "
-                "the breach-inflow cell, where its depth differs from LISFLOOD-FP's by up to ~1 m "
-                "at the hydrograph peak (a mass-conserving inflow limiter, not a solver error; see "
-                "the engine README) - depths beyond ~300 m from the breach match within 4 mm. It "
-                "is new: confirm a final hazard classification with a LISFLOOD-FP run."
-                .format(lfmod.gpu_backend_note()))
+                "millimetres across the test cases (DWR-2801 at 30 m, Lake Delhi 2010), the "
+                "breach-inflow cell included: the point source enters in LISFLOOD-FP's order by "
+                "default ('physicalinflow' in the .par keeps a mass-conserving order instead - a "
+                "lower, CFL-independent breach-cell depth, differing from LISFLOOD-FP only at the "
+                "breach cell and its near field). It is new: confirm a final hazard classification "
+                "with a LISFLOOD-FP run.".format(lfmod.gpu_backend_note()))
         if gmsg not in warnings:
             warnings.append(gmsg)
             log(gmsg)

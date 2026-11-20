@@ -128,6 +128,13 @@ class Deck:
             raise EngineError("cfl and theta must be in (0, 1] (cfl {}, theta {})".format(
                 self.cfl, self.theta))
         self.fric2d = "1dfriction" not in par
+        # The point source enters in LISFLOOD-FP's order by default (the donor-cell limiter /
+        # DryCheck runs before the source is added), so the breach-inflow cell and its near field
+        # match LISFLOOD-FP to the mm. "physicalinflow" in the .par keeps the mass-conserving order
+        # instead - the source is available to flow out the same step, a lower, CFL-independent
+        # breach-cell depth. Only the inflow cell and its near field (within ~300 m) differ between
+        # the two; the rest of the domain agrees to ~0.2 mm.
+        self.inflow_lf_order = "physicalinflow" not in par
         self.valid = np.isfinite(z) & (z != NODATA)
         self.z = np.where(self.valid, z, 0.0)
         self.n = np.where(self.valid, n, 0.0)
@@ -175,6 +182,7 @@ class Engine:
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
+        p.inflow_lf_order = int(d.inflow_lf_order)
         p.dry, p.maxhflow, p.velmin, p.arr_depth = DRY_M, MAX_HFLOW, VEL_MIN_DEPTH_M, d.arr_depth
         self.win = self._window_from(self.h2() > 0)
 
