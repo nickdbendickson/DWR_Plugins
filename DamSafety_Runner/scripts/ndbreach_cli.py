@@ -1111,8 +1111,12 @@ def breach_overrides(cfg):
 
 def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     """(lisflood exe, anuga python): command line, then the configuration, then auto-detect."""
-    exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
-           or nd_data.detect_lisflood())
+    raw = str(getattr(opts, "lisflood", "") or cfg.get("model", "lisflood_exe", "") or "")
+    if raw.strip().lower() in lfmod.BUILTIN_WORDS + lfmod.GPU_WORDS:
+        exe = lfmod.resolve_exe(raw)          # 3.29.0: "builtin" / "gpu" name an engine
+    else:
+        exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
+               or nd_data.detect_lisflood())
     py = (getattr(opts, "anuga_python", "") or cfg.get_path("model", "anuga_python")
           or nd_data.detect_anuga_python())
     tier = cfg.get("model", "tier", workflow.TIER_LISFLOOD)

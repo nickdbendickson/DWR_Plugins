@@ -588,10 +588,10 @@ def _check_solver(st, model_dir, log=None):
     if solver == lfmod.SOLVER_ACC:
         return
     name = lfmod.SOLVER_SHORT.get(solver, solver)
-    if lfmod.is_builtin(st.lisflood_exe):
+    if lfmod.is_inprocess(st.lisflood_exe):
         raise brmod.BreachInputError(
-            "The built-in engine runs only ACC; {} needs LISFLOOD-FP. Choose ACC or set the "
-            "LISFLOOD-FP executable.".format(name))
+            "{} runs only ACC; {} needs LISFLOOD-FP. Choose ACC or set the LISFLOOD-FP "
+            "executable.".format(lfmod.engine_name(st.lisflood_exe).capitalize(), name))
     key = (os.path.abspath(str(st.lisflood_exe or "")), solver)
     chk = _SOLVER_CHECKED.get(key)
     if chk is None:
@@ -3067,6 +3067,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if bmsg not in warnings:
             warnings.append(bmsg)
             log(bmsg)
+    if lfmod.is_gpu(st.lisflood_exe):
+        gmsg = ("This run uses the GPU engine (LISFLOOD-FP 8.3's ACC scheme rewritten as GPU "
+                "kernels, on {}), not LISFLOOD-FP itself. It matched LISFLOOD-FP 8.3 within "
+                "millimetres across the test cases (DWR-2801 at 30 m, Lake Delhi 2010) EXCEPT at "
+                "the breach-inflow cell, where its depth differs from LISFLOOD-FP's by up to ~1 m "
+                "at the hydrograph peak (a mass-conserving inflow limiter, not a solver error; see "
+                "the engine README) - depths beyond ~300 m from the breach match within 4 mm. It "
+                "is new: confirm a final hazard classification with a LISFLOOD-FP run."
+                .format(lfmod.gpu_backend_note()))
+        if gmsg not in warnings:
+            warnings.append(gmsg)
+            log(gmsg)
 
     # --- LISFLOOD-FP with domain extension ----------------------------------------
     iterations = list(state.get("iterations", []))
@@ -3904,7 +3916,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     # run_report.json / manifest), so a built-in-engine run is never presented as LISFLOOD-FP.
     _builtin_run = lfmod.is_builtin(st.lisflood_exe)
     report["flood_engine"] = ("Built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
-                              if _builtin_run else "LISFLOOD-FP (inertial solver)")
+                              if _builtin_run else
+                              "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu(st.lisflood_exe) else "LISFLOOD-FP (inertial solver)")
     report["flood_engine_short"] = lfmod.engine_name(st.lisflood_exe)
     summary["flood_engine_short"] = report["flood_engine_short"]
     # 3.15.0 (ND 3.27.7): a coarse cell over a wide, shallow flood on flat terrain can

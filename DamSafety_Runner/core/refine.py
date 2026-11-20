@@ -105,7 +105,11 @@ def decide(st, final_model, receptors, structures, breach_xy):
         info["reason"] = "off (REFINE_NEAR not set)"
         return info
     if final_model != "LISFLOOD-FP":
-        if lfmod.is_builtin(getattr(st, "lisflood_exe", "")):
+        if lfmod.is_gpu(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used the GPU engine (local inertial), which has no FV1 "
+                              "shock-capturing solver, so the near-dam velocities cannot be "
+                              "refined; install LISFLOOD-FP for a near-dam FV1 velocity check")
+        elif lfmod.is_builtin(getattr(st, "lisflood_exe", "")):
             # The built-in engine is itself local-inertial and has no FV1 shock-capturing
             # solver, so near-dam velocities ARE in question here and simply cannot be refined.
             # Do not imply they are trustworthy (M5 safety: reviewers' near-dam concern).

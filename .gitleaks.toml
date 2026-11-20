@@ -1,6 +1,25 @@
 [extend]
 useDefault = true
 
-[allowlist]
+# Allowlists are independent [[allowlists]] blocks, OR'd across the config: a finding is
+# cleared if any block clears it. (Conditions WITHIN one block are evaluated together, which
+# is why folding the discharge_m3s rule into the baseline block - whose `paths` only match
+# .secrets.baseline / .gitleaksignore - never cleared the solve_gate.py finding.)
+
+[[allowlists]]
 description = "Generated hash manifests, not secrets: detect-secrets baselines store hashed_secret values (SHA-1 of already-reviewed false positives); Crest's (dwr_crest/) desktop bundle build-info.json stores SHA-256 source-content hashes (one per source file, e.g. the crest-token.ts entry whose filename trips the generic-api-key keyword rule)."
 paths = ['''(^|/)\.secrets\.baseline$''', '''^\.gitleaksignore$''', '''(^|/)build-info\.json$''']
+
+[[allowlists]]
+# `discharge_m3s` is a CSV column name read by hydro_stats() in DamSafety_Runner/core/solve_gate.py
+# (and its byte-identical DamSafety_Screening copy): the discharge column ("discharge in m3/s") of a
+# hydrograph CSV, not a credential. gitleaks' generic-api-key heuristic flags the `key_q = "discharge_m3s"`
+# assignment (the `key` keyword + a 13-char value). This matches the EXACT literal, anchored, against the
+# finding's extracted SECRET (regexTarget = "secret"; gitleaks' default target is the whole match, which is
+# why a bare anchored regex did not clear it). It is commit-independent - unlike a SHA-pinned
+# .gitleaksignore fingerprint, which re-orphans on every history reconciliation (it did, on the BoannGrid
+# stack rebase). Exact literal only - never a path suppression of solve_gate.py, which could hide a real
+# secret committed there.
+description = "discharge_m3s CSV column (not a credential): exact literal, anchored, matched against the secret"
+regexTarget = "secret"
+regexes = ['''^discharge_m3s$''']
