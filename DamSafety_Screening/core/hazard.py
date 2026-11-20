@@ -265,11 +265,6 @@ class Grid:
     def point(self, x, y):
         return nh.sample_point(self.depth, self.vel, self.x0, self.y_top, self.cell, x, y)
 
-    def _dv_point(self, x, y):
-        if self.dv is None:
-            return None
-        return nh.sample_point(self.dv, None, self.x0, self.y_top, self.cell, x, y)[0]
-
     def _stamp_how(self, best, how, src=None):
         """Copy damit-style sampling / flag from a how-string or a SamplePV onto best."""
         if best is None:
