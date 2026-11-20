@@ -18,6 +18,7 @@ struct uint2 {
 #define kernel
 #define device
 #define constant const
+#define thread
 #define B(i)
 #define GID
 
