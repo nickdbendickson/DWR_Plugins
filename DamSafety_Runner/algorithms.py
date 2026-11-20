@@ -988,6 +988,13 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "start full to the bank, every other channel starts empty. Empty: all start "
                   "empty (the breach water fills them first). Full: all start full.")
         self.addParameter(set_advanced(p))
+        self._num("POTHOLE_START_FILL", "Potholes: share of each closed depression already full "
+                  "at the start (0 = dry, 1 = full)", 0.0, minimum=0.0, maximum=1.0, advanced=True,
+                  help="Closed depressions (potholes) of the model DEM start this share full, each to "
+                  "one flat level. A dry pothole stores flood water a real, partly full one would "
+                  "pass on. 1 = full to the spill level (conservative for a PMF); for a real event "
+                  "match the season. The water is initial water: it is taken off the reported and "
+                  "classified depths. 0 (default) = dry, no change.")
         self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
                    False, advanced=True,
                    help="Accept an edge where the flood's depth (or its rise over the no-breach "
@@ -1335,6 +1342,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             if parameters.get("SGC_START") not in (None, ""):
                 st.sgc_start = sgc_defaults.START_MODES[min(2, max(0, self.parameterAsEnum(
                     parameters, "SGC_START", context)))]
+        if self.parameterDefinition("POTHOLE_START_FILL") is not None:  # 3.35.0
+            st.pothole_start_fill = min(1.0, max(0.0, float(g("POTHOLE_START_FILL") or 0.0)))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
