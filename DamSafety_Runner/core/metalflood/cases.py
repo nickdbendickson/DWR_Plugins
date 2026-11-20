@@ -78,9 +78,12 @@ def valley_deck(folder, ny=60, nx=90, dx=20.0, peak_cms=400.0, sim_s=3 * 3600.0,
 
 
 def level_pool_lake(folder, n=40, dx=10.0, bed=100.0, inflow_cms=50.0, sim_s=3600.0,
-                    free="NSEW", extra=()):
-    """Flat-bed lake with a constant point-source inflow. Checks volume conservation
-    and that the donor-cell limiter does not create artificial gradients at rest."""
+                    free="NSEW", h0=None, extra=()):
+    """Flat-bed lake. Default: constant point-source inflow and FREE edges (a draining pool).
+
+    Pass free="" and h0= a depth for the still-water case: closed walls, a uniform start
+    depth, no inflow. That is the serial-oracle check that the donor-cell limiter does not
+    invent a slope on water at rest. h0 is the start depth (m); None writes no start file."""
     os.makedirs(folder, exist_ok=True)
     z = np.full((n, n), bed, dtype=float)
     xll, yll = 0.0, 0.0
@@ -88,19 +91,30 @@ def level_pool_lake(folder, n=40, dx=10.0, bed=100.0, inflow_cms=50.0, sim_s=360
     lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results",
              "sim_time {:.1f}".format(sim_s), "initial_tstep 5.0",
              "massint 300.0", "saveint {:.1f}".format(sim_s + 10.0),
-             "fpfric 0.04", "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
+             "fpfric 0.04", "acceleration"] + list(extra)
+    if h0 is not None:
+        write_asc(os.path.join(folder, "run.start"), np.full((n, n), float(h0)), xll, yll, dx)
+        lines.append("startfile run.start")
+    has_edge = bool(free)
+    has_src = float(inflow_cms) > 0.0
+    if has_edge or has_src:
+        at = lines.index("acceleration")
+        lines[at:at] = ["bcifile run.bci", "bdyfile run.bdy"]
     with open(os.path.join(folder, "run.par"), "w") as f:
         f.write("\n".join(lines) + "\n")
-    # source near centre
+    if not (has_edge or has_src):
+        return os.path.join(folder, "run.par")
+    # source near centre; omitted when the lake is closed and still
     r_src, c_src = n // 2, n // 2
     x_src = xll + (c_src + 0.5) * dx
     y_src = yll + (n - r_src - 0.5) * dx
     with open(os.path.join(folder, "run.bci"), "w") as f:
-        f.write("P {:.3f} {:.3f} QVAR lake\n".format(x_src, y_src))
+        if has_src:
+            f.write("P {:.3f} {:.3f} QVAR lake\n".format(x_src, y_src))
         for e in free:
             lo, hi = (xll, xll + n * dx) if e in "NS" else (yll, yll + n * dx)
             f.write("{} {:.3f} {:.3f} FREE\n".format(e, lo, hi))
-    t = np.array([0.0, sim_s])
+    t = np.array([0.0, max(sim_s, 1.0)])
     q = np.array([inflow_cms, inflow_cms])
     with open(os.path.join(folder, "run.bdy"), "w") as f:
         f.write("constant inflow\nlake\n{} seconds\n".format(len(t)))
