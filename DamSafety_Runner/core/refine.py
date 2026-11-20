@@ -105,8 +105,13 @@ def decide(st, final_model, receptors, structures, breach_xy):
         info["reason"] = "off (REFINE_NEAR not set)"
         return info
     if final_model != "LISFLOOD-FP":
-        if lfmod.is_gpu(getattr(st, "lisflood_exe", "")):
-            info["reason"] = ("the run used the GPU engine (local inertial), which has no FV1 "
+        if lfmod.is_gpu_fv(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used Boann, shock-capturing (HLLC finite volume), "
+                              "which already resolves hydraulic jumps across the whole grid, so a "
+                              "separate near-dam FV1 refinement is not needed; confirm a final "
+                              "classification with a LISFLOOD-FP run")
+        elif lfmod.is_gpu(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used Boann (ACC / local inertial), which has no FV1 "
                               "shock-capturing solver, so the near-dam velocities cannot be "
                               "refined; install LISFLOOD-FP for a near-dam FV1 velocity check")
         elif lfmod.is_builtin(getattr(st, "lisflood_exe", "")):

@@ -23,9 +23,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KERNEL_SOURCE = os.path.join(HERE, "kernels.metal")
 SHIM = os.path.join(HERE, "mf_shim.h")
 CPU_SOURCE = os.path.join(HERE, "cpu_kernels.cpp")
+FV_KERNEL_SOURCE = os.path.join(HERE, "kernels_fv.metal")
+FV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_fv.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
+FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
 
 
 class BackendError(RuntimeError):
@@ -54,6 +57,20 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
             ("vxf", f, ny * (nx + 1)), ("vyf", f, (ny + 1) * nx)]
 
 
+def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
+    """[(name, dtype, count)] in the order of kernels_fv.metal's buffer indices 0..23."""
+    cells = ny * nx
+    xf, yf = ny * (nx + 1), (ny + 1) * nx
+    f, u = np.float32, np.uint32
+    return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("hu", f, cells),
+            ("hv", f, cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
+            ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
+            ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
+            ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf)]
+
+
 class Spec:
     """What tells the generic Metal/CPU backend which kernels to run: one engine's kernel
     source, its C++-build source and shim, the kernel names, the ctypes Params for that
@@ -80,6 +97,16 @@ def _flood_plan(p):
 
 
 FLOOD_SPEC = Spec("mf", KERNEL_SOURCE, SHIM, CPU_SOURCE, KERNELS, Params, _flood_plan)
+
+
+def _fv_plan(p):
+    one = (1, 1, 1)
+    faces = (p.wc + 1, p.wr + 1, 1)
+    cells = (p.wc, p.wr, 1)
+    return [("k_begin_fv", one), ("k_faces_fv", faces), ("k_cont_fv", cells), ("k_end_fv", one)]
+
+
+FV_SPEC = Spec("fv", FV_KERNEL_SOURCE, SHIM, FV_CPU_SOURCE, FV_KERNELS, Params, _fv_plan)
 
 
 def _source_hash(spec):

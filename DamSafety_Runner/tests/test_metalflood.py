@@ -10,6 +10,7 @@ exercised by metalflood_diagnostic_cases_run (they run and conserve mass) and ch
 the serial numpy oracle (builtin_lisflood, 1-D friction) by
 metalflood_diagnostic_cases_match_serial_oracle. Metal vs that CPU build is in
 metalflood_gpu_matches_cpu_build, which skips where there is no Apple GPU."""
+import math
 import os
 import shutil
 import subprocess
@@ -241,12 +242,12 @@ def gpu_engine_is_a_runner_engine_choice():
     assert not lf.is_gpu(lf.BUILTIN_EXE) and lf.resolve_exe("builtin") == lf.BUILTIN_EXE
     assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_EXE)
     assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_EXE)
-    assert lf.engine_name(lf.GPU_EXE) == "the GPU engine"
+    assert lf.engine_name(lf.GPU_EXE) == "Boann"
     blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
-    assert blk["model"].startswith("GPU engine"), blk
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
     blk = record._engine_block(None, {"software": {"lisflood_exe": {
         "path": "C:\\x\\core\\metalflood\\engine.py"}}})
-    assert blk["model"].startswith("GPU engine"), blk
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
     try:                                                    # the Processing layer needs QGIS
         from nd_breach_runner import algorithms as algs     # (absent on the Metal-only CI)
     except ImportError:
@@ -259,7 +260,7 @@ def gpu_engine_is_a_runner_engine_choice():
     try:
         r = lf.check_lisflood(lf.GPU_EXE, os.path.join(d, "chk"))
         assert r["ok"] and r["patched"] and r["velocity"], r
-        assert "GPU engine" in r["message"], r
+        assert "Boann" in r["message"], r
         with open(os.path.join(d, "chk", "lisflood.log")) as f:
             assert f.readline().startswith(mf.NAME)
     finally:
@@ -383,6 +384,180 @@ def metalflood_diagnostic_cases_run():
         shutil.rmtree(d, True)
 
 
+from nd_breach_runner.core.metalflood import engine_fv as fve  # noqa: E402
+from nd_breach_runner.core.metalflood.cases import write_asc as _write_asc  # noqa: E402
+
+_G = bl.G
+
+
+def _fv_deck(folder, z, h0, dx=5.0, sim=100.0, n=0.0, free=""):
+    """A minimal start-depth deck for the FV engine (no inflow): bed z, start depth h0."""
+    os.makedirs(folder, exist_ok=True)
+    xll, yll = 500000.0, 5200000.0
+    _write_asc(os.path.join(folder, "run.dem.asc"), z, xll, yll, dx)
+    _write_asc(os.path.join(folder, "run.start"), h0, xll, yll, dx)
+    lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results", "startfile run.start",
+             "sim_time {:.1f}".format(sim), "initial_tstep 1.0", "massint {:.1f}".format(sim),
+             "saveint {:.1f}".format(sim + 10.0), "fpfric {}".format(n)]
+    if free:
+        ny, nx = z.shape
+        with open(os.path.join(folder, "run.bci"), "w") as f:
+            for e in free:
+                lo, hi = (xll, xll + nx * dx) if e in "NS" else (yll, yll + ny * dx)
+                f.write("{} {:.3f} {:.3f} FREE\n".format(e, lo, hi))
+        lines.append("bcifile run.bci")
+    with open(os.path.join(folder, "run.par"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return os.path.join(folder, "run.par")
+
+
+@test
+def metalflood_fv_lake_at_rest_is_well_balanced():
+    """The shock-capturing FV engine holds a lake at rest over a bumpy bed to float32 round-off:
+    no spurious velocity (maxVc ~ 0) and the still-water depth is unchanged (max == initial)."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx = 20, 20
+        rng = np.random.default_rng(0)
+        z = rng.uniform(0.0, 2.0, size=(ny, nx))
+        h0 = np.maximum(3.0 - z, 0.0)                 # flat surface eta = 3
+        p = _fv_deck(os.path.join(d, "lake"), z, h0, dx=5.0, sim=200.0, n=0.0)   # closed walls
+        s = fve.run_par(p, backend="cpu")
+        assert s["scheme"] == "fv" and s["backend"] == "cpu"
+        vc = _res(os.path.join(d, "lake"), "maxVc")
+        hm = _res(os.path.join(d, "lake"), "max")
+        vmax = vc[vc != bl.NODATA].max()
+        drift = np.abs(hm[h0 > 1e-6] - h0[h0 > 1e-6]).max()
+        assert vmax < 1e-3, "spurious speed {:.2e} m/s".format(vmax)
+        assert drift < 1e-3, "depth drift {:.2e} m".format(drift)
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_fv_reproduces_the_ritter_dam_break():
+    """A dry-bed dam break: the FV engine's depth at the dam approaches Ritter's 4h0/9, the fan
+    matches the analytical rarefaction, and the front advances (a first-order scheme sits a few
+    cells behind the exact h=0 front, never ahead of it)."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx, h0, dam = 1, 801, 1.0, 1.0, 400
+        z = np.zeros((ny, nx))
+        hinit = np.zeros((ny, nx)); hinit[0, :dam] = h0
+        p = _fv_deck(os.path.join(d, "ritter"), z, hinit, dx=dx, sim=8.0, n=0.0)
+        deck = fve.Deck(p)
+        bk = mfb.CpuBackend(mfb.FV_SPEC)
+        eng = fve.Engine(deck, bk)
+        t, T = 0.0, 8.0
+        while t < T - 1e-6:
+            out = eng.batch(t, T, fve.BATCH_STEPS, clip=True)
+            if out["steps"] == 0:
+                break
+            t += out["t_local"]
+        h = eng.h2().astype(np.float64)[0].copy()
+        bk.close()
+        c0 = math.sqrt(_G * h0)
+        xc = (np.arange(nx) + 0.5 - dam) * dx
+
+        def ritter_h(x):
+            xi = x / T
+            if xi <= -c0:
+                return h0
+            if xi >= 2 * c0:
+                return 0.0
+            return (2 * c0 - xi) ** 2 / (9 * _G)
+        ha = np.array([ritter_h(x) for x in xc])
+        # depth at the dam -> 4 h0 / 9
+        assert abs(h[dam] - 4 * h0 / 9) < 0.02, "h@dam {:.4f}".format(h[dam])
+        # fan, where the analytical depth is well above the near-front sliver
+        inner = ha > 0.05
+        assert np.abs(h[inner] - ha[inner]).mean() < 0.02, np.abs(h[inner] - ha[inner]).mean()
+        # the front: behind the exact h=0 front, not grossly stalled, never ahead
+        front = xc[h > 1e-3].max()
+        assert 0.70 * (2 * c0 * T) < front <= 2 * c0 * T + dx, "front {:.1f} m".format(front)
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_fv_conserves_water():
+    """The FV engine keeps mass: a closed valley filled by an inflow ends with a volume error far
+    under a tenth of a percent of what was injected."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        a = valley_deck(os.path.join(d, "v"), free="", hole=False, pond=False, gauge=False)
+        s = fve.run_par(a, backend="cpu")
+        assert s["scheme"] == "fv"
+        assert abs(s["mass_error_m3"]) < 1e-3 * max(s["injected_m3"], 1.0), s["mass_error_m3"]
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def fv_engine_is_a_runner_engine_choice():
+    """Runner 3.23.0: 'shock' (or 'gpu-fv') selects Boann's shock-capturing solver; it runs
+    in-process, is labelled as not LISFLOOD-FP everywhere, and is a FLOOD_ENGINE choice of its
+    own."""
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.damsuite import record
+    for w in ("shock", "SHOCK", " gpu-fv ", "hllc"):
+        assert lf.resolve_exe(w) == lf.GPU_FV_EXE, w
+    assert os.path.isfile(lf.GPU_FV_EXE)
+    assert lf.is_gpu_fv(lf.GPU_FV_EXE) and lf.is_inprocess(lf.GPU_FV_EXE)
+    assert not lf.is_gpu(lf.GPU_FV_EXE) and not lf.is_gpu_fv(lf.GPU_EXE)
+    assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_FV_EXE)
+    assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_FV_EXE)
+    assert lf.engine_name(lf.GPU_FV_EXE) == "Boann (shock-capturing)"
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_FV_EXE}}})
+    assert blk["model"].startswith("Boann, shock-capturing"), blk
+    assert not blk["built_in"]
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {
+        "path": "C:\\x\\core\\metalflood\\engine_fv.py"}}})
+    assert blk["model"].startswith("Boann, shock-capturing"), blk
+    # the ACC engine must still label as Boann ACC, not the shock-capturing one
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
+    assert blk["model"].startswith("Boann") and "shock" not in blk["model"], blk
+    try:                                                    # the Processing layer needs QGIS
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[2] == "gpu-fv"
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+
+
+@model_test
+def metalflood_matches_lisflood_fp():
+    """The same deck through LISFLOOD-FP (NDBREACH_LISFLOOD) and this engine."""
+    exe = os.environ.get("NDBREACH_LISFLOOD")
+    if not exe or not os.path.isfile(exe):
+        raise Skip("NDBREACH_LISFLOOD is not set")
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        extra = ["hazard", "inittm_depth 0.003"]
+        a = valley_deck(os.path.join(d, "lf"), hole=False, extra=extra)
+        b = valley_deck(os.path.join(d, "mf"), hole=False, extra=extra)
+        subprocess.run([exe, os.path.basename(a)], cwd=os.path.dirname(a),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, check=True,
+                       env=dict(os.environ, OMP_NUM_THREADS="1"))
+        mf.run_par(b, backend="cpu")
+        x = _res(os.path.join(d, "lf"), "max")
+        y = _res(os.path.join(d, "mf"), "max")
+        wet = (x > 0.003) | (y > 0.003)
+        assert np.abs(x - y)[wet].mean() < 0.03, np.abs(x - y)[wet].mean()
+        a1, b1 = x > 0.1, y > 0.1
+        assert (a1 & b1).sum() / (a1 | b1).sum() > 0.98
+        vx = _res(os.path.join(d, "lf"), "maxVc")
+        vy = _res(os.path.join(d, "mf"), "maxVc")
+        assert abs(vx[wet].max() - vy[wet].max()) < 0.1 * vx[wet].max()
+    finally:
+        shutil.rmtree(d, True)
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
@@ -391,7 +566,10 @@ if __name__ == "__main__":
                metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
                gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
                metalflood_diagnostic_cases_match_serial_oracle,
-               metalflood_diagnostic_cases_run):
+               metalflood_diagnostic_cases_run,
+               metalflood_fv_lake_at_rest_is_well_balanced,
+               metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
+               fv_engine_is_a_runner_engine_choice):
         try:
             fn()
             print("ok    ", fn.__name__)

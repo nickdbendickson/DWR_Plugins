@@ -207,12 +207,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
-# 3.29.0: the GPU engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
+# 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (one
 # core, needs a C++ compiler). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
 GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
 GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
+# 3.23.0: Boann's shock-capturing solver (core/metalflood/engine_fv): a well-balanced,
+# positivity-preserving HLLC finite-volume solver of the full 2-D shallow-water equations, run on
+# the same Metal/CPU kernel machinery. It resolves hydraulic jumps and dam-break fronts the ACC
+# scheme diffuses; like the others it is chosen only by name, never as a fallback.
+GPU_FV_EXE = os.path.join(HERE, "metalflood", "engine_fv.py")
+GPU_FV_WORDS = ("gpu-fv", "metal-fv", "shock", "hllc", "gpu shock", "shock-capturing")
 
 
 def bundled_platform(system=None, machine=None):
@@ -268,13 +274,22 @@ def is_gpu(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_EXE
 
 
+def is_gpu_fv(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_FV_EXE
+
+
+def is_gpu_any(exe):
+    """Either GPU engine (the ACC scheme or the shock-capturing FV scheme)."""
+    return is_gpu(exe) or is_gpu_fv(exe)
+
+
 def is_inprocess(exe):
     """True for the engines that run inside this process (built-in, GPU), not as a program."""
-    return is_builtin(exe) or is_gpu(exe)
+    return is_builtin(exe) or is_gpu_any(exe)
 
 
 def gpu_backend_note():
-    """Which device the GPU engine will use here, in words (for logs and the self-test)."""
+    """Which device Boann will use here, in words (for logs and the self-test)."""
     try:
         from .metalflood import backends as mfb
         ok, why = mfb.metal_available()
@@ -296,6 +311,8 @@ def resolve_exe(exe):
     v = (str(exe).strip() if exe else "")
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
+    if v.lower() in GPU_FV_WORDS:
+        return GPU_FV_EXE
     if v.lower() in GPU_WORDS:
         return GPU_EXE
     return v
@@ -306,7 +323,10 @@ def describe_exe(exe):
     if is_builtin(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
-        return "the GPU engine (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+        return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_fv(exe):
+        return ("Boann, shock-capturing (HLLC finite-volume shallow water on the GPU; "
+                "NOT LISFLOOD-FP)")
     if exe and os.path.abspath(str(exe)).startswith(BUNDLED_DIR + os.sep):
         return "LISFLOOD-FP bundled with the plugin ({})".format(exe)
     return "LISFLOOD-FP at {}".format(exe)
@@ -319,14 +339,18 @@ def engine_label(exe):
     if is_builtin(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
-        return "GPU engine (LISFLOOD-FP ACC scheme on the GPU; NOT LISFLOOD-FP)"
+        return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_fv(exe):
+        return "Boann, shock-capturing (HLLC finite volume; NOT LISFLOOD-FP)"
     return "LISFLOOD-FP"
 
 
 def engine_name(exe):
     """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
+    if is_gpu_fv(exe):
+        return "Boann (shock-capturing)"
     if is_gpu(exe):
-        return "the GPU engine"
+        return "Boann"
     return "the built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
 
 
@@ -875,12 +899,16 @@ def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
     return time.time() - t0
 
 
-def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
+def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None, fv=False):
     """Run core/metalflood in-process: on the Apple GPU when there is one, else the CPU build of
-    the same kernels. Writes lisflood.log whose first line is the engine name."""
+    the same kernels. fv selects the shock-capturing HLLC finite-volume scheme instead of the
+    local-inertial (ACC) one. Writes lisflood.log whose first line is the engine name."""
     from . import metalflood as mf
     t0 = time.time()
     lines = []
+    runner = mf.run_par_fv if fv else mf.run_par
+    name, version = (mf.FV_NAME, mf.FV_VERSION) if fv else (mf.NAME, mf.VERSION)
+    tag = "Boann (shock-capturing)" if fv else "Boann"
 
     def say(msg):
         lines.append(msg)
@@ -889,17 +917,17 @@ def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
 
     def prog(t, sim):
         if progress:
-            progress(min(100.0, 100.0 * t / sim), "GPU engine t = {:.2f} h".format(t / 3600.0))
+            progress(min(100.0, 100.0 * t / sim), "{} t = {:.2f} h".format(tag, t / 3600.0))
     backend = os.environ.get("DAMSAFETY_MF_BACKEND") or "auto"
     try:
-        mf.run_par(par, progress=prog, cancel=cancel, log=say, backend=backend)
+        runner(par, progress=prog, cancel=cancel, log=say, backend=backend)
     except mf.Cancelled:
         raise Cancelled("cancelled")
     except mf.EngineError as e:
-        raise ModelError("GPU engine: {}".format(e))
+        raise ModelError("{}: {}".format(tag, e))
     finally:
         with open(os.path.join(workdir, "lisflood.log"), "w", encoding="utf-8") as f:
-            f.write(mf.NAME + " " + mf.VERSION + "\n" + "\n".join(lines) + "\n")
+            f.write(name + " " + version + "\n" + "\n".join(lines) + "\n")
     return time.time() - t0
 
 
@@ -917,6 +945,8 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
         return _run_builtin(workdir, par, st, progress, cancel, log)
     if is_gpu(exe):
         return _run_gpu(workdir, par, st, progress, cancel, log)
+    if is_gpu_fv(exe):
+        return _run_gpu(workdir, par, st, progress, cancel, log, fv=True)
     if not exe or not os.path.isfile(exe):
         raise ModelError("LISFLOOD-FP executable not found: {}".format(exe))
     env = dict(os.environ)
@@ -1276,15 +1306,19 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     # it is recorded wherever there was any water, which is far more cells.
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
-    who = ("The built-in engine" if is_builtin(exe) else "The GPU engine" if is_gpu(exe)
-           else "LISFLOOD-FP")
+    who = ("The built-in engine" if is_builtin(exe)
+           else "Boann (shock-capturing)" if is_gpu_fv(exe)
+           else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
     msg = ("{} ran: {} cells reached 0.3 m.".format(who, thr_wet))
     if is_builtin(exe):
         msg += (" This is the built-in numpy screening engine (local inertial), NOT LISFLOOD-FP; "
                 "its results are preliminary estimates.")
     if is_gpu(exe):
-        msg += (" This is the GPU engine (LISFLOOD-FP 8.3's ACC scheme on {}), NOT LISFLOOD-FP "
+        msg += (" This is Boann (LISFLOOD-FP 8.3's ACC scheme on {}), NOT LISFLOOD-FP "
                 "itself.".format(gpu_backend_note()))
+    if is_gpu_fv(exe):
+        msg += (" This is Boann, shock-capturing (HLLC finite-volume shallow water on "
+                "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "

@@ -8,6 +8,7 @@ The Runner's core/metalflood is the original; DamSafety_Screening/core/metalfloo
 its engine files (no bench / cases), and DamIT Runner ports it with the rest of core/.
 """
 from .engine import NAME, VERSION, EngineError, Cancelled, run_par  # noqa: F401
+from .engine_fv import NAME as FV_NAME, VERSION as FV_VERSION, run_par as run_par_fv  # noqa: F401
 from .backends import BackendError, metal_available, find_compiler  # noqa: F401
 
 
