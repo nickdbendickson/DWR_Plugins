@@ -219,6 +219,13 @@ GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
 # scheme diffuses; like the others it is chosen only by name, never as a fallback.
 GPU_FV_EXE = os.path.join(HERE, "metalflood", "engine_fv.py")
 GPU_FV_WORDS = ("gpu-fv", "metal-fv", "shock", "hllc", "gpu shock", "shock-capturing")
+# 3.33.0: Boann's 2nd-order shock-capturing solver (core/metalflood/engine_fv2): the same HLLC
+# finite-volume scheme run with MUSCL slope-limited reconstruction (2nd order in space) and SSP-RK2
+# (2nd order in time), so it holds a dam-break bore and a hydraulic jump even sharper than FV1.
+# Chosen only by name, never as a fallback.
+GPU_FV2_EXE = os.path.join(HERE, "metalflood", "engine_fv2.py")
+GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2", "shock 2nd order",
+                 "second order")
 
 
 def bundled_platform(system=None, machine=None):
@@ -278,9 +285,18 @@ def is_gpu_fv(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_FV_EXE
 
 
+def is_gpu_fv2(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_FV2_EXE
+
+
+def is_gpu_fv_any(exe):
+    """Either shock-capturing finite-volume scheme (FV1 1st order or FV2 2nd order)."""
+    return is_gpu_fv(exe) or is_gpu_fv2(exe)
+
+
 def is_gpu_any(exe):
-    """Either GPU engine (the ACC scheme or the shock-capturing FV scheme)."""
-    return is_gpu(exe) or is_gpu_fv(exe)
+    """Any GPU engine: the ACC scheme or either shock-capturing FV scheme (1st or 2nd order)."""
+    return is_gpu(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe)
 
 
 def is_inprocess(exe):
@@ -311,6 +327,8 @@ def resolve_exe(exe):
     v = (str(exe).strip() if exe else "")
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
+    if v.lower() in GPU_FV2_WORDS:
+        return GPU_FV2_EXE
     if v.lower() in GPU_FV_WORDS:
         return GPU_FV_EXE
     if v.lower() in GPU_WORDS:
@@ -324,6 +342,9 @@ def describe_exe(exe):
         return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_fv2(exe):
+        return ("Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite-volume shallow "
+                "water on the GPU; NOT LISFLOOD-FP)")
     if is_gpu_fv(exe):
         return ("Boann, shock-capturing (HLLC finite-volume shallow water on the GPU; "
                 "NOT LISFLOOD-FP)")
@@ -340,6 +361,8 @@ def engine_label(exe):
         return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
     if is_gpu(exe):
         return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
+    if is_gpu_fv2(exe):
+        return "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; NOT LISFLOOD-FP)"
     if is_gpu_fv(exe):
         return "Boann, shock-capturing (HLLC finite volume; NOT LISFLOOD-FP)"
     return "LISFLOOD-FP"
@@ -347,6 +370,8 @@ def engine_label(exe):
 
 def engine_name(exe):
     """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
+    if is_gpu_fv2(exe):
+        return "Boann (shock-capturing, 2nd order)"
     if is_gpu_fv(exe):
         return "Boann (shock-capturing)"
     if is_gpu(exe):
@@ -899,16 +924,24 @@ def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
     return time.time() - t0
 
 
-def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None, fv=False):
+def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
     """Run core/metalflood in-process: on the Apple GPU when there is one, else the CPU build of
-    the same kernels. fv selects the shock-capturing HLLC finite-volume scheme instead of the
-    local-inertial (ACC) one. Writes lisflood.log whose first line is the engine name."""
+    the same kernels. The scheme is chosen from st.exe: the local-inertial ACC engine, the 1st-order
+    shock-capturing FV engine, or the 2nd-order FV2 engine. Writes lisflood.log whose first line is
+    the engine name."""
     from . import metalflood as mf
     t0 = time.time()
     lines = []
-    runner = mf.run_par_fv if fv else mf.run_par
-    name, version = (mf.FV_NAME, mf.FV_VERSION) if fv else (mf.NAME, mf.VERSION)
-    tag = "Boann (shock-capturing)" if fv else "Boann"
+    exe = st.exe
+    if is_gpu_fv2(exe):
+        runner, name, version = mf.run_par_fv2, mf.FV2_NAME, mf.FV2_VERSION
+        tag = "Boann (shock-capturing, 2nd order)"
+    elif is_gpu_fv(exe):
+        runner, name, version = mf.run_par_fv, mf.FV_NAME, mf.FV_VERSION
+        tag = "Boann (shock-capturing)"
+    else:
+        runner, name, version = mf.run_par, mf.NAME, mf.VERSION
+        tag = "Boann"
 
     def say(msg):
         lines.append(msg)
@@ -943,10 +976,8 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     exe = st.exe
     if is_builtin(exe):
         return _run_builtin(workdir, par, st, progress, cancel, log)
-    if is_gpu(exe):
+    if is_gpu_any(exe):
         return _run_gpu(workdir, par, st, progress, cancel, log)
-    if is_gpu_fv(exe):
-        return _run_gpu(workdir, par, st, progress, cancel, log, fv=True)
     if not exe or not os.path.isfile(exe):
         raise ModelError("LISFLOOD-FP executable not found: {}".format(exe))
     env = dict(os.environ)
@@ -1307,6 +1338,7 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
     who = ("The built-in engine" if is_builtin(exe)
+           else "Boann (shock-capturing, 2nd order)" if is_gpu_fv2(exe)
            else "Boann (shock-capturing)" if is_gpu_fv(exe)
            else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
     msg = ("{} ran: {} cells reached 0.3 m.".format(who, thr_wet))
@@ -1319,6 +1351,9 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     if is_gpu_fv(exe):
         msg += (" This is Boann, shock-capturing (HLLC finite-volume shallow water on "
                 "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
+    if is_gpu_fv2(exe):
+        msg += (" This is Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite-volume "
+                "shallow water on {}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "

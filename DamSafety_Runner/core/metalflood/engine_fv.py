@@ -43,7 +43,10 @@ class Engine:
         self.b = backend
         ny, nx = d.ny, d.nx
         n_values = sum(len(s[1]) for s in d.series)
-        layout = be.fv_buffer_layout(ny, nx, len(d.src_cells), len(d.series), n_values)
+        # the 2nd-order (FV2) backend needs the wider layout (previous-step state + slopes)
+        is_fv2 = getattr(backend, "spec", None) is be.FV2_SPEC
+        lay = be.fv2_buffer_layout if is_fv2 else be.fv_buffer_layout
+        layout = lay(ny, nx, len(d.src_cells), len(d.series), n_values)
         a = self.a = backend.allocate(layout)
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
@@ -122,15 +125,17 @@ class Engine:
         return out
 
 
-def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
-    """Run a .par file with the finite-volume scheme. backend: 'auto', 'metal' or 'cpu'."""
+def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", order=1):
+    """Run a .par file with the finite-volume scheme. backend: 'auto', 'metal' or 'cpu'.
+    order 1 = first-order HLLC (FV1); order 2 = 2nd-order MUSCL + SSP-RK2 (FV2)."""
     def say(msg):
         if log:
             log(msg)
 
     deck = Deck(par_path)
+    spec = be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC
     try:
-        bk = be.make_backend(backend, spec=be.FV_SPEC, log=say)
+        bk = be.make_backend(backend, spec=spec, log=say)
     except be.BackendError as e:
         raise EngineError(str(e))
     try:
@@ -277,7 +282,8 @@ def _run(d, bk, progress, cancel, say):
     vol = volume()
     wall = time.time() - t_start
     stats = {"engine": NAME, "version": VERSION, "backend": bk.kind, "device": bk.device,
-             "scheme": "fv", "steps": steps, "batches": batches, "sim_time_s": t,
+             "scheme": getattr(getattr(bk, "spec", None), "name", "fv"),
+             "steps": steps, "batches": batches, "sim_time_s": t,
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout),
              "clipped_m3": clip}

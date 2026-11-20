@@ -72,9 +72,10 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
-FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv")
+FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2")
 FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
-                      "Boann, shock-capturing (HLLC finite volume on the Apple GPU)"]
+                      "Boann, shock-capturing (HLLC finite volume on the Apple GPU)",
+                      "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1104,12 +1105,16 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                 return lfmod.GPU_EXE
             if _eng == "gpu-fv":
                 return lfmod.GPU_FV_EXE
+            if _eng == "gpu-fv2":
+                return lfmod.GPU_FV2_EXE
         # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
         # the field, or the provider flag. It is never selected just because the field is empty,
         # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
         if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
             return lfmod.BUILTIN_EXE
         # 3.22.0: Boann (the GPU engine), likewise only by name ("gpu" / "metal")
+        if exe and str(exe).strip().lower() in lfmod.GPU_FV2_WORDS:
+            return lfmod.GPU_FV2_EXE
         if exe and str(exe).strip().lower() in lfmod.GPU_FV_WORDS:
             return lfmod.GPU_FV_EXE
         if exe and str(exe).strip().lower() in lfmod.GPU_WORDS:
