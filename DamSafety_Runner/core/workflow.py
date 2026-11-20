@@ -1243,6 +1243,18 @@ def grid_refine_wanted(st):
 
 def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
+    """One breach run into `out_folder`, which the run claims first (core/runlock.py, audit
+    2026-11-20): a second driver of the same dam folder (another QGIS session, a batch) stops with
+    runlock.RunClaimError naming this run, instead of overwriting its checkpoints and reports.
+    The same thread may claim a folder it holds (refine, sensitivity, nested). See _run_dam_claimed."""
+    from . import runlock
+    with runlock.claim(out_folder, "Runner flood run"):
+        return _run_dam_claimed(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy,
+                                progress, log, cancel)
+
+
+def _run_dam_claimed(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
+                     progress=None, log=None, cancel=None):
     """One breach run (see _run_dam_once). 3.15.0: when the finished run shows the coarse-grid
     over-spread signature (grid_spread_flagged) and st.grid_refine is on, the dam is run again
     on the SAME domain, inflow point and clock at st.grid_refine_cell_m (10 m), which replaces
@@ -4268,6 +4280,14 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
 RUN_REPORT_REL = os.path.join(MODEL_FOLDER, "run_report.json")
 
 
+def _tmp_name(path):
+    """<path>.<pid>.<thread>.tmp, in the same folder: unique per writer (audit 2026-11-20). A fixed
+    <path>.tmp let two drivers of one folder write the same temp file and rename each other's half
+    documents into place."""
+    import threading
+    return "{}.{}.{}.tmp".format(path, os.getpid(), threading.get_ident())
+
+
 def _write_json(path, obj):
     """Replace `path` only after the whole document is on disk.
 
@@ -4278,7 +4298,7 @@ def _write_json(path, obj):
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(obj, f, indent=2, default=_json_default)
@@ -4299,7 +4319,7 @@ def _write_text(path, text):
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)

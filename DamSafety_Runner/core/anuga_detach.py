@@ -32,6 +32,7 @@ import time
 
 STATUS_NAME = "anuga_worker.json"
 LOG_NAME = "anuga.log"
+LAUNCH_CLAIM = ".anuga_launch.lock"     # audit 2026-11-20: launch() claims the workdir (runlock)
 # set by the launcher: the status file to write and the launch's id (a worker started by hand
 # writes <folder of the result>/anuga_worker.json)
 ENV_STATUS = "NDBREACH_ANUGA_STATUS"
@@ -235,38 +236,54 @@ def popen_flags():
 def launch(cmd, workdir, env, log_name=LOG_NAME, tag=None, script=None):
     """Start `cmd` detached, its stdout + stderr appended to <workdir>/<log_name> (created
     fresh). Returns (Popen, log path, status path)."""
-    log_path = os.path.join(workdir, log_name)
-    spath = status_path(workdir)
-    for p in (spath,):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-    launch_id = "{}-{}".format(os.getpid(), int(time.time() * 1000))
-    env = dict(env)
-    env[ENV_STATUS] = spath
-    env[ENV_LAUNCH] = launch_id
-    env.setdefault("PYTHONUNBUFFERED", "1")          # a file is block-buffered: keep PROGRESS live
-    if tag:
-        env[ENV_TAG] = json.dumps(tag, default=str)
-    kw = popen_flags()
-    with open(log_path, "wb") as logf:               # the child gets its own copy of the fd
-        try:
-            proc = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=logf, stderr=subprocess.STDOUT, **kw)
-        except OSError:
-            if os.name != "nt":
-                raise
-            # a job object that forbids breakaway: start inside it (dies with QGIS's job)
-            kw["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
-            proc = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=logf, stderr=subprocess.STDOUT, **kw)
-    create_status(spath, state=RUNNING, pid=proc.pid, launch_id=launch_id, log=log_path,
-                  script=os.path.basename(script or (cmd[2] if len(cmd) > 2 else cmd[-1])),
-                  job=cmd[-2] if len(cmd) >= 2 else "", result=cmd[-1],
-                  started_utc=utc_now(), started_epoch=time.time(),
-                  host=socket.gethostname(), launcher_pid=os.getpid(),
-                  tag=tag or {}, written_by="launcher")
+    try:
+        from . import runlock
+    except ImportError:                              # imported as a plain module (worker side)
+        import runlock
+    # audit 2026-11-20: the caller's busy check (anuga_model.adoption) and this launch were not one
+    # step, so two sessions could both find no worker, both delete the status and both start one.
+    # The launch now claims the workdir (O_EXCL), looks again for a live worker, and only then
+    # deletes the old status and starts the worker; the claim is let go once the worker's status
+    # says running, so a later launcher sees it.
+    with runlock.claim(workdir, "ANUGA worker launch", name=LAUNCH_CLAIM):
+        w = worker_state(workdir)
+        if w["state"] == RUNNING:
+            raise runlock.RunClaimError(
+                "an ANUGA worker is already running in {} (pid {}, started {}): wait for it to finish "
+                "or stop it before starting another".format(workdir, (w["status"] or {}).get("pid", "?"),
+                                                           (w["status"] or {}).get("started_utc", "?")))
+        log_path = os.path.join(workdir, log_name)
+        spath = status_path(workdir)
+        for p in (spath,):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        launch_id = "{}-{}".format(os.getpid(), int(time.time() * 1000))
+        env = dict(env)
+        env[ENV_STATUS] = spath
+        env[ENV_LAUNCH] = launch_id
+        env.setdefault("PYTHONUNBUFFERED", "1")          # a file is block-buffered: keep PROGRESS live
+        if tag:
+            env[ENV_TAG] = json.dumps(tag, default=str)
+        kw = popen_flags()
+        with open(log_path, "wb") as logf:               # the child gets its own copy of the fd
+            try:
+                proc = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL,
+                                        stdout=logf, stderr=subprocess.STDOUT, **kw)
+            except OSError:
+                if os.name != "nt":
+                    raise
+                # a job object that forbids breakaway: start inside it (dies with QGIS's job)
+                kw["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
+                proc = subprocess.Popen(cmd, cwd=workdir, env=env, stdin=subprocess.DEVNULL,
+                                        stdout=logf, stderr=subprocess.STDOUT, **kw)
+        create_status(spath, state=RUNNING, pid=proc.pid, launch_id=launch_id, log=log_path,
+                      script=os.path.basename(script or (cmd[2] if len(cmd) > 2 else cmd[-1])),
+                      job=cmd[-2] if len(cmd) >= 2 else "", result=cmd[-1],
+                      started_utc=utc_now(), started_epoch=time.time(),
+                      host=socket.gethostname(), launcher_pid=os.getpid(),
+                      tag=tag or {}, written_by="launcher")
     return proc, log_path, spath
 
 
