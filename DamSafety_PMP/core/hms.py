@@ -64,6 +64,9 @@ def export_hms(hyeto_paths, cfg: HydroConfig, out_dir, project="NDPMP", tail_hr=
                 "     Surface Storage Capacity: %.4f\n     End Surface:\n\n" % cap)
         warn.append("pothole abstraction exported as Simple Surface storage %.3f in (HMS applies it to "
                     "precipitation before the loss method; ndpmp applies it to excess)" % cap)
+    if cfg.loss == "green_ampt":
+        raise ValueError("Green-Ampt losses are not exported to HEC-HMS yet: export with SCS CN or "
+                         "initial + constant, or set the Green and Ampt loss in HMS by hand")
     if cfg.loss == "scs_cn":
         S = 1000.0 / cn - 10.0
         loss = ("     LossRate: SCS\n     Percent Impervious Area: 0.0\n     Curve Number: %.4f\n"
