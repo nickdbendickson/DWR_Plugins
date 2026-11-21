@@ -62,6 +62,16 @@ def grid_scale(path, default=0.001):
 def point_value(raster_path, x, y, crs_wkt, scale=0.001):
     """Value (in inches) of the grid cell containing x, y (a point in the CRS ``crs_wkt``); None if outside / empty."""
     ds = gdal.Open(raster_path)
+    if ds is None:
+        return None            # audit 2026-11-20: unreadable raster, not a crash (also releases cleanly)
+    try:
+        return _point_value_body(ds, x, y, crs_wkt, scale)
+    finally:
+        ds = None              # audit 2026-11-20: release the handle before GC (Windows file locking)
+
+
+def _point_value_body(ds, x, y, crs_wkt, scale):
+    """The read logic, split out so point_value can guarantee the ds release."""
     band = ds.GetRasterBand(1)
     srs = osr.SpatialReference()
     srs.ImportFromWkt(ds.GetProjection()) if ds.GetProjection() else srs.ImportFromEPSG(4326)

@@ -211,6 +211,7 @@ def read_clip(zpath, window=None, mask_wkt=None, mask_wkt_crs=None):
         c0, r0 = max(c0, 0), max(r0, 0)
         w, h = min(c1, nx) - c0, min(r1, ny) - r0
     raw = band.ReadAsArray(c0, r0, w, h).astype("float64")
+    ds = None                                           # audit 2026-11-20: release the zip member early
     valid = np.isfinite(raw) & (raw >= 0)
     if nodata is not None:
         valid &= raw != nodata
