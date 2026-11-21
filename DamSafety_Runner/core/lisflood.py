@@ -242,6 +242,14 @@ GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
 GPU_SGC_EXE = os.path.join(HERE, "metalflood", "engine_sgc.py")
 GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid channels",
                  "sub-grid channels")
+# 3.42.0: Boann's sub-grid finite-volume solver (core/metalflood/engine_subfv): the HLLC
+# shock-capturing scheme run on a COARSE grid whose cells each keep their r x r fine (LiDAR)
+# sub-cells as stage tables (Devi & Kuiry 2024), so a coarse run conveys and stores the channel a
+# flat coarse cell loses and still writes a fine-resolution inundation map. The deck DEM is the fine
+# grid; a 'subgrid <r>' keyword sets the coarsening factor. Shock-capturing family. By name only.
+GPU_SUBFV_EXE = os.path.join(HERE, "metalflood", "engine_subfv.py")
+GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid fv", "gpu subfv",
+                   "subgrid finite volume")
 
 
 def bundled_platform(system=None, machine=None):
@@ -313,22 +321,27 @@ def is_gpu_sgc(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_SGC_EXE
 
 
+def is_gpu_subfv(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_SUBFV_EXE
+
+
 def is_gpu_fv_any(exe):
     """Either shock-capturing finite-volume scheme (FV1 1st order or FV2 2nd order)."""
     return is_gpu_fv(exe) or is_gpu_fv2(exe)
 
 
 def is_gpu_shock(exe):
-    """Any of Boann's shock-capturing solvers: FV1, FV2 (finite volume) or DG2 (discontinuous
-    Galerkin) - as opposed to the diffusive ACC scheme or the built-in engine."""
-    return is_gpu_fv(exe) or is_gpu_fv2(exe) or is_gpu_dg2(exe)
+    """Any of Boann's shock-capturing solvers: FV1, FV2 (finite volume), DG2 (discontinuous
+    Galerkin) or the sub-grid finite-volume scheme - as opposed to the diffusive ACC scheme or the
+    built-in engine."""
+    return is_gpu_fv(exe) or is_gpu_fv2(exe) or is_gpu_dg2(exe) or is_gpu_subfv(exe)
 
 
 def is_gpu_any(exe):
     """Any GPU engine: the ACC scheme, the sub-grid-channel ACC scheme, or any shock-capturing
-    scheme (FV1, FV2 or DG2)."""
+    scheme (FV1, FV2, DG2 or sub-grid FV)."""
     return (is_gpu(exe) or is_gpu_sgc(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe)
-            or is_gpu_dg2(exe))
+            or is_gpu_dg2(exe) or is_gpu_subfv(exe))
 
 
 def is_inprocess(exe):
@@ -361,6 +374,8 @@ def resolve_exe(exe):
         return BUILTIN_EXE
     if v.lower() in GPU_DG2_WORDS:
         return GPU_DG2_EXE
+    if v.lower() in GPU_SUBFV_WORDS:
+        return GPU_SUBFV_EXE
     if v.lower() in GPU_SGC_WORDS:
         return GPU_SGC_EXE
     if v.lower() in GPU_FV2_WORDS:
@@ -380,6 +395,9 @@ def describe_exe(exe):
         return "Boann (LISFLOOD-FP 8.3's ACC scheme on the GPU; NOT LISFLOOD-FP)"
     if is_gpu_sgc(exe):
         return ("Boann, sub-grid channels (ACC scheme with LISFLOOD-FP sub-grid channels on the "
+                "GPU; NOT LISFLOOD-FP)")
+    if is_gpu_subfv(exe):
+        return ("Boann, sub-grid finite volume (coarse HLLC with per-cell LiDAR sub-cells on the "
                 "GPU; NOT LISFLOOD-FP)")
     if is_gpu_dg2(exe):
         return ("Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on the GPU; "
@@ -405,6 +423,8 @@ def engine_label(exe):
         return "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
     if is_gpu_sgc(exe):
         return "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels; NOT LISFLOOD-FP)"
+    if is_gpu_subfv(exe):
+        return "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; NOT LISFLOOD-FP)"
     if is_gpu_dg2(exe):
         return "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
     if is_gpu_fv2(exe):
@@ -422,6 +442,8 @@ def engine_name(exe):
         return "Boann (shock-capturing, 2nd order)"
     if is_gpu_fv(exe):
         return "Boann (shock-capturing)"
+    if is_gpu_subfv(exe):
+        return "Boann (sub-grid finite volume)"
     if is_gpu_sgc(exe):
         return "Boann (sub-grid channels)"
     if is_gpu(exe):
@@ -452,7 +474,7 @@ class LisfloodSettings:
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None):
+                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -474,6 +496,11 @@ class LisfloodSettings:
         self.cfl = None if cfl is None else float(cfl)
         if self.cfl is not None and not 0.0 < self.cfl <= 1.0:
             raise ModelError("ACC cfl must be in (0, 1], got {}".format(self.cfl))
+        # 3.42.0: the sub-grid finite-volume coarsening factor r (the Boann sub-grid FV engine only;
+        # None = its own default of 4). Written to the .par as 'subgrid r' only for that engine.
+        self.subgrid_r = None if subgrid_r is None else int(subgrid_r)
+        if self.subgrid_r is not None and not 1 <= self.subgrid_r <= 8:
+            raise ModelError("subgrid r must be 1..8, got {}".format(self.subgrid_r))
         # v3.11.0: domain edges written as closed walls ("N", "S", "E", "W") instead of free
         # outflow. The near-dam FV1 run closes the edges that face the reservoir: with FV1 a
         # free edge across ponded water brings water INTO the model (see core/refine.py).
@@ -742,6 +769,11 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         cfl = getattr(st, "cfl", None)
         if cfl is not None:
             lines.append("cfl {:.3f}".format(float(cfl)))
+    # the sub-grid finite-volume coarsening factor r (Boann sub-grid FV engine only; empty = its
+    # own default). Harmless to any other engine, which does not read it.
+    sub_r = getattr(st, "subgrid_r", None)
+    if sub_r is not None and is_gpu_subfv(st.exe):
+        lines.append("subgrid {}".format(int(sub_r)))
     if st.manning_grid is not None:
         st.manning_grid.write_asc(os.path.join(workdir, name + ".n.asc"), fmt="%.4f")
         lines.append("manningfile {}.n.asc".format(name))
@@ -989,6 +1021,12 @@ def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
     elif is_gpu_sgc(exe):
         runner, name, version = mf.run_par_sgc, mf.SGC_NAME, mf.SGC_VERSION
         tag = "Boann (sub-grid channels)"
+    elif is_gpu_subfv(exe):
+        # engine_subfv is Runner-only research, not re-exported from metalflood/__init__ (which
+        # stays byte-identical with Screening, where this solver does not exist), so import direct.
+        from .metalflood import engine_subfv as _subfv
+        runner, name, version = _subfv.run_par, _subfv.NAME, _subfv.VERSION
+        tag = "Boann (sub-grid finite volume)"
     elif is_gpu_fv2(exe):
         runner, name, version = mf.run_par_fv2, mf.FV2_NAME, mf.FV2_VERSION
         tag = "Boann (shock-capturing, 2nd order)"
@@ -1395,6 +1433,7 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     patched = raw_wet <= 1.03 * deep + 3
     who = ("The built-in engine" if is_builtin(exe)
            else "Boann (discontinuous Galerkin, 2nd order)" if is_gpu_dg2(exe)
+           else "Boann (sub-grid finite volume)" if is_gpu_subfv(exe)
            else "Boann (shock-capturing, 2nd order)" if is_gpu_fv2(exe)
            else "Boann (shock-capturing)" if is_gpu_fv(exe)
            else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
@@ -1414,6 +1453,9 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     if is_gpu_dg2(exe):
         msg += (" This is Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on "
                 "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
+    if is_gpu_subfv(exe):
+        msg += (" This is Boann, sub-grid finite volume (coarse HLLC with per-cell LiDAR sub-cells "
+                "on {}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "

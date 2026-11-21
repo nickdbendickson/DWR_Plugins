@@ -2936,12 +2936,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         stability["on"] = True
 
     def stable_kw():
+        # 3.41.0: the sub-grid FV coarsening factor is a mesh choice, not a stability knob, so it is
+        # forwarded whether or not the stability fallback is engaged (only theta/cfl change then).
+        kw = {}
+        if getattr(st, "user_subgrid_r", None) is not None:
+            kw["subgrid_r"] = int(st.user_subgrid_r)
         if stability["on"] and getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == \
                 lfmod.SOLVER_ACC:
-            return {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
+            kw["theta"] = lfmod.STABLE_THETA
+            kw["cfl"] = lfmod.STABLE_CFL
+            return kw
         # 3.39.0: the Courant number / theta the user set in the run tool (None = engine default).
         # The stability fallback above still wins once a run has lost its mass balance.
-        kw = {}
         if getattr(st, "user_theta", None) is not None:
             kw["theta"] = float(st.user_theta)
         if getattr(st, "user_cfl", None) is not None:
@@ -3147,6 +3153,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             _scheme = "discontinuous Galerkin 2nd order (an RKDG2 solver of"
         elif lfmod.is_gpu_fv2(st.lisflood_exe):
             _scheme = "shock-capturing 2nd order (an HLLC finite-volume solver of"
+        elif lfmod.is_gpu_subfv(st.lisflood_exe):
+            _scheme = ("sub-grid finite volume (a coarse HLLC solver, each cell keeping its LiDAR "
+                       "sub-cells as stage tables, of")
         else:
             _scheme = "shock-capturing (an HLLC finite-volume solver of"
         fmsg = ("This run uses Boann, {} the 2-D shallow-water equations, on {}), not LISFLOOD-FP "
@@ -3997,6 +4006,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                               if _builtin_run else
                               "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu(st.lisflood_exe) else
+                              "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels; "
+                              "NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu_sgc(st.lisflood_exe) else
+                              "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; "
+                              "NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu_subfv(st.lisflood_exe) else
                               "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_dg2(st.lisflood_exe) else
                               "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; "
