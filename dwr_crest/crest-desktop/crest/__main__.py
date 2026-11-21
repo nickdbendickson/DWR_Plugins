@@ -189,6 +189,10 @@ def start_job(
                     job["chainResult"] = list(result["chainResult"])
                 if result.get("check"):
                     job["check"] = list(result["check"])
+                if result.get("timedOut"):
+                    job["timedOut"] = True
+                if result.get("warning"):
+                    job["warning"] = str(result["warning"])
                 job["folder"] = result.get("folder") or ""
                 job["work"] = result.get("work") or ""
         except Exception as exc:
@@ -220,6 +224,29 @@ def job_snapshot(job_id: str) -> dict | None:
     with _jobs_lock:
         found = _jobs.get(job_id)
         return dict(found) if found else None
+
+
+def choose_linux_backend(environ=None, platform: str | None = None, find_spec=None) -> str | None:
+    """On Linux pywebview tries GTK first and prints a long "GTK cannot be loaded ... No module named 'gi'" traceback
+    before it falls back to Qt, the backend requirements.txt installs there. That traceback is harmless but looks
+    like a crash (install test 2026-11-21). When GTK's Python bindings are missing and Qt's are there, ask for Qt
+    (PYWEBVIEW_GUI=qt) so nothing is printed. A PYWEBVIEW_GUI you set yourself is kept. Returns what it set."""
+    import importlib.util
+
+    environ = os.environ if environ is None else environ
+    platform = sys.platform if platform is None else platform
+    find_spec = importlib.util.find_spec if find_spec is None else find_spec
+    if not platform.startswith("linux") or environ.get("PYWEBVIEW_GUI"):
+        return None
+    try:
+        has_gi = find_spec("gi") is not None
+        has_qt = find_spec("PyQt6") is not None or find_spec("PyQt5") is not None or find_spec("PySide6") is not None
+    except (ImportError, ValueError):
+        return None
+    if has_gi or not has_qt:
+        return None
+    environ["PYWEBVIEW_GUI"] = "qt"
+    return "qt"
 
 
 def web_dir() -> Path:
@@ -755,6 +782,7 @@ def main() -> None:
         # script-src 'self' (no unsafe-eval). See webview_csp.py.
         from .webview_csp import install_pywebview_csp_patches
         install_pywebview_csp_patches(webview)
+        choose_linux_backend()
         store = storage_dir()
         store.mkdir(parents=True, exist_ok=True)
         global SETTINGS_FILE

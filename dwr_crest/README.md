@@ -114,7 +114,7 @@ from the shared defaults and has a button to put it back on them.
 
 | Where | Your values live in | How to change them |
 | --- | --- | --- |
-| Desktop app | `~/DamSafety/defaults.json` (or the path in `CREST_DEFAULTS` / `DAMSAFETY_DEFAULTS`) | Settings > Save writes the file. Editing it in QGIS or by hand works too; Crest reads it when it opens. |
+| Desktop app | `~/DamSafety/defaults.json` (or the path in `CREST_DEFAULTS` / `DAMSAFETY_DEFAULTS`) | Settings > Save writes the file; the panel then says "Saved to <file>". Editing it in QGIS or by hand works too; Crest reads it when it opens. If the panel says "Saved in this browser", the window could not reach the app (before 2026-11-21 this happened on Linux, where the app's link to the page arrives a moment after the page opens). |
 | Web desk | this browser | Settings > Save. *Open settings file* reads a `defaults.json`; *Save settings file* writes one to hand to the plugins. |
 | Batch command line | a file you name | `npm run batch:dams -- --defaults ~/DamSafety/defaults.json ...` |
 
@@ -374,10 +374,39 @@ Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.
    ```
 3. Optional app: `sh build_mac.sh` gives `dist/Crest.app`. It is unsigned, so the first time right-click it and choose Open.
 
-The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Get layers** either uses the ND offline pack both plugin sets already share (`NDSUITE_DATA`, or `ndsuite/data_folder` in `~/.ndsuite/config.json`) or downloads a 3DEP DEM and NHD streams and waterbodies for the drawn area. **Write the dam folder** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, both hydrographs, the LISFLOOD `.par` / `.bci` / `.bdy`, and the flood strip) and does not start a model. **Write folder and run screening** does that write, runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. Pick LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in screening engine. It needs a DEM (`dem.tif` in the work folder, the DEM field, the pack DEM, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude GeoJSON; it is sent as `DAM_LINES` and the Runner reprojects it to the DEM so the toe-band inflow can be placed. `line_xy` (the embankment insert in DEM coordinates) is still not set from that file. The flood strip is straight down the valley at the breach (the dam segment nearest the breach, not the end-to-end chord, and not later bends in the stream). The log is on the Report step.
+The Report step can hand the open dam to the QGIS plugins already installed on this computer. **Get layers** either uses the ND offline pack both plugin sets already share (see **How Crest finds the suite data folder** below) or downloads a 3DEP DEM and NHD streams and waterbodies for the drawn area. **Write the dam folder** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, both hydrographs, the LISFLOOD `.par` / `.bci` / `.bdy`, and the flood strip) and does not start a model. **Write folder and run screening** does that write, runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. Pick LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in screening engine. It needs a DEM (`dem.tif` in the work folder, the DEM field, the pack DEM, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude GeoJSON; it is sent as `DAM_LINES` and the Runner reprojects it to the DEM so the toe-band inflow can be placed. `line_xy` (the embankment insert in DEM coordinates) is still not set from that file. The flood strip is straight down the valley at the breach (the dam segment nearest the breach, not the end-to-end chord, and not later bends in the stream). The log is on the Report step.
 
 ### Linux
-`pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.
+Use a virtual environment: recent Ubuntu, Debian and Fedora refuse a plain `pip install` into the system Python
+("externally-managed-environment"). In a terminal:
+```
+git clone https://github.com/nickdbendickson/DWR_Plugins && cd DWR_Plugins/dwr_crest/crest-desktop
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python run.py
+```
+(`sudo apt install python3-venv` first if `python3 -m venv` says venv is missing.) `requirements.txt` pulls
+`pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB). Next time: `cd` to the folder, `source .venv/bin/activate`,
+`python run.py`.
+
+pywebview tries GTK before Qt on Linux. Older Crest versions let it print a long `[pywebview] GTK cannot be loaded`
+traceback ending in `ModuleNotFoundError: No module named 'gi'`. It is harmless: the window then opens with Qt.
+Since 2026-11-21 Crest asks for Qt itself when GTK's Python bindings are not installed, so the traceback no longer
+appears (set `PYWEBVIEW_GUI` yourself to choose another backend).
+
+### How Crest finds the suite data folder
+**Get layers** (ND offline pack), the screening and the flood model use the suite data folder that ND Hazard and the
+DWR plugins share. Crest takes the first of these that names an existing folder:
+1. `NDSUITE_DATA` set before `python run.py` (the suite launchers set it);
+2. the QGIS setting `ndsuite/data_folder` that DamSafety Setup's **Start here** saves. Crest reads it from the
+   `default` profile that its qgis_process uses: the `QGIS_CUSTOM_CONFIG_PATH` in the `qgis-process-*.sh` / `.cmd`
+   launcher named by `QGIS_PROCESS`, else QGIS's own profile folder (`~/.local/share/QGIS/QGIS3` on Linux,
+   `%APPDATA%\QGIS\QGIS3` on Windows, `~/Library/Application Support/QGIS/QGIS3` on macOS). It only reads the file;
+3. `"ndsuite/data_folder"` in `~/.ndsuite/config.json`.
+
+That folder is the one that **holds** the pack, not the pack itself. The pack folder inside it must be named exactly
+`ND_Dam_Suite_Pack` (or the older `nd_offline_pack`), and a `dem/` folder next to it holds the DEM mosaic. The log
+line "ND offline pack folder … (from …)" on the Report step says which of the three was used.
 
 ### The printed address and the browser
 When it starts, the desk prints its address in the terminal, e.g. `Crest desktop: http://127.0.0.1:47231/index.html`

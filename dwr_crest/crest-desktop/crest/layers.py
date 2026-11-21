@@ -7,6 +7,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -22,25 +23,94 @@ RASTER_EXT = {".tif", ".tiff", ".vrt", ".img"}
 CONFIG_KEY = "ndsuite/data_folder"
 
 
-def find_suite_folder() -> str | None:
-    """The suite data folder. ND Hazard and the DWR plugins write the same place."""
+def default_qgis_profile_root() -> Path:
+    """QGIS's own profiles folder when QGIS_CUSTOM_CONFIG_PATH is not set (QgsApplication's default per OS)."""
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "QGIS" / "QGIS3"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "QGIS" / "QGIS3"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "QGIS" / "QGIS3"
+
+
+def qgis_ini_value(ini: Path, key: str) -> str:
+    """One value from a QGIS3.ini (QSettings INI file), e.g. "ndsuite/data_folder". "" when absent. Read only."""
+    section, _, name = key.partition("/")
+    try:
+        lines = ini.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    current = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+            continue
+        if current != section or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        if k.strip() != name:
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] == '"':
+            v = v[1:-1]
+        return v.replace("\\\\", "\\").strip()             # QSettings writes a backslash as two
+    return ""
+
+
+def qgis_profile_ini() -> Path:
+    """QGIS3.ini of the profile Crest's qgis_process reads: the suite launcher's QGIS_CUSTOM_CONFIG_PATH (read from
+    the launcher script, as Check QGIS does), else Crest's own QGIS_CUSTOM_CONFIG_PATH, else QGIS's default
+    folder; always the "default" profile, which is the one qgis_process opens."""
+    from crest.qgis_run import find_qgis_process, qgis_config_path   # here: qgis_run imports this module
+
+    custom = None
+    try:
+        exe = find_qgis_process()
+        custom = qgis_config_path(exe)[0] if exe else os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
+    except Exception:                                    # noqa: BLE001  (a lookup, never fatal)
+        custom = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
+    root = Path(custom).expanduser() if custom else default_qgis_profile_root()
+    return root / "profiles" / "default" / "QGIS" / "QGIS3.ini"
+
+
+def find_suite_folder_and_source() -> tuple[str | None, str]:
+    """(suite data folder, where it came from). The suite's own order (DamSafety_Data settings.suite_folder):
+      1. NDSUITE_DATA in Crest's environment;
+      2. the QGIS setting ndsuite/data_folder that DamSafety Setup's "Start here" saves, in the profile Crest's
+         qgis_process reads (2026-11-21);
+      3. "ndsuite/data_folder" in ~/.ndsuite/config.json.
+    A folder that does not exist is skipped. Read only."""
     env = (os.environ.get("NDSUITE_DATA") or "").strip()
     if env:
         path = Path(env).expanduser()
         if path.is_dir():
-            return str(path.resolve())
+            return str(path.resolve()), "NDSUITE_DATA"
+    try:
+        ini = qgis_profile_ini()
+        raw = qgis_ini_value(ini, CONFIG_KEY)
+    except Exception:                                    # noqa: BLE001
+        ini, raw = None, ""
+    if raw:
+        path = Path(raw).expanduser()
+        if path.is_dir():
+            return str(path.resolve()), f"the QGIS setting {CONFIG_KEY} in {ini}"
     config = Path.home() / ".ndsuite" / "config.json"
     try:
         data = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
-    if not isinstance(data, dict):
-        return None
-    raw = str(data.get(CONFIG_KEY) or "").strip()
-    if not raw:
-        return None
-    path = Path(raw).expanduser()
-    return str(path.resolve()) if path.is_dir() else None
+    if isinstance(data, dict):
+        raw = str(data.get(CONFIG_KEY) or "").strip()
+        if raw:
+            path = Path(raw).expanduser()
+            if path.is_dir():
+                return str(path.resolve()), str(config)
+    return None, ""
+
+
+def find_suite_folder() -> str | None:
+    """The suite data folder. ND Hazard and the DWR plugins write the same place."""
+    return find_suite_folder_and_source()[0]
 
 
 def suite_dem(folder: str | None) -> str | None:
@@ -283,12 +353,14 @@ def download_aoi(work: Path, dam: dict, log, fetch=None) -> dict:
 
 
 def use_offline_pack(work: Path, log) -> dict:
-    folder = find_suite_folder()
+    folder, source = find_suite_folder_and_source()
     if not folder:
         log("No ND offline pack folder is set.")
-        log("Both plugin sets use the same place: NDSUITE_DATA, or ndsuite/data_folder in ~/.ndsuite/config.json.")
+        log("Crest looks, in order, at: NDSUITE_DATA; the QGIS setting ndsuite/data_folder that DamSafety Setup's "
+            f"\"Start here\" saves (read from {qgis_profile_ini()}); ndsuite/data_folder in ~/.ndsuite/config.json. "
+            "Point it at the folder that holds ND_Dam_Suite_Pack (that exact name), not at the pack itself.")
         return {"ok": False, "stopped": True}
-    log(f"ND offline pack folder (ND Hazard and the DWR plugins): {folder}")
+    log(f"ND offline pack folder (ND Hazard and the DWR plugins): {folder} (from {source})")
     log(pack_note(folder))
     dem = suite_dem(folder)
     if dem:
