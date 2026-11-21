@@ -191,6 +191,29 @@ def sgc_settings_key_and_solver_gate():
 
 
 @test
+def sgc_gpu_sgc_engine_passes_the_solver_gate():
+    """Boann's sub-grid-channel engine (gpu-sgc) runs channels natively, so sub-grid channels with
+    it must NOT be refused for a missing LISFLOOD-FP arrival-depth patch (there is no binary in the
+    loop). The other in-process engines, which have no channel model, are still refused clearly."""
+    from nd_breach_runner.core import workflow, breach as br, lisflood as lf
+    d = _tmp()
+    try:
+        # gpu-sgc + sub-grid channels: accepted (no LISFLOOD-FP binary patch check)
+        workflow._check_solver(
+            workflow.RunSettings(lisflood_sgc=True, lisflood_exe=lf.GPU_SGC_EXE), d)
+        # a non-channel in-process engine (here DG2) + sub-grid channels: refused, and the message
+        # names the engine and points at LISFLOOD-FP or gpu-sgc instead of a binary-patch failure
+        try:
+            workflow._check_solver(
+                workflow.RunSettings(lisflood_sgc=True, lisflood_exe=lf.GPU_DG2_EXE), d)
+            raise AssertionError("gpu-dg2 + sub-grid channels was accepted")
+        except br.BreachInputError as e:
+            assert "no channel model" in str(e) and "gpu-sgc" in str(e), str(e)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
 def sgc_near_dam_refine_runs_without_channels():
     from nd_breach_runner.core import refine, workflow
     from nd_breach_runner.core.breach import Hydrograph
