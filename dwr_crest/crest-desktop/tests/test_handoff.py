@@ -116,6 +116,11 @@ if "runchain" in joined or "rundam" in joined:
     print("started", flush=True)
     if mode == "slow":
         import time
+        live = next((a.split("=", 1)[1] for a in args if a.startswith("--LOG=")), "")
+        if live and "runchain" in joined:      # the chain's live log, as far as a run killed in step 7 gets
+            Path(live).write_text(">>> Step 1 - Prepare dam inventory\n    step 1 done\n"
+                                  ">>> Step 5 - Breach parameters and hydrograph\n    step 5 done\n"
+                                  ">>> Step 7 - Run breach flood simulations\n", encoding="utf-8")
         time.sleep(60)
     if mode == "outputs" and "runchain" in joined:
         import csv, sqlite3
@@ -651,6 +656,44 @@ class GateTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["timedOut"])
         self.assertTrue(any("Stopped" in line for line in self.lines))
+
+    # 2026-11-21 (install test): a run stopped at the time limit says so plainly, with the step it stopped in and
+    # the steps kept, and the job carries it for the amber box on the Report step.
+    def test_time_limit_reached_says_which_step_and_what_is_kept(self):
+        os.environ["QGIS_MODE"] = "slow"
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), timeout=1.5)
+        self.assertTrue(result["timedOut"])
+        self.assertFalse(result["cancelled"])
+        warning = result["warning"]
+        self.assertTrue(warning.startswith("TIME LIMIT REACHED"), warning)
+        self.assertIn("after 1.5 s", warning)
+        self.assertIn("in step 7 (Run breach flood simulations)", warning)
+        self.assertIn("Steps finished and kept: 1, 5.", warning)
+        self.assertIn("CREST_SCREENING_TIMEOUT_S", warning)
+        self.assertIn(warning, self.lines)
+
+    def test_the_job_carries_the_time_limit_warning(self):
+        os.environ["QGIS_MODE"] = "slow"
+        job = m.start_job("screen", DAM, ANALYSIS, str(self.root / "work"), timeout=1.5)
+        found = None
+        for _ in range(400):
+            found = m.job_snapshot(job["id"])
+            if found and found["done"]:
+                break
+            time.sleep(0.05)
+        self.assertTrue(found and found["done"])
+        self.assertTrue(found.get("timedOut"))
+        self.assertIn("TIME LIMIT REACHED", found.get("warning", ""))
+        self.assertIn("TIME LIMIT REACHED", found["log"])
+
+    def test_a_cancel_is_not_a_time_limit(self):
+        os.environ["QGIS_MODE"] = "slow"
+        cancel = threading.Event()
+        threading.Timer(1.0, cancel.set).start()
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), cancel=cancel)
+        self.assertTrue(result["cancelled"])
+        self.assertFalse(result.get("timedOut"))
+        self.assertNotIn("warning", result)
 
     def test_timeout_from_environment(self):
         os.environ["QGIS_MODE"] = "slow"
