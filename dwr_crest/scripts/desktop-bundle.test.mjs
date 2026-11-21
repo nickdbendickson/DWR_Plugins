@@ -118,4 +118,13 @@ describe("crest-desktop bundle", () => {
       ),
     );
   });
+
+  // 2026-11-21: a screening stopped at CREST_SCREENING_TIMEOUT_S shows the server's TIME LIMIT REACHED text in amber.
+  it("shows the screening time-limit box when the job timed out", () => {
+    const js = readdirSync(join(web, "assets")).filter((f) => f.endsWith(".js"));
+    const text = js.map((f) => readFileSync(join(web, "assets", f), "utf8")).join("\n");
+    assert.ok(text.includes("screening-time-limit"));
+    assert.ok(text.includes("Time limit reached: no screening result yet"));
+    assert.ok(text.includes("timedOut"));
+  });
 });
