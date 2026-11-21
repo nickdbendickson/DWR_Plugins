@@ -33,6 +33,7 @@ classification plugin to be installed until it is called.
 """
 import csv
 import json
+import logging
 import os
 import re
 
@@ -60,6 +61,7 @@ class HandoffError(Exception):
 # v3.2.0: NID parameters (SUBJECT_NID, "NID ID of the dam ...") get an NID ID, never any dam ID
 _NID_WORDS = re.compile(r"(^|[^a-z])nid", re.I)
 NID_PATTERN = re.compile(r"^[A-Z]{2}\d{5}$", re.I)
+LOG = logging.getLogger(__name__)
 
 
 def nid_for(folder, dam_id):
@@ -72,8 +74,9 @@ def nid_for(folder, dam_id):
             v = rec.get("nid_id") if rec is not None else None
             if v not in (None, "") and str(v).strip():
                 return str(v).strip()
-        except Exception:
-            pass
+        except Exception as e:                                     # noqa: BLE001 - logged, then the dam ID
+            LOG.warning("nid_for: the dam.json in %s could not be read (%s: %s); using the dam ID instead",
+                        folder, type(e).__name__, e)
     d = str(dam_id or "").strip()
     return d if NID_PATTERN.match(d) else ""
 

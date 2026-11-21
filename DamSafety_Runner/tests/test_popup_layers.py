@@ -1,4 +1,4 @@
-"""3.40.1: duplicate layers in the Runner window (audit 3-pack, lower priority).
+"""3.40.2: duplicate layers in the Runner window (audit 3-pack, lower priority).
 
 The DEM list showed the same raster file twice when it was loaded twice (two entries, one DEM) and
 could not tell two files with the same layer name apart; "Add results to project" added every
