@@ -38,6 +38,9 @@ G = sg.G
 DRY = 1e-3
 HVEL = 1e-6          # depth floor for velocity desingularisation (matches kernels_fv MF_HVEL)
 CFL_CAP = 0.45       # 2-D explicit Godunov stability ceiling (kernels_fv MF_CFL_CAP)
+SLOPE_EPS = 1e-6     # FREE-edge normal-depth floor deadband (matches kernels_* MF_SLOPE_EPS): a
+#                      surface flat to within this slope has no drainage drive, and sqrt(slope) is
+#                      ill-conditioned as slope -> 0, so below it the transmissive flux stands.
 FREE_N, FREE_S, FREE_E, FREE_W = 1, 2, 4, 8
 
 
@@ -118,7 +121,7 @@ def _free_und(etac, etain, A, W, nc2, dx):
     slope = np.maximum((etain - etac) / dx, 0.0)
     Rh = A / np.maximum(W, 1e-9)
     und = np.sqrt(slope) * Rh ** (2.0 / 3.0) / np.sqrt(np.maximum(nc2, 1e-12))
-    return np.where((A > 0.0) & (slope > 0.0), und, 0.0)
+    return np.where((A > 0.0) & (slope > SLOPE_EPS), und, 0.0)
 
 
 class SubFVHLLCRef:

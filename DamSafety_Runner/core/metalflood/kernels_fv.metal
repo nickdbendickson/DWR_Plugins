@@ -33,6 +33,9 @@ using namespace metal;
 #define MF_CFL_CAP 0.45f         // 2-D explicit Godunov stability ceiling (per the sum of the
                                  // two directional CFLs staying under 1)
 #define MF_HVEL 1.0e-6f          // depth below which a cell carries no velocity: a
+#define MF_SLOPE_EPS 1.0e-6f     // FREE-edge normal-depth floor deadband: a surface flat to
+//                                 within this slope has no drainage drive (sqrt(slope) ill-
+//                                 conditioned as slope -> 0); below it the transmissive flux stands.
                                  // desingularisation floor, far finer than the 1 mm output "dry",
                                  // so a dam-break film's momentum is not thrown away at the front
 
@@ -248,7 +251,9 @@ kernel void k_begin_fv(MF_ARGS_FV) {
 // own velocity already exceeds it, so the transmissive outflow is only ever raised, never cut.
 inline float mf_free_und(float etac, float etain, float hc, float n2c, float dx) {
     float slope = (etain - etac) / dx;
-    if (slope <= 0.0f || hc <= MF_HVEL) {
+    // deadband: a surface flat to within MF_SLOPE_EPS has no drainage drive, and sqrt(slope) is
+    // ill-conditioned as slope -> 0, so below it the transmissive flux stands (keeps engines matched).
+    if (slope <= MF_SLOPE_EPS || hc <= MF_HVEL) {
         return 0.0f;
     }
     return sqrt(slope) * pow(hc, 2.0f / 3.0f) / sqrt(fmax(n2c, 1e-12f));

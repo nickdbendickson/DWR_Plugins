@@ -31,6 +31,9 @@ using namespace metal;
 #define MF_NODATA (-9999.0f)
 #define MF_CFL_CAP 0.45f
 #define MF_HVEL 1.0e-6f          // depth floor for velocity desingularisation
+#define MF_SLOPE_EPS 1.0e-6f     // FREE-edge normal-depth floor deadband: a surface flat to
+//                                 within this slope has no drainage drive (sqrt(slope) ill-
+//                                 conditioned as slope -> 0); below it the transmissive flux stands.
 #define MF_DRY 1.0e-3f
 #define MF_MSUB 64               // max r*r supported (r <= 8); local scratch for the curve loops
 
@@ -268,7 +271,7 @@ kernel void k_eta_subfv(MF_ARGS_SUBFV) {
 inline float mf_subfv_und(float etac, float etain, float A, float W, float nc2c, float dx) {
     if (A <= 0.0f) return 0.0f;
     float slope = (etain - etac) / dx;
-    if (slope <= 0.0f) return 0.0f;
+    if (slope <= MF_SLOPE_EPS) return 0.0f;   // deadband: no drainage drive below this surface slope
     float Rh = A / fmax(W, 1e-9f);
     return sqrt(slope) * pow(Rh, 2.0f / 3.0f) / sqrt(fmax(nc2c, 1e-12f));
 }
