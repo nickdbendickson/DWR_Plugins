@@ -31,13 +31,19 @@ class Tables:
     over a face sees the higher sill), so a flat pair reduces to the plain hflow = eta - max(zl, zr).
     """
 
-    def __init__(self, dx, r, s, csum, asub, zfx, nf2x, zfy, nf2y, zbed, zbank, edges):
+    def __init__(self, dx, r, s, csum, asub, zfx, nf2x, zfy, nf2y, zbed, zbank, edges,
+                 ncell=None):
         self.dx = float(dx)
         self.r = int(r)
         self.s = s                 # (ny, nx, m) sorted sub-elevations
         self.csum = csum           # (ny, nx, m) cumulative sum of s along the last axis
         self.asub = float(asub)    # (dx/r)^2
         self.wsub = float(dx) / r  # dx/r
+        # plan-area-mean Manning n per cell, for a cell-centred friction term (PROVISIONAL
+        # composite; a stage-dependent conveyance composite is a later refinement, roughness-gated
+        # like the bed-carve coeffs). Only the shock-capturing cell-momentum solver reads it; the
+        # face conveyance nf2* above is what the local-inertial solver uses.
+        self.ncell = ncell         # (ny, nx) or None
         self.zfx = zfx             # (ny, nx-1, r) interior x-face sub-bed profiles
         self.nf2x = nf2x           # (ny, nx-1, r) interior x-face Manning n^2
         self.zfy = zfy             # (ny-1, nx, r) interior y-face sub-bed profiles
@@ -69,6 +75,7 @@ def build_from_fine(dem_fine, n_fine, dx, r):
     zbed = s[:, :, 0].copy()
     zbank = s[:, :, -1].copy()
     nblk = nn.reshape(ny, R, nx, R).transpose(0, 2, 1, 3)   # (ny, nx, r_row, r_col)
+    ncell = nblk.reshape(ny, nx, R * R).mean(-1)            # plan-area-mean Manning n per cell
     # x-face between coarse cols j and j+1: the shared vertical edge, r sub-rows tall. Left cell's
     # east sub-column is fine col (j*R + R-1); right cell's west sub-column is fine col ((j+1)*R).
     left_e = dem[:, R - 1::R][:, :-1]             # (ny*R, nx-1) east edge of each left cell
@@ -91,7 +98,7 @@ def build_from_fine(dem_fine, n_fine, dx, r):
         "N": (dem[0, :].reshape(nx, R), nn[0, :].reshape(nx, R) ** 2),
         "S": (dem[-1, :].reshape(nx, R), nn[-1, :].reshape(nx, R) ** 2),
     }
-    return Tables(dx, R, s, csum, asub, zfx, nf2x, zfy, nf2y, zbed, zbank, edges)
+    return Tables(dx, R, s, csum, asub, zfx, nf2x, zfy, nf2y, zbed, zbank, edges, ncell)
 
 
 # --- cell stage curves (vectorised over all cells) ------------------------------------------------
