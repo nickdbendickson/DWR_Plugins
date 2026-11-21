@@ -66,6 +66,7 @@ class EditClass(IntEnum):
     CROSSING_STITCH = 7
     CULVERT = 8
     CREST_WEIR = 9
+    CHANNEL_PRISM = 10
 
 
 CLASS_NAMES = {
@@ -74,6 +75,7 @@ CLASS_NAMES = {
     EditClass.LAKE_RAISE: "LAKE_RAISE", EditClass.PRESERVED: "PRESERVED",
     EditClass.BREAKLINE_ENFORCE: "BREAKLINE", EditClass.CROSSING_STITCH: "CROSSING_STITCH",
     EditClass.CULVERT: "CULVERT", EditClass.CREST_WEIR: "CREST_WEIR",
+    EditClass.CHANNEL_PRISM: "CHANNEL_PRISM",
 }
 
 # The action string for a crossing the conditioner REFUSED to carve because a frozen embankment /
@@ -354,6 +356,41 @@ def log_reconnect(log, records, cell_m=1.0, algo_ref="CROSSING_RECONNECT_V1+PD20
                      spill_after=r.get("floor_elev_m"), algo_ref=algo_ref, evidence_ref=ev,
                      params={"accum_cells": r.get("accum_cells")})
             log.add(e)
+    return refused
+
+
+def log_prism(log, channels, refusals=(), cell_m=1.0,
+              algo_ref="CHANNEL_PRISM_V1+BIEGER2015", evidence="GEOMORPHIC_SIGNAL",
+              evidence_ref=None):
+    """Record `prism.carve_channels` output in the ledger: each carved flowline as an AUTO
+    CHANNEL_PRISM edit (its cells, drainage-area and depth range, dz statistics), and each refusal
+    as a FLAGGED CHANNEL_PRISM with action REFUSE_FREEZE (the same action the crossing refusals use,
+    so it reaches summary()'s Bottom line and blocks export through the existing dam-safety gate).
+    `evidence` defaults to GEOMORPHIC_SIGNAL (a DEM-traced flowline); pass NHD_FLOWLINE with an
+    `evidence_ref` when the flowline came from a real 3DHP / NHD vector. Returns the number of
+    refusals (the aggregate the caller must not drop)."""
+    refused = 0
+    for r in refusals:
+        cells = r.get("frozen_cells", [])
+        e = Edit(EditClass.CHANNEL_PRISM, REFUSE_FREEZE_ACTION, evidence="FREEZE_MASK",
+                 n_cells=int(r.get("n_cells", 0)), algo_ref=algo_ref,
+                 evidence_ref="flowline {} -> {}".format(r.get("head"), r.get("outlet")),
+                 params={"frozen_cells": [list(c) for c in cells],
+                         "da_max_km2": r.get("da_max_km2")})
+        log.flag(e, reason="channel flowline centreline crosses {} frozen (embankment / dam-crest) "
+                           "cell(s); refused by the dam-safety invariant - resolve before use "
+                           "(real culvert / channel? mask wrong?)".format(len(cells)))
+        refused += 1
+    for ch in channels:
+        e = Edit(EditClass.CHANNEL_PRISM, "CARVE", evidence=evidence,
+                 n_cells=int(ch.get("n_cells", 0)), dz_min=ch.get("dz_min_m"),
+                 dz_mean=ch.get("dz_mean_m"), dz_max=ch.get("dz_max_m"), algo_ref=algo_ref,
+                 evidence_ref=evidence_ref or "flowline {} -> {}".format(ch.get("head"),
+                                                                         ch.get("outlet")),
+                 params={"n_reaches": ch.get("n_reaches"), "da_min_km2": ch.get("da_min_km2"),
+                         "da_max_km2": ch.get("da_max_km2"), "width_max_m": ch.get("width_max_m"),
+                         "depth_max_m": ch.get("depth_max_m"), "cell_m": cell_m})
+        log.add(e)
     return refused
 
 
