@@ -494,7 +494,7 @@ class GateTests(unittest.TestCase):
         settings = json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
         self.assertEqual(settings["terrain_source"], 1)
-        self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertEqual(Path(settings["local_dem"]), (pack / "dem").resolve(), "the pack's DEM folder goes in as it is")
         self.assertEqual(settings["larger_clips"], 2)
         self.assertEqual(settings["only_ids"], "ND00199")
         self.assertIn("--SETTINGS=", self.calls_text())
@@ -516,7 +516,8 @@ class GateTests(unittest.TestCase):
     def test_the_dams_dem_goes_into_the_screening_settings(self):
         dem = self._dem("dems/cass_10m_3dep.vrt")
         settings = self._screen_settings({**DAM, "demPath": str(dem)})
-        self.assertEqual(Path(settings["local_dem"]), dem.resolve().parent)
+        self.assertEqual(Path(settings["local_dem"]).resolve(), (self.root / "work" / "screen_dem").resolve())
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["cass_10m_3dep.vrt"])
         self.assertEqual(settings["terrain_source"], 1)
         self.assertEqual(settings["larger_clips"], 2, "larger clips read the DEM, not a fresh 3DEP download")
         self.assertEqual(settings["only_ids"], "ND00199")
@@ -531,12 +532,12 @@ class GateTests(unittest.TestCase):
         dem = self._dem("dems/dam.tif")
         settings = self._screen_settings({**DAM, "demPath": str(dem)})
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
-        self.assertEqual(Path(settings["local_dem"]), dem.resolve().parent)
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["dam.tif"])
 
     def test_crest_dem_counts_too(self):
         dem = self._dem("statewide/ND_1m.vrt")
         os.environ["CREST_DEM"] = str(dem)
-        self.assertEqual(Path(self._screen_settings()["local_dem"]), dem.resolve().parent)
+        self.assertEqual([p.name for p in Path(self._screen_settings()["local_dem"]).iterdir()], ["ND_1m.vrt"])
 
     def test_the_dem_chosen_in_the_app_is_used_when_the_field_is_empty(self):
         from crest import localdem, qgis_run
@@ -549,7 +550,7 @@ class GateTests(unittest.TestCase):
             settings = self._screen_settings()
         finally:
             qgis_run.DESK_SETTINGS_FILE = saved
-        self.assertEqual(Path(settings["local_dem"]), dem.resolve().parent)
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["chosen.tif"])
 
     def test_no_dem_says_the_screening_downloads(self):
         settings = self._screen_settings()

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-21
+
+- **The screening's local DEM folder holds the chosen DEM only.** The 2026-11-20 change passed the DEM's own folder
+  as `local_dem`, and DamSafety_Screening's tool 2 mosaics every raster under that folder (`list_local_tiles`), so
+  model results (hmax, vmax, arrival) or a second DEM sitting next to the DEM were mixed into the terrain; for
+  `<work>/dem.tif` that folder was the whole work folder. `layers.stage_dem_folder()` now fills
+  `<work>/screen_dem` with the chosen DEM alone (a symlink, else a hard link, else a copy on Windows without the
+  symlink right; a VRT with relative tile paths is written out with absolute ones) plus its own sidecars, and
+  `local_dem` points there. The DEM's folder is only read. The offline pack's `<suite>/dem` folder still goes in as
+  it is (by the suite's convention it holds the DEM only). Same staging as DamIT Crest (damit #163). Tests:
+  `tests/test_screen_dem_folder.py` (a decoy raster next to the DEM, relative VRT tiles, the work folder's
+  `dem.tif`, the pack folder, copy fallback), `tests/test_handoff.py`.
+
 ## 2026-11-20
 
 - **Screening uses the dam's own DEM for every clip.** `crest-desktop/crest/qgis_run.py` `_settings_arg()` only wrote

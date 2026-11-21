@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
 from crest import localdem
-from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
+from crest.layers import STAGED_DEM_DIR, download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
 
 # The Runner's option text. qgis_process (QGIS 3.34) rejects option text for these enums ("Incorrect parameter
 # value for METHOD"), so enum_value() looks the text up in `qgis_process help ndbreach:rundam` and sends its index;
@@ -402,21 +402,28 @@ def _settings_arg(root: Path, log, only_ids: str | None = None, dem: str | None 
     """--SETTINGS for the screening (crest_settings.json).
 
     dem: this dam's DEM (dem_path: the Report step's DEM field, CREST_DEM, the DEM chosen in the app, <work>/dem.tif or
-    dem.vrt). Its folder goes in as the local DEM (terrain_source 1, local_dem, larger_clips 2), so the screening's
-    first clip and every larger clip read it. Before 2026-11-20 only the offline pack's DEM or <work>/dem.tif went
+    dem.vrt). It goes in as the local DEM (terrain_source 1, local_dem, larger_clips 2), so the screening's first clip
+    and every larger clip read it. local_dem is <work>/screen_dem holding this DEM only (layers.stage_dem_folder),
+    because the screening mosaics every raster in that folder; the offline pack's own dem folder goes in as it is. Before 2026-11-20 only the offline pack's DEM or <work>/dem.tif went
     there, so a DEM typed, chosen or set in CREST_DEM was ignored and the clips downloaded USGS 3DEP afresh
     (DamIT Crest's same fix: damit #146)."""
     suite = find_suite_folder()
     local = str(root / "dem.tif") if (root / "dem.tif").is_file() else None
-    terrain = dem or suite_dem(suite) or local
+    pack_dem = suite_dem(suite)
+    terrain = dem or pack_dem or local
     if not suite and not terrain and not only_ids:
         log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
         return []
-    path = write_settings(root, suite, terrain, only_ids)
+    # The offline pack's <suite>/dem folder holds the DEM only (the suite's convention), so it goes in as it is.
+    # Any other DEM is staged alone in <work>/screen_dem: the screening mosaics every raster in its local DEM folder,
+    # and a DEM's own folder (or the work folder, for <work>/dem.tif) can hold model results or another DEM.
+    in_pack = bool(pack_dem) and Path(terrain or "").resolve().parent == Path(pack_dem).resolve().parent
+    path = write_settings(root, suite, terrain, only_ids, stage=not in_pack)
     if suite:
         log(f"Screening settings use the ND offline pack: {suite}")
     if terrain:
-        log(f"Screening terrain: {terrain} (its folder is the local DEM; the larger clips read it too, not a "
+        where = "the pack's DEM folder" if in_pack else f"{root / STAGED_DEM_DIR}, which holds this DEM only"
+        log(f"Screening terrain: {terrain} (local DEM folder: {where}; the larger clips read it too, not a "
             "USGS 3DEP download).")
     else:
         log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
