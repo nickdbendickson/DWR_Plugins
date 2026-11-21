@@ -668,7 +668,8 @@ class GateTests(unittest.TestCase):
         self.assertTrue(warning.startswith("TIME LIMIT REACHED"), warning)
         self.assertIn("after 1.5 s", warning)
         self.assertIn("in step 7 (Run breach flood simulations)", warning)
-        self.assertIn("Steps finished and kept: 1, 5.", warning)
+        self.assertIn("Steps finished in this run and kept: 1, 5.", warning)
+        self.assertIn("earlier runs are kept too", warning)
         self.assertIn("CREST_SCREENING_TIMEOUT_S", warning)
         self.assertIn(warning, self.lines)
 
