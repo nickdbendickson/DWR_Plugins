@@ -67,6 +67,8 @@ jobs:
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
         run: python3 DamSafety_Core/tests/test_shared_defaults.py
+      - name: File-digest cache follows the user's cache folder (Core 1.5.3, QGIS-free)
+        run: python3 DamSafety_Core/tests/test_digest_cache_path.py
       - name: Offline pack safety - extraction caps, cache-escaping names, row inflate cap, evaluation cache cap (QGIS-free)
         run: |
           python3 DamSafety_Core/tests/test_offline_pack_safety.py
