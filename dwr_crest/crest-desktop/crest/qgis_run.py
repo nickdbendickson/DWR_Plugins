@@ -635,7 +635,8 @@ def time_limit_warning(chain_log: Path, limit: float | None) -> str:
     seconds = f"{limit:g} s" if limit else "its time limit"
     parts = [f"TIME LIMIT REACHED: the screening chain was stopped after {seconds} (CREST_SCREENING_TIMEOUT_S)"]
     parts.append(f" in {running}." if running else ".")
-    parts.append(f" Steps finished and kept: {', '.join(done)}." if done else " No step had finished.")
+    parts.append(f" Steps finished in this run and kept: {', '.join(done)}." if done else " No step finished in this run.")
+    parts.append(" Outputs of steps finished in earlier runs are kept too.")
     parts.append(" There is no screening class for this dam yet: the flood and the class are not partial results,"
                  " they were not made. The stopped step runs again from the start next time (the steps that"
                  " finished are not redone). Raise CREST_SCREENING_TIMEOUT_S (or 0 for no limit) and run the"
