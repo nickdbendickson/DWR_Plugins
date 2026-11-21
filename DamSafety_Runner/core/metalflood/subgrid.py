@@ -130,6 +130,32 @@ def invert_eta(V, s, csum, asub):
     return (V0 / asub + csum_k) / (k + 1)
 
 
+def all_faces(tables):
+    """Assemble the kernel's all-faces sub-bed and Manning-n^2 profiles from a Tables.
+
+    The Tables store the INTERIOR face profiles (zfx (ny,nx-1,r), zfy (ny-1,nx,r)) and the four
+    domain-edge profiles separately (tables.edges). The Metal/CPU kernel wants them as single
+    all-faces arrays with the FREE-edge sub-bed in the boundary slots:
+      zfx_all, nf2x_all : (ny, nx+1, r)   face column 0 = west edge, nx = east edge
+      zfy_all, nf2y_all : (ny+1, nx, r)   face row 0 = north edge, ny = south edge
+    Returns (zfx_all, nf2x_all, zfy_all, nf2y_all)."""
+    t = tables
+    ny, nx, r = t.ny, t.nx, t.r
+    zfx = np.zeros((ny, nx + 1, r)); nf2x = np.zeros((ny, nx + 1, r))
+    if nx > 1:
+        zfx[:, 1:nx, :] = t.zfx
+        nf2x[:, 1:nx, :] = t.nf2x
+    zfx[:, 0, :], nf2x[:, 0, :] = t.edges["W"]
+    zfx[:, nx, :], nf2x[:, nx, :] = t.edges["E"]
+    zfy = np.zeros((ny + 1, nx, r)); nf2y = np.zeros((ny + 1, nx, r))
+    if ny > 1:
+        zfy[1:ny, :, :] = t.zfy
+        nf2y[1:ny, :, :] = t.nf2y
+    zfy[0, :, :], nf2y[0, :, :] = t.edges["N"]
+    zfy[ny, :, :], nf2y[ny, :, :] = t.edges["S"]
+    return zfx, nf2x, zfy, nf2y
+
+
 def fine_depth(eta, dem_fine, r):
     """Downscale a coarse water-surface eta back to the fine (LiDAR) grid.
 

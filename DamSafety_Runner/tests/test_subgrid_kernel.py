@@ -33,26 +33,6 @@ def _channel_dem(ny_c, nx_c, R, dxf, S0, D, chan_rows):
     return dem
 
 
-def _all_faces(tables):
-    """Assemble the kernel's all-x-faces (ny, nx+1, r) and all-y-faces (ny+1, nx, r) sub-bed and
-    Manning-n^2 profiles from the interior Tables.zfx/zfy and the FREE-edge profiles Tables.edges."""
-    t = tables
-    ny, nx, r = t.ny, t.nx, t.r
-    zfx = np.zeros((ny, nx + 1, r))
-    nf2x = np.zeros((ny, nx + 1, r))
-    zfx[:, 1:nx, :] = t.zfx
-    nf2x[:, 1:nx, :] = t.nf2x
-    zfx[:, 0, :], nf2x[:, 0, :] = t.edges["W"]
-    zfx[:, nx, :], nf2x[:, nx, :] = t.edges["E"]
-    zfy = np.zeros((ny + 1, nx, r))
-    nf2y = np.zeros((ny + 1, nx, r))
-    zfy[1:ny, :, :] = t.zfy
-    nf2y[1:ny, :, :] = t.nf2y
-    zfy[0, :, :], nf2y[0, :, :] = t.edges["N"]
-    zfy[ny, :, :], nf2y[ny, :, :] = t.edges["S"]
-    return zfx, nf2x, zfy, nf2y
-
-
 def _run_backend(back, tables, V0, free_mask, src_cell, Q, dt0, nsteps):
     """Drive a backend (CPU or Metal) on kernels_subfv.metal: returns (eta, V, t_elapsed)."""
     t = tables
@@ -64,7 +44,7 @@ def _run_backend(back, tables, V0, free_mask, src_cell, Q, dt0, nsteps):
     a["V"][:] = V0.reshape(-1).astype(np.float32)
     a["ok"][:] = 1
     a["arr"][:] = -9999.0
-    zfx, nf2x, zfy, nf2y = _all_faces(t)
+    zfx, nf2x, zfy, nf2y = sg.all_faces(t)
     a["zfx"][:] = zfx.reshape(-1).astype(np.float32)
     a["nf2x"][:] = nf2x.reshape(-1).astype(np.float32)
     a["zfy"][:] = zfy.reshape(-1).astype(np.float32)
