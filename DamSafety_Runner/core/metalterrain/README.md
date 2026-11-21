@@ -50,6 +50,12 @@ kernels_fill.metal      the Planchon–Darboux relax kernel (Metal + C++ via the
 cpu_kernels_fill.cpp    the CPU build: the kernel once per cell per sweep, nsteps sweeps
 fill.py                 fill_dem(): seeding, the convergence loop, the backend Spec
 cases.py                synthetic DEMs: a pitted plane, and a NoData-ringed pit
+burn.py                 breakline enforcement on the conditioned DEM:
+                        burn_channel()      low-ground breakline — lower a thalweg/ditch line to an
+                                            enforced downstream fall (only lowers; freeze_mask guards crests)
+                        raise_levee()       high-ground breakline — raise a levee/road crest line to its
+                                            crest elevation or a freeboard (only raises; channel_mask guards channels)
+                        reconnect_crossings()  auto-sweep: carve culvert notches through road/rail fills
 __main__.py             verify / bench / fill CLI
 ```
 
@@ -69,7 +75,13 @@ checked against the CPU build.
 
 ## Status
 
-Depression-fill only — the reference, correct, GPU-and-CPU piece. The rest of the BoannGrid
-conditioner (artifact triage, crossing reconnection, channel burn, culvert/HDS-5 ratings) is
-Python decision logic that builds on this and on existing suite code; see the conditioner
-design notes.
+Depression-fill is the reference, correct, GPU-and-CPU piece. Built on it in Python decision logic
+(each with a delta-log class, the freeze-mask dam-safety invariant, and tests): artifact triage
+(`audit.py`), crossing reconnection and channel burn (`burn.py`), culvert/HDS-5 ratings
+(`culvert.py`), and the below-water channel-prism carve (`prism.py`). The carve is **RESEARCH**:
+`carve_channels` derives the channel network and drainage area from the flow accumulation, traces
+ordered flowlines, and cuts a regional-hydraulic-geometry prism (width/depth = a·DA^b) below the
+LiDAR surface, which sees the water, not the bed. Its default coefficients (Bieger et al. 2015
+national) are **not** calibrated for North Dakota, so it is not wired into a default conditioner
+run; a hazard-affecting carve must pass a verified regional / StreamStats regression. See the
+conditioner design notes.

@@ -814,6 +814,337 @@ def metalflood_matches_lisflood_fp():
         shutil.rmtree(d, True)
 
 
+from nd_breach_runner.core.metalflood import engine_sgc as sge  # noqa: E402
+from nd_breach_runner.core.metalflood import sgc_ref as sgr  # noqa: E402
+
+
+def _sgc_deck(folder, z, w, bed, dx=10.0, sim=600.0, inflow=None, sgcn=0.035, bank=None,
+              physical=True, free=""):
+    """A DEM + SGC rasters (SGCwidth / SGCbank / SGCbed, SGCn) deck, optionally with one constant
+    point inflow and FREE edges."""
+    os.makedirs(folder, exist_ok=True)
+    xll, yll = 500000.0, 5200000.0
+    ny, nx = z.shape
+    bank = z if bank is None else bank
+    _write_asc(os.path.join(folder, "run.dem.asc"), z, xll, yll, dx)
+    _write_asc(os.path.join(folder, "run.sgcwidth.asc"), w, xll, yll, dx)
+    _write_asc(os.path.join(folder, "run.sgcbank.asc"), bank, xll, yll, dx)
+    _write_asc(os.path.join(folder, "run.sgcbed.asc"), bed, xll, yll, dx)
+    lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results",
+             "sim_time {:.1f}".format(sim), "initial_tstep 1.0", "massint {:.1f}".format(sim),
+             "saveint {:.1f}".format(sim + 10), "fpfric 0.06",
+             "SGCwidth run.sgcwidth.asc", "SGCbank run.sgcbank.asc", "SGCbed run.sgcbed.asc",
+             "SGCn {:.4f}".format(sgcn)]
+    if physical:
+        lines.append("physicalinflow")
+    bci = []
+    if inflow is not None:
+        (r, c), q = inflow
+        ytop = yll + ny * dx
+        gx, gy = xll + (c + 0.5) * dx, ytop - (r + 0.5) * dx
+        bci.append("P {:.3f} {:.3f} QVAR breach\n".format(gx, gy))
+        # the ACC Deck multiplies a .bdy value by dx (m2/s -> m3/s per cell), so write q/dx to
+        # inject the actual q m3/s.
+        with open(os.path.join(folder, "run.bdy"), "w") as f:
+            f.write("sgc inflow\nbreach\n2 seconds\n{:.6f} 0\n{:.6f} 1000000000\n".format(
+                q / dx, q / dx))
+        lines.append("bdyfile run.bdy")
+    for e in free:
+        lo, hi = (xll, xll + nx * dx) if e in "NS" else (yll, yll + ny * dx)
+        bci.append("{} {:.3f} {:.3f} FREE\n".format(e, lo, hi))
+    if bci:
+        with open(os.path.join(folder, "run.bci"), "w") as f:
+            f.writelines(bci)
+        lines.append("bcifile run.bci")
+    with open(os.path.join(folder, "run.par"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return os.path.join(folder, "run.par")
+
+
+@test
+def sgc_engine_is_a_runner_engine_choice():
+    """Runner 3.36.0: 'sgc' (or 'gpu-sgc' / 'metal-sgc') selects Boann's sub-grid-channel solver; it
+    runs in-process, is labelled as not LISFLOOD-FP everywhere, is ACC-family (NOT shock-capturing),
+    is distinct from every other engine, and is a FLOOD_ENGINE choice of its own."""
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.damsuite import record
+    for w in ("sgc", "SGC", " gpu-sgc ", "metal-sgc"):
+        assert lf.resolve_exe(w) == lf.GPU_SGC_EXE, w
+    assert os.path.isfile(lf.GPU_SGC_EXE)
+    assert lf.is_gpu_sgc(lf.GPU_SGC_EXE) and lf.is_inprocess(lf.GPU_SGC_EXE)
+    assert lf.is_gpu_any(lf.GPU_SGC_EXE)
+    assert not lf.is_gpu_shock(lf.GPU_SGC_EXE)          # SGC is the local-inertial ACC scheme
+    # distinct file from every other engine; predicates must not cross-match
+    assert not lf.is_gpu(lf.GPU_SGC_EXE) and not lf.is_gpu_fv_any(lf.GPU_SGC_EXE)
+    assert not lf.is_gpu_dg2(lf.GPU_SGC_EXE)
+    assert not lf.is_gpu_sgc(lf.GPU_EXE) and not lf.is_gpu_sgc(lf.GPU_DG2_EXE)
+    assert "NOT LISFLOOD-FP" in lf.engine_label(lf.GPU_SGC_EXE)
+    assert "sub-grid channels" in lf.engine_label(lf.GPU_SGC_EXE)
+    assert "NOT LISFLOOD-FP" in lf.describe_exe(lf.GPU_SGC_EXE)
+    assert lf.engine_name(lf.GPU_SGC_EXE) == "Boann (sub-grid channels)"
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_SGC_EXE}}})
+    assert blk["model"].startswith("Boann, sub-grid channels"), blk
+    assert not blk["built_in"]
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {
+        "path": "C:\\x\\core\\metalflood\\engine_sgc.py"}}})
+    assert blk["model"].startswith("Boann, sub-grid channels"), blk
+    # the plain ACC engine must NOT be read as sub-grid channels
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": lf.GPU_EXE}}})
+    assert "sub-grid" not in blk["model"], blk
+    try:
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[5] == "gpu-sgc"
+        assert algs.FLOOD_ENGINES[4] == "gpu-dg2"       # the others did not move
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        # Runner 3.39.0: find_lisflood delegates the FLOOD_ENGINE dropdown to resolve_exe, so every
+        # engine the dropdown offers must map to a distinct engine exe. gpu-sgc was missing from the
+        # inlined mapping (#446), so picking "Boann, sub-grid channels" ran LISFLOOD-FP. This guards
+        # that drift for every entry, not just sgc.
+        exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
+                   "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE}
+        for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            assert lf.resolve_exe(_w) == exe_for[_w], _w
+        assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
+
+
+@test
+def metalflood_sgc_params_layout_matches_kernels():
+    """The SGC buffer layout and the kernel source agree: 30 data buffers, Params at index 30 (the
+    31-slot Metal cap), and the CPU build's Params size equals Python's."""
+    _need_cpu_build()
+    import ctypes
+    lib = ctypes.CDLL(mfb.build_cpu_library(mfb.SGC_SPEC))
+    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 96
+    names = [n for n, _, _ in mfb.sgc_buffer_layout(3, 4, 1, 1, 2)]
+    assert len(names) == 30, len(names)
+    assert names[:3] == ["z", "n2", "h"] and names[-3:] == ["w", "Dd", "nc2"]
+    with open(mfb.SGC_KERNEL_SOURCE, encoding="utf-8") as f:
+        src = f.read()
+    assert "constant Params& p B({})".format(len(names)) in src   # Params at index 30
+
+
+@test
+def metalflood_sgc_channel_at_rest_is_well_balanced():
+    """A channel filled to a flat water surface below bank, over a flat bed, stays at rest to
+    float32 round-off and keeps its mass (the SGC well-balanced property: flat eta -> zero slope ->
+    zero discharge, in-channel)."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx = 16, 24, 10.0
+        z = np.full((ny, nx), 40.0)
+        w = np.zeros((ny, nx)); w[8, :] = 2.0
+        D = np.zeros((ny, nx)); D[8, :] = 1.0
+        bed = z - D
+        p = _sgc_deck(os.path.join(d, "rest"), z, w, bed, dx=dx, sim=600.0)
+        deck = sge.Deck(p, build_from_dem=False)
+        bk = mfb.CpuBackend(mfb.SGC_SPEC)
+        eng = sge.Engine(deck, bk)
+        h_flat = np.where(w > 0, -0.4, 0.0)            # channel 0.6 m deep, flat surface eta=39.6
+        eng.a["h"][:] = h_flat.ravel()
+        eng.a["st"][mfe.S_HMAX] = np.float32(0.6).view(np.uint32)
+        V0 = eng.volume()
+        t, T = 0.0, 600.0
+        while t < T - 1e-6:
+            out = eng.batch(t, T, sge.BATCH_STEPS, clip=True)
+            if out["steps"] == 0:
+                break
+            t += out["t_local"]
+        h = eng.h2().astype(np.float64)
+        bk.close()
+        drift = np.abs(h - h_flat).max()
+        assert drift < 1e-3, "rest drift {:.2e} m".format(drift)
+        assert abs(eng.volume() - V0) < 1e-6 * max(V0, 1.0)
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_sgc_matches_the_float64_reference():
+    """The float32 SGC CPU engine matches the float64 numpy reference (sgc_ref) to float32 round-off
+    on an inflow case: same channel geometry, same CFL, driven to the same end time."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx = 16, 50, 10.0
+        z = (50.0 - 0.02 * np.arange(nx))[None, :] * np.ones((ny, 1))
+        w = np.zeros((ny, nx)); w[8, :] = 3.0
+        D = np.zeros((ny, nx)); D[8, :] = 1.5
+        bed = z - D
+        q = 20.0        # actual m3/s; overbanks the ~4.7 m3/s channel so both regimes are exercised
+        p = _sgc_deck(os.path.join(d, "ref"), z, w, bed, dx=dx, sim=500.0, inflow=((8, 0), q))
+        deck = sge.Deck(p, build_from_dem=False)
+        bk = mfb.CpuBackend(mfb.SGC_SPEC)
+        eng = sge.Engine(deck, bk)
+        T = 500.0
+        t = 0.0
+        while t < T - 1e-6:
+            out = eng.batch(t, T, sge.BATCH_STEPS, clip=True)
+            if out["steps"] == 0:
+                break
+            t += out["t_local"]
+        hk = eng.h2().astype(np.float64).copy()
+        bk.close()
+        r = sgr.SGCRef(z, w, D, 0.035, 0.06, dx)
+        r.set_h(np.where(w > 0, -D, 0.0))
+        srcarr = np.zeros((ny, nx)); srcarr[8, 0] = q
+        r.run(srcarr, T=T, dt0=1.0, cfl=bl.ALPHA)
+        diff = np.abs(hk - r.h).max()
+        assert diff < 5e-3, "engine vs reference max |dh| = {:.3e} m".format(diff)
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_sgc_conveys_below_bank_then_spills_overbank():
+    """A sub-bankfull inflow runs down the channel and stays below bank (every h < 0); a large
+    inflow exceeds the channel and spills onto the floodplain (some h > 0). Both conserve mass in a
+    closed basin."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx = 16, 50, 10.0
+        z = (50.0 - 0.02 * np.arange(nx))[None, :] * np.ones((ny, 1))
+        w = np.zeros((ny, nx)); w[8, :] = 3.0
+        D = np.zeros((ny, nx)); D[8, :] = 1.5
+        bed = z - D
+        # sub-bankfull: 2 m3/s, short enough not to back-fill the closed basin over bank
+        p = _sgc_deck(os.path.join(d, "lo"), z, w, bed, dx=dx, sim=300.0, inflow=((8, 0), 2.0))
+        s = sge.run_par(p, backend="cpu", build_from_dem=False)
+        hlo = _res(os.path.join(d, "lo"), "max")           # depth ABOVE bank; 0 while in-channel
+        assert hlo[hlo != bl.NODATA].max() < 1e-3, "sub-bankfull flow left the channel"
+        assert abs(s["mass_error_m3"]) < 1e-3 * max(s["injected_m3"], 1.0), s["mass_error_m3"]
+        assert (s["channel_cells"] == int((w > 0).sum()))
+        # overbank: 300 m3/s spills
+        p = _sgc_deck(os.path.join(d, "hi"), z, w, bed, dx=dx, sim=600.0, inflow=((8, 0), 300.0))
+        s = sge.run_par(p, backend="cpu", build_from_dem=False)
+        hhi = _res(os.path.join(d, "hi"), "max")
+        assert hhi[hhi != bl.NODATA].max() > 0.0, "overbank inflow never spilled"
+        assert abs(s["mass_error_m3"]) < 1e-3 * max(s["injected_m3"], 1.0), s["mass_error_m3"]
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_sgc_free_edge_drains_and_matches_reference():
+    """A channel inflow drains off a FREE east edge: the SGC engine matches the float64 reference
+    (which carries the same FREE-edge outflow) to float32, and its mass balances
+    (injected = outflow + stored)."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx = 12, 50, 10.0
+        z = (50.0 - 0.03 * np.arange(nx))[None, :] * np.ones((ny, 1))
+        w = np.zeros((ny, nx)); w[6, :] = 3.0
+        D = np.zeros((ny, nx)); D[6, :] = 1.5
+        bed = z - D
+        q = 6.0           # just over the channel's ~4-5 m3/s capacity so it drains steadily east
+        p = _sgc_deck(os.path.join(d, "fe"), z, w, bed, dx=dx, sim=900.0, inflow=((6, 0), q),
+                      free="E")
+        deck = sge.Deck(p, build_from_dem=False)
+        bk = mfb.CpuBackend(mfb.SGC_SPEC)
+        eng = sge.Engine(deck, bk)
+        T = 900.0
+        t = 0.0
+        while t < T - 1e-6:
+            out = eng.batch(t, T, sge.BATCH_STEPS, clip=True)
+            if out["steps"] == 0:
+                break
+            t += out["t_local"]
+        hk = eng.h2().astype(np.float64).copy()
+        bk.close()
+        s = sge.run_par(p, backend="cpu", build_from_dem=False)   # for its mass balance
+        assert s["outflow_m3"] > 0.3 * s["injected_m3"], "little drained off the FREE edge"
+        assert abs(s["mass_error_m3"]) < 1e-3 * max(s["injected_m3"], 1.0), s["mass_error_m3"]
+        r = sgr.SGCRef(z, w, D, 0.035, 0.06, dx, free_mask=sgr.FREE_E)
+        r.set_h(np.where(w > 0, -D, 0.0))
+        srcarr = np.zeros((ny, nx)); srcarr[6, 0] = q
+        r.run(srcarr, T=T, dt0=1.0, cfl=bl.ALPHA)
+        diff = np.abs(hk - r.h).max()
+        assert diff < 1e-2, "engine vs reference (FREE edge) max |dh| = {:.3e} m".format(diff)
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_sgc_reduces_to_acc_without_channels():
+    """With no channels (no SGC rasters, build_from_dem off) the SGC engine is plain ACC: a pond on
+    a closed flat basin spreads and its depth field matches the ACC engine to float32."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        ny, nx, dx = 20, 20, 10.0
+        z = np.full((ny, nx), 30.0)
+        h0 = np.zeros((ny, nx)); h0[8:12, 8:12] = 0.6
+        # ACC engine
+        aroot = _fv_like_start_deck(os.path.join(d, "acc"), z, h0, dx)
+        sa = mfe.run_par(aroot, backend="cpu")
+        ha = _res(os.path.join(d, "acc"), "max")
+        # SGC engine, no channels
+        sroot = _sgc_deck(os.path.join(d, "sgc"), z, np.zeros((ny, nx)), z, dx=dx, sim=200.0)
+        # add the same start depth
+        _write_asc(os.path.join(d, "sgc", "run.start"), h0, 500000.0, 5200000.0, dx)
+        with open(sroot, "a") as f:
+            f.write("startfile run.start\n")
+        ss = sge.run_par(sroot, backend="cpu", build_from_dem=False)
+        hs = _res(os.path.join(d, "sgc"), "max")
+        both = (ha != bl.NODATA) & (hs != bl.NODATA)
+        assert np.abs(ha[both] - hs[both]).max() < 1e-3, np.abs(ha[both] - hs[both]).max()
+        assert ss["channel_cells"] == 0
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def metalflood_sgc_floodplain_area_spans_the_full_cell_width():
+    """The overbank floodplain discharge uses the FULL cell-width flow area, with the channel's
+    share removed ONCE as q*(1 - w/dx) -- exactly LISFLOOD-FP SGC2 (sgm_fast.cpp SGC2_CalcPoint:
+    A = cell_width*hflow, then q - channel_ratio*q). Guards against re-narrowing the area to
+    (dx - w)*hflow, which applies the width fraction twice and starves the floodplain (the
+    over-prediction near bankfull found in the 2026-11-20 LISFLOOD-FP head-to-head). Fast unit
+    check on the reference face kernel; the float32 engine mirrors it (…matches_the_float64_reference).
+    The reduces-to-ACC test can't catch this -- there w=0, so the width fraction vanishes."""
+    dx, dt = 10.0, 1.0
+    w, D = 4.0, 1.0                          # sub-cell channel, so (1 - w/dx) = 0.6
+    nchan2, nfp2 = 0.035 ** 2, 0.06 ** 2
+    one = np.ones(1)
+    # two channel cells, both above bank (h > 0): the floodplain term is active on the face
+    hl, hr = 0.5 * one, 0.3 * one
+    zl, zr = 0.0 * one, 0.0 * one
+    wl = wr = w * one
+    Dl = Dr = D * one
+    qc, qf = sgr._axis_Q(hl, hr, zl, zr, wl, wr, Dl, Dr, 0.0 * one, 0.0 * one,
+                         nchan2, nfp2, dx, dt)
+    wratio = w / dx
+    hflow = max(hl[0], hr[0]) - max(zl[0], zr[0])            # etamax - max(z)
+    S = ((zr[0] - zl[0]) + (hr[0] - hl[0])) / dx
+    full = sgr._calcQ(0.0, dx * hflow, hflow, S, nfp2, dt) * (1.0 - wratio)        # LF-faithful
+    narrowed = sgr._calcQ(0.0, dx * (1.0 - wratio) * hflow, hflow, S, nfp2, dt) * (1.0 - wratio)
+    assert abs(qf[0] - full) < 1e-12, \
+        "floodplain qf {:.6g} != full-width LF form {:.6g}".format(qf[0], full)
+    # the two forms must be meaningfully different, or the guard would be vacuous
+    assert abs(full - narrowed) > 1e-3, \
+        "full-width and narrowed forms indistinguishable ({:.3e})".format(full - narrowed)
+
+
+def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
+    """A start-depth ACC deck (closed walls) for the reduces-to-ACC comparison."""
+    os.makedirs(folder, exist_ok=True)
+    xll, yll = 500000.0, 5200000.0
+    _write_asc(os.path.join(folder, "run.dem.asc"), z, xll, yll, dx)
+    _write_asc(os.path.join(folder, "run.start"), h0, xll, yll, dx)
+    with open(os.path.join(folder, "run.par"), "w") as f:
+        f.write("\n".join(["DEMfile run.dem.asc", "resroot run", "dirroot results",
+                           "startfile run.start", "sim_time {:.1f}".format(sim),
+                           "initial_tstep 1.0", "massint {:.1f}".format(sim),
+                           "saveint {:.1f}".format(sim + 10), "fpfric 0.06",
+                           "1Dfriction"]) + "\n")   # SGC uses LISFLOOD-FP SGC's 1-D CalculateQ
+    return os.path.join(folder, "run.par")
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
@@ -832,7 +1163,15 @@ if __name__ == "__main__":
                metalflood_dg2_limiter_is_a_deck_keyword,
                fv_engine_is_a_runner_engine_choice,
                fv2_engine_is_a_runner_engine_choice,
-               dg2_engine_is_a_runner_engine_choice):
+               dg2_engine_is_a_runner_engine_choice,
+               sgc_engine_is_a_runner_engine_choice,
+               metalflood_sgc_params_layout_matches_kernels,
+               metalflood_sgc_channel_at_rest_is_well_balanced,
+               metalflood_sgc_matches_the_float64_reference,
+               metalflood_sgc_conveys_below_bank_then_spills_overbank,
+               metalflood_sgc_free_edge_drains_and_matches_reference,
+               metalflood_sgc_reduces_to_acc_without_channels,
+               metalflood_sgc_floodplain_area_spans_the_full_cell_width):
         try:
             fn()
             print("ok    ", fn.__name__)

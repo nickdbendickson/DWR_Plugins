@@ -72,11 +72,12 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
-FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2")
+FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc")
 FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
                       "Boann, shock-capturing (HLLC finite volume on the Apple GPU)",
                       "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 on the Apple GPU)",
-                      "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)"]
+                      "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)",
+                      "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1073,6 +1074,20 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "finite-volume solver (the analogue of LISFLOOD-FP's FV1). Typing 'gpu' or "
                   "'shock' in the LISFLOOD-FP field does the same.")
         self.addParameter(p)
+        # 3.39.0: the solver's Courant number and theta, exposed (were .par / env only). Empty =
+        # each engine's stable default. Both reach LISFLOOD-FP and Boann through the .par; every
+        # Boann solver caps the Courant number at its own stability ceiling, and a run that loses
+        # its mass balance still falls back to the stable settings regardless of what is set here.
+        self._num("CFL", "Courant number for the flood solver (empty = each engine's stable "
+                  "default: ~0.7 ACC and sub-grid channels, 0.45 shock-capturing, 1/3 "
+                  "discontinuous Galerkin). Lower = more robust and slower; the engine caps it "
+                  "at its own stability limit.", optional=True, minimum=0.05, maximum=1.0,
+                  advanced=True)
+        self._num("THETA", "Momentum weighting theta for the local-inertial solver (ACC / "
+                  "sub-grid channels; empty = 1.0, LISFLOOD-FP's default). 0.7 adds the "
+                  "de Almeida et al. 2012 numerical diffusion that steadies a flashy inflow. "
+                  "Ignored by the shock-capturing and Galerkin solvers.", optional=True,
+                  minimum=0.5, maximum=1.0, advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
                    advanced=True)
@@ -1109,28 +1124,23 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         if self.parameterDefinition("FLOOD_ENGINE") is not None and \
                 parameters.get("FLOOD_ENGINE") not in (None, ""):
             _eng = FLOOD_ENGINES[self.parameterAsEnum(parameters, "FLOOD_ENGINE", context)]
-            if _eng == "gpu":
-                return lfmod.GPU_EXE
-            if _eng == "gpu-fv":
-                return lfmod.GPU_FV_EXE
-            if _eng == "gpu-fv2":
-                return lfmod.GPU_FV2_EXE
-            if _eng == "gpu-dg2":
-                return lfmod.GPU_DG2_EXE
+            # Delegate to resolve_exe so every Boann engine the dropdown offers (gpu / gpu-fv /
+            # gpu-fv2 / gpu-dg2 / gpu-sgc) maps from one list. Inlining the branches here is what
+            # left gpu-sgc unreachable from the dropdown when #446 added it (Runner 3.38.0).
+            if _eng != "lisflood":
+                return lfmod.resolve_exe(_eng)
         # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
         # the field, or the provider flag. It is never selected just because the field is empty,
         # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
-        if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
-            return lfmod.BUILTIN_EXE
-        # 3.22.0: Boann (the GPU engine), likewise only by name ("gpu" / "metal")
-        if exe and str(exe).strip().lower() in lfmod.GPU_DG2_WORDS:
-            return lfmod.GPU_DG2_EXE
-        if exe and str(exe).strip().lower() in lfmod.GPU_FV2_WORDS:
-            return lfmod.GPU_FV2_EXE
-        if exe and str(exe).strip().lower() in lfmod.GPU_FV_WORDS:
-            return lfmod.GPU_FV_EXE
-        if exe and str(exe).strip().lower() in lfmod.GPU_WORDS:
-            return lfmod.GPU_EXE
+        # 3.22.0: an engine named by word in the executable field (builtin, or a Boann engine:
+        # gpu / gpu-fv / gpu-fv2 / gpu-dg2 / gpu-sgc). resolve_exe owns the one word->engine list,
+        # so a new engine never has to be added here too. An empty field stays empty (resolve_exe
+        # returns it unchanged), so the built-in numpy approximation is never silently selected
+        # (M5 safety) and a real path falls through to the file check below.
+        if exe:
+            _resolved = lfmod.resolve_exe(exe)
+            if _resolved != str(exe).strip():
+                return _resolved
         if not exe or not os.path.isfile(exe):
             found = nd_data.detect_lisflood()
             if found:
@@ -1258,6 +1268,12 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         st.planning_cell_m = max(30.0, st.cell_size_m)
         st.allow_unpatched = str(_setting(SET_ALLOW_UNPATCHED, False)).lower() in (
             "true", "1", "yes", "on")
+        # 3.39.0: user Courant / theta from the run tool (None = each engine's stable default).
+        # Threaded into the solver settings in workflow (and overridden by the stability fallback).
+        if self.parameterDefinition("CFL") is not None:
+            st.user_cfl = self._opt(parameters, "CFL", context)
+        if self.parameterDefinition("THETA") is not None:
+            st.user_theta = self._opt(parameters, "THETA", context)
         if self.parameterDefinition("PIPE_FRACTION") is not None:
             st.overrides = brmod.BreachOverrides(
                 self._opt(parameters, "BREACH_WIDTH", context),

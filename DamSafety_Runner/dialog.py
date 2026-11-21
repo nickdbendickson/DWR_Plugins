@@ -933,17 +933,26 @@ class NDBreachRunnerDialog(QDialog):
 
     # --------------------------------------------------------------------- DEM --
     @staticmethod
-    def raster_layers():
-        """[(name, id)] of the project's raster layers."""
-        rows = []
+    def raster_layers(repeats=None):
+        """[(label, id)] of the project's raster layers (popup_logic.dem_choices, 3.40.2): the same file
+        loaded twice is listed once, and a name two files share shows the file after it. `repeats`, a
+        list, receives [(name, id, kept name, kept id)] of the layers left out."""
+        layers = []
         try:
             from qgis.core import QgsProject, QgsRasterLayer
             for lyr in QgsProject.instance().mapLayers().values():
                 if isinstance(lyr, QgsRasterLayer):
-                    rows.append((str(lyr.name()), lyr.id()))
+                    try:
+                        src = lyr.source()
+                    except Exception:                            # noqa
+                        src = ""
+                    layers.append((str(lyr.name()), lyr.id(), src))
         except Exception:                                        # noqa
             return []
-        return sorted(rows, key=lambda r: r[0].lower())
+        rows, rep = pl.dem_choices(layers)
+        if repeats is not None:
+            repeats.extend(rep)
+        return rows
 
     def _fill_dem(self):
         was = self._loading
@@ -952,8 +961,16 @@ class NDBreachRunnerDialog(QDialog):
             keep = self._pending_dem or (self.dem_combo.currentData() or "")
             self.dem_combo.clear()
             self.dem_combo.addItem("(choose in the tool)", "")
-            for nm, lid in self.raster_layers():
+            repeats = []
+            for nm, lid in self.raster_layers(repeats):
                 self.dem_combo.addItem(nm, lid)
+            note = "; ".join("'{}' (the same file as '{}')".format(r[0], r[2]) for r in repeats)
+            if note and note != getattr(self, "_dem_repeat_note", ""):
+                self._log("The project has the same raster file loaded more than once; the DEM list shows "
+                          "it once. Left out: {}".format(note))
+            self._dem_repeat_note = note
+            # a choice of a layer left out as a repeat becomes the entry kept for the same file
+            keep = {r[1]: r[3] for r in repeats}.get(keep, keep)
             if keep:
                 i = self.dem_combo.findData(keep)
                 if i < 0:
@@ -1214,6 +1231,15 @@ class NDBreachRunnerDialog(QDialog):
             group = root.findGroup(name) or root.addGroup(name)
         except Exception:                                        # noqa
             group = None
+        # 3.40.2: a result already in the project (an earlier click) is not added a second time
+        try:
+            loaded = [lyr.source() for lyr in project.mapLayers().values()]
+        except Exception:                                        # noqa
+            loaded = []
+        files, have = pl.results_to_add(files, loaded)
+        if have:
+            self._log("{} result layer(s) of {} already in the project, not added again: {}".format(
+                len(have), folder, ", ".join(os.path.basename(p) for _k, p in have)))
         added = 0
         for kind, path in files:
             try:

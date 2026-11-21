@@ -1113,9 +1113,16 @@ def breach_overrides(cfg):
 
 def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     """(lisflood exe, anuga python): command line, then the configuration, then auto-detect."""
-    raw = str(getattr(opts, "lisflood", "") or cfg.get("model", "lisflood_exe", "") or "")
-    if raw.strip().lower() in lfmod.BUILTIN_WORDS + lfmod.GPU_WORDS:
-        exe = lfmod.resolve_exe(raw)          # 3.22.0: "builtin" / "gpu" name an engine
+    raw = str(getattr(opts, "lisflood", "") or cfg.get("model", "lisflood_exe", "") or "").strip()
+    # 3.22.0: a word names a built-in engine instead of a file. Delegate to resolve_exe (the one
+    # word->engine map) so every Boann engine is reachable here - builtin / gpu / gpu-fv / gpu-fv2 /
+    # gpu-dg2 / gpu-sgc. (Inlining the word list is what left gpu-sgc, added in 3.36.0, unreachable
+    # from the CLI, the same bug #450 fixed in the QGIS run tool's find_lisflood.) resolve_exe
+    # returns a real engine .py path for a word and the string unchanged for a path, so a true
+    # executable path falls through to the file resolution below.
+    resolved = lfmod.resolve_exe(raw) if raw else ""
+    if resolved and resolved != raw:
+        exe = resolved
     else:
         exe = (getattr(opts, "lisflood", "") or cfg.get_path("model", "lisflood_exe")
                or nd_data.detect_lisflood())
