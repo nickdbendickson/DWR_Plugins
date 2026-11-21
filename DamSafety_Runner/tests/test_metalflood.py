@@ -904,10 +904,66 @@ def sgc_engine_is_a_runner_engine_choice():
         # inlined mapping (#446), so picking "Boann, sub-grid channels" ran LISFLOOD-FP. This guards
         # that drift for every entry, not just sgc.
         exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
-                   "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE}
+                   "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
+                   "gpu-subfv": lf.GPU_SUBFV_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
             assert lf.resolve_exe(_w) == exe_for[_w], _w
         assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
+
+
+@test
+def subfv_engine_is_a_runner_engine_choice():
+    """Runner 3.42.0: 'subfv' (or 'gpu-subfv' / 'metal-subfv' / 'sub-grid fv') selects Boann's
+    sub-grid finite-volume solver; it runs in-process, is shock-capturing family, is labelled as not
+    LISFLOOD-FP everywhere, is distinct from every other engine, is a FLOOD_ENGINE choice of its own,
+    and the 'subgrid r' coarsening factor reaches the .par for that engine only."""
+    import os
+    import tempfile
+    import numpy as np
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.damsuite import record
+    from nd_breach_runner.core.breach import Hydrograph
+    from nd_breach_runner.core.grid import Grid
+    for w in ("subfv", "SUBFV", " gpu-subfv ", "metal-subfv", "sub-grid fv"):
+        assert lf.resolve_exe(w) == lf.GPU_SUBFV_EXE, w
+    e = lf.GPU_SUBFV_EXE
+    assert os.path.isfile(e)
+    assert lf.is_gpu_subfv(e) and lf.is_inprocess(e) and lf.is_gpu_any(e)
+    assert lf.is_gpu_shock(e)                              # sub-grid FV is an HLLC (shock) scheme
+    # distinct file from every other engine; predicates must not cross-match
+    assert not (lf.is_gpu(e) or lf.is_gpu_fv_any(e) or lf.is_gpu_dg2(e) or lf.is_gpu_sgc(e))
+    for other in (lf.GPU_EXE, lf.GPU_FV_EXE, lf.GPU_FV2_EXE, lf.GPU_DG2_EXE, lf.GPU_SGC_EXE):
+        assert not lf.is_gpu_subfv(other), other
+    assert "NOT LISFLOOD-FP" in lf.engine_label(e) and "sub-grid finite volume" in lf.engine_label(e)
+    assert "NOT LISFLOOD-FP" in lf.describe_exe(e)
+    assert lf.engine_name(e) == "Boann (sub-grid finite volume)"
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {"path": e}}})
+    assert blk["model"].startswith("Boann, sub-grid finite volume") and not blk["built_in"], blk
+    blk = record._engine_block(None, {"software": {"lisflood_exe": {
+        "path": "C:\\x\\core\\metalflood\\engine_subfv.py"}}})
+    assert blk["model"].startswith("Boann, sub-grid finite volume"), blk
+    # the sub-grid-CHANNEL engine must NOT be read as sub-grid finite volume, and vice versa
+    assert "finite volume" not in record._engine_block(
+        None, {"software": {"lisflood_exe": {"path": lf.GPU_SGC_EXE}}})["model"]
+    try:
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[6] == "gpu-subfv"
+        assert algs.FLOOD_ENGINES[5] == "gpu-sgc"          # the others did not move
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+    # the 'subgrid r' coarsening factor reaches the .par for the sub-grid-FV engine only
+    d = tempfile.mkdtemp(prefix="subfvpar_")
+    dem = Grid(np.full((8, 8), 10.0), 0.0, 80.0, 10.0)
+    hy = Hydrograph(np.array([0.0, 60.0]), np.array([1.0, 0.0]), "t")
+    st = lf.LisfloodSettings(e, sim_time_s=60.0, subgrid_r=5)
+    par = lf.write_inputs(d, dem, (5.0, 40.0), hy, st)
+    assert "subgrid 5" in open(par, encoding="utf-8").read()
+    # a non-subfv engine with the same setting does NOT get the keyword
+    st2 = lf.LisfloodSettings(lf.GPU_FV_EXE, sim_time_s=60.0, subgrid_r=5)
+    par2 = lf.write_inputs(tempfile.mkdtemp(prefix="subfvpar2_"), dem, (5.0, 40.0), hy, st2)
+    assert "subgrid" not in open(par2, encoding="utf-8").read()
 
 
 @test
@@ -1165,6 +1221,7 @@ if __name__ == "__main__":
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,
                sgc_engine_is_a_runner_engine_choice,
+               subfv_engine_is_a_runner_engine_choice,
                metalflood_sgc_params_layout_matches_kernels,
                metalflood_sgc_channel_at_rest_is_well_balanced,
                metalflood_sgc_matches_the_float64_reference,

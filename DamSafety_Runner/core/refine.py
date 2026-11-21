@@ -110,6 +110,8 @@ def decide(st, final_model, receptors, structures, breach_xy):
                 _ord = "discontinuous Galerkin 2nd order (RKDG2)"
             elif lfmod.is_gpu_fv2(getattr(st, "lisflood_exe", "")):
                 _ord = "shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume)"
+            elif lfmod.is_gpu_subfv(getattr(st, "lisflood_exe", "")):
+                _ord = "sub-grid finite volume (coarse HLLC with per-cell LiDAR sub-cells)"
             else:
                 _ord = "shock-capturing (HLLC finite volume)"
             info["reason"] = ("the run used Boann, {}, "

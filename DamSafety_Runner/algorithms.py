@@ -72,12 +72,13 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
-FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc")
+FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc", "gpu-subfv")
 FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
                       "Boann, shock-capturing (HLLC finite volume on the Apple GPU)",
                       "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 on the Apple GPU)",
                       "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)",
-                      "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels on the Apple GPU)"]
+                      "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels on the Apple GPU)",
+                      "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells on the Apple GPU)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1088,6 +1089,15 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "de Almeida et al. 2012 numerical diffusion that steadies a flashy inflow. "
                   "Ignored by the shock-capturing and Galerkin solvers.", optional=True,
                   minimum=0.5, maximum=1.0, advanced=True)
+        # 3.42.0: the sub-grid finite-volume coarsening factor r. Only the 'Boann, sub-grid finite
+        # volume' engine reads it: it runs on a grid of r x the DEM cell and keeps each cell's r x r
+        # DEM sub-cells as stage tables, so the run is r*r cheaper but still writes a full-resolution
+        # map. Empty = 4. Ignored by every other engine.
+        self._num("SUBGRID_R", "Sub-grid coarsening factor r (the 'Boann, sub-grid finite volume' "
+                  "engine only): the run uses cells r x the DEM resolution, keeping each cell's "
+                  "r x r DEM sub-cells, so it is r*r cheaper and still writes a full-resolution "
+                  "map. Empty = 4; 1 to 8. Ignored by the other engines.", optional=True,
+                  minimum=1, maximum=8, advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
                    advanced=True)
@@ -1274,6 +1284,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             st.user_cfl = self._opt(parameters, "CFL", context)
         if self.parameterDefinition("THETA") is not None:
             st.user_theta = self._opt(parameters, "THETA", context)
+        if self.parameterDefinition("SUBGRID_R") is not None:
+            _sr = self._opt(parameters, "SUBGRID_R", context)
+            st.user_subgrid_r = int(_sr) if _sr is not None else None
         if self.parameterDefinition("PIPE_FRACTION") is not None:
             st.overrides = brmod.BreachOverrides(
                 self._opt(parameters, "BREACH_WIDTH", context),
