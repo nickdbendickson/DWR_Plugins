@@ -143,10 +143,41 @@ def subgrid_channel_matches_manning_normal_depth():
     assert abs(out - Q) / Q < 0.05, "outflow {:.3f} vs inflow {:.3f}".format(out, Q)
 
 
+@test
+def subgrid_fine_depth_downscales_and_conserves():
+    """The coarse eta downscales to a LiDAR-resolution depth map that (a) integrates back to the exact
+    coarse cell volume, and (b) resolves wet channel / dry banks inside a single coarse cell."""
+    dx, r = 20.0, 6
+    chan_rows, D, bank = 2, 3.0, 2.0
+    # one coarse cell: a channel D below a floodplain, banks above
+    dem = np.full((r, r), 100.0 + bank)
+    lo = (r - chan_rows) // 2
+    dem[lo:lo + chan_rows, :] = 100.0           # channel invert
+    t = sg.build_from_fine(dem, np.full((r, r), 0.03), dx, r)
+
+    # a stage that drowns the channel but not the banks -> channel wet, banks dry
+    eta = np.array([[101.0]])
+    fd = sg.fine_depth(eta, dem, r)
+    assert fd.shape == (r, r)
+    wet = fd > 0
+    assert wet[lo:lo + chan_rows, :].all(), "channel sub-cells should be wet"
+    assert not wet[:lo, :].any() and not wet[lo + chan_rows:, :].any(), "banks should be dry"
+    # exact volume consistency: sum(asub * fine depth) == V(eta)
+    vol_fine = t.asub * fd.sum()
+    vol_cell = sg.cell_volume(eta, t.s, t.asub)[0, 0]
+    assert abs(vol_fine - vol_cell) < 1e-9, "fine map volume {:.6f} vs cell {:.6f}".format(
+        vol_fine, vol_cell)
+    # r = 1 reduces to the plain coarse depth (eta - dem)
+    flat = np.full((3, 3), 10.0)
+    t1 = sg.build_from_fine(flat, np.full((3, 3), 0.03), dx, 1)
+    e1 = np.full((3, 3), 11.25)
+    assert np.allclose(sg.fine_depth(e1, flat, 1), 1.25)
+
+
 def _main():
     fns = [subgrid_tables_reduce_to_flat_cell, subgrid_reduces_to_plain_acc,
            subgrid_lake_at_rest_stays_flat, subgrid_closed_basin_conserves_volume,
-           subgrid_channel_matches_manning_normal_depth]
+           subgrid_channel_matches_manning_normal_depth, subgrid_fine_depth_downscales_and_conserves]
     import traceback
     f = 0
     for fn in fns:

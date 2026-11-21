@@ -130,6 +130,26 @@ def invert_eta(V, s, csum, asub):
     return (V0 / asub + csum_k) / (k + 1)
 
 
+def fine_depth(eta, dem_fine, r):
+    """Downscale a coarse water-surface eta back to the fine (LiDAR) grid.
+
+    eta      : (ny, nx) coarse free-surface elevation (from the sub-grid solver).
+    dem_fine : (ny*r, nx*r) the fine DEM the tables were built from.
+    r        : fine sub-cells per coarse cell per axis.
+
+    Each fine sub-cell takes its coarse cell's eta (the FV1 state is piecewise-constant over the
+    coarse cell's wet plan) and its depth is max(eta - its own fine bed, 0). So a COARSE sub-grid run
+    yields a LiDAR-resolution inundation map: the channel is wet and the banks dry inside one coarse
+    cell, which a flat coarse cell cannot show. By construction it integrates back to the exact coarse
+    cell volume - sum over a cell's sub-cells of asub * depth == V(eta) - so the fine map adds no water.
+    Returns the (ny*r, nx*r) fine depth (0 where dry)."""
+    eta = np.asarray(eta, float)
+    dem = np.asarray(dem_fine, float)
+    r = int(r)
+    up = np.repeat(np.repeat(eta, r, axis=0), r, axis=1)
+    return np.maximum(up - dem, 0.0)
+
+
 # --- face stage curves ----------------------------------------------------------------------------
 
 def face_hydraulics(etaface, zf, nf2, wsub):
