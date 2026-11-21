@@ -713,3 +713,59 @@ def result_files(folder):
         if os.path.isfile(p):
             out.append(("vector", p))
     return out
+
+
+# 3.40.2 (audit 3-pack, lower priority): duplicate layers in the window. The DEM list showed every raster layer of
+# the project, so the same file loaded twice was listed twice (two entries, one DEM) and two different files with
+# the same layer name (two dams' "Depth (Max)") could not be told apart; "Add results to project" added every
+# result again on a second click. These helpers are the pure part of both checks.
+def layer_key(source):
+    """The file a layer reads, as one comparable string: the source up to any '|' option (an OGR
+    '|layername=...'), the real path when it exists, case-folded where the file system ignores case.
+    '' for an empty source."""
+    s = str(source or "").split("|", 1)[0].strip()
+    if not s:
+        return ""
+    if os.path.exists(s):
+        s = os.path.realpath(s)
+    return os.path.normcase(os.path.normpath(s))
+
+
+def dem_choices(layers):
+    """The window's DEM list from the project's raster layers [(name, layer id, source)].
+
+    Returns (rows, repeats): rows [(label, layer id)] sorted by label, where a file loaded more than
+    once is listed once (the first by name, then id) and a name that two different files share gets
+    the file's folder and name after it ("Depth (Max) - DWR-1/Depth (Max).tif"); repeats
+    [(name, layer id, name kept, layer id kept)] for the layers left out as the same file."""
+    seen, kept, repeats = {}, [], []
+    for name, lid, source in sorted(layers, key=lambda r: (str(r[0]).lower(), str(r[1]))):
+        key = layer_key(source) or "id:" + str(lid)
+        if key in seen:
+            repeats.append((str(name), lid) + seen[key])
+            continue
+        seen[key] = (str(name), lid)
+        kept.append((str(name), lid, source))
+    counts = {}
+    for name, _lid, _src in kept:
+        counts[name.lower()] = counts.get(name.lower(), 0) + 1
+    rows = []
+    for name, lid, source in kept:
+        label = name
+        if counts[name.lower()] > 1:
+            path = str(source or "").split("|", 1)[0]
+            where = "/".join(p for p in (os.path.basename(os.path.dirname(path)), os.path.basename(path)) if p)
+            label = "{} - {}".format(name, where or lid)
+        rows.append((label, lid))
+    return sorted(rows, key=lambda r: r[0].lower()), repeats
+
+
+def results_to_add(files, loaded_sources):
+    """(to add, already loaded) of result_files() [(kind, path)], given the sources of the layers
+    already in the project: a result file that is already a layer is not added a second time."""
+    loaded = {layer_key(s) for s in loaded_sources}
+    loaded.discard("")
+    add, have = [], []
+    for kind, path in files:
+        (have if layer_key(path) in loaded else add).append((kind, path))
+    return add, have
