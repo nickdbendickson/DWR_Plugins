@@ -91,7 +91,7 @@ note (`src/lib/crest/desk-file.ts`).
 ## Settings: starting pool, roughness and the shared defaults
 
 Crest's presets are the pool at the top of dam, a piping failure, Froehlich (2008) and Manning's n of 0.035 in the
-channel and 0.06 on the floodplain. They can be changed in two places.
+channel and 0.05 on the floodplain (0.06 before 2026-11-21, following the suite's shared default). They can be changed in two places.
 
 **On one record (Breach step, "Advanced: starting pool and roughness").**
 
