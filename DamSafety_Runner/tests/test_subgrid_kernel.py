@@ -15,7 +15,7 @@ Run standalone:  PYTHONPATH=. python3 DamSafety_Runner/tests/test_subgrid_kernel
 """
 import numpy as np
 
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import test, Skip
 from nd_breach_runner.core.metalflood import subgrid as sg
 from nd_breach_runner.core.metalflood import subfv_hllc_ref as hv
 from nd_breach_runner.core.metalflood import backends as be
@@ -53,11 +53,10 @@ def _all_faces(tables):
     return zfx, nf2x, zfy, nf2y
 
 
-def _run_kernel(tables, V0, free_mask, src_cell, Q, dt0, nsteps):
-    """Drive the CPU build of kernels_subfv.metal: returns (eta, V, t_elapsed)."""
+def _run_backend(back, tables, V0, free_mask, src_cell, Q, dt0, nsteps):
+    """Drive a backend (CPU or Metal) on kernels_subfv.metal: returns (eta, V, t_elapsed)."""
     t = tables
     ny, nx, r, m = t.ny, t.nx, t.r, t.r * t.r
-    back = be.CpuBackend(be.SUBFV_SPEC)
     lay = be.subfv_buffer_layout(ny, nx, 1, 1, 1, r)
     a = back.allocate(lay)
     a["s"][:] = t.s.reshape(-1).astype(np.float32)
@@ -88,25 +87,40 @@ def _run_kernel(tables, V0, free_mask, src_cell, Q, dt0, nsteps):
 be_S_T = 0   # st word 0 holds the elapsed time as a float
 
 
-@test
-def subgrid_hllc_kernel_matches_reference():
-    """The CPU build of kernels_subfv.metal reproduces subfv_hllc_ref to float32 round-off."""
+def _dam_break_case():
+    """A sub-grid-channel dam-break: tables, initial volume V0, the source cell and (Q, dt0, nsteps).
+    Closed walls; a raised water column over the left third drives wet/dry fronts and shocks."""
     R, ny_c, nx_c = 4, 4, 12
     dxf = 2.0
     dxc = dxf * R
     S0, n, D, chan_rows = 0.003, 0.035, 2.0, 2
     dem = _channel_dem(ny_c, nx_c, R, dxf, S0, D, chan_rows)
-    nn = np.full(dem.shape, n)
-    t = sg.build_from_fine(dem, nn, dxc, R)
-
-    # dam-break initial state: a raised water surface over the left third, dry elsewhere, closed walls
+    t = sg.build_from_fine(dem, np.full(dem.shape, n), dxc, R)
     eta0 = t.zbed.copy()
     eta0[:, :nx_c // 3] = t.zbank[:, :nx_c // 3].max() + 1.0
     V0 = sg.cell_volume(eta0, t.s, t.asub)
+    return t, V0, (ny_c // 2, 0), 4.0, 0.02, 400
 
-    Q = 4.0
-    src_cell = (ny_c // 2, 0)
-    dt0, nsteps = 0.02, 400
+
+@test
+def subgrid_subfv_layout_matches_kernel():
+    """subfv_buffer_layout is in the exact order of the kernel's buffer indices B(0)..B(28), and the
+    CPU build's Params struct is the same size as SubFVParams (the load-time check in CpuBackend)."""
+    import ctypes
+    names = [n for n, _, _ in be.subfv_buffer_layout(3, 4, 1, 1, 2, 2)]
+    with open(be.SUBFV_KERNEL_SOURCE, encoding="utf-8") as f:
+        src = f.read()
+    for k, n in enumerate(names):
+        assert "{} B({})".format(n, k) in src, "buffer {} ({}) not at B({}) in the kernel".format(n, k, k)
+    assert "constant Params& p B({})".format(len(names)) in src, "Params not after the buffers"
+    lib = ctypes.CDLL(be.build_cpu_library(be.SUBFV_SPEC))
+    assert lib.mf_params_size() == ctypes.sizeof(be.SubFVParams), "Params size mismatch"
+
+
+@test
+def subgrid_hllc_kernel_matches_reference():
+    """The CPU build of kernels_subfv.metal reproduces subfv_hllc_ref to float32 round-off."""
+    t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
 
     ref = hv.SubFVHLLCRef(t, free_mask=0)
     ref.V = V0.copy()
@@ -115,7 +129,7 @@ def subgrid_hllc_kernel_matches_reference():
         ref.step(dt0, src=src)
     eta_ref, V_ref = ref.eta, ref.V
 
-    eta_k, V_k, t_elapsed = _run_kernel(t, V0, 0, src_cell, Q, dt0, nsteps)
+    eta_k, V_k, t_elapsed = _run_backend(be.CpuBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
 
     # the fixed dt must have bound every step (else the two are not in lock-step)
     assert abs(t_elapsed - nsteps * dt0) < 1e-3, \
@@ -130,17 +144,39 @@ def subgrid_hllc_kernel_matches_reference():
     assert dvol < 1e-4, "kernel vs reference total volume off {:.3e}".format(dvol)
 
 
+@test
+def subgrid_hllc_gpu_matches_cpu():
+    """The Apple-GPU (Metal) build matches the CPU build of the same kernel source, cell for cell.
+    Runs only on a Mac with a Metal GPU (Nick's M2 Pro, the macOS CI job); skipped in the cloud."""
+    ok, why = be.metal_available()
+    if not ok:
+        raise Skip("no Metal GPU here ({})".format(why))
+    t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
+    eta_c, V_c, _ = _run_backend(be.CpuBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
+    eta_g, V_g, _ = _run_backend(be.MetalBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
+    assert np.abs(eta_g - eta_c).max() < 1e-4, "GPU vs CPU eta max {:.3e} m".format(
+        float(np.abs(eta_g - eta_c).max()))
+    dvol = abs(float(V_g.sum()) - float(V_c.sum())) / max(float(V_c.sum()), 1e-9)
+    assert dvol < 1e-5, "GPU vs CPU total volume off {:.3e}".format(dvol)
+
+
 def _main():
     import traceback
-    try:
-        subgrid_hllc_kernel_matches_reference()
-        print("ok    subgrid_hllc_kernel_matches_reference")
-        print("\n1 tests, 0 failed")
-        return 0
-    except Exception:
-        traceback.print_exc()
-        print("\n1 tests, 1 failed")
-        return 1
+    fns = [subgrid_subfv_layout_matches_kernel, subgrid_hllc_kernel_matches_reference,
+           subgrid_hllc_gpu_matches_cpu]
+    f = 0
+    for fn in fns:
+        try:
+            fn()
+            print("ok   ", fn.__name__)
+        except Skip as s:
+            print("skip ", fn.__name__, "({})".format(s))
+        except Exception:
+            f += 1
+            print("FAIL ", fn.__name__)
+            traceback.print_exc()
+    print("\n{} tests, {} failed".format(len(fns), f))
+    return 1 if f else 0
 
 
 if __name__ == "__main__":
