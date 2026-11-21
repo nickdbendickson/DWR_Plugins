@@ -48,10 +48,15 @@ _disk = None
 
 
 def _disk_path():
+    """DAMSUITE_DIGEST_CACHE, else <the user's cache folder>/damsuite/file_digests.json. The cache folder is the
+    same one suitedata.pack_cache_root() uses: %LOCALAPPDATA% on Windows, $XDG_CACHE_HOME elsewhere, else ~/.cache
+    (1.5.3: it was always ~/.cache, even when the cache folder was pointed elsewhere)."""
     p = os.environ.get("DAMSUITE_DIGEST_CACHE")
     if p is not None:
         return p or None
-    return os.path.join(os.path.expanduser("~"), ".cache", "damsuite", "file_digests.json")
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME")
+    base = (base or "").strip() or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "damsuite", "file_digests.json")
 
 
 def _disk_load(path):

@@ -3,13 +3,29 @@ Crest desktop
 
 Python 3.10 or newer. Python 3.14 is fine. You do not need Node.
 
-1. Unzip this file.
-2. Open Terminal and go into the crest-desktop folder:
-     cd ~/Downloads/crest-desktop
-3. Install the window library (once):
-     python3 -m pip install -r requirements.txt
+There is no download zip: get the desk from the DWR_Plugins repository.
+
+1. Open Terminal (PowerShell on Windows) and get a copy of the repository
+   (Git is needed once; later, "git pull" in that folder updates it):
+     git clone https://github.com/nickdbendickson/DWR_Plugins
+     cd DWR_Plugins/dwr_crest/crest-desktop
+2. Make a virtual environment for Crest's libraries (once). Recent Linux
+   systems refuse a plain "pip install" into the system Python.
+     macOS / Linux:  python3 -m venv .venv
+                     source .venv/bin/activate
+     Windows:        py -3.12 -m venv .venv
+                     .\.venv\Scripts\Activate.ps1
+   (Linux: if venv is missing, "sudo apt install python3-venv" first.)
+3. Install the window library (once, inside the virtual environment):
+     pip install -r requirements.txt
 4. Start the desk. Leave this Terminal window open.
-     python3 run.py
+     python run.py
+   Next time: cd to the same folder, activate the virtual environment
+   (step 2's second line), then python run.py.
+
+Linux: older versions printed "[pywebview] GTK cannot be loaded" and a
+traceback ending in "No module named 'gi'". It was harmless (the window
+then opened with Qt); Crest now picks Qt itself so it is not printed.
 
 If the window does not open, the desk opens in your browser instead,
 through a one-time launch link (valid 2 minutes, used once). If no browser
@@ -27,8 +43,17 @@ Report step — Plugins already in QGIS
 These buttons need QGIS and the ND Dam plugins already installed.
 
 Layers
-  ND offline pack: the folder both plugin sets already share
-  (NDSUITE_DATA, or ndsuite/data_folder in ~/.ndsuite/config.json).
+  ND offline pack: the folder both plugin sets already share. Crest takes
+  the first of these that names an existing folder:
+    1. NDSUITE_DATA, set before python run.py;
+    2. the QGIS setting ndsuite/data_folder that DamSafety Setup's
+       "Start here" saves, read (never written) from the default profile
+       of the qgis_process Crest uses (the QGIS_CUSTOM_CONFIG_PATH in the
+       qgis-process-*.sh / .cmd launcher, else QGIS's own profile folder);
+    3. ndsuite/data_folder in ~/.ndsuite/config.json.
+  It is the folder that HOLDS the pack. The pack inside it must be named
+  exactly ND_Dam_Suite_Pack, with the DEM mosaic in a dem/ folder beside
+  it. The Report log says which one was used.
   Download DEM and streams for this area: a 3DEP DEM (about 10 m, EPSG:5070)
   and NHD streams and waterbodies. DWR dams stay in the offline pack.
 
@@ -54,6 +79,19 @@ Write folder and run screening
   Cancel (shown while a job runs) stops qgis_process. To set a time limit,
   set CREST_SCREENING_TIMEOUT_S (seconds) before python run.py. There is no
   default limit: one dam with a local DEM took over 45 minutes.
+  When the limit is reached, an amber "Time limit reached" box names the
+  step that was stopped and the steps whose outputs are kept. There is no
+  partial flood or class: the run made none. The next run keeps the
+  finished steps and starts the stopped step again from the beginning
+  (DamSafety Screening 0.28.0 or newer; older versions could skip it and
+  then fail at step 8).
+
+Check QGIS hand-off
+  Names the qgis_process Crest found and the QGIS profile it reads: the
+  QGIS_CUSTOM_CONFIG_PATH set in the qgis-process-*.sh / .cmd launcher
+  (read from the script, never run), else Crest's own environment, else
+  QGIS's default profile. Then it checks that each tool the buttons call
+  is installed there.
   For a one-dam run with a local DEM, larger_clips 2 in the screening
   plugin's settings is a reasonable choice. Crest does not set it; the
   plugin default is unchanged.

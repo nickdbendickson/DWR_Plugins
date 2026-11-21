@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-11-21 (install test fixes)
+
+- **Settings > Save writes the shared defaults file on Linux.** With the Qt window (Linux), pywebview's link to the
+  app (`window.pywebview.api`) arrives a moment after the page opens. `settings-store.ts` decided once, at page
+  open, that there was no app and kept every Save in the browser only. It now listens for `pywebviewready` and
+  switches to the file when the link arrives, so Save writes `defaults.json` and the panel says where. Test:
+  `src/lib/crest/settings-store.test.ts`.
+- **Time limit reached is said plainly.** When `CREST_SCREENING_TIMEOUT_S` stops the screening, the log gets a
+  "TIME LIMIT REACHED" line naming the limit, the step that was running and the steps whose outputs are kept, the
+  job carries `timedOut` and that `warning`, and the Report step shows it in an amber box. No partial flood or class
+  is shown: the screening engines are stopped from outside and leave none (see the PR for what keeping partial
+  depths would take). Tests: `tests/test_handoff.py`, `scripts/desktop-bundle.test.mjs`.
+- **Check QGIS names the launcher's profile.** It said "default profile (QGIS_CUSTOM_CONFIG_PATH not set)" when the
+  suite's `qgis-process-*.sh` / `.cmd` launcher sets it. It now reads the launcher (read only, never run), then
+  Crest's environment, and says where the value came from. Same fix as damit-desk #5. Test:
+  `tests/test_check_handoff.py`.
+- **Suite data folder from the QGIS "Start here" setting.** Between `NDSUITE_DATA` and `~/.ndsuite/config.json`,
+  Crest now reads `ndsuite/data_folder` from the QGIS profile its qgis_process uses (the suite's own order). The log
+  says which source was used, and the "not set" message lists all three and the exact `ND_Dam_Suite_Pack` name.
+  Test: `tests/test_suite_folder_lookup.py`.
+- **No GTK traceback on Linux.** When GTK's Python bindings are missing and Qt's are installed, Crest sets
+  `PYWEBVIEW_GUI=qt` (unless you set it), so pywebview no longer prints "GTK cannot be loaded … No module named
+  'gi'" before opening with Qt. Test: `tests/test_linux_backend.py`.
+- **Install docs:** README and INSTALL.txt use a virtual environment for pip (Linux refuses a system-wide pip),
+  say to clone the repository (there is no zip), explain how the data folder is found, and correct the Settings >
+  Save line.
+
 ## 2026-11-21
 
 - **The screening's local DEM folder holds the chosen DEM only.** The 2026-11-20 change passed the DEM's own folder

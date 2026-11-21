@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -441,6 +442,54 @@ def run_folder(dam: dict, analysis: dict, work: str | None, log, files=None) -> 
     return {"ok": True, "stopped": False, "folder": str(folder), "work": str(root)}
 
 
+_CONFIG_SH = re.compile(r"^\s*(?:export\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*QGIS_CUSTOM_CONFIG_PATH=(.*)$")
+_CONFIG_CMD = re.compile(r'^\s*set\s+"?QGIS_CUSTOM_CONFIG_PATH=([^"\r\n]*)"?\s*$', re.IGNORECASE)
+
+
+def launcher_config_path(exe: str) -> str | None:
+    """The QGIS_CUSTOM_CONFIG_PATH a qgis_process launcher script sets for QGIS: the suite installer's
+    qgis-process-*.sh (`export QGIS_CUSTOM_CONFIG_PATH=...`) or .cmd (`set "QGIS_CUSTOM_CONFIG_PATH=..."`).
+    None for a real qgis_process (a binary) or a script that does not set it. Read only, never run.
+    Same rule as the DamIT desk (damit-desk #5)."""
+    path = Path(exe)
+    try:
+        if not path.is_file() or path.stat().st_size > 256 * 1024:
+            return None
+        head = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in head[:4096]:
+        return None                                   # a binary: QGIS's own qgis_process
+    found = None
+    for line in head.decode("utf-8", "replace").splitlines():
+        if line.lstrip().startswith(("#", "rem ", "REM ", "::")):
+            continue
+        m = _CONFIG_CMD.match(line)
+        if m:
+            found = m.group(1).strip() or None
+            continue
+        m = _CONFIG_SH.match(line)
+        if m:
+            try:
+                parts = shlex.split(m.group(1), comments=True)
+            except ValueError:
+                parts = m.group(1).split()
+            found = (parts[0] if parts else "") or None
+    return found
+
+
+def qgis_config_path(exe: str) -> tuple[str | None, str]:
+    """(QGIS_CUSTOM_CONFIG_PATH qgis_process runs with, where it comes from). The launcher's own setting wins over
+    Crest's environment, because the launcher sets it last, just before QGIS starts."""
+    from_launcher = launcher_config_path(exe)
+    if from_launcher:
+        return from_launcher, f"set by the launcher {Path(exe).name}"
+    env = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
+    if env:
+        return env, "from Crest's environment"
+    return None, ""
+
+
 # The Processing tools the Report step's buttons call, for "Check QGIS hand-off" (install test 2026-11-18).
 HANDOFF_ALGORITHMS = (
     ("nddam:preflight", "Screening preflight (tool 17), run first by the screening button"),
@@ -459,8 +508,10 @@ def run_check(log, cancel: threading.Event | None = None) -> dict:
             "dam-suite launcher open-nd-crest.sh, or put QGIS's qgis_process on PATH.")
         return {"ok": False, "check": []}
     log(f"qgis_process: {exe}")
-    custom = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
-    log(f"QGIS profile it reads: {'default profile under ' + custom if custom else 'the default profile (QGIS_CUSTOM_CONFIG_PATH not set)'}")
+    custom, where = qgis_config_path(exe)
+    log("QGIS profile it reads: " + (f"default profile under {custom} (QGIS_CUSTOM_CONFIG_PATH, {where})" if custom else
+                                     "QGIS's default profile (neither Crest nor its qgis_process launcher sets "
+                                     "QGIS_CUSTOM_CONFIG_PATH)"))
     if custom:
         link = Path(custom) / "profiles" / "default"
         target = os.path.realpath(link) if link.exists() else None
@@ -557,6 +608,42 @@ def _result_line(row: dict) -> str:
     return text + " A screening result, not an official class. The Crest record is not changed."
 
 
+def chain_progress(chain_log: Path) -> tuple[list[str], str | None]:
+    """(steps that finished, the step that was running) from the chain's live log (its "    step N done" and
+    ">>> Step N - title" lines). The chain writes that log line by line, so a killed run still leaves it."""
+    try:
+        text = chain_log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [], None
+    done: list[str] = []
+    running = None
+    for line in text.splitlines():
+        started = re.match(r">>> Step (\S+) - (.+)$", line.strip())
+        if started:
+            running = f"step {started.group(1)} ({started.group(2).strip()})"
+            continue
+        finished = re.match(r"step (\S+) done$", line.strip())
+        if finished:
+            done.append(finished.group(1))
+            running = None
+    return done, running
+
+
+def time_limit_warning(chain_log: Path, limit: float | None) -> str:
+    """The amber TIME LIMIT REACHED text: the limit, the step it stopped, the steps kept, and what to do next."""
+    done, running = chain_progress(chain_log)
+    seconds = f"{limit:g} s" if limit else "its time limit"
+    parts = [f"TIME LIMIT REACHED: the screening chain was stopped after {seconds} (CREST_SCREENING_TIMEOUT_S)"]
+    parts.append(f" in {running}." if running else ".")
+    parts.append(f" Steps finished in this run and kept: {', '.join(done)}." if done else " No step finished in this run.")
+    parts.append(" Outputs of steps finished in earlier runs are kept too.")
+    parts.append(" There is no screening class for this dam yet: the flood and the class are not partial results,"
+                 " they were not made. The stopped step runs again from the start next time (the steps that"
+                 " finished are not redone). Raise CREST_SCREENING_TIMEOUT_S (or 0 for no limit) and run the"
+                 " screening again, or run the flood model.")
+    return "".join(parts)
+
+
 def run_screening(
     dam: dict,
     analysis: dict,
@@ -638,6 +725,11 @@ def run_screening(
     if names and [n.upper() for n in names] != [dam_id.upper()]:
         log(f"The screening outputs name this dam {', '.join(names)} (Crest: {dam_id}).")
     out = {"folder": str(folder), "work": str(root), "chainIds": names}
+    if code == STOPPED_TIMEOUT:
+        warning = time_limit_warning(chain_log, limit)
+        log(warning)
+        log("The work folder keeps the outputs of the steps that finished; chain_log.txt has the steps that ran.")
+        return {**out, "ok": False, "stopped": True, "cancelled": False, "timedOut": True, "warning": warning}
     if code in (STOPPED_TIMEOUT, STOPPED_CANCEL):
         log("The screening chain was stopped. Its outputs so far stay in the work folder; chain_log.txt has the steps that ran.")
         return {**out, "ok": False, "stopped": True, "cancelled": code == STOPPED_CANCEL, "timedOut": code == STOPPED_TIMEOUT}
