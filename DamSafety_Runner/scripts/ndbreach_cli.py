@@ -233,6 +233,8 @@ MODEL_KEYS = {
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # 3.42.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8); engine default 4
+    "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
