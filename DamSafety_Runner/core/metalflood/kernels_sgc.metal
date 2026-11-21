@@ -16,8 +16,9 @@
 // Storage V(h):  below bank (w>0, h<0): V = w dx (h+D);  above: V = w dx D + dx^2 h;  no channel: dx^2 h.
 // Face Q (m3/s) = Q_chan + Q_fp, each a LISFLOOD-FP SGC2 CalculateQ with its OWN stored old discharge:
 //   chan (both cells w>0):  chan_h = max(eta) - max(bed); A=wf*chan_h; R=A/(wf+2 min(chan_h,Df)); n=nc2
-//   flood (above bank):     hflow = max(eta) - max(z);    A=Wfp*hflow;  R=hflow;  n=n2;  Wfp=dx(1-wf/dx)
-//                           Q_fp scaled by (1 - wf/dx)  (Neal 2012 Fig 1C)
+//   flood (above bank):     hflow = max(eta) - max(z);    A=dx*hflow (FULL width);  R=hflow;  n=n2
+//                           Q_fp scaled by (1 - wf/dx) ONCE  (Neal 2012 Fig 1C; LISFLOOD-FP
+//                           sgm_fast.cpp SGC2_CalcPoint: A=cell_width*hflow then q-channel_ratio*q)
 //
 // Float32 care as in kernels.metal: z is stored relative to the lowest valid cell (engine), and the
 // surface slope is ((z_r - z_l) + (h_r - h_l))/dx, never eta_r - eta_l of two large numbers.
@@ -182,8 +183,10 @@ inline float sgc_face(float zl, float hl, float wl, float Dl,
     float wratio = wface > 0.0f ? fmin(wface / p.dx, 1.0f) : 0.0f;
     float qfn = 0.0f;
     if (hflow > MF_DRY) {
-        float Wfp = p.dx * (1.0f - wratio);
-        float A = Wfp * hflow;
+        // LISFLOOD-FP SGC2 (sgm_fast.cpp SGC2_CalcPoint): the floodplain area spans the FULL
+        // cell width, and the channel's share is removed ONCE afterwards as q*(1-wf/dx). Do NOT
+        // also narrow the area to (dx-wf): that applies the width fraction twice.
+        float A = p.dx * hflow;
         qfn = sgc_calcQ(qf_old, A, hflow, S, nf2, p.g, dt) * (1.0f - wratio);
     }
     *qc = qcn;
@@ -218,7 +221,7 @@ inline void sgc_free(float zc, float hc, float wc, float Dc, float etain,
     float qfm = 0.0f;
     if (hflow > MF_DRY) {
         float wratio = wc > 0.0f ? fmin(wc / p.dx, 1.0f) : 0.0f;
-        float A = p.dx * (1.0f - wratio) * hflow;
+        float A = p.dx * hflow;  // full cell width; channel share removed once below as *(1-wratio)
         if (A > 0.0f) {
             qfm = (fabs(qf_old) + p.g * dt * A * slope)
                   / (1.0f + p.g * dt * nf2c * fabs(qf_old) / (pow(hflow, 4.0f / 3.0f) * A))

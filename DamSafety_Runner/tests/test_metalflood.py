@@ -899,6 +899,15 @@ def sgc_engine_is_a_runner_engine_choice():
         assert algs.FLOOD_ENGINES[5] == "gpu-sgc"
         assert algs.FLOOD_ENGINES[4] == "gpu-dg2"       # the others did not move
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        # Runner 3.39.0: find_lisflood delegates the FLOOD_ENGINE dropdown to resolve_exe, so every
+        # engine the dropdown offers must map to a distinct engine exe. gpu-sgc was missing from the
+        # inlined mapping (#446), so picking "Boann, sub-grid channels" ran LISFLOOD-FP. This guards
+        # that drift for every entry, not just sgc.
+        exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
+                   "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE}
+        for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            assert lf.resolve_exe(_w) == exe_for[_w], _w
+        assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
 
 
 @test
@@ -1089,6 +1098,38 @@ def metalflood_sgc_reduces_to_acc_without_channels():
         shutil.rmtree(d, True)
 
 
+@test
+def metalflood_sgc_floodplain_area_spans_the_full_cell_width():
+    """The overbank floodplain discharge uses the FULL cell-width flow area, with the channel's
+    share removed ONCE as q*(1 - w/dx) -- exactly LISFLOOD-FP SGC2 (sgm_fast.cpp SGC2_CalcPoint:
+    A = cell_width*hflow, then q - channel_ratio*q). Guards against re-narrowing the area to
+    (dx - w)*hflow, which applies the width fraction twice and starves the floodplain (the
+    over-prediction near bankfull found in the 2026-11-20 LISFLOOD-FP head-to-head). Fast unit
+    check on the reference face kernel; the float32 engine mirrors it (…matches_the_float64_reference).
+    The reduces-to-ACC test can't catch this -- there w=0, so the width fraction vanishes."""
+    dx, dt = 10.0, 1.0
+    w, D = 4.0, 1.0                          # sub-cell channel, so (1 - w/dx) = 0.6
+    nchan2, nfp2 = 0.035 ** 2, 0.06 ** 2
+    one = np.ones(1)
+    # two channel cells, both above bank (h > 0): the floodplain term is active on the face
+    hl, hr = 0.5 * one, 0.3 * one
+    zl, zr = 0.0 * one, 0.0 * one
+    wl = wr = w * one
+    Dl = Dr = D * one
+    qc, qf = sgr._axis_Q(hl, hr, zl, zr, wl, wr, Dl, Dr, 0.0 * one, 0.0 * one,
+                         nchan2, nfp2, dx, dt)
+    wratio = w / dx
+    hflow = max(hl[0], hr[0]) - max(zl[0], zr[0])            # etamax - max(z)
+    S = ((zr[0] - zl[0]) + (hr[0] - hl[0])) / dx
+    full = sgr._calcQ(0.0, dx * hflow, hflow, S, nfp2, dt) * (1.0 - wratio)        # LF-faithful
+    narrowed = sgr._calcQ(0.0, dx * (1.0 - wratio) * hflow, hflow, S, nfp2, dt) * (1.0 - wratio)
+    assert abs(qf[0] - full) < 1e-12, \
+        "floodplain qf {:.6g} != full-width LF form {:.6g}".format(qf[0], full)
+    # the two forms must be meaningfully different, or the guard would be vacuous
+    assert abs(full - narrowed) > 1e-3, \
+        "full-width and narrowed forms indistinguishable ({:.3e})".format(full - narrowed)
+
+
 def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
     """A start-depth ACC deck (closed walls) for the reduces-to-ACC comparison."""
     os.makedirs(folder, exist_ok=True)
@@ -1129,7 +1170,8 @@ if __name__ == "__main__":
                metalflood_sgc_matches_the_float64_reference,
                metalflood_sgc_conveys_below_bank_then_spills_overbank,
                metalflood_sgc_free_edge_drains_and_matches_reference,
-               metalflood_sgc_reduces_to_acc_without_channels):
+               metalflood_sgc_reduces_to_acc_without_channels,
+               metalflood_sgc_floodplain_area_spans_the_full_cell_width):
         try:
             fn()
             print("ok    ", fn.__name__)

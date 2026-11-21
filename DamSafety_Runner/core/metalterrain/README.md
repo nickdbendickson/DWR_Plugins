@@ -50,6 +50,12 @@ kernels_fill.metal      the Planchon–Darboux relax kernel (Metal + C++ via the
 cpu_kernels_fill.cpp    the CPU build: the kernel once per cell per sweep, nsteps sweeps
 fill.py                 fill_dem(): seeding, the convergence loop, the backend Spec
 cases.py                synthetic DEMs: a pitted plane, and a NoData-ringed pit
+burn.py                 breakline enforcement on the conditioned DEM:
+                        burn_channel()      low-ground breakline — lower a thalweg/ditch line to an
+                                            enforced downstream fall (only lowers; freeze_mask guards crests)
+                        raise_levee()       high-ground breakline — raise a levee/road crest line to its
+                                            crest elevation or a freeboard (only raises; channel_mask guards channels)
+                        reconnect_crossings()  auto-sweep: carve culvert notches through road/rail fills
 __main__.py             verify / bench / fill CLI
 ```
 

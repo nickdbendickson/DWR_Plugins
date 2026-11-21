@@ -73,8 +73,9 @@ def _axis_Q(hl, hr, zl, zr, wl, wr, Dl, Dr, qc_old, qf_old, nchan2, nfp2, dx, dt
     hflow = np.minimum(etamax - np.maximum(zl, zr), MAXHF)
     wratio = np.minimum(np.where(wface > 0, wface / dx, 0.0), 1.0)
     has_fp = hflow > DRY
-    Wfp = dx * (1.0 - wratio)
-    A_f = np.where(has_fp, Wfp * hflow, 0.0)
+    # LISFLOOD-FP SGC2 (sgm_fast.cpp SGC2_CalcPoint): floodplain area spans the FULL cell width;
+    # the channel's share is removed ONCE as *(1-wratio). Narrowing A to Wfp too = width twice.
+    A_f = np.where(has_fp, dx * hflow, 0.0)
     qf = np.where(has_fp, _calcQ(qf_old, A_f, np.maximum(hflow, 1e-9), S, nfp2, dt) * (1.0 - wratio),
                   0.0)
     return qc, qf
@@ -96,7 +97,7 @@ def _free_mag(zc, hc, wc, Dc, etain, qc_old, qf_old, nchan2, nfp2, dx, dt):
     hflow = np.minimum(np.maximum(hc, 0.0), MAXHF)
     has_fp = hflow > DRY
     wratio = np.minimum(np.where(wc > 0, wc / dx, 0.0), 1.0)
-    A_f = np.where(has_fp, dx * (1.0 - wratio) * hflow, 0.0)
+    A_f = np.where(has_fp, dx * hflow, 0.0)  # full cell width; channel share removed once below
     qf = np.where(has_fp, (np.abs(qf_old) + G * dt * A_f * slope)
                   / (1.0 + G * dt * nfp2 * np.abs(qf_old)
                      / (np.maximum(hflow, 1e-9) ** (4.0 / 3.0) * np.maximum(A_f, 1e-12)))
