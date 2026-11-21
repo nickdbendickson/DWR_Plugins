@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shutil
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from xml.sax.saxutils import escape, unescape
 
 THREEDEP = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage"
 NHD = "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer"
@@ -64,10 +67,77 @@ def pack_note(folder: str) -> str:
     return "No ND_Dam_Suite_Pack or nd_offline_pack was sitting in that folder. The dem/, dwr/, and hifld/ folders are still used."
 
 
-def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids: str | None = None) -> Path:
+#: <work>/screen_dem: the chosen DEM alone (a link to it, or a copy of a VRT with its tiles made absolute).
+STAGED_DEM_DIR = "screen_dem"
+_DEM_SIDECARS = (".aux.xml", ".ovr", ".msk")
+_WORLD_FILES = (".tfw", ".tifw", ".wld", ".prj")
+
+
+def _place(src: Path, dst: Path) -> None:
+    """dst = src: a symlink, else a hard link, else a copy (Windows without the symlink right, or another drive)."""
+    for make in (lambda: os.symlink(src, dst), lambda: os.link(src, dst)):
+        try:
+            make()
+            return
+        except (OSError, NotImplementedError, AttributeError):
+            continue
+    shutil.copy2(src, dst)
+
+
+def _vrt_with_absolute_sources(vrt: Path) -> str | None:
+    """The VRT's text with every relativeToVRT="1" source made absolute (so it still finds its tiles from another
+    folder), or None when it has no relative source (a plain link then works)."""
+    try:
+        text = vrt.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    pattern = re.compile(r'(<SourceFilename[^>]*?)relativeToVRT="1"([^>]*>)([^<]*)(</SourceFilename>)')
+    if not pattern.search(text):
+        return None
+
+    def absolute(m: re.Match) -> str:
+        src = (vrt.resolve().parent / unescape(m.group(3).strip())).resolve()
+        return f'{m.group(1)}relativeToVRT="0"{m.group(2)}{escape(str(src))}{m.group(4)}'
+
+    return pattern.sub(absolute, text)
+
+
+def stage_dem_folder(work: Path, dem_file: str) -> Path:
+    """A folder that holds the chosen DEM and nothing else, for the screening's local DEM FOLDER (local_dem with
+    terrain_source 1): DamSafety_Screening's tool 2 mosaics every raster under that folder, so the DEM's own folder
+    would also bring in the model results (hmax, vmax, arrival) or a second DEM sitting next to it.
+
+    <work>/screen_dem is emptied of what an earlier run put there and gets the DEM (a link; a VRT with relative tile
+    paths is written out with absolute ones) and its own sidecars (.aux.xml, .ovr, .msk, world file). The DEM's own
+    folder is only read. Same staging as DamIT Crest (damit #163)."""
+    dem = Path(dem_file).resolve()
+    folder = Path(work) / STAGED_DEM_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    if dem.parent == folder.resolve():
+        return folder                       # the DEM chosen IS the staged one: keep it as it is
+    for old in folder.iterdir():
+        if old.is_symlink() or old.is_file():
+            old.unlink()
+    rewritten = _vrt_with_absolute_sources(dem) if dem.suffix.lower() == ".vrt" else None
+    if rewritten is not None:
+        (folder / dem.name).write_text(rewritten, encoding="utf-8")
+    else:
+        _place(dem, folder / dem.name)
+    sides = [dem.with_name(dem.name + ext) for ext in _DEM_SIDECARS] + [dem.with_suffix(ext) for ext in _WORLD_FILES]
+    for side in sides:
+        if side.is_file() and not (folder / side.name).exists():
+            _place(side, folder / side.name)
+    return folder
+
+
+def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids: str | None = None,
+                   stage: bool = True) -> Path:
     """crest_settings.json for --SETTINGS. only_ids limits the DWR screening chain to that dam:
     DamSafety_Screening's nddam:runchain has no DAM_ID parameter and reads the filter from the
-    settings' only_ids (the nd_ runchain takes DAM_ID as well)."""
+    settings' only_ids (the nd_ runchain takes DAM_ID as well).
+
+    stage: the local DEM folder is <work>/screen_dem holding dem_file alone (stage_dem_folder). False only for the
+    offline pack's own <suite>/dem folder, which by the suite's convention holds the DEM and nothing else."""
     data: dict = {}
     if only_ids:
         data["only_ids"] = str(only_ids).strip()
@@ -75,7 +145,7 @@ def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids
         data["suite_folder"] = suite
     if dem_file:
         data["terrain_source"] = 1
-        data["local_dem"] = str(Path(dem_file).resolve().parent)
+        data["local_dem"] = str(stage_dem_folder(work, dem_file) if stage else Path(dem_file).resolve().parent)
         # Growing clips must use the same local / pack DEM; the screening default (1) is a fresh 3DEP download.
         data["larger_clips"] = 2
     path = work / "crest_settings.json"
@@ -225,6 +295,6 @@ def use_offline_pack(work: Path, log) -> dict:
         log(f"Pack DEM: {dem}")
     else:
         log("No DEM mosaic in the pack's dem folder. lidar_1m tiles are not used as the one DEM.")
-    settings = write_settings(work, folder, dem)
+    settings = write_settings(work, folder, dem, stage=False)
     log(f"Wrote {settings} so a headless chain can see suite_folder.")
     return {"ok": True, "stopped": False, "dem": dem or "", "suite": folder}

@@ -18,7 +18,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
-from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
+from crest import localdem
+from crest.layers import STAGED_DEM_DIR, download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
 
 # The Runner's option text. qgis_process (QGIS 3.34) rejects option text for these enums ("Incorrect parameter
 # value for METHOD"), so enum_value() looks the text up in `qgis_process help ndbreach:rundam` and sends its index;
@@ -141,8 +142,25 @@ def _dam_line_layer(folder: Path) -> Path | None:
     return path if path.is_file() else None
 
 
+#: The app's own settings file (set by __main__.main): the local DEM chosen with "Choose DEM" is read from it, so the
+#: screening and the flood model get the same terrain the app draws with. Same name and order as DamIT Crest
+#: (damit #146) and DamIT Desk.
+DESK_SETTINGS_FILE: Path | None = None
+
+
+def desk_dem() -> str | None:
+    """The local DEM chosen in the app ("Choose DEM"), when that file still exists."""
+    try:
+        chosen = localdem.read_dem_path(DESK_SETTINGS_FILE) if DESK_SETTINGS_FILE else None
+    except (OSError, ValueError):
+        return None
+    return chosen if chosen and Path(chosen).is_file() else None
+
+
 def dem_path(work: Path, dam: dict, source: str = "pack") -> str | None:
-    for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), work / "dem.tif", work / "dem.vrt"):
+    """The DEM the plugins get: the Report step's DEM field, else CREST_DEM, else the DEM chosen in the app, else
+    <work>/dem.tif or dem.vrt (Get layers), else the ND offline pack's DEM (source "pack")."""
+    for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), desk_dem(), work / "dem.tif", work / "dem.vrt"):
         if not raw:
             continue
         path = Path(str(raw)).expanduser()
@@ -380,15 +398,35 @@ def _prepare(dam: dict, analysis: dict, work: str | None, log, files=None, appen
     return root, folder
 
 
-def _settings_arg(root: Path, log, only_ids: str | None = None) -> list[str]:
+def _settings_arg(root: Path, log, only_ids: str | None = None, dem: str | None = None) -> list[str]:
+    """--SETTINGS for the screening (crest_settings.json).
+
+    dem: this dam's DEM (dem_path: the Report step's DEM field, CREST_DEM, the DEM chosen in the app, <work>/dem.tif or
+    dem.vrt). It goes in as the local DEM (terrain_source 1, local_dem, larger_clips 2), so the screening's first clip
+    and every larger clip read it. local_dem is <work>/screen_dem holding this DEM only (layers.stage_dem_folder),
+    because the screening mosaics every raster in that folder; the offline pack's own dem folder goes in as it is. Before 2026-11-20 only the offline pack's DEM or <work>/dem.tif went
+    there, so a DEM typed, chosen or set in CREST_DEM was ignored and the clips downloaded USGS 3DEP afresh
+    (DamIT Crest's same fix: damit #146)."""
     suite = find_suite_folder()
-    dem = suite_dem(suite)
-    if not suite and not (root / "dem.tif").is_file() and not only_ids:
+    local = str(root / "dem.tif") if (root / "dem.tif").is_file() else None
+    pack_dem = suite_dem(suite)
+    terrain = dem or pack_dem or local
+    if not suite and not terrain and not only_ids:
+        log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
         return []
-    path = write_settings(root, suite, dem or (str(root / "dem.tif") if (root / "dem.tif").is_file() else None),
-                          only_ids)
+    # The offline pack's <suite>/dem folder holds the DEM only (the suite's convention), so it goes in as it is.
+    # Any other DEM is staged alone in <work>/screen_dem: the screening mosaics every raster in its local DEM folder,
+    # and a DEM's own folder (or the work folder, for <work>/dem.tif) can hold model results or another DEM.
+    in_pack = bool(pack_dem) and Path(terrain or "").resolve().parent == Path(pack_dem).resolve().parent
+    path = write_settings(root, suite, terrain, only_ids, stage=not in_pack)
     if suite:
         log(f"Screening settings use the ND offline pack: {suite}")
+    if terrain:
+        where = "the pack's DEM folder" if in_pack else f"{root / STAGED_DEM_DIR}, which holds this DEM only"
+        log(f"Screening terrain: {terrain} (local DEM folder: {where}; the larger clips read it too, not a "
+            "USGS 3DEP download).")
+    else:
+        log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
     return [f"--SETTINGS={path}"]
 
 
@@ -549,7 +587,7 @@ def run_screening(
     # ND00199): both go in only_ids, so a Screening that filters later steps by dam_id alone keeps it.
     known = [n for n in chain_names(root, dam_id) if n.upper() != dam_id.upper()] if has_id else []
     only = ",".join([dam_id, *known]) if has_id else None
-    settings = _settings_arg(root, log, only)
+    settings = _settings_arg(root, log, only, dem_path(root, dam or {}, "pack"))
     limit = screening_timeout(timeout)
     log(f"Tool 17: {exe} run nddam:preflight")
     code, text = _run(

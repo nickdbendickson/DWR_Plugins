@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
-from crest import defaults, localdem
+from crest import defaults, localdem, qgis_run
 from crest.qgis_run import WorkFolderError, resolve_work, run_check, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
@@ -759,6 +759,7 @@ def main() -> None:
         store.mkdir(parents=True, exist_ok=True)
         global SETTINGS_FILE
         SETTINGS_FILE = store / "crest-settings.json"
+        qgis_run.DESK_SETTINGS_FILE = SETTINGS_FILE  # the DEM chosen in the app goes to the screening too
         api = Api(settings_file=SETTINGS_FILE)
         api._window = webview.create_window(TITLE, open_url, js_api=api, width=1280, height=860, min_size=(760, 560))
         # Re-arm the nav guard after every in-page load (the loaded event re-fires on each navigation).
