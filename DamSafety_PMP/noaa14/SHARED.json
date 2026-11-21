@@ -21,12 +21,12 @@
   {
    "file": "gisgrid.py",
    "damit_path": "damit_pmp/gisgrid.py",
-   "sha256": "7c5c7818ea5ec15281eb550a48e048d9d328fa9a4109b3d0666d65ec1f2c44a7"
+   "sha256": "58e86dd0ffcf08548e1210a048b3a0d5985c313c45560ebf85c0a469dbde02c8"
   },
   {
    "file": "gridstats.py",
    "damit_path": "damit_pmp/gridstats.py",
-   "sha256": "14d906c25d48382b8699d576264ef118fd54096c0fa47bb835d6016716db8b9a"
+   "sha256": "2ec3279070e524856e730d215719bc2c5d331bbb25e6d9b7506d56e2f4844b99"
   }
  ]
 }
