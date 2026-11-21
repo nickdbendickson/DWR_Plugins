@@ -19,6 +19,7 @@ from nd_breach_runner.tests.registry import test, Skip
 from nd_breach_runner.core.metalflood import subgrid as sg
 from nd_breach_runner.core.metalflood import subfv_hllc_ref as hv
 from nd_breach_runner.core.metalflood import backends as be
+from nd_breach_runner.core.metalflood import subfv_backend as sb
 
 
 def _channel_dem(ny_c, nx_c, R, dxf, S0, D, chan_rows):
@@ -37,7 +38,7 @@ def _run_backend(back, tables, V0, free_mask, src_cell, Q, dt0, nsteps):
     """Drive a backend (CPU or Metal) on kernels_subfv.metal: returns (eta, V, t_elapsed)."""
     t = tables
     ny, nx, r, m = t.ny, t.nx, t.r, t.r * t.r
-    lay = be.subfv_buffer_layout(ny, nx, 1, 1, 1, r)
+    lay = sb.subfv_buffer_layout(ny, nx, 1, 1, 1, r)
     a = back.allocate(lay)
     a["s"][:] = t.s.reshape(-1).astype(np.float32)
     a["nc2"][:] = (t.ncell ** 2).reshape(-1).astype(np.float32)
@@ -55,7 +56,7 @@ def _run_backend(back, tables, V0, free_mask, src_cell, Q, dt0, nsteps):
     a["ser_off"][:] = np.array([0, 1], np.uint32)
     a["ser_t"][:] = 0.0
     a["ser_q"][:] = Q
-    p = be.SubFVParams(nx=nx, ny=ny, r0=0, c0=0, wr=ny, wc=nx, free_mask=free_mask, n_src=1,
+    p = sb.SubFVParams(nx=nx, ny=ny, r0=0, c0=0, wr=ny, wc=nx, free_mask=free_mask, n_src=1,
                        n_series=1, r=r, m=m, clip_end=0, dx=t.dx, dt0=dt0, alpha=hv.CFL_CAP,
                        g=sg.G, dry=1e-3, arr_depth=0.05, t0=0.0, t_end=1.0e9, wsub=t.wsub, pad=0.0)
     back.run_batch(p, nsteps)
@@ -87,14 +88,14 @@ def subgrid_subfv_layout_matches_kernel():
     """subfv_buffer_layout is in the exact order of the kernel's buffer indices B(0)..B(28), and the
     CPU build's Params struct is the same size as SubFVParams (the load-time check in CpuBackend)."""
     import ctypes
-    names = [n for n, _, _ in be.subfv_buffer_layout(3, 4, 1, 1, 2, 2)]
-    with open(be.SUBFV_KERNEL_SOURCE, encoding="utf-8") as f:
+    names = [n for n, _, _ in sb.subfv_buffer_layout(3, 4, 1, 1, 2, 2)]
+    with open(sb.SUBFV_KERNEL_SOURCE, encoding="utf-8") as f:
         src = f.read()
     for k, n in enumerate(names):
         assert "{} B({})".format(n, k) in src, "buffer {} ({}) not at B({}) in the kernel".format(n, k, k)
     assert "constant Params& p B({})".format(len(names)) in src, "Params not after the buffers"
-    lib = ctypes.CDLL(be.build_cpu_library(be.SUBFV_SPEC))
-    assert lib.mf_params_size() == ctypes.sizeof(be.SubFVParams), "Params size mismatch"
+    lib = ctypes.CDLL(be.build_cpu_library(sb.SUBFV_SPEC))
+    assert lib.mf_params_size() == ctypes.sizeof(sb.SubFVParams), "Params size mismatch"
 
 
 @test
@@ -109,7 +110,7 @@ def subgrid_hllc_kernel_matches_reference():
         ref.step(dt0, src=src)
     eta_ref, V_ref = ref.eta, ref.V
 
-    eta_k, V_k, t_elapsed = _run_backend(be.CpuBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
+    eta_k, V_k, t_elapsed = _run_backend(be.CpuBackend(sb.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
 
     # the fixed dt must have bound every step (else the two are not in lock-step)
     assert abs(t_elapsed - nsteps * dt0) < 1e-3, \
@@ -132,8 +133,8 @@ def subgrid_hllc_gpu_matches_cpu():
     if not ok:
         raise Skip("no Metal GPU here ({})".format(why))
     t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
-    eta_c, V_c, _ = _run_backend(be.CpuBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
-    eta_g, V_g, _ = _run_backend(be.MetalBackend(be.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
+    eta_c, V_c, _ = _run_backend(be.CpuBackend(sb.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
+    eta_g, V_g, _ = _run_backend(be.MetalBackend(sb.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
     assert np.abs(eta_g - eta_c).max() < 1e-4, "GPU vs CPU eta max {:.3e} m".format(
         float(np.abs(eta_g - eta_c).max()))
     dvol = abs(float(V_g.sum()) - float(V_c.sum())) / max(float(V_c.sum()), 1e-9)

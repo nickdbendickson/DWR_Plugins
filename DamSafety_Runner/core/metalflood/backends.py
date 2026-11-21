@@ -31,8 +31,6 @@ DG2_KERNEL_SOURCE = os.path.join(HERE, "kernels_dg2.metal")
 DG2_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_dg2.cpp")
 SGC_KERNEL_SOURCE = os.path.join(HERE, "kernels_sgc.metal")
 SGC_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_sgc.cpp")
-SUBFV_KERNEL_SOURCE = os.path.join(HERE, "kernels_subfv.metal")
-SUBFV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_subfv.cpp")
 
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
@@ -43,7 +41,6 @@ DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_f
                "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2")
 SGC_KERNELS = ("k_begin_sgc", "k_faces_sgc", "k_scale_sgc", "k_limit_sgc", "k_cont_sgc",
                "k_speed_sgc", "k_end_sgc")
-SUBFV_KERNELS = ("k_begin_subfv", "k_eta_subfv", "k_faces_subfv", "k_cont_subfv", "k_end_subfv")
 
 
 class BackendError(RuntimeError):
@@ -57,15 +54,6 @@ class Params(ctypes.Structure):
         "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
             "theta", "pad4")]
-
-
-class SubFVParams(ctypes.Structure):
-    """struct Params of kernels_subfv.metal, field for field (adds the refinement factor r, the cell
-    curve stride m = r*r, and the sub-cell width wsub = dx/r; drops the ACC-only fields)."""
-    _fields_ = [(n, ctypes.c_uint32) for n in (
-        "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
-        "r", "m", "clip_end")] + [(n, ctypes.c_float) for n in (
-            "dx", "dt0", "alpha", "g", "dry", "arr_depth", "t0", "t_end", "wsub", "pad")]
 
 
 def buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -141,28 +129,6 @@ def sgc_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("qxco", f, xf), ("qxfo", f, xf), ("qyco", f, yf), ("qyfo", f, yf),
             ("vxf", f, xf), ("vyf", f, yf), ("w", f, cells), ("Dd", f, cells), ("nc2", f, cells)]
-
-
-def subfv_buffer_layout(ny, nx, n_src, n_series, n_values, r):
-    """[(name, dtype, count)] in the order of kernels_subfv.metal's buffer indices 0..28. Each cell
-    keeps its r*r sorted sub-elevations (s, stride m = r*r); the conserved state is volume V and the
-    two momenta Px/Py (eta is inverted from V into its own buffer each step). The HLLC face fluxes are
-    whole-face mass/normal/tangential (fxA/fxN/fxT, fyA/fyN/fyT). The sub-bed face profiles zfx/zfy
-    (r sub-cells per face) carry the FREE-edge sub-bed in their boundary slots; nf2x/nf2y are the
-    per-face sub-grid Manning n^2 (reserved). 29 buffers + Params at 29 = 30 slots (<= Metal's 31)."""
-    cells = ny * nx
-    m = r * r
-    xf, yf = ny * (nx + 1), (ny + 1) * nx
-    xfp, yfp = ny * (nx + 1) * r, (ny + 1) * nx * r          # face sub-bed profiles (r per face)
-    f, u = np.float32, np.uint32
-    return [("s", f, cells * m), ("nc2", f, cells), ("V", f, cells), ("Px", f, cells),
-            ("Py", f, cells), ("eta", f, cells), ("src", f, cells), ("hmax", f, cells),
-            ("tmax", f, cells), ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
-            ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
-            ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
-            ("st", u, S_WORDS), ("fxA", f, xf), ("fxN", f, xf), ("fxT", f, xf),
-            ("fyA", f, yf), ("fyN", f, yf), ("fyT", f, yf),
-            ("zfx", f, xfp), ("nf2x", f, xfp), ("zfy", f, yfp), ("nf2y", f, yfp)]
 
 
 class Spec:
@@ -244,19 +210,6 @@ def _sgc_plan(p):
 
 
 SGC_SPEC = Spec("sgc", SGC_KERNEL_SOURCE, SHIM, SGC_CPU_SOURCE, SGC_KERNELS, Params, _sgc_plan)
-
-
-def _subfv_plan(p):
-    one = (1, 1, 1)
-    faces = (p.wc + 1, p.wr + 1, 1)
-    cells = (p.wc, p.wr, 1)
-    # eta from V (every cell), HLLC face fluxes, then the FV update + friction + close.
-    return [("k_begin_subfv", one), ("k_eta_subfv", cells), ("k_faces_subfv", faces),
-            ("k_cont_subfv", cells), ("k_end_subfv", one)]
-
-
-SUBFV_SPEC = Spec("subfv", SUBFV_KERNEL_SOURCE, SHIM, SUBFV_CPU_SOURCE, SUBFV_KERNELS,
-                  SubFVParams, _subfv_plan)
 
 
 def _source_hash(spec):
