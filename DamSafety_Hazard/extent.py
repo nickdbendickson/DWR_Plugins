@@ -135,8 +135,16 @@ class ExtentClip(object):
                 if src_crs is not None and src_crs.isValid() and self.crs.isValid():
                     t = QgsCoordinateTransform(src_crs, self.crs, self.ctx)
                     xf = None if t.isShortCircuited() else t
-            except Exception:
+            except Exception as e:
                 xf = None
+                # 2026-11-20 audit: a transform that cannot be built was silent; its features are then
+                # tested untransformed, like an invalid CRS (XT.2) - said once per CRS
+                if key not in self._bad_crs:
+                    self._bad_crs.add(key)
+                    log_message("Extent clip: no transform from {} to the raster CRS {} ({}: {}) - its "
+                                "features are tested untransformed (may be clipped wrongly)".format(
+                                    key or "(unknown)", self.crs.authid() or "(custom)",
+                                    type(e).__name__, e), MSG_WARNING)
             self._xf[key] = xf
         return self._xf[key]
 
