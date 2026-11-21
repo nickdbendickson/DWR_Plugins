@@ -6,6 +6,11 @@ Two operations on a DEM, both pure numpy on top of the fill, flow and audit piec
                                        monotonically downstream (an enforced-fall invert burn);
                                        only ever lowers, never raises.
 
+  raise_levee(dem, path, crest_elev)   raise the ground along an ordered levee / road crest line to
+                                       the crest elevation (or a freeboard above ground), filling a
+                                       barrier the DEM under-represents - the uphill twin of
+                                       burn_channel; only ever raises, never lowers.
+
   reconnect_crossings(dem, ...)        find filled depressions that a real channel drains into -
                                        a channel blocked by a road/rail fill with no culvert - and
                                        carve a notch through the barrier so the channel reconnects,
@@ -46,6 +51,46 @@ def burn_channel(dem, path, depth=0.0, freeze_mask=None):
                 "refusing to lower it - this is the dam-safety invariant".format(r, c))
         run = min(run, float(out[r, c]))
         out[r, c] = run - depth
+    return out
+
+
+def raise_levee(dem, path, crest_elev=None, height=None, channel_mask=None):
+    """Raise `dem` along `path` (an ordered list of (row, col) following a levee / road / embankment
+    crest) so the ground sits at least at the crest, filling a gap the DEM under-represents. The
+    uphill twin of burn_channel: returns a new array; only the path cells change and they only ever
+    RISE, never drop. Use it when a known barrier (surveyed levee, road embankment) is thinner than a
+    cell or missed by LiDAR, so the bare DEM lets the model overtop a crest that really holds.
+
+    Give EXACTLY ONE target:
+      crest_elev : absolute crest elevation in the DEM's vertical datum. Every path cell is raised to
+                   at least this, so no notch on the line sits below it - use when the design /
+                   surveyed crest elevation is known. (A NODATA path cell is set straight to it.)
+      height     : metres of freeboard above each cell's OWN ground - each path cell is raised to its
+                   current ground + height - for a road / levee of roughly constant height above the
+                   surrounding terrain. A NODATA path cell has no ground to add to and is left alone.
+
+    If `channel_mask` is given (a bool array, True = a known channel / thalweg that must stay open), a
+    path cell that is a channel cell raises RuntimeError LOUDLY: damming a live channel into a phantom
+    reservoir is the mirror of burn_channel breaching a dam crest - an error to surface, never a cell
+    to silently raise. (This is the uphill analogue of burn_channel's freeze_mask guard.)"""
+    if (crest_elev is None) == (height is None):
+        raise ValueError("raise_levee: give exactly one of crest_elev or height")
+    out = np.asarray(dem, dtype=np.float64).copy()
+    for r, c in path:
+        if channel_mask is not None and channel_mask[r, c]:
+            raise RuntimeError(
+                "raise_levee blocked: cell ({}, {}) is a channel / thalweg (channel mask); refusing "
+                "to raise it - raising ground across a live channel would dam it into a phantom "
+                "reservoir".format(r, c))
+        cur = float(out[r, c])
+        if crest_elev is not None:
+            target = float(crest_elev)
+            if cur == NODATA or target > cur:      # fill a NODATA gap, else raise only
+                out[r, c] = target
+        else:
+            if cur == NODATA:                      # no ground to add freeboard to
+                continue
+            out[r, c] = cur + float(height)
     return out
 
 
