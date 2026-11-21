@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-11-21
+
+- **The screening's local DEM folder holds the chosen DEM only.** The 2026-11-20 change passed the DEM's own folder
+  as `local_dem`, and DamSafety_Screening's tool 2 mosaics every raster under that folder (`list_local_tiles`), so
+  model results (hmax, vmax, arrival) or a second DEM sitting next to the DEM were mixed into the terrain; for
+  `<work>/dem.tif` that folder was the whole work folder. `layers.stage_dem_folder()` now fills
+  `<work>/screen_dem` with the chosen DEM alone (a symlink, else a hard link, else a copy on Windows without the
+  symlink right; a VRT with relative tile paths is written out with absolute ones) plus its own sidecars, and
+  `local_dem` points there. The DEM's folder is only read. The offline pack's `<suite>/dem` folder still goes in as
+  it is (by the suite's convention it holds the DEM only). Same staging as DamIT Crest (damit #163). Tests:
+  `tests/test_screen_dem_folder.py` (a decoy raster next to the DEM, relative VRT tiles, the work folder's
+  `dem.tif`, the pack folder, copy fallback), `tests/test_handoff.py`.
+
+## 2026-11-20
+
+- **Screening uses the dam's own DEM for every clip.** `crest-desktop/crest/qgis_run.py` `_settings_arg()` only wrote
+  the ND offline pack's DEM or `<work>/dem.tif` into `crest_settings.json`, so a DEM typed in the Report step's DEM
+  field, chosen with "Choose DEM", or set in `CREST_DEM` never reached the screening, and its larger clips downloaded
+  USGS 3DEP afresh. The screening now gets the same DEM as the flood model (`dem_path`: the DEM field, `CREST_DEM`,
+  the chosen DEM, `<work>/dem.tif` / `dem.vrt`, then the pack's DEM) as its local DEM folder (`terrain_source` 1,
+  `local_dem`, `larger_clips` 2), and the log names it. Same fix as DamIT Crest (damit #146). Tests:
+  `tests/test_handoff.py` (GateTests).
+
 ## 2026-11-18
 
 - **Security: the browser fallback no longer puts the API token on the browser's command line.** When no pywebview

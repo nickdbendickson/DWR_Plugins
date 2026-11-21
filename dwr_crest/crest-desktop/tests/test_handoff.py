@@ -494,10 +494,69 @@ class GateTests(unittest.TestCase):
         settings = json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
         self.assertEqual(settings["terrain_source"], 1)
-        self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertEqual(Path(settings["local_dem"]), (pack / "dem").resolve(), "the pack's DEM folder goes in as it is")
         self.assertEqual(settings["larger_clips"], 2)
         self.assertEqual(settings["only_ids"], "ND00199")
         self.assertIn("--SETTINGS=", self.calls_text())
+
+    # 2026-11-20 (mirrors DamIT Crest, damit #146): the dam's own DEM reaches the screening settings, so every
+    # larger clip reads it instead of downloading USGS 3DEP afresh.
+    def _screen_settings(self, dam=None) -> dict:
+        os.environ["QGIS_MODE"] = "pass"
+        result = run_screening(dam or DAM, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertTrue(result["ok"], self.lines)
+        return json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
+
+    def _dem(self, rel: str) -> Path:
+        dem = self.root / rel
+        dem.parent.mkdir(parents=True, exist_ok=True)
+        dem.write_text("<VRTDataset></VRTDataset>", encoding="utf-8")
+        return dem
+
+    def test_the_dams_dem_goes_into_the_screening_settings(self):
+        dem = self._dem("dems/cass_10m_3dep.vrt")
+        settings = self._screen_settings({**DAM, "demPath": str(dem)})
+        self.assertEqual(Path(settings["local_dem"]).resolve(), (self.root / "work" / "screen_dem").resolve())
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["cass_10m_3dep.vrt"])
+        self.assertEqual(settings["terrain_source"], 1)
+        self.assertEqual(settings["larger_clips"], 2, "larger clips read the DEM, not a fresh 3DEP download")
+        self.assertEqual(settings["only_ids"], "ND00199")
+        self.assertTrue(any(line.startswith("Screening terrain: ") and "cass_10m_3dep.vrt" in line
+                            for line in self.lines))
+
+    def test_the_dams_dem_wins_over_the_offline_pack(self):
+        pack = self.root / "pack"
+        (pack / "dem").mkdir(parents=True)
+        (pack / "dem" / "mosaic.vrt").write_text("<VRTDataset></VRTDataset>", encoding="utf-8")
+        os.environ["NDSUITE_DATA"] = str(pack)
+        dem = self._dem("dems/dam.tif")
+        settings = self._screen_settings({**DAM, "demPath": str(dem)})
+        self.assertEqual(settings["suite_folder"], str(pack.resolve()))
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["dam.tif"])
+
+    def test_crest_dem_counts_too(self):
+        dem = self._dem("statewide/ND_1m.vrt")
+        os.environ["CREST_DEM"] = str(dem)
+        self.assertEqual([p.name for p in Path(self._screen_settings()["local_dem"]).iterdir()], ["ND_1m.vrt"])
+
+    def test_the_dem_chosen_in_the_app_is_used_when_the_field_is_empty(self):
+        from crest import localdem, qgis_run
+        dem = self._dem("chosen/chosen.tif")
+        settings_file = self.root / "app-settings.json"
+        localdem.write_dem_path(settings_file, str(dem))
+        saved = qgis_run.DESK_SETTINGS_FILE
+        qgis_run.DESK_SETTINGS_FILE = settings_file
+        try:
+            settings = self._screen_settings()
+        finally:
+            qgis_run.DESK_SETTINGS_FILE = saved
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["chosen.tif"])
+
+    def test_no_dem_says_the_screening_downloads(self):
+        settings = self._screen_settings()
+        self.assertNotIn("local_dem", settings)
+        self.assertNotIn("terrain_source", settings)
+        self.assertTrue(any("downloads USGS 3DEP" in line for line in self.lines))
 
     def test_download_uses_the_supplied_fetch(self):
         saved = []
