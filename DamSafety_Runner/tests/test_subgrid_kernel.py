@@ -83,6 +83,58 @@ def _dam_break_case():
     return t, V0, (ny_c // 2, 0), 4.0, 0.02, 400
 
 
+def _drain_case():
+    """A sub-grid channel pre-filled with water that slopes down to a FREE east edge: it drains
+    eastward off the boundary. Unlike the closed-wall dam-break this exercises the FREE-edge path
+    (free_mask != 0) and its Manning normal-depth outflow floor. Returns tables, V0, free_mask and
+    (dt0, nsteps)."""
+    R, ny_c, nx_c = 4, 4, 10
+    dxf = 2.0
+    dxc = dxf * R
+    S0, n, D, chan_rows = 0.004, 0.035, 2.0, 2
+    dem = _channel_dem(ny_c, nx_c, R, dxf, S0, D, chan_rows)
+    t = sg.build_from_fine(dem, np.full(dem.shape, n), dxc, R)
+    ramp = np.linspace(1.0, 0.0, nx_c)                       # high west -> low east
+    top = t.zbank[:, 0].max() + 0.5
+    bot = t.zbed[:, -1].max() + 0.3
+    surf = bot + (top - bot) * ramp                          # water surface sloping to the east edge
+    eta0 = np.maximum(t.zbed, surf[None, :])
+    V0 = sg.cell_volume(eta0, t.s, t.asub)
+    return t, V0, hv.FREE_E, 0.01, 6000
+
+
+@test
+def subgrid_hllc_free_edge_drains_and_matches_reference():
+    """The FREE-edge outflow (transmissive flux with the Manning normal-depth floor that lets a coarse
+    sub-grid outlet drain): the CPU build matches the float64 reference to float32, and the pre-filled
+    channel actually drains off the boundary."""
+    t, V0, fm, dt0, nsteps = _drain_case()
+
+    ref = hv.SubFVHLLCRef(t, free_mask=fm)
+    ref.V = V0.copy()
+    for _ in range(nsteps):
+        ref.step(dt0)                                        # no source: it drains under its own slope
+    eta_ref, V_ref = ref.eta, ref.V
+
+    eta_k, V_k, t_elapsed = _run_backend(be.CpuBackend(sb.SUBFV_SPEC), t, V0, fm, (0, 0), 0.0,
+                                         dt0, nsteps)
+
+    # fixed dt (lock-step to within 0.1% of the elapsed time, so the two advance together)
+    assert abs(t_elapsed - nsteps * dt0) < 1e-3 * (nsteps * dt0), \
+        "kernel dt not locked: t={:.4f} vs {:.4f}".format(t_elapsed, nsteps * dt0)
+    # it must have drained a real share of the pre-filled water off the FREE edge
+    drained = (float(V0.sum()) - float(V_ref.sum())) / max(float(V0.sum()), 1e-9)
+    assert drained > 0.3, "little drained off the FREE edge: {:.3f}".format(drained)
+
+    wet = V_ref > hv.HVEL * t.dx * t.dx
+    deta = np.abs(eta_k - eta_ref)[wet]
+    max_deta = float(deta.max()) if deta.size else 0.0
+    dvol = abs(float(V_k.sum()) - float(V_ref.sum())) / max(float(V0.sum()), 1e-9)
+    assert max_deta < 2e-3, "kernel eta vs reference (FREE edge) max {:.3e} m over {} wet cells".format(
+        max_deta, int(wet.sum()))
+    assert dvol < 1e-4, "kernel vs reference total volume off {:.3e}".format(dvol)
+
+
 @test
 def subgrid_subfv_layout_matches_kernel():
     """subfv_buffer_layout is in the exact order of the kernel's buffer indices B(0)..B(28), and the
@@ -132,6 +184,7 @@ def subgrid_hllc_gpu_matches_cpu():
     ok, why = be.metal_available()
     if not ok:
         raise Skip("no Metal GPU here ({})".format(why))
+    # closed-wall dam-break (interior HLLC) and a FREE-edge drain (the boundary outflow path)
     t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
     eta_c, V_c, _ = _run_backend(be.CpuBackend(sb.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
     eta_g, V_g, _ = _run_backend(be.MetalBackend(sb.SUBFV_SPEC), t, V0, 0, src_cell, Q, dt0, nsteps)
@@ -140,11 +193,19 @@ def subgrid_hllc_gpu_matches_cpu():
     dvol = abs(float(V_g.sum()) - float(V_c.sum())) / max(float(V_c.sum()), 1e-9)
     assert dvol < 1e-5, "GPU vs CPU total volume off {:.3e}".format(dvol)
 
+    td, V0d, fm, dt0d, nsd = _drain_case()
+    eta_cd, V_cd, _ = _run_backend(be.CpuBackend(sb.SUBFV_SPEC), td, V0d, fm, (0, 0), 0.0, dt0d, nsd)
+    eta_gd, V_gd, _ = _run_backend(be.MetalBackend(sb.SUBFV_SPEC), td, V0d, fm, (0, 0), 0.0, dt0d, nsd)
+    assert np.abs(eta_gd - eta_cd).max() < 1e-4, "GPU vs CPU eta (FREE edge) max {:.3e} m".format(
+        float(np.abs(eta_gd - eta_cd).max()))
+    dvold = abs(float(V_gd.sum()) - float(V_cd.sum())) / max(float(V0d.sum()), 1e-9)
+    assert dvold < 1e-5, "GPU vs CPU total volume (FREE edge) off {:.3e}".format(dvold)
+
 
 def _main():
     import traceback
     fns = [subgrid_subfv_layout_matches_kernel, subgrid_hllc_kernel_matches_reference,
-           subgrid_hllc_gpu_matches_cpu]
+           subgrid_hllc_free_edge_drains_and_matches_reference, subgrid_hllc_gpu_matches_cpu]
     f = 0
     for fn in fns:
         try:

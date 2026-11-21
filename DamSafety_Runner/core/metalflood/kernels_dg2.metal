@@ -353,6 +353,18 @@ kernel void k_limit_dg2(MF_ARGS_DG2) {
     Uhv[3u * i + 2u] = mf_minmod3(MF_SQ3 * Uhv[3u * i + 2u], dVN, dVS) / MF_SQ3;
 }
 
+// FREE-edge outflow floor: the Manning normal-depth velocity that the water-surface slope to the
+// inner cell drives, so a flooded basin that decelerates into a FREE boundary still drains instead
+// of ponding. 0 when the surface does not slope outward, and at an established outflow the cell's
+// own velocity already exceeds it, so the transmissive outflow is only ever raised, never cut.
+inline float mf_free_und(float etac, float etain, float hc, float n2c, float dx) {
+    float slope = (etain - etac) / dx;
+    if (slope <= 0.0f || hc <= MF_HVEL) {
+        return 0.0f;
+    }
+    return sqrt(slope) * pow(hc, 2.0f / 3.0f) / sqrt(fmax(n2c, 1e-12f));
+}
+
 // every face of the window: HLLC flux of the DG2 modal edge states, Audusse hydrostatically
 // reconstructed. Same face ownership and domain-edge ghosting as kernels_fv2.metal; each side's edge
 // value is w0 +/- sqrt(3) w1 (the modal value at the shared edge). The Audusse bed source is added in
@@ -402,7 +414,12 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float ui = mf_vel(Uhu[3u * ii], h0i);
                 float vi = mf_vel(Uhv[3u * ii], h0i);
                 if ((p.free_mask & MF_W) != 0u) {
-                    fl = mf_hllc(h0i, ui, vi, h0i, ui, vi, g);
+                    float uo = ui;
+                    if (nx > 1u) {
+                        float und = mf_free_und(z[ii] + h0i, z[ii + 1u] + Uh[3u * (ii + 1u)], h0i, n2[ii], p.dx);
+                        if (und > 0.0f) uo = fmin(ui, -und);          // at least und outward (-x)
+                    }
+                    fl = mf_hllc(h0i, uo, vi, h0i, uo, vi, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h0i, -ui, vi, h0i, ui, vi, g);
@@ -415,7 +432,12 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float ui = mf_vel(Uhu[3u * ii], h0i);
                 float vi = mf_vel(Uhv[3u * ii], h0i);
                 if ((p.free_mask & MF_E) != 0u) {
-                    fl = mf_hllc(h0i, ui, vi, h0i, ui, vi, g);
+                    float uo = ui;
+                    if (nx > 1u) {
+                        float und = mf_free_und(z[ii] + h0i, z[ii - 1u] + Uh[3u * (ii - 1u)], h0i, n2[ii], p.dx);
+                        if (und > 0.0f) uo = fmax(ui, und);           // at least und outward (+x)
+                    }
+                    fl = mf_hllc(h0i, uo, vi, h0i, uo, vi, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h0i, ui, vi, h0i, -ui, vi, g);
@@ -455,7 +477,12 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float ni = mf_vel(Uhv[3u * ii], h0i);
                 float ti = mf_vel(Uhu[3u * ii], h0i);
                 if ((p.free_mask & MF_N) != 0u) {
-                    fl = mf_hllc(h0i, ni, ti, h0i, ni, ti, g);
+                    float no = ni;
+                    if (ny > 1u) {
+                        float und = mf_free_und(z[ii] + h0i, z[ii + nx] + Uh[3u * (ii + nx)], h0i, n2[ii], p.dx);
+                        if (und > 0.0f) no = fmin(ni, -und);          // at least und outward (-y)
+                    }
+                    fl = mf_hllc(h0i, no, ti, h0i, no, ti, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h0i, -ni, ti, h0i, ni, ti, g);
@@ -468,7 +495,12 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float ni = mf_vel(Uhv[3u * ii], h0i);
                 float ti = mf_vel(Uhu[3u * ii], h0i);
                 if ((p.free_mask & MF_S) != 0u) {
-                    fl = mf_hllc(h0i, ni, ti, h0i, ni, ti, g);
+                    float no = ni;
+                    if (ny > 1u) {
+                        float und = mf_free_und(z[ii] + h0i, z[ii - nx] + Uh[3u * (ii - nx)], h0i, n2[ii], p.dx);
+                        if (und > 0.0f) no = fmax(ni, und);           // at least und outward (+y)
+                    }
+                    fl = mf_hllc(h0i, no, ti, h0i, no, ti, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h0i, ni, ti, h0i, -ni, ti, g);
