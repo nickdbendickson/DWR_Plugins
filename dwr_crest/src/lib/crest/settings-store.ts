@@ -57,6 +57,51 @@ function store(yours: SharedValues): string | null {
 }
 
 let loading: Promise<void> | null = null;
+let waitingForBridge = false;
+
+async function loadFromFile(api: DefaultsApi): Promise<void> {
+  try {
+    const r = await api.get_defaults();
+    if (r.error) {
+      useSettings.setState({ yours: {}, where: "file", filePath: r.path ?? null, problems: [`${r.error} The suite's values are used.`] });
+      return;
+    }
+    if (r.text == null) {
+      useSettings.setState({ yours: {}, where: "file", filePath: r.path ?? null, problems: [] });
+      return;
+    }
+    const read = readDefaultsFile(r.text, "Your defaults file");
+    useSettings.setState(
+      read.ok
+        ? { yours: changedOnly(read.values), where: "file", filePath: r.path ?? null, problems: read.problems }
+        : { yours: {}, where: "file", filePath: r.path ?? null, problems: [`${read.reason} The suite's values are used.`] },
+    );
+  } catch (e) {
+    useSettings.setState({ yours: readStored(), where: "browser", filePath: null, problems: [`The shared defaults file could not be reached (${(e as Error).message}).`] });
+  }
+}
+
+/**
+ * The desktop window's bridge can come up AFTER the desk has started: pywebview's Qt backend (Linux) adds
+ * window.pywebview.api once the page has loaded and then fires "pywebviewready". Before 2026-11-21 the desk looked only
+ * once, at start, so on Linux it settled on "this browser" and Settings > Save never wrote the defaults file (install
+ * test 2026-11-21). Now, when there is no bridge at start, the desk listens for that event and switches to the file.
+ */
+function switchToFileWhenBridgeIsReady(): void {
+  const w = typeof window === "undefined" ? undefined : (window as unknown as { addEventListener?: (t: string, f: () => void, o?: object) => void });
+  if (!w || typeof w.addEventListener !== "function" || waitingForBridge) return;
+  waitingForBridge = true;
+  w.addEventListener(
+    "pywebviewready",
+    () => {
+      waitingForBridge = false;
+      const api = defaultsApi();
+      if (!api) return;
+      loading = loadFromFile(api);
+    },
+    { once: true },
+  );
+}
 
 /** Load your values once: from the shared file in the desktop window, else from this browser. */
 export function loadSettings(): Promise<void> {
@@ -65,27 +110,10 @@ export function loadSettings(): Promise<void> {
     const api = defaultsApi();
     if (!api) {
       useSettings.setState({ yours: readStored(), where: "browser", filePath: null, problems: [] });
+      switchToFileWhenBridgeIsReady();
       return;
     }
-    try {
-      const r = await api.get_defaults();
-      if (r.error) {
-        useSettings.setState({ yours: {}, where: "file", filePath: r.path ?? null, problems: [`${r.error} The suite's values are used.`] });
-        return;
-      }
-      if (r.text == null) {
-        useSettings.setState({ yours: {}, where: "file", filePath: r.path ?? null, problems: [] });
-        return;
-      }
-      const read = readDefaultsFile(r.text, "Your defaults file");
-      useSettings.setState(
-        read.ok
-          ? { yours: changedOnly(read.values), where: "file", filePath: r.path ?? null, problems: read.problems }
-          : { yours: {}, where: "file", filePath: r.path ?? null, problems: [`${read.reason} The suite's values are used.`] },
-      );
-    } catch (e) {
-      useSettings.setState({ yours: readStored(), where: "browser", filePath: null, problems: [`The shared defaults file could not be reached (${(e as Error).message}).`] });
-    }
+    await loadFromFile(api);
   })();
   return loading;
 }
@@ -115,5 +143,6 @@ export async function saveSettings(values: SharedValues): Promise<string | null>
 /** Test-only: forget the loaded settings. */
 export function resetSettings(): void {
   loading = null;
+  waitingForBridge = false;
   useSettings.setState({ yours: {}, where: "browser", filePath: null, problems: [] });
 }
