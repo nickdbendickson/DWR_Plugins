@@ -1016,8 +1016,18 @@ def handoff_gives_nid_parameters_an_nid_never_another_dam_id():
         assert handoff.build_parameters(alg, "ND00123", d, par, {})["SUBJECT_NID"] == "ND05289"
         # a broken dam.json never raises: the dam ID rule applies
         open(os.path.join(d, "dam.json"), "w").write("{broken")
-        assert handoff.nid_for(d, "DWR-5289") == "" and handoff.nid_for(d, "ND00001") == \
-            "ND00001"
+        import logging
+        seen = []
+        h = logging.Handler()
+        h.emit = lambda r: seen.append(r.getMessage())
+        handoff.LOG.addHandler(h)
+        try:
+            assert handoff.nid_for(d, "DWR-5289") == "" and handoff.nid_for(d, "ND00001") == \
+                "ND00001"
+        finally:
+            handoff.LOG.removeHandler(h)
+        # 2026-11-20 audit: ... and is logged, not swallowed
+        assert len(seen) == 2 and all("could not be read" in m and "not valid JSON" in m for m in seen), seen
         os.remove(os.path.join(d, "dam.json"))
         # a required NID parameter without a value is reported missing
         req = _Alg("x:classify", [_P("DAM_FOLDER", "file", "Dam project folder"),
