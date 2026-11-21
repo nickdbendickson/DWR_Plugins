@@ -2931,7 +2931,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if stability["on"] and getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == \
                 lfmod.SOLVER_ACC:
             return {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
-        return {}
+        # 3.39.0: the Courant number / theta the user set in the run tool (None = engine default).
+        # The stability fallback above still wins once a run has lost its mass balance.
+        kw = {}
+        if getattr(st, "user_theta", None) is not None:
+            kw["theta"] = float(st.user_theta)
+        if getattr(st, "user_cfl", None) is not None:
+            kw["cfl"] = float(st.user_cfl)
+        return kw
 
     # audit P2: the wall-clock record of every LISFLOOD-FP pass (report["lisflood_wall"]) and the
     # one warning when a pass's time step collapsed (the run itself goes on)
@@ -3043,8 +3050,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 and lst.solver == lfmod.SOLVER_ACC and err is not None
                 and err > lfmod.STABILITY_RETRY_PCT):
             stability["on"] = True
-            log("LISFLOOD-FP lost its mass balance ({:.1f}% of the injected volume); running "
-                "it again with theta {:g} and CFL {:g}.".format(err, lfmod.STABLE_THETA,
+            eng_nm = lfmod.engine_name(st.lisflood_exe)   # "LISFLOOD-FP" or the Boann engine
+            log("{} lost its mass balance ({:.1f}% of the injected volume); running "
+                "it again with theta {:g} and CFL {:g}.".format(eng_nm, err, lfmod.STABLE_THETA,
                                                                 lfmod.STABLE_CFL))
             lst = settings()
             par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
@@ -3060,11 +3068,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                             "cfl": lfmod.STABLE_CFL,
                                             "events": stability["events"]}
             warnings.append(
-                "LISFLOOD-FP lost its mass balance with its default settings (volume error "
+                "{} lost its mass balance with its default settings (volume error "
                 "{:.1f}% of the injected volume: the solver made water). The run was repeated "
                 "with theta {:g} and CFL {:g} (volume error now {}%), and every later run of "
                 "this dam uses them. The results come from the repeated run.".format(
-                    err, lfmod.STABLE_THETA, lfmod.STABLE_CFL,
+                    eng_nm, err, lfmod.STABLE_THETA, lfmod.STABLE_CFL,
                     "?" if err2 is None else "{:.2f}".format(err2)))
         if stability["on"] and lst.solver == lfmod.SOLVER_ACC:
             with open(marker, "w") as f:
