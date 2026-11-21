@@ -715,7 +715,7 @@ def result_files(folder):
     return out
 
 
-# 3.37.1 (audit 3-pack, lower priority): duplicate layers in the window. The DEM list showed every raster layer of
+# 3.40.1 (audit 3-pack, lower priority): duplicate layers in the window. The DEM list showed every raster layer of
 # the project, so the same file loaded twice was listed twice (two entries, one DEM) and two different files with
 # the same layer name (two dams' "Depth (Max)") could not be told apart; "Add results to project" added every
 # result again on a second click. These helpers are the pure part of both checks.

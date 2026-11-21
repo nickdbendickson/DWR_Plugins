@@ -934,7 +934,7 @@ class NDBreachRunnerDialog(QDialog):
     # --------------------------------------------------------------------- DEM --
     @staticmethod
     def raster_layers(repeats=None):
-        """[(label, id)] of the project's raster layers (popup_logic.dem_choices, 3.37.1): the same file
+        """[(label, id)] of the project's raster layers (popup_logic.dem_choices, 3.40.1): the same file
         loaded twice is listed once, and a name two files share shows the file after it. `repeats`, a
         list, receives [(name, id, kept name, kept id)] of the layers left out."""
         layers = []
@@ -1231,7 +1231,7 @@ class NDBreachRunnerDialog(QDialog):
             group = root.findGroup(name) or root.addGroup(name)
         except Exception:                                        # noqa
             group = None
-        # 3.37.1: a result already in the project (an earlier click) is not added a second time
+        # 3.40.1: a result already in the project (an earlier click) is not added a second time
         try:
             loaded = [lyr.source() for lyr in project.mapLayers().values()]
         except Exception:                                        # noqa
