@@ -365,6 +365,9 @@ class RunSettings:
         self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
         self.sgc_start = "auto"
         self.sgc_curve = list(sgcmod.BIEGER_2015_US)
+        # 3.42.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
+        # default (4). The QGIS run tool sets it via SUBGRID_R; the CLI via model.subgrid_r.
+        self.user_subgrid_r = None
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
         # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
         # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
