@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -18,7 +19,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
-from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
+from crest import localdem
+from crest.layers import STAGED_DEM_DIR, download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
 
 # The Runner's option text. qgis_process (QGIS 3.34) rejects option text for these enums ("Incorrect parameter
 # value for METHOD"), so enum_value() looks the text up in `qgis_process help ndbreach:rundam` and sends its index;
@@ -141,8 +143,25 @@ def _dam_line_layer(folder: Path) -> Path | None:
     return path if path.is_file() else None
 
 
+#: The app's own settings file (set by __main__.main): the local DEM chosen with "Choose DEM" is read from it, so the
+#: screening and the flood model get the same terrain the app draws with. Same name and order as DamIT Crest
+#: (damit #146) and DamIT Desk.
+DESK_SETTINGS_FILE: Path | None = None
+
+
+def desk_dem() -> str | None:
+    """The local DEM chosen in the app ("Choose DEM"), when that file still exists."""
+    try:
+        chosen = localdem.read_dem_path(DESK_SETTINGS_FILE) if DESK_SETTINGS_FILE else None
+    except (OSError, ValueError):
+        return None
+    return chosen if chosen and Path(chosen).is_file() else None
+
+
 def dem_path(work: Path, dam: dict, source: str = "pack") -> str | None:
-    for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), work / "dem.tif", work / "dem.vrt"):
+    """The DEM the plugins get: the Report step's DEM field, else CREST_DEM, else the DEM chosen in the app, else
+    <work>/dem.tif or dem.vrt (Get layers), else the ND offline pack's DEM (source "pack")."""
+    for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), desk_dem(), work / "dem.tif", work / "dem.vrt"):
         if not raw:
             continue
         path = Path(str(raw)).expanduser()
@@ -380,15 +399,35 @@ def _prepare(dam: dict, analysis: dict, work: str | None, log, files=None, appen
     return root, folder
 
 
-def _settings_arg(root: Path, log, only_ids: str | None = None) -> list[str]:
+def _settings_arg(root: Path, log, only_ids: str | None = None, dem: str | None = None) -> list[str]:
+    """--SETTINGS for the screening (crest_settings.json).
+
+    dem: this dam's DEM (dem_path: the Report step's DEM field, CREST_DEM, the DEM chosen in the app, <work>/dem.tif or
+    dem.vrt). It goes in as the local DEM (terrain_source 1, local_dem, larger_clips 2), so the screening's first clip
+    and every larger clip read it. local_dem is <work>/screen_dem holding this DEM only (layers.stage_dem_folder),
+    because the screening mosaics every raster in that folder; the offline pack's own dem folder goes in as it is. Before 2026-11-20 only the offline pack's DEM or <work>/dem.tif went
+    there, so a DEM typed, chosen or set in CREST_DEM was ignored and the clips downloaded USGS 3DEP afresh
+    (DamIT Crest's same fix: damit #146)."""
     suite = find_suite_folder()
-    dem = suite_dem(suite)
-    if not suite and not (root / "dem.tif").is_file() and not only_ids:
+    local = str(root / "dem.tif") if (root / "dem.tif").is_file() else None
+    pack_dem = suite_dem(suite)
+    terrain = dem or pack_dem or local
+    if not suite and not terrain and not only_ids:
+        log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
         return []
-    path = write_settings(root, suite, dem or (str(root / "dem.tif") if (root / "dem.tif").is_file() else None),
-                          only_ids)
+    # The offline pack's <suite>/dem folder holds the DEM only (the suite's convention), so it goes in as it is.
+    # Any other DEM is staged alone in <work>/screen_dem: the screening mosaics every raster in its local DEM folder,
+    # and a DEM's own folder (or the work folder, for <work>/dem.tif) can hold model results or another DEM.
+    in_pack = bool(pack_dem) and Path(terrain or "").resolve().parent == Path(pack_dem).resolve().parent
+    path = write_settings(root, suite, terrain, only_ids, stage=not in_pack)
     if suite:
         log(f"Screening settings use the ND offline pack: {suite}")
+    if terrain:
+        where = "the pack's DEM folder" if in_pack else f"{root / STAGED_DEM_DIR}, which holds this DEM only"
+        log(f"Screening terrain: {terrain} (local DEM folder: {where}; the larger clips read it too, not a "
+            "USGS 3DEP download).")
+    else:
+        log("Screening terrain: none given, so the screening downloads USGS 3DEP for each clip.")
     return [f"--SETTINGS={path}"]
 
 
@@ -401,6 +440,54 @@ def run_folder(dam: dict, analysis: dict, work: str | None, log, files=None) -> 
     root, folder = prepared
     log("The dam folder is written. No model was started.")
     return {"ok": True, "stopped": False, "folder": str(folder), "work": str(root)}
+
+
+_CONFIG_SH = re.compile(r"^\s*(?:export\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*QGIS_CUSTOM_CONFIG_PATH=(.*)$")
+_CONFIG_CMD = re.compile(r'^\s*set\s+"?QGIS_CUSTOM_CONFIG_PATH=([^"\r\n]*)"?\s*$', re.IGNORECASE)
+
+
+def launcher_config_path(exe: str) -> str | None:
+    """The QGIS_CUSTOM_CONFIG_PATH a qgis_process launcher script sets for QGIS: the suite installer's
+    qgis-process-*.sh (`export QGIS_CUSTOM_CONFIG_PATH=...`) or .cmd (`set "QGIS_CUSTOM_CONFIG_PATH=..."`).
+    None for a real qgis_process (a binary) or a script that does not set it. Read only, never run.
+    Same rule as the DamIT desk (damit-desk #5)."""
+    path = Path(exe)
+    try:
+        if not path.is_file() or path.stat().st_size > 256 * 1024:
+            return None
+        head = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in head[:4096]:
+        return None                                   # a binary: QGIS's own qgis_process
+    found = None
+    for line in head.decode("utf-8", "replace").splitlines():
+        if line.lstrip().startswith(("#", "rem ", "REM ", "::")):
+            continue
+        m = _CONFIG_CMD.match(line)
+        if m:
+            found = m.group(1).strip() or None
+            continue
+        m = _CONFIG_SH.match(line)
+        if m:
+            try:
+                parts = shlex.split(m.group(1), comments=True)
+            except ValueError:
+                parts = m.group(1).split()
+            found = (parts[0] if parts else "") or None
+    return found
+
+
+def qgis_config_path(exe: str) -> tuple[str | None, str]:
+    """(QGIS_CUSTOM_CONFIG_PATH qgis_process runs with, where it comes from). The launcher's own setting wins over
+    Crest's environment, because the launcher sets it last, just before QGIS starts."""
+    from_launcher = launcher_config_path(exe)
+    if from_launcher:
+        return from_launcher, f"set by the launcher {Path(exe).name}"
+    env = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
+    if env:
+        return env, "from Crest's environment"
+    return None, ""
 
 
 # The Processing tools the Report step's buttons call, for "Check QGIS hand-off" (install test 2026-11-18).
@@ -421,8 +508,10 @@ def run_check(log, cancel: threading.Event | None = None) -> dict:
             "dam-suite launcher open-nd-crest.sh, or put QGIS's qgis_process on PATH.")
         return {"ok": False, "check": []}
     log(f"qgis_process: {exe}")
-    custom = os.environ.get("QGIS_CUSTOM_CONFIG_PATH")
-    log(f"QGIS profile it reads: {'default profile under ' + custom if custom else 'the default profile (QGIS_CUSTOM_CONFIG_PATH not set)'}")
+    custom, where = qgis_config_path(exe)
+    log("QGIS profile it reads: " + (f"default profile under {custom} (QGIS_CUSTOM_CONFIG_PATH, {where})" if custom else
+                                     "QGIS's default profile (neither Crest nor its qgis_process launcher sets "
+                                     "QGIS_CUSTOM_CONFIG_PATH)"))
     if custom:
         link = Path(custom) / "profiles" / "default"
         target = os.path.realpath(link) if link.exists() else None
@@ -519,6 +608,42 @@ def _result_line(row: dict) -> str:
     return text + " A screening result, not an official class. The Crest record is not changed."
 
 
+def chain_progress(chain_log: Path) -> tuple[list[str], str | None]:
+    """(steps that finished, the step that was running) from the chain's live log (its "    step N done" and
+    ">>> Step N - title" lines). The chain writes that log line by line, so a killed run still leaves it."""
+    try:
+        text = chain_log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [], None
+    done: list[str] = []
+    running = None
+    for line in text.splitlines():
+        started = re.match(r">>> Step (\S+) - (.+)$", line.strip())
+        if started:
+            running = f"step {started.group(1)} ({started.group(2).strip()})"
+            continue
+        finished = re.match(r"step (\S+) done$", line.strip())
+        if finished:
+            done.append(finished.group(1))
+            running = None
+    return done, running
+
+
+def time_limit_warning(chain_log: Path, limit: float | None) -> str:
+    """The amber TIME LIMIT REACHED text: the limit, the step it stopped, the steps kept, and what to do next."""
+    done, running = chain_progress(chain_log)
+    seconds = f"{limit:g} s" if limit else "its time limit"
+    parts = [f"TIME LIMIT REACHED: the screening chain was stopped after {seconds} (CREST_SCREENING_TIMEOUT_S)"]
+    parts.append(f" in {running}." if running else ".")
+    parts.append(f" Steps finished in this run and kept: {', '.join(done)}." if done else " No step finished in this run.")
+    parts.append(" Outputs of steps finished in earlier runs are kept too.")
+    parts.append(" There is no screening class for this dam yet: the flood and the class are not partial results,"
+                 " they were not made. The stopped step runs again from the start next time (the steps that"
+                 " finished are not redone). Raise CREST_SCREENING_TIMEOUT_S (or 0 for no limit) and run the"
+                 " screening again, or run the flood model.")
+    return "".join(parts)
+
+
 def run_screening(
     dam: dict,
     analysis: dict,
@@ -549,7 +674,7 @@ def run_screening(
     # ND00199): both go in only_ids, so a Screening that filters later steps by dam_id alone keeps it.
     known = [n for n in chain_names(root, dam_id) if n.upper() != dam_id.upper()] if has_id else []
     only = ",".join([dam_id, *known]) if has_id else None
-    settings = _settings_arg(root, log, only)
+    settings = _settings_arg(root, log, only, dem_path(root, dam or {}, "pack"))
     limit = screening_timeout(timeout)
     log(f"Tool 17: {exe} run nddam:preflight")
     code, text = _run(
@@ -600,6 +725,11 @@ def run_screening(
     if names and [n.upper() for n in names] != [dam_id.upper()]:
         log(f"The screening outputs name this dam {', '.join(names)} (Crest: {dam_id}).")
     out = {"folder": str(folder), "work": str(root), "chainIds": names}
+    if code == STOPPED_TIMEOUT:
+        warning = time_limit_warning(chain_log, limit)
+        log(warning)
+        log("The work folder keeps the outputs of the steps that finished; chain_log.txt has the steps that ran.")
+        return {**out, "ok": False, "stopped": True, "cancelled": False, "timedOut": True, "warning": warning}
     if code in (STOPPED_TIMEOUT, STOPPED_CANCEL):
         log("The screening chain was stopped. Its outputs so far stay in the work folder; chain_log.txt has the steps that ran.")
         return {**out, "ok": False, "stopped": True, "cancelled": code == STOPPED_CANCEL, "timedOut": code == STOPPED_TIMEOUT}

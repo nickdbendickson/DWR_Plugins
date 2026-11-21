@@ -1468,6 +1468,8 @@ const handoff = {
   log: "The screening chain has not been started.",
   busy: false,
   job: "",
+  /** The server's TIME LIMIT REACHED text for a screening stopped at CREST_SCREENING_TIMEOUT_S (shown in amber). */
+  warning: "",
 };
 let handoffTimer = 0;
 
@@ -1520,6 +1522,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     async (path: JobPath) => {
       if (handoffTimer) window.clearInterval(handoffTimer);
       handoff.busy = true;
+      handoff.warning = "";
       handoff.log = "Starting…\n";
       bump((n) => n + 1);
       let response: Response;
@@ -1556,6 +1559,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
             const found = await (await fetch(`/api/job?id=${job.id}`, { headers: await crestApiHeaders() })).json();
             handoff.log = String(found.log || "");
             if (found.done) {
+              handoff.warning = found.timedOut && found.warning ? String(found.warning) : "";
               window.clearInterval(handoffTimer);
               handoffTimer = 0;
               handoff.busy = false;
@@ -1696,6 +1700,12 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         DEM's coordinates). It does not start ndbreach:batch. The drawn line stays longitude and latitude, so it is
         not sent as DAM_LINES.
       </p>
+      {handoff.warning ? (
+        <div data-testid="screening-time-limit" role="status" className="mt-3 rounded-sm border border-amber bg-amber/10 p-3 text-sm">
+          <p className="font-medium text-amber">Time limit reached: no screening result yet</p>
+          <p className="mt-1">{handoff.warning}</p>
+        </div>
+      ) : null}
       <pre className="mt-3 max-h-72 overflow-auto rounded-sm bg-paper p-3 text-xs whitespace-pre-wrap">{handoff.log}</pre>
     </div>
   );

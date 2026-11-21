@@ -116,6 +116,11 @@ if "runchain" in joined or "rundam" in joined:
     print("started", flush=True)
     if mode == "slow":
         import time
+        live = next((a.split("=", 1)[1] for a in args if a.startswith("--LOG=")), "")
+        if live and "runchain" in joined:      # the chain's live log, as far as a run killed in step 7 gets
+            Path(live).write_text(">>> Step 1 - Prepare dam inventory\n    step 1 done\n"
+                                  ">>> Step 5 - Breach parameters and hydrograph\n    step 5 done\n"
+                                  ">>> Step 7 - Run breach flood simulations\n", encoding="utf-8")
         time.sleep(60)
     if mode == "outputs" and "runchain" in joined:
         import csv, sqlite3
@@ -494,10 +499,69 @@ class GateTests(unittest.TestCase):
         settings = json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
         self.assertEqual(settings["terrain_source"], 1)
-        self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertEqual(Path(settings["local_dem"]), (pack / "dem").resolve(), "the pack's DEM folder goes in as it is")
         self.assertEqual(settings["larger_clips"], 2)
         self.assertEqual(settings["only_ids"], "ND00199")
         self.assertIn("--SETTINGS=", self.calls_text())
+
+    # 2026-11-20 (mirrors DamIT Crest, damit #146): the dam's own DEM reaches the screening settings, so every
+    # larger clip reads it instead of downloading USGS 3DEP afresh.
+    def _screen_settings(self, dam=None) -> dict:
+        os.environ["QGIS_MODE"] = "pass"
+        result = run_screening(dam or DAM, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertTrue(result["ok"], self.lines)
+        return json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
+
+    def _dem(self, rel: str) -> Path:
+        dem = self.root / rel
+        dem.parent.mkdir(parents=True, exist_ok=True)
+        dem.write_text("<VRTDataset></VRTDataset>", encoding="utf-8")
+        return dem
+
+    def test_the_dams_dem_goes_into_the_screening_settings(self):
+        dem = self._dem("dems/cass_10m_3dep.vrt")
+        settings = self._screen_settings({**DAM, "demPath": str(dem)})
+        self.assertEqual(Path(settings["local_dem"]).resolve(), (self.root / "work" / "screen_dem").resolve())
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["cass_10m_3dep.vrt"])
+        self.assertEqual(settings["terrain_source"], 1)
+        self.assertEqual(settings["larger_clips"], 2, "larger clips read the DEM, not a fresh 3DEP download")
+        self.assertEqual(settings["only_ids"], "ND00199")
+        self.assertTrue(any(line.startswith("Screening terrain: ") and "cass_10m_3dep.vrt" in line
+                            for line in self.lines))
+
+    def test_the_dams_dem_wins_over_the_offline_pack(self):
+        pack = self.root / "pack"
+        (pack / "dem").mkdir(parents=True)
+        (pack / "dem" / "mosaic.vrt").write_text("<VRTDataset></VRTDataset>", encoding="utf-8")
+        os.environ["NDSUITE_DATA"] = str(pack)
+        dem = self._dem("dems/dam.tif")
+        settings = self._screen_settings({**DAM, "demPath": str(dem)})
+        self.assertEqual(settings["suite_folder"], str(pack.resolve()))
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["dam.tif"])
+
+    def test_crest_dem_counts_too(self):
+        dem = self._dem("statewide/ND_1m.vrt")
+        os.environ["CREST_DEM"] = str(dem)
+        self.assertEqual([p.name for p in Path(self._screen_settings()["local_dem"]).iterdir()], ["ND_1m.vrt"])
+
+    def test_the_dem_chosen_in_the_app_is_used_when_the_field_is_empty(self):
+        from crest import localdem, qgis_run
+        dem = self._dem("chosen/chosen.tif")
+        settings_file = self.root / "app-settings.json"
+        localdem.write_dem_path(settings_file, str(dem))
+        saved = qgis_run.DESK_SETTINGS_FILE
+        qgis_run.DESK_SETTINGS_FILE = settings_file
+        try:
+            settings = self._screen_settings()
+        finally:
+            qgis_run.DESK_SETTINGS_FILE = saved
+        self.assertEqual([p.name for p in Path(settings["local_dem"]).iterdir()], ["chosen.tif"])
+
+    def test_no_dem_says_the_screening_downloads(self):
+        settings = self._screen_settings()
+        self.assertNotIn("local_dem", settings)
+        self.assertNotIn("terrain_source", settings)
+        self.assertTrue(any("downloads USGS 3DEP" in line for line in self.lines))
 
     def test_download_uses_the_supplied_fetch(self):
         saved = []
@@ -592,6 +656,45 @@ class GateTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["timedOut"])
         self.assertTrue(any("Stopped" in line for line in self.lines))
+
+    # 2026-11-21 (install test): a run stopped at the time limit says so plainly, with the step it stopped in and
+    # the steps kept, and the job carries it for the amber box on the Report step.
+    def test_time_limit_reached_says_which_step_and_what_is_kept(self):
+        os.environ["QGIS_MODE"] = "slow"
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), timeout=1.5)
+        self.assertTrue(result["timedOut"])
+        self.assertFalse(result["cancelled"])
+        warning = result["warning"]
+        self.assertTrue(warning.startswith("TIME LIMIT REACHED"), warning)
+        self.assertIn("after 1.5 s", warning)
+        self.assertIn("in step 7 (Run breach flood simulations)", warning)
+        self.assertIn("Steps finished in this run and kept: 1, 5.", warning)
+        self.assertIn("earlier runs are kept too", warning)
+        self.assertIn("CREST_SCREENING_TIMEOUT_S", warning)
+        self.assertIn(warning, self.lines)
+
+    def test_the_job_carries_the_time_limit_warning(self):
+        os.environ["QGIS_MODE"] = "slow"
+        job = m.start_job("screen", DAM, ANALYSIS, str(self.root / "work"), timeout=1.5)
+        found = None
+        for _ in range(400):
+            found = m.job_snapshot(job["id"])
+            if found and found["done"]:
+                break
+            time.sleep(0.05)
+        self.assertTrue(found and found["done"])
+        self.assertTrue(found.get("timedOut"))
+        self.assertIn("TIME LIMIT REACHED", found.get("warning", ""))
+        self.assertIn("TIME LIMIT REACHED", found["log"])
+
+    def test_a_cancel_is_not_a_time_limit(self):
+        os.environ["QGIS_MODE"] = "slow"
+        cancel = threading.Event()
+        threading.Timer(1.0, cancel.set).start()
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), cancel=cancel)
+        self.assertTrue(result["cancelled"])
+        self.assertFalse(result.get("timedOut"))
+        self.assertNotIn("warning", result)
 
     def test_timeout_from_environment(self):
         os.environ["QGIS_MODE"] = "slow"

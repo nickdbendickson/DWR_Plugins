@@ -243,8 +243,68 @@ def out(work, step, param="OUT"):
     return path(work, step, param) if work and exists(work, step, param) else None
 
 
+# 0.28.0 (Crest install test 2026-11-21): a step the run-in-order chain started gets a "running" mark beside the
+# chain's logs, cleared only when the step ends well. A step stopped part-way (a time limit, a cancel that kills
+# qgis_process, a crash, a failed step) leaves it, and its output in the work folder is then NOT counted as done:
+# a killed step 7 had already created an empty 7_simulations.gpkg, so the next run skipped step 7 and step 8 failed
+# reading it.
+RUNNING_DIR = "_logs"
+
+
+def running_mark(work, step):
+    """The file that says `step` was started by the chain and has not ended well (yet)."""
+    return os.path.join(work, RUNNING_DIR, "step_{}.running".format(step))
+
+
+def was_interrupted(work, step):
+    """True when `step` was started by the chain and did not end well: its output is half written or stale."""
+    return bool(work) and os.path.isfile(running_mark(work, step))
+
+
+def mark_running(work, step):
+    try:
+        os.makedirs(os.path.join(work, RUNNING_DIR), exist_ok=True)
+        import datetime
+        with open(running_mark(work, step), "w", encoding="utf-8") as fh:
+            json.dump({"step": step, "started": datetime.datetime.now().isoformat(timespec="seconds"),
+                       "pid": os.getpid()}, fh)
+    except OSError:
+        pass
+
+
+def clear_running(work, step):
+    try:
+        os.remove(running_mark(work, step))
+    except OSError:
+        pass
+
+
+def remove_interrupted_output(work, step):
+    """Delete the half-written output FILE of an interrupted step (its done mark, e.g. 7_simulations.gpkg) and
+    return its path, or "" when there was none. Folders (terrain caches, per-dam runs) are kept: the step reuses or
+    overwrites what is in them."""
+    if not was_interrupted(work, step) or step not in DONE_MARK or step not in LAYOUT:
+        return ""
+    rel = LAYOUT[step].get(DONE_MARK[step])
+    if not rel:
+        return ""
+    p = os.path.join(work, rel)
+    if not os.path.isfile(p):
+        return ""
+    removed = p
+    for q in (p, p + "-wal", p + "-shm", p + "-journal"):
+        try:
+            os.remove(q)
+        except OSError:
+            if q == p:
+                removed = ""
+    return removed
+
+
 def is_done(work, step):
     if not work or not os.path.isdir(work):
+        return False
+    if was_interrupted(work, step):
         return False
     if step == "10":
         return os.path.isfile(os.path.join(work, REPORT_INDEX))
@@ -1275,15 +1335,22 @@ class Chain(object):
         for line in chain_summary(step, self.work, S):
             self.log("    " + line)
         self.log(">>> Step {} - {}".format(step, TITLE[step]))
+        if was_interrupted(self.work, step):
+            gone = remove_interrupted_output(self.work, step)
+            self.log("    step {} was stopped part-way in an earlier run; it runs again{}".format(
+                step, " (its half-written {} was removed)".format(os.path.basename(gone)) if gone else ""))
+        mark_running(self.work, step)
         self._start(step, aid, params, lambda ok, msg="", _s=step: self._finished(_s, ok, msg))
 
     def _finished(self, step, ok, message=""):
         if not self.active or step != self.current:
             return                                              # a late call after a stop
         if not ok:
+            # the running mark stays: what the step wrote is not counted as done next time
             return self._end(False, "Step {} ({}) {}{}".format(
                 step, TITLE[step], "did not finish" if not self._cancel else "was cancelled",
                 ": " + message if message else "."))
+        clear_running(self.work, step)
         if not is_done(self.work, step):
             return self._end(False, "Step {} ({}) finished but its output is not in the work folder "
                                     "({}).".format(step, TITLE[step], LAYOUT[step].get(

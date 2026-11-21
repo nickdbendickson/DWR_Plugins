@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-11-21 (install test fixes)
+
+- **Settings > Save writes the shared defaults file on Linux.** With the Qt window (Linux), pywebview's link to the
+  app (`window.pywebview.api`) arrives a moment after the page opens. `settings-store.ts` decided once, at page
+  open, that there was no app and kept every Save in the browser only. It now listens for `pywebviewready` and
+  switches to the file when the link arrives, so Save writes `defaults.json` and the panel says where. Test:
+  `src/lib/crest/settings-store.test.ts`.
+- **Time limit reached is said plainly.** When `CREST_SCREENING_TIMEOUT_S` stops the screening, the log gets a
+  "TIME LIMIT REACHED" line naming the limit, the step that was running and the steps whose outputs are kept, the
+  job carries `timedOut` and that `warning`, and the Report step shows it in an amber box. No partial flood or class
+  is shown: the screening engines are stopped from outside and leave none (see the PR for what keeping partial
+  depths would take). Tests: `tests/test_handoff.py`, `scripts/desktop-bundle.test.mjs`.
+- **Check QGIS names the launcher's profile.** It said "default profile (QGIS_CUSTOM_CONFIG_PATH not set)" when the
+  suite's `qgis-process-*.sh` / `.cmd` launcher sets it. It now reads the launcher (read only, never run), then
+  Crest's environment, and says where the value came from. Same fix as damit-desk #5. Test:
+  `tests/test_check_handoff.py`.
+- **Suite data folder from the QGIS "Start here" setting.** Between `NDSUITE_DATA` and `~/.ndsuite/config.json`,
+  Crest now reads `ndsuite/data_folder` from the QGIS profile its qgis_process uses (the suite's own order). The log
+  says which source was used, and the "not set" message lists all three and the exact `ND_Dam_Suite_Pack` name.
+  Test: `tests/test_suite_folder_lookup.py`.
+- **No GTK traceback on Linux.** When GTK's Python bindings are missing and Qt's are installed, Crest sets
+  `PYWEBVIEW_GUI=qt` (unless you set it), so pywebview no longer prints "GTK cannot be loaded … No module named
+  'gi'" before opening with Qt. Test: `tests/test_linux_backend.py`.
+- **Install docs:** README and INSTALL.txt use a virtual environment for pip (Linux refuses a system-wide pip),
+  say to clone the repository (there is no zip), explain how the data folder is found, and correct the Settings >
+  Save line.
+
+## 2026-11-21
+
+- **The screening's local DEM folder holds the chosen DEM only.** The 2026-11-20 change passed the DEM's own folder
+  as `local_dem`, and DamSafety_Screening's tool 2 mosaics every raster under that folder (`list_local_tiles`), so
+  model results (hmax, vmax, arrival) or a second DEM sitting next to the DEM were mixed into the terrain; for
+  `<work>/dem.tif` that folder was the whole work folder. `layers.stage_dem_folder()` now fills
+  `<work>/screen_dem` with the chosen DEM alone (a symlink, else a hard link, else a copy on Windows without the
+  symlink right; a VRT with relative tile paths is written out with absolute ones) plus its own sidecars, and
+  `local_dem` points there. The DEM's folder is only read. The offline pack's `<suite>/dem` folder still goes in as
+  it is (by the suite's convention it holds the DEM only). Same staging as DamIT Crest (damit #163). Tests:
+  `tests/test_screen_dem_folder.py` (a decoy raster next to the DEM, relative VRT tiles, the work folder's
+  `dem.tif`, the pack folder, copy fallback), `tests/test_handoff.py`.
+
+## 2026-11-20
+
+- **Screening uses the dam's own DEM for every clip.** `crest-desktop/crest/qgis_run.py` `_settings_arg()` only wrote
+  the ND offline pack's DEM or `<work>/dem.tif` into `crest_settings.json`, so a DEM typed in the Report step's DEM
+  field, chosen with "Choose DEM", or set in `CREST_DEM` never reached the screening, and its larger clips downloaded
+  USGS 3DEP afresh. The screening now gets the same DEM as the flood model (`dem_path`: the DEM field, `CREST_DEM`,
+  the chosen DEM, `<work>/dem.tif` / `dem.vrt`, then the pack's DEM) as its local DEM folder (`terrain_source` 1,
+  `local_dem`, `larger_clips` 2), and the log names it. Same fix as DamIT Crest (damit #146). Tests:
+  `tests/test_handoff.py` (GateTests).
+
 ## 2026-11-18
 
 - **Security: the browser fallback no longer puts the API token on the browser's command line.** When no pywebview
