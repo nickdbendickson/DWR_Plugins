@@ -260,10 +260,6 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
     return out
 
 
-def layer_names(table=None):
-    return [t["name"] for t in (table or registry())]
-
-
 def _hifld_files(folder):
     """{HIFLD name: file} for the vector files of `folder` whose name says what they are (the
     DataLumos downloads: <layer>-geojson.zip / -shapefile.zip, or an unpacked file)."""
