@@ -55,11 +55,16 @@ class Tables:
         self.edges = edges
 
 
-def build_from_fine(dem_fine, n_fine, dx, r):
+def build_from_fine(dem_fine, n_fine, dx, r, fine_shape=None):
     """Build sub-grid tables from a fine DEM and roughness grid.
 
     dem_fine, n_fine : (ny*r, nx*r) fine bed elevation (m) and Manning n.
     dx               : COARSE cell size (m).  r : fine cells per coarse cell per axis.
+    fine_shape       : (rows, cols) of the TRUE fine grid when dem_fine was padded on its south and
+                       east sides up to a whole multiple of r (fewer than r rows / columns of
+                       padding). The south and east domain-edge profiles are then read from the last
+                       true row / column, not from the padding: a padded edge would otherwise be a
+                       wall of padding and an open (FREE) edge could never drain. None = not padded.
     """
     dem = np.asarray(dem_fine, float)
     nn = np.asarray(n_fine, float)
@@ -67,6 +72,13 @@ def build_from_fine(dem_fine, n_fine, dx, r):
     if dem.shape != nn.shape or dem.shape[0] % R or dem.shape[1] % R:
         raise ValueError("fine grids must share a shape that is a whole multiple of r")
     ny, nx = dem.shape[0] // R, dem.shape[1] // R
+    if fine_shape is None:
+        true_rows, true_cols = dem.shape
+    else:
+        true_rows, true_cols = int(fine_shape[0]), int(fine_shape[1])
+        if not (dem.shape[0] - R < true_rows <= dem.shape[0]
+                and dem.shape[1] - R < true_cols <= dem.shape[1]):
+            raise ValueError("fine_shape must be the padded shape less under r rows / columns")
     # (ny, nx, r, r) blocks -> (ny, nx, m) sorted sub-elevations
     blk = dem.reshape(ny, R, nx, R).transpose(0, 2, 1, 3).reshape(ny, nx, R * R)
     s = np.sort(blk, axis=-1)
@@ -91,12 +103,14 @@ def build_from_fine(dem_fine, n_fine, dx, r):
     nts = nn[R - 1::R, :][:-1, :]
     nbn = nn[0::R, :][1:, :]
     nf2y = (0.5 * (nts + nbn)).reshape(ny - 1, nx, R) ** 2
-    # domain-boundary edge sub-profiles (one cell only; no max with a neighbour)
+    # domain-boundary edge sub-profiles (one cell only; no max with a neighbour). The east / south
+    # profiles are the last TRUE fine column / row (fine_shape), so padding never walls an edge.
+    ce, rs = true_cols - 1, true_rows - 1
     edges = {
         "W": (dem[:, 0].reshape(ny, R), nn[:, 0].reshape(ny, R) ** 2),
-        "E": (dem[:, -1].reshape(ny, R), nn[:, -1].reshape(ny, R) ** 2),
+        "E": (dem[:, ce].reshape(ny, R), nn[:, ce].reshape(ny, R) ** 2),
         "N": (dem[0, :].reshape(nx, R), nn[0, :].reshape(nx, R) ** 2),
-        "S": (dem[-1, :].reshape(nx, R), nn[-1, :].reshape(nx, R) ** 2),
+        "S": (dem[rs, :].reshape(nx, R), nn[rs, :].reshape(nx, R) ** 2),
     }
     return Tables(dx, R, s, csum, asub, zfx, nf2x, zfy, nf2y, zbed, zbank, edges, ncell)
 
