@@ -174,10 +174,44 @@ def subgrid_fine_depth_downscales_and_conserves():
     assert np.allclose(sg.fine_depth(e1, flat, 1), 1.25)
 
 
+@test
+def subgrid_padded_grid_keeps_the_true_edge_profiles():
+    """A fine grid padded on its south / east sides up to a multiple of r (fine_shape = its true
+    shape) takes its south and east domain-edge profiles from the last TRUE row / column, never from
+    the padding - which would wall an open edge. The north / west profiles are unchanged."""
+    r, dx = 4, 40.0
+    rows, cols = 10, 13                               # true fine shape: pads to 12 x 16
+    rng = np.random.RandomState(7)
+    true = 100.0 + rng.rand(rows, cols)
+    pad = np.full((12, 16), 1100.0)
+    pad[:rows, :cols] = true
+    nn = np.full(pad.shape, 0.03)
+    t = sg.build_from_fine(pad, nn, dx, r, fine_shape=(rows, cols))
+    east, south = t.edges["E"][0], t.edges["S"][0]
+    assert np.array_equal(east.reshape(-1)[:rows], true[:, cols - 1]), "east edge is not the true column"
+    assert np.all(east.reshape(-1)[rows:] == 1100.0)   # the pad rows of that column stay a wall
+    assert np.array_equal(south.reshape(-1)[:cols], true[rows - 1, :]), "south edge is not the true row"
+    assert np.all(south.reshape(-1)[cols:] == 1100.0)
+    assert np.array_equal(t.edges["W"][0].reshape(-1), pad[:, 0])
+    assert np.array_equal(t.edges["N"][0].reshape(-1), pad[0, :])
+    # without fine_shape (an unpadded grid) the edges are the grid's own last row / column, as before
+    t0 = sg.build_from_fine(pad, nn, dx, r)
+    assert np.array_equal(t0.edges["E"][0].reshape(-1), pad[:, -1])
+    assert np.array_equal(t0.edges["S"][0].reshape(-1), pad[-1, :])
+    # a fine_shape that is not "the padded shape less under r" is refused
+    try:
+        sg.build_from_fine(pad, nn, dx, r, fine_shape=(rows - 4, cols))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an impossible fine_shape was accepted")
+
+
 def _main():
     fns = [subgrid_tables_reduce_to_flat_cell, subgrid_reduces_to_plain_acc,
            subgrid_lake_at_rest_stays_flat, subgrid_closed_basin_conserves_volume,
-           subgrid_channel_matches_manning_normal_depth, subgrid_fine_depth_downscales_and_conserves]
+           subgrid_channel_matches_manning_normal_depth, subgrid_fine_depth_downscales_and_conserves,
+           subgrid_padded_grid_keeps_the_true_edge_profiles]
     import traceback
     f = 0
     for fn in fns:
