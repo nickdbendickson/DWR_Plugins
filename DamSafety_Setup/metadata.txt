@@ -20,6 +20,6 @@ changelog=1.2.0 - 2026-11-12 (needs DamSafety Core 1.1.0 for the new row; withou
     1.0.15 - Fix of the 2026-10-19 audit (R-H1): the Suite status dock's Linux LISFLOOD-FP build (scripts/build_lisflood_linux.sh, the same file as the Runner's) applies the arrival-depth patch and refuses an unpatched build. The audit's F-01 and F-03 are already handled by the GUI-grammar rework and the Runner's dam wizard, so they are not re-applied here.
     1.0.14 - GUI grammar, part 3 (option A): Start here… is one page, the suite data folder (scanned as you type, the last folder filled in), then 'Continue…' opens DamSafety Runner's dam wizard with the folder and the scan carried over. Without DamSafety Runner, Continue… stays off and a red line says: 'DamSafety Runner is not installed — it provides the modelling tools. Install it, then Start here… again.' The old Dam, DEM and Run pages are gone: they only appeared without DamSafety Runner, and their last step opened a DamSafety Runner tool. Their NID fill, not-a-dam filter and DEM storage estimate moved to the Runner's dam wizard (Runner 3.10.36, with their tests); the Run page's max extent is set in the run tool's dialog. ui_widgets.py is the suite's shared copy. No default changes.
 author=N.D. Bendickson
-repository=https://github.com/nickdbendickson/dAmIt_Plugins
-tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
-homepage=https://github.com/nickdbendickson/dAmIt_Plugins
+repository=https://github.com/nickdbendickson/DWR_Plugins
+tracker=https://github.com/nickdbendickson/DWR_Plugins/issues
+homepage=https://github.com/nickdbendickson/DWR_Plugins

@@ -365,7 +365,7 @@ class RunSettings:
         self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
         self.sgc_start = "auto"
         self.sgc_curve = list(sgcmod.BIEGER_2015_US)
-        # 3.42.3: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
+        # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
         # own default (4). The QGIS run tool sets it from SUBGRID_R, the CLI from model.subgrid_r.
         self.user_subgrid_r = None
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
@@ -658,7 +658,7 @@ def key_settings(st):
         for k in ("lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n",
                   "sgc_start", "sgc_curve"):
             d.pop(k, None)
-    # 3.42.3: the sub-grid FV coarsening factor is in the key only when it is set (a different r is
+    # 3.49.0: the sub-grid FV coarsening factor is in the key only when it is set (a different r is
     # a different flood); left at the engine's default it stays out, so earlier checkpoints resume
     if getattr(st, "user_subgrid_r", None) is None:
         d.pop("user_subgrid_r", None)

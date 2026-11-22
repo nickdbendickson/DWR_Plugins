@@ -1069,8 +1069,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         _set_help(p, "LISFLOOD-FP: the executable below, else the provider setting, else an "
                   "installed one. Boann (GPU engine): LISFLOOD-FP 8.3's ACC (local inertial) scheme "
                   "rewritten as GPU kernels; it runs on the Apple GPU through Metal, and on other "
-                  "computers on the CPU build of the same kernels (one core, needs a C++ "
-                  "compiler). It matched LISFLOOD-FP 8.3 within millimetres on the test cases; "
+                  "computers on the CPU build of the same kernels (shipped prebuilt for "
+                  "Windows, Linux and macOS, else compiled once with a C++ compiler; every core). "
+                  "It matched LISFLOOD-FP 8.3 within millimetres on the test cases; "
                   "the run report says which engine ran. 'Boann, shock-capturing' is its HLLC "
                   "finite-volume solver (the analogue of LISFLOOD-FP's FV1). Typing 'gpu' or "
                   "'shock' in the LISFLOOD-FP field does the same.")
