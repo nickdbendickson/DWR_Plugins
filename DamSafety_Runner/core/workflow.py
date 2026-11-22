@@ -43,6 +43,7 @@ import time
 import numpy as np
 
 from . import model_terrain                 # 3.17.7
+from . import run_health                    # 3.46.0
 from . import breach as brmod
 from . import conditioning as cond
 from . import flood as floodmod
@@ -4094,6 +4095,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
+    report["health"] = run_health.assess(report)             # 3.46.0: the run health card
     _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     with open(res.report_md, "w", encoding="utf-8") as f:
@@ -4318,6 +4320,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     vec.update(res_ns.vectors)
     report.setdefault("outputs", {})["final"] = dict(paths)
     report["outputs"]["vectors"] = vec
+    report["health"] = run_health.assess(report)             # 3.46.0: the run health card
     _write_json(rp, report)
     with open(os.path.join(model_dir, "run_report.md"), "w", encoding="utf-8") as f:
         f.write(render_report(report))
@@ -4525,6 +4528,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
+    report["health"] = run_health.assess(report)             # 3.46.0: the run health card
     _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
@@ -5387,8 +5391,12 @@ def render_report(r):
     s = r["summary"]
     h = r["hydrograph"]
     lines = ["# Breach model run: {}".format(s["dam_id"]), "",
-             "{} · {} · finished {}".format(r["tool"], r["policy"], r["run_finished"]), "",
-             "## Result", "",
+             "{} · {} · finished {}".format(r["tool"], r["policy"], r["run_finished"]), ""]
+    # 3.46.0: one pass / warn / fail line before anything else (core/run_health.py)
+    _card = run_health.card_line(r.get("health") or run_health.assess(r))
+    if _card:
+        lines += [_card, ""]
+    lines += ["## Result", "",
              "| | |", "|---|---|",
              "| Scenario | {} |".format(SCENARIO_TEXT.get(s.get("scenario"), "sunny day")),
              "| Final rasters from | {} |".format(s["final_model"]),
