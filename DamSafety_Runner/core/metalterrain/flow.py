@@ -76,8 +76,53 @@ def _layout(ny, nx):
     return [("w", f, n), ("ok", u8, n), ("dir", u8, n), ("a0", u, n), ("a1", u, n), ("st", u, 4)]
 
 
+def _topo_accum(direction, valid, conn):
+    """Drainage area (cell counts) on a direction field by Kahn topological order: every cell
+    starts at 1, and a cell hands its total to its downstream neighbour once all of its own donors
+    have been counted. Level-synchronous, so each level is one vectorised numpy step and the cost is
+    O(cells + levels), not the gather iteration's O(cells x longest flow path).
+
+    It gives the same numbers as the kernels' fixed point (1 + sum of donors), because the network
+    is acyclic: every direction points to a strictly lower cell. Returns (accum int64 flat, levels,
+    every_valid_cell_drained)."""
+    ny, nx = direction.shape
+    n = ny * nx
+    d = direction.ravel()
+    ok = valid.ravel()
+    down = np.full(n, -1, dtype=np.int64)
+    for code, (dr, dc) in drc(conn).items():
+        idx = np.nonzero(ok & (d == code))[0]
+        if idx.size:
+            r, c = np.divmod(idx, nx)
+            r2, c2 = r + dr, c + dc
+            inb = (r2 >= 0) & (r2 < ny) & (c2 >= 0) & (c2 < nx)
+            t = np.full(idx.size, -1, dtype=np.int64)
+            t[inb] = r2[inb] * nx + c2[inb]
+            down[idx] = t
+    has = down >= 0
+    has[has] = ok[down[has]]              # the kernels only count donors into a valid cell
+    down[~has] = -1
+    acc = ok.astype(np.int64)
+    indeg = np.bincount(down[has], minlength=n).astype(np.int64)
+    frontier = np.nonzero(ok & (indeg == 0))[0]
+    drained = int(frontier.size)
+    levels = 0
+    while frontier.size:
+        f = frontier[down[frontier] >= 0]
+        if not f.size:
+            break
+        t = down[f]
+        np.add.at(acc, t, acc[f])
+        np.subtract.at(indeg, t, 1)
+        tu = np.unique(t)
+        frontier = tu[indeg[tu] == 0]
+        drained += int(frontier.size)
+        levels += 1
+    return acc, levels, drained == int(ok.sum())
+
+
 def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, max_sweeps=0,
-               conn=4, log=None):
+               conn=4, log=None, method="topo"):
     """Flow direction and accumulation for `dem` (2-D; NaN or -9999 = NoData). Returns
     (direction, accum, info).
 
@@ -86,9 +131,19 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
     drainage area for channel extraction). `direction` is int8 (-1 = NoData; for D4, 0-3 = N/E/S/W
     and 4 = outlet/sink; for D8, 0-7 = N/E/S/W/NE/SE/SW/NW and 8 = outlet/sink - use flow.drc(conn)
     and flow.none_code(conn)). `accum` is float64 drainage area in cell counts, NaN at NoData. Pass
-    `filled` (the output of fill.fill_dem) to skip re-filling."""
+    `filled` (the output of fill.fill_dem) to skip re-filling.
+
+    `method` is how the drainage area is summed once the kernels have set the directions:
+      "topo" (default, Runner 3.50.0): Kahn topological order on the host, O(cells + levels).
+      "iterate": the kernels' gather sweeps until nothing changes (the pre-3.50.0 path). Each sweep
+          moves area one cell downstream, so it needs about as many sweeps as the longest flow path;
+          a 2001 x 2001 prairie-pothole grid on the CPU build was still running after 12 minutes.
+    Both give identical directions and identical drainage areas (tests/test_metalterrain_flow.py
+    pins that); "iterate" stays for that comparison."""
     if conn not in (4, 8):
         raise ValueError("conn must be 4 or 8")
+    if method not in ("topo", "iterate"):
+        raise ValueError("method must be 'topo' or 'iterate'")
     spec = _SPEC_FOR[conn]
     none_c = none_code(conn)
     a = np.asarray(dem, dtype=np.float64)
@@ -116,8 +171,21 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
         arr["a1"][:] = ones
         p = TParams()
         p.nx, p.ny, p.r0, p.c0, p.wr, p.wc, p.pad, p.pad2 = nx, ny, 0, 0, ny, nx, 0, 0
-        k = int(sweeps_per_batch) or max(16, nx + ny)
         nvalid = int(valid.sum())
+        if method == "topo":
+            # one sweep sets the directions (k_d*_dir); the area is then summed on the host
+            bk.run_batch(p, 1)
+            direction = arr["dir"].reshape(ny, nx).astype(np.int16)
+            direction = np.where(valid, direction, -1).astype(np.int8)
+            acc, levels, drained = _topo_accum(direction, valid, conn)
+            accum = np.where(valid, acc.reshape(ny, nx).astype(np.float64), np.nan)
+            info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": 1,
+                    "converged": bool(drained), "valid": nvalid, "conn": conn,
+                    "method": "topo", "levels": levels}
+            if not drained:
+                info["note"] = "the direction field has a cycle; some cells were never drained"
+            return direction, accum, info
+        k = int(sweeps_per_batch) or max(16, nx + ny)
         cap = int(max_sweeps) or max(200 * (nx + ny), 2 * nvalid)
         sweeps, changed = 0, 1
         while changed and sweeps < cap:
@@ -130,7 +198,7 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
         accum = arr["a0"].reshape(ny, nx).astype(np.float64)
         accum = np.where(valid, accum, np.nan)
         info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": sweeps,
-                "converged": changed == 0, "valid": nvalid, "conn": conn}
+                "converged": changed == 0, "valid": nvalid, "conn": conn, "method": "iterate"}
         if not info["converged"]:
             info["note"] = "accumulation did not converge in {} sweeps (raise max_sweeps)".format(
                 cap)
