@@ -8,9 +8,9 @@
 One <pyqgis_plugin> per zip in --zips (DamSafety_<Name>_<version>.zip, as tools/build_release.py
 names them), filled from the plugin's metadata.txt inside the zip, with download_url pointing at
 the GitHub Release asset:
-  https://github.com/nickdbendickson/dAmIt_Plugins/releases/download/<tag>/<zip>
+  https://github.com/nickdbendickson/DWR_Plugins/releases/download/<tag>/<zip>
 QGIS reads the file from the URL the user adds under Plugins > Manage and Install Plugins >
-Settings > Add repository (https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml, published
+Settings > Add repository (https://nickdbendickson.github.io/DWR_Plugins/plugins.xml, published
 to the gh-pages branch by .github/workflows/release.yml).
 
 --merge takes a previously published plugins.xml and keeps every entry whose (name, version)
@@ -27,7 +27,7 @@ import sys
 import zipfile
 import xml.etree.ElementTree as ET
 
-RELEASE_URL = "https://github.com/nickdbendickson/dAmIt_Plugins/releases/download/{tag}/{zip}"
+RELEASE_URL = "https://github.com/nickdbendickson/DWR_Plugins/releases/download/{tag}/{zip}"
 ZIP_RE = re.compile(r"^(DamSafety_[A-Za-z]+)_(\d+\.\d+\.\d+)\.zip$")
 # metadata key -> plugins.xml element (in the order the official repository writes them)
 FIELDS = (("description", "description"), ("about", "about"), ("version", "version"),

@@ -240,7 +240,7 @@ in the release assets. A failed LISFLOOD-FP job stops the release. So does a Win
 does not start, and a suite that fails on Windows or macOS.
 
 **The QGIS plugin repository.** The index is served by GitHub Pages at
-`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, and its `download_url`s point at
+`https://nickdbendickson.github.io/DWR_Plugins/plugins.xml`, and its `download_url`s point at
 the release assets. Two one-time steps for the repository owner:
 
 1. *Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages`,
