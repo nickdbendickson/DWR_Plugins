@@ -134,8 +134,8 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
     `filled` (the output of fill.fill_dem) to skip re-filling.
 
     `method` is how the drainage area is summed once the kernels have set the directions:
-      "topo" (default, Runner 3.50.0): Kahn topological order on the host, O(cells + levels).
-      "iterate": the kernels' gather sweeps until nothing changes (the pre-3.50.0 path). Each sweep
+      "topo" (default, Runner 3.51.0): Kahn topological order on the host, O(cells + levels).
+      "iterate": the kernels' gather sweeps until nothing changes (the pre-3.51.0 path). Each sweep
           moves area one cell downstream, so it needs about as many sweeps as the longest flow path;
           a 2001 x 2001 prairie-pothole grid on the CPU build was still running after 12 minutes.
     Both give identical directions and identical drainage areas (tests/test_metalterrain_flow.py

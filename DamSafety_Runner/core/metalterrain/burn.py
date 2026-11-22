@@ -106,7 +106,7 @@ def _carve_path_from(dem, valid, in_depr, rows, cols, floor):
     """_carve_path's BFS from the depression cells (rows, cols) in row-major order. `in_depr` is
     anything indexable by [r, c] that is True inside the depression (a bool mask, or a label grid
     compared to one id). The visited set is a dict, so the cost is the cells the search reaches,
-    not the whole grid (Runner 3.50.0: a full-grid parent array per depression made
+    not the whole grid (Runner 3.51.0: a full-grid parent array per depression made
     reconnect_crossings O(n_depressions x cells))."""
     ny, nx = dem.shape
     parent = {}
@@ -192,7 +192,7 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
         _dirn, accum, _ = FL.flow_accum(a, filled=filled, backend=backend)
     out = a.copy()
     records = []
-    # Each depression's cells and peak drainage area from one pass over the grid (Runner 3.50.0),
+    # Each depression's cells and peak drainage area from one pass over the grid (Runner 3.51.0),
     # not a `labels == id` mask per depression: same cells, same order, same max, same carves.
     labels = np.asarray(labels)
     nx = labels.shape[1]

@@ -115,7 +115,7 @@ def depression_census(dem, filled=None, cell_m=1.0, eps=1e-5, backend="auto"):
     # sort keeps each depression's cells in row-major order, the order `labels == lid` gave), then
     # read each depression from its slice. The per-depression numbers are bit-identical to the old
     # mask-per-label loop (same values, same order), but the cost is O(cells log cells + n) instead
-    # of O(n x cells): 86,402 depressions on a 2001 x 2001 grid took 7+ minutes before (Runner 3.50.0).
+    # of O(n x cells): 86,402 depressions on a 2001 x 2001 grid took 7+ minutes before (Runner 3.51.0).
     nx = labels.shape[1]
     _flat, cells, starts = label_cells(labels, n)
     dflat, aflat, fflat = delta.ravel(), a.ravel(), filled.ravel()

@@ -165,7 +165,7 @@ def lisflood_smoke(exe, work=None):
     A successful check is remembered for this process (same file, same mtime).
     Set ND_DAM_PRE_RUN_SMOKE=0 to skip it. The built-in engine and Boann are never smoked: they
     run inside this process from a .py file in this plugin (core/builtin_lisflood.py,
-    core/metalflood/engine*.py), so there is no program to start (Runner 3.50.0: Boann's
+    core/metalflood/engine*.py), so there is no program to start (Runner 3.51.0: Boann's
     engine.py was started as a program and the run stopped with PermissionError).
     """
     if str(os.environ.get("ND_DAM_PRE_RUN_SMOKE", "1")).strip().lower() in ("0", "false", "no", "off"):

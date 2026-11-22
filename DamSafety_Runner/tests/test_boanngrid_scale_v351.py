@@ -1,4 +1,4 @@
-"""Runner 3.50.0: three bugs found running Absaraka (DWR-2801) at 30 m with Boann ACC on the Linux
+"""Runner 3.51.0: three bugs found running Absaraka (DWR-2801) at 30 m with Boann ACC on the Linux
 CPU build (DAMSAFETY_MF_BACKEND=cpu), Grok Bot for Nick, 2026-11-21.
 
 1. The pre-run LISFLOOD 1-second check started Boann's core/metalflood/engine.py as a program
@@ -101,9 +101,9 @@ def smoke_still_checks_a_real_program_and_a_py_outside_the_plugin():
             os.environ["ND_DAM_PRE_RUN_SMOKE"] = saved_env
 
 
-# ------------------------------------------------------- 2: the pre-3.50.0 census / reconnect
+# ------------------------------------------------------- 2: the pre-3.51.0 census / reconnect
 def _census_legacy(dem, filled, cell_m=1.0):
-    """audit.depression_census before Runner 3.50.0 (one mask per depression), verbatim."""
+    """audit.depression_census before Runner 3.51.0 (one mask per depression), verbatim."""
     a = np.asarray(dem, dtype=np.float64)
     filled = np.asarray(filled, dtype=np.float64)
     delta = A.fill_delta(a, filled)
@@ -167,7 +167,7 @@ def _carve_path_legacy(dem, valid, depr, floor):
 
 
 def _reconnect_legacy(a, labels, items, accum, min_accum_cells, freeze_mask=None):
-    """The carve loop of burn.reconnect_crossings before Runner 3.50.0, verbatim."""
+    """The carve loop of burn.reconnect_crossings before Runner 3.51.0, verbatim."""
     a = np.asarray(a, dtype=np.float64)
     valid = np.isfinite(a) & (a != B.NODATA)
     out = a.copy()
