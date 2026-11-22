@@ -7,6 +7,10 @@ uploads to the GitHub Release and plugins.xml points at), on any OS with git and
     python3 tools/build_release.py --out dist --runner-bin build/bin
         (also puts build/bin/<platform>/lisflood[.exe] into the Runner zip as
          DamSafety_Runner/bin/<platform>/..., which core/lisflood.bundled_exe() finds)
+    python3 tools/build_release.py --out dist --boann-cpu build/boann
+        (also puts Boann's CPU libraries, build/boann/<platform>/*, made by
+         tools/build_boann_cpu.py, into the Runner and Screening zips under
+         core/metalflood/prebuilt/<platform>/, which metalflood/backends.build_cpu_library finds)
 
 Like tools/mac/make_plugin_zips.py (the Mac installer's zips): committed files only, through
 `git archive`, so an uncommitted edit never ships; fixed timestamps, so the same files give the
@@ -85,6 +89,27 @@ def runner_binaries(folder):
     return out
 
 
+def boann_libraries(folder, plugin):
+    """{zip path: (bytes, False)} for Boann's prebuilt CPU libraries under folder/<platform>/, laid
+    out as <plugin>/core/metalflood/prebuilt/<platform>/<name>. Screening has no sub-grid FV engine,
+    so its zip leaves the subfv_* libraries out."""
+    out = {}
+    if not folder:
+        return out
+    for plat in BIN_PLATFORMS:
+        sub = os.path.join(folder, plat)
+        if not os.path.isdir(sub):
+            continue
+        for name in sorted(os.listdir(sub)):
+            if name.startswith(".") or not name.endswith((".so", ".dll", ".dylib")):
+                continue
+            if plugin != "DamSafety_Runner" and name.startswith("subfv_"):
+                continue
+            with open(os.path.join(sub, name), "rb") as fh:
+                out["{}/core/metalflood/prebuilt/{}/{}".format(plugin, plat, name)] = (fh.read(), False)
+    return out
+
+
 def sha256_of(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -115,6 +140,9 @@ def main(argv=None):
     ap.add_argument("--out", default=os.path.join(REPO, "dist"), help="output folder [dist]")
     ap.add_argument("--runner-bin", default="", metavar="DIR",
                     help="folder with <platform>/lisflood[.exe] to bundle into the Runner zip")
+    ap.add_argument("--boann-cpu", default="", metavar="DIR",
+                    help="folder with <platform>/<spec>_cpu_<hash>[_omp].<ext> (tools/build_boann_cpu.py) "
+                         "to bundle into the Runner and Screening zips")
     ap.add_argument("--only", default="", help="comma-separated plugin folders (default: all)")
     a = ap.parse_args(argv)
     commit = git("rev-parse", "--verify", a.ref + "^{commit}", text=True).strip()
@@ -130,11 +158,16 @@ def main(argv=None):
     bins = runner_binaries(a.runner_bin)
     if a.runner_bin and not bins:
         raise SystemExit("no <platform>/lisflood[.exe] under " + a.runner_bin)
+    if a.boann_cpu and not boann_libraries(a.boann_cpu, "DamSafety_Runner"):
+        raise SystemExit("no <platform>/*_cpu_* library under " + a.boann_cpu)
     sums, built = [], []
     for p in plugins:
         files = committed_files(commit, p)
         dest = os.path.join(a.out, "{}_{}.zip".format(p, version(files, p)))
-        write_zip(dest, files, bins if p == "DamSafety_Runner" else None)
+        extra = dict(bins) if p == "DamSafety_Runner" else {}
+        if p in ("DamSafety_Runner", "DamSafety_Screening"):
+            extra.update(boann_libraries(a.boann_cpu, p))
+        write_zip(dest, files, extra or None)
         sums.append("{}  {}".format(sha256_of(dest), os.path.basename(dest)))
         built.append(dest)
         print(os.path.basename(dest), "({} files{})".format(

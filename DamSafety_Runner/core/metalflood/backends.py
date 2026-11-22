@@ -3,15 +3,21 @@
 MetalBackend   the Apple GPU, through the Metal framework called with ctypes (no PyObjC, no
                Xcode, nothing to install: the shader source is compiled by Metal at run time).
                Apple silicon (no float atomics needed).
-CpuBackend     the same kernel source built as C++ (mf_shim.h + cpu_kernels.cpp) with the
-               computer's C++ compiler at first use, cached by the source's hash. One core. It is
-               how the engine is tested where there is no Apple GPU (Linux CI, the cloud).
+CpuBackend     the same kernel source built as C++ (mf_shim.h + cpu_kernels.cpp): a library
+               shipped with the plugin (prebuilt/<platform>/, made by the release workflow with
+               tools/build_boann_cpu.py) when one matches the source's hash, else compiled with
+               the computer's C++ compiler at first use and cached by that hash. Built with
+               OpenMP when the compiler has it (every core, bit-identical to one core; set
+               DAMSAFETY_MF_THREADS to cap it, DAMSAFETY_MF_OPENMP=0 for the one-core build),
+               else one core. It is how Boann runs on Windows and Linux, and how the engine is
+               tested where there is no Apple GPU (Linux CI, the cloud).
 
 Both hold every grid as a numpy array the host reads and writes directly (Metal: shared
 storage, the GPU's own memory on Apple silicon), and run n steps per call (run_batch)."""
 import ctypes
 import hashlib
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -241,32 +247,106 @@ def find_compiler():
     return None
 
 
-def build_cpu_library(spec=FLOOD_SPEC, log=None):
-    """The CPU build of the kernels (compiled once per source version), its path."""
-    ext = ".dylib" if sys.platform == "darwin" else (".dll" if os.name == "nt" else ".so")
-    out = os.path.join(_cache_dir(), "{}_cpu_{}{}".format(spec.name, _source_hash(spec), ext))
-    if os.path.isfile(out):
-        return out
-    cxx = find_compiler()
-    if not cxx:
-        raise BackendError("no C++ compiler (c++, clang++ or g++) for the engine's CPU build")
-    fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
-    os.close(fd)
+PREBUILT_DIR = os.path.join(HERE, "prebuilt")
+
+
+def platform_tag():
+    """linux-x64, windows-x64, macos-arm64, ... : the prebuilt/ folder for this computer."""
+    m = platform.machine().lower()
+    arch = "arm64" if m in ("arm64", "aarch64") else ("x64" if m in ("x86_64", "amd64") else m)
+    osname = "macos" if sys.platform == "darwin" else ("windows" if os.name == "nt" else "linux")
+    return "{}-{}".format(osname, arch)
+
+
+def library_ext(osname=None):
+    osname = osname or platform_tag().split("-")[0]
+    return {"macos": ".dylib", "windows": ".dll"}.get(osname, ".so")
+
+
+def cpu_library_name(spec, ext, openmp):
+    """<spec>_cpu_<source hash>[_omp]<ext>, the name of a CPU build of these exact sources."""
+    return "{}_cpu_{}{}{}".format(spec.name, _source_hash(spec), "_omp" if openmp else "", ext)
+
+
+def cpu_build_command(spec, cxx, out, openmp=True, extra=()):
+    """The compiler command for the CPU build of spec (tools/build_boann_cpu.py uses it too)."""
     inc = []
     for d in dict.fromkeys(os.path.dirname(p) for p in
                            (spec.cpu_source, spec.shim, spec.kernel_source)):
         inc += ["-I", d]
-    cmd = [cxx, "-O3", "-std=c++14", "-fno-strict-aliasing", "-shared", "-fPIC",
-           *inc, "-x", "c++", spec.cpu_source, "-o", tmp]
-    if log:
-        log("Building the engine's CPU kernels: " + " ".join(cmd))
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       universal_newlines=True)
-    if r.returncode != 0:
+    cmd = [cxx, "-O3", "-std=c++14", "-fno-strict-aliasing", "-shared", "-fPIC"]
+    if openmp:
+        cmd.append("-fopenmp")
+    return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + ["-o", out]
+
+
+def prebuilt_available(spec=FLOOD_SPEC):
+    """True when this plugin ships a CPU build of spec's current sources for this computer."""
+    d = os.path.join(PREBUILT_DIR, platform_tag())
+    return any(os.path.isfile(os.path.join(d, cpu_library_name(spec, library_ext(), omp)))
+               for omp in (True, False))
+
+
+def _loads(path, log=None):
+    """True when the library opens here (a prebuilt OpenMP build needs the OpenMP runtime, which a
+    computer may lack: the one-core build is the fallback)."""
+    try:
+        ctypes.CDLL(path)
+        return True
+    except OSError as e:
+        if log:
+            log("Not using {} ({}).".format(os.path.basename(path), e))
+        return False
+
+
+def _openmp_wanted():
+    return os.environ.get("DAMSAFETY_MF_OPENMP", "1").strip().lower() not in ("0", "no", "false", "off")
+
+
+def build_cpu_library(spec=FLOOD_SPEC, log=None):
+    """The CPU build of the kernels, its path: a prebuilt library shipped with the plugin for
+    these exact sources, else one compiled here once per source version (OpenMP first, the
+    one-core build if the compiler has no OpenMP)."""
+    ext = library_ext()
+    kinds = [True, False] if _openmp_wanted() else [False]
+    for omp in kinds:
+        p = os.path.join(PREBUILT_DIR, platform_tag(), cpu_library_name(spec, ext, omp))
+        if os.path.isfile(p) and _loads(p, log):
+            return p
+    cxx = find_compiler()
+    err = ""
+    for omp in kinds:
+        out = os.path.join(_cache_dir(), cpu_library_name(spec, ext, omp))
+        if os.path.isfile(out):
+            return out
+        failed = out + ".failed"                # this compiler has no OpenMP: do not retry each run
+        if not cxx or (omp and os.path.isfile(failed)):
+            continue
+        fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
+        os.close(fd)
+        cmd = cpu_build_command(spec, cxx, tmp, openmp=omp)
+        if log:
+            log("Building the engine's CPU kernels: " + " ".join(cmd))
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           universal_newlines=True)
+        if r.returncode == 0:
+            os.replace(tmp, out)
+            return out
         os.remove(tmp)
-        raise BackendError("the CPU kernels did not compile:\n" + r.stdout[-3000:])
-    os.replace(tmp, out)
-    return out
+        err = r.stdout[-3000:]
+        if omp:
+            try:
+                with open(failed, "w") as f:
+                    f.write(err)
+            except OSError:
+                pass
+            if log:
+                log("This compiler has no OpenMP; building the one-core CPU kernels instead.")
+    if not cxx:
+        raise BackendError("no C++ compiler (c++, clang++ or g++) for the engine's CPU build, and no "
+                           "prebuilt library for {} in this plugin (a release zip ships them)".format(
+                               platform_tag()))
+    raise BackendError("the CPU kernels did not compile:\n" + err)
 
 
 class CpuBackend:
@@ -274,14 +354,25 @@ class CpuBackend:
 
     def __init__(self, spec=FLOOD_SPEC, log=None):
         self.spec = spec
-        self.lib = ctypes.CDLL(build_cpu_library(spec, log))
+        self.path = build_cpu_library(spec, log)
+        self.lib = ctypes.CDLL(self.path)
         self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(spec.params_cls),
                                           ctypes.c_int]
         self.lib.mf_run_batch.restype = ctypes.c_int
         if self.lib.mf_params_size() != ctypes.sizeof(spec.params_cls):
             raise BackendError("the CPU kernels' Params is {} bytes, Python's {}".format(
                 self.lib.mf_params_size(), ctypes.sizeof(spec.params_cls)))
-        self.device = "CPU (one core, C++ build of the Metal kernels)"
+        self.threads = 1
+        if hasattr(self.lib, "mf_threads"):
+            self.lib.mf_threads.argtypes = [ctypes.c_int]
+            self.lib.mf_threads.restype = ctypes.c_int
+            try:
+                want = int(os.environ.get("DAMSAFETY_MF_THREADS", "0") or 0)
+            except ValueError:
+                want = 0
+            self.threads = max(1, int(self.lib.mf_threads(max(0, want))))
+        self.device = ("CPU ({} cores, C++ build of the Metal kernels)".format(self.threads)
+                       if self.threads > 1 else "CPU (one core, C++ build of the Metal kernels)")
         self.arrays = {}
 
     def allocate(self, layout):
