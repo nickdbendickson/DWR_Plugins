@@ -1,5 +1,12 @@
 # Crest
 
+> **Retired (2026-11-22).** DamIT Desk ([nickdbendickson/damit-desk](https://github.com/nickdbendickson/damit-desk)) is
+> the one desk now. Its **North Dakota profile** (*Settings > Dam inventory profile*, `?profile=nd`, or
+> `bin/damit-desk --profile nd`) carries this desk's work: the NID with DWR's dam values, the DWR dams, dugouts and
+> unknown structures list on the Batch screen, DWR's NAVD 88 crests, and the hand-off to the DamSafety plugins
+> (`nddam:*`, `ndbreach:*`, `ndhazard:classify`). The dam-suite installer installs DamIT Desk instead of this folder.
+> This folder stays until its removal is agreed; fixes go to damit-desk.
+
 > Crest lives in **nickdbendickson/DWR_Plugins**, folder `dwr_crest/` (it was the `nickdbendickson/crest` repository
 > until 2026-11-19; its full history came along). Run every `npm` command below from `dwr_crest/`.
 
