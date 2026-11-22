@@ -909,9 +909,53 @@ def sgc_engine_is_a_runner_engine_choice():
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
                    "gpu-subfv": lf.GPU_SUBFV_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            if _w == "auto":                            # 3.44.0: picked per computer, tested below
+                continue
             assert lf.resolve_exe(_w) == exe_for[_w], _w
         assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
 
+
+@test
+def recommended_auto_engine_choice():
+    """Runner 3.44.0: 'Recommended (auto)' is appended (no saved index moves), labels are plain (no
+    'Apple GPU' - the engine also runs on the CPU), and choose_auto picks Boann ACC on an Apple GPU,
+    else an installed LISFLOOD-FP, else Boann on the CPU, else nothing (with a reason)."""
+    import os
+    import tempfile
+    from unittest import mock
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.core.metalflood import backends as mfb
+    for w in ("auto", " Auto ", "recommended", "Recommended (auto)"):
+        assert lf.is_auto_word(w), w
+    assert not lf.is_auto_word("gpu") and not lf.is_auto_word("")
+    fake_lf = os.path.join(tempfile.mkdtemp(prefix="autolf_"), "lisflood")
+    open(fake_lf, "w").close()
+    with mock.patch.object(mfb, "metal_available", return_value=(True, "M2 Pro")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == lf.GPU_EXE and "GPU" in why, why
+    with mock.patch.object(mfb, "metal_available", return_value=(False, "not macOS")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == fake_lf and "LISFLOOD-FP" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=True):
+            exe, why = lf.choose_auto("")
+            assert exe == lf.GPU_EXE and "CPU" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=False), \
+                mock.patch.object(mfb, "find_compiler", return_value=None):
+            exe, why = lf.choose_auto(os.path.join(os.path.dirname(fake_lf), "missing"))
+            assert exe == "" and "no flood engine" in why, why
+    try:
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[:7] == ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2",
+                                          "gpu-sgc", "gpu-subfv")   # saved indices unchanged
+        assert algs.FLOOD_ENGINES[7] == "auto"
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        assert not any("Apple GPU" in t for t in algs.FLOOD_ENGINES_TEXT)
+        assert algs.FLOOD_ENGINES_TEXT[7].startswith("Recommended (auto)")
+        for i in (3, 4, 6):
+            assert algs.FLOOD_ENGINES_TEXT[i].startswith("Advanced:"), i
 
 @test
 def subfv_engine_is_a_runner_engine_choice():
@@ -1317,7 +1361,7 @@ if __name__ == "__main__":
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,
                sgc_engine_is_a_runner_engine_choice,
-               subfv_engine_is_a_runner_engine_choice,
+               subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
                metalflood_sgc_params_layout_matches_kernels,
                metalflood_sgc_channel_at_rest_is_well_balanced,
                metalflood_sgc_matches_the_float64_reference,
