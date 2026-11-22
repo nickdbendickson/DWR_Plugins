@@ -11,7 +11,7 @@ Data Updater of the nd_hazard fork.
 ## Install
 
 1. In QGIS: **Plugins > Manage and Install Plugins…**, either from the DamSafety plugin
-   repository (`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, added under
+   repository (`https://nickdbendickson.github.io/DWR_Plugins/plugins.xml`, added under
    *Settings*) or **Install from ZIP** with `DamSafety_Data_<version>.zip` from the GitHub
    Release.
 2. The plugin appears under **Plugins > Dam safety > Data** and as a toolbar button
