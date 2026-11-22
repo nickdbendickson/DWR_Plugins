@@ -356,9 +356,9 @@ def gpu_backend_note():
         ok, why = mfb.metal_available()
         if ok:
             return "the Apple GPU ({})".format(why)
-        if mfb.find_compiler():
-            return ("the CPU build of the GPU kernels, one core (no Metal GPU here: {})"
-                    .format(why))
+        if mfb.prebuilt_available() or mfb.find_compiler():
+            return ("the CPU build of the GPU kernels, every core where built with OpenMP (no "
+                    "Metal GPU here: {})".format(why))
         return "nothing: no Metal GPU ({}) and no C++ compiler for the CPU build".format(why)
     except Exception as e:  # a description only
         return "unknown ({})".format(e)
