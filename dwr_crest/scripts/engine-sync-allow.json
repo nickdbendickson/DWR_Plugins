@@ -25,12 +25,6 @@
       "crest": " *   W-H1/H2   nd-dams.ts NID height checks               warn",
       "damit": " *   W-H1/H2   nid-dams.ts NID height checks               warn",
       "why": "Comment only: crest's NID loader is nd-dams.ts, DamIT's is nid-dams.ts."
-    },
-    {
-      "file": "routing.ts",
-      "crest": "export const DEFAULT_ROUGHNESS: RoughnessOptions = { nChannel: 0.035, nFloodplain: 0.05, bankfullM: 1.5 };",
-      "damit": "export const DEFAULT_ROUGHNESS: RoughnessOptions = { nChannel: 0.035, nFloodplain: 0.06, bankfullM: 1.5 };",
-      "why": "Default floodplain n: Crest follows the suite's shared manning_n 0.05 (DamSafety_Core, DamIT Core 0.3.3 / damit#160, damit-desk #8); damit's legacy damit_crest copy still has 0.06. Drop this entry when damit_crest moves too."
     }
   ]
 }

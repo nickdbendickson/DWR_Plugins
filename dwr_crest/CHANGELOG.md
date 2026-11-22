@@ -8,8 +8,8 @@
   the shared defaults file) and the built-in floodplain n (`DEFAULT_ROUGHNESS.nFloodplain`, `routing.ts`) are now
   0.05. A record that sets its own n (Breach step, Advanced) is unchanged. A record left on the default gets a
   slower, deeper routed flood and needs its terrain layer built again. The LISFLOOD export writes `fpfric 0.0500`.
-  The channel n stays 0.035. `engine-sync-allow.json` allows the one `routing.ts` line to differ from damit's
-  legacy `damit_crest` copy, which still says 0.06.
+  The channel n stays 0.035. damit's `damit_crest` copy moved in the same pair (damit #165), so the engine files
+  match line for line and `engine-sync-allow.json` is unchanged.
 
 ## 2026-11-21 (install test fixes)
 
