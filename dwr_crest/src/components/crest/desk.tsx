@@ -584,7 +584,7 @@ function BreachStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             options={[
               ["froehlich", "Froehlich 2008"],
               ["macdonald", "MacDonald"],
-              ["tr60", "TR-60 width"],
+              ["tr60", "Height-multiple width (screening)"],
             ]}
             onChange={(method) => update({ method: method as BreachMethod })}
           />

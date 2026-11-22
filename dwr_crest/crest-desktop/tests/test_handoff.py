@@ -375,6 +375,16 @@ class GateTests(unittest.TestCase):
         self.assertIn("--DAM_ID=ND00199", text)
         self.assertIn("--DAM_ID=ND00199", text)
 
+    def test_desk_height_multiple_width_is_not_handed_off_as_tr60(self):
+        # Absaraka audit: the desk's "tr60" is a 2H/3H screening width, not the Runner's NRCS TR-60 peak
+        os.environ["QGIS_MODE"] = "pass"
+        os.environ["CREST_NDBREACH_CLI"] = str(self.cli)
+        result = run_model({**DAM, "method": "tr60"}, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertFalse(result["ok"])
+        self.assertTrue(result.get("stopped"))
+        self.assertTrue(any("height-multiple width" in line for line in self.lines))
+        self.assertEqual(self.calls_text(), "")
+
     def test_model_without_dem_stops(self):
         os.environ["QGIS_MODE"] = "pass"
         os.environ["CREST_NDBREACH_CLI"] = str(self.cli)

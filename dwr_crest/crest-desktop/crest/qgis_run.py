@@ -760,6 +760,16 @@ def run_model(
     if prepared is None:
         return {"ok": False, "stopped": True, "folder": "", "work": ""}
     root, folder = prepared
+    if _method_key(dam)[0] == "tr60":
+        # Absaraka audit: the desk's height-multiple width (2H piping / 3H overtopping) is a screening opening; the
+        # Runner's TR-60 is the NRCS 1,100*Br^1.35 peak (at 110 ft and 5,000 ac-ft about 4x the desk's peak). Handing
+        # one off as the other would run a different breach without saying so, so the hand-off refuses it.
+        log(
+            "Not started: this record uses the desk's height-multiple width (2H piping, 3H overtopping), a screening "
+            "opening. The Runner's TR-60 is the NRCS peak discharge, a different breach. Choose Froehlich 2008 or "
+            "MacDonald for the flood model run."
+        )
+        return {"ok": False, "stopped": True, "folder": str(folder), "work": str(root)}
     dams = root / "dams"
     dam_id = str(dam.get("nid") or dam.get("id") or "dam")
     label, cli_tier, builtin = model_choice(model)

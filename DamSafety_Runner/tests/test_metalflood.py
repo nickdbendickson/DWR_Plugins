@@ -30,8 +30,10 @@ from nd_breach_runner.tests.registry import Skip, model_test, test
 
 
 def _need_cpu_build():
+    if mfb.prebuilt_available():
+        return                                   # a release's shipped CPU build (any OS)
     if os.name == "nt":
-        raise Skip("the engine's CPU build is not made on Windows")
+        raise Skip("the engine's CPU build is not made on Windows (a release ships it prebuilt)")
     if not mfb.find_compiler():
         raise Skip("no C++ compiler for the engine's CPU build")
 
@@ -907,9 +909,53 @@ def sgc_engine_is_a_runner_engine_choice():
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
                    "gpu-subfv": lf.GPU_SUBFV_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            if _w == "auto":                            # 3.44.0: picked per computer, tested below
+                continue
             assert lf.resolve_exe(_w) == exe_for[_w], _w
         assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
 
+
+@test
+def recommended_auto_engine_choice():
+    """Runner 3.44.0: 'Recommended (auto)' is appended (no saved index moves), labels are plain (no
+    'Apple GPU' - the engine also runs on the CPU), and choose_auto picks Boann ACC on an Apple GPU,
+    else an installed LISFLOOD-FP, else Boann on the CPU, else nothing (with a reason)."""
+    import os
+    import tempfile
+    from unittest import mock
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.core.metalflood import backends as mfb
+    for w in ("auto", " Auto ", "recommended", "Recommended (auto)"):
+        assert lf.is_auto_word(w), w
+    assert not lf.is_auto_word("gpu") and not lf.is_auto_word("")
+    fake_lf = os.path.join(tempfile.mkdtemp(prefix="autolf_"), "lisflood")
+    open(fake_lf, "w").close()
+    with mock.patch.object(mfb, "metal_available", return_value=(True, "M2 Pro")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == lf.GPU_EXE and "GPU" in why, why
+    with mock.patch.object(mfb, "metal_available", return_value=(False, "not macOS")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == fake_lf and "LISFLOOD-FP" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=True):
+            exe, why = lf.choose_auto("")
+            assert exe == lf.GPU_EXE and "CPU" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=False), \
+                mock.patch.object(mfb, "find_compiler", return_value=None):
+            exe, why = lf.choose_auto(os.path.join(os.path.dirname(fake_lf), "missing"))
+            assert exe == "" and "no flood engine" in why, why
+    try:
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[:7] == ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2",
+                                          "gpu-sgc", "gpu-subfv")   # saved indices unchanged
+        assert algs.FLOOD_ENGINES[7] == "auto"
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        assert not any("Apple GPU" in t for t in algs.FLOOD_ENGINES_TEXT)
+        assert algs.FLOOD_ENGINES_TEXT[7].startswith("Recommended (auto)")
+        for i in (3, 4, 6):
+            assert algs.FLOOD_ENGINES_TEXT[i].startswith("Advanced:"), i
 
 @test
 def subfv_engine_is_a_runner_engine_choice():
@@ -1201,6 +1247,100 @@ def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
     return os.path.join(folder, "run.par")
 
 
+@test
+def metalflood_cpu_openmp_matches_one_core():
+    """The multi-core (OpenMP) CPU build gives the same bits as the one-core build for every Boann
+    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV): every reduction in the kernels is an integer
+    add / max / min, so the order the cores finish in cannot change the answer."""
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_fv2 as fv2e, engine_dg2 as dg2e
+    from nd_breach_runner.core.metalflood import engine_sgc as sgce, engine_subfv as sfve
+    from nd_breach_runner.core.metalflood import subfv_backend as sfb
+    keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_THREADS")}
+    try:
+        os.environ["DAMSAFETY_MF_OPENMP"] = "1"
+        if not mfb.build_cpu_library(mfb.FLOOD_SPEC).endswith("_omp" + mfb.library_ext()):
+            raise Skip("this C++ compiler has no OpenMP")
+        engines = (("acc", mf.run_par, mfb.FLOOD_SPEC), ("fv", fve.run_par, mfb.FV_SPEC),
+                   ("fv2", fv2e.run_par, mfb.FV2_SPEC), ("dg2", dg2e.run_par, mfb.DG2_SPEC),
+                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC))
+        d = _tmp()
+        try:
+            for name, run, spec in engines:
+                outs = []
+                for mode, threads in (("0", "1"), ("1", "4")):
+                    os.environ["DAMSAFETY_MF_OPENMP"] = mode
+                    os.environ["DAMSAFETY_MF_THREADS"] = threads
+                    lib = mfb.build_cpu_library(spec)
+                    assert ("_omp" in os.path.basename(lib)) == (mode == "1"), lib
+                    f = os.path.join(d, "{}_{}".format(name, mode))
+                    p = valley_deck(f, ny=72, nx=110, sim_s=1800.0, hole=False, pond=False,
+                                    gauge=False, free="E")
+                    st = run(p, backend="cpu")
+                    outs.append((st, {e: _res(f, e) for e in ("max", "maxVc", "inittm")}))
+                (s1, r1), (sn, rn) = outs
+                assert s1["steps"] == sn["steps"], (name, s1["steps"], sn["steps"])
+                for e in r1:
+                    assert np.array_equal(r1[e], rn[e]), (name, e, float(np.abs(r1[e] - rn[e]).max()))
+                assert s1["final_volume_m3"] == sn["final_volume_m3"], name
+        finally:
+            shutil.rmtree(d, True)
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@test
+def metalflood_cpu_prefers_a_prebuilt_library():
+    """A CPU build shipped in prebuilt/<platform>/ under these sources' name is used before the
+    cache or a compiler; a file there that does not open is skipped."""
+    _need_cpu_build()
+    keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_CACHE")}
+    lib_dir = os.path.join(mfb.PREBUILT_DIR, mfb.platform_tag())
+    made_root = not os.path.isdir(mfb.PREBUILT_DIR)
+    made_dir = not os.path.isdir(lib_dir)
+    d = _tmp()
+    made = []
+    try:
+        os.environ["DAMSAFETY_MF_CACHE"] = os.path.join(d, "cache")
+        os.environ["DAMSAFETY_MF_OPENMP"] = "0"
+        built = mfb.build_cpu_library(mfb.FLOOD_SPEC)            # one-core build, in the cache
+        os.makedirs(lib_dir, exist_ok=True)
+        serial = os.path.join(lib_dir, mfb.cpu_library_name(mfb.FLOOD_SPEC, mfb.library_ext(), False))
+        omp = os.path.join(lib_dir, mfb.cpu_library_name(mfb.FLOOD_SPEC, mfb.library_ext(), True))
+        for path in (serial, omp):
+            if os.path.exists(path):
+                raise Skip("a real prebuilt library is present")
+        shutil.copy(built, serial)
+        made.append(serial)
+        with open(omp, "wb") as f:                                # does not open: skipped
+            f.write(b"not a library")
+        made.append(omp)
+        os.environ["DAMSAFETY_MF_OPENMP"] = "1"
+        assert mfb.build_cpu_library(mfb.FLOOD_SPEC) == serial
+        assert mfb.prebuilt_available(mfb.FLOOD_SPEC)
+        bk = mfb.CpuBackend(mfb.FLOOD_SPEC)
+        assert bk.lib is not None
+        bk.close()
+    finally:
+        for path in made:
+            if os.path.exists(path):
+                os.remove(path)
+        if made_root:
+            shutil.rmtree(mfb.PREBUILT_DIR, True)
+        elif made_dir:
+            shutil.rmtree(lib_dir, True)
+        shutil.rmtree(d, True)
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
@@ -1221,13 +1361,14 @@ if __name__ == "__main__":
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,
                sgc_engine_is_a_runner_engine_choice,
-               subfv_engine_is_a_runner_engine_choice,
+               subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
                metalflood_sgc_params_layout_matches_kernels,
                metalflood_sgc_channel_at_rest_is_well_balanced,
                metalflood_sgc_matches_the_float64_reference,
                metalflood_sgc_conveys_below_bank_then_spills_overbank,
                metalflood_sgc_free_edge_drains_and_matches_reference,
                metalflood_sgc_reduces_to_acc_without_channels,
+               metalflood_cpu_openmp_matches_one_core, metalflood_cpu_prefers_a_prebuilt_library,
                metalflood_sgc_floodplain_area_spans_the_full_cell_width):
         try:
             fn()

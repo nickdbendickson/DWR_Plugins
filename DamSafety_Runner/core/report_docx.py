@@ -1827,6 +1827,15 @@ def datum_text(rep):
     return "{}{}".format(tgt, " ({})".format(", ".join(bits)) if bits else "")
 
 
+def extent_flags(rep):
+    """(cut-off reason or "", extent is a minimum, boundary outflow %) from the run report's own
+    flags - what the checklist's downstream-extent row reads (Absaraka audit)."""
+    rep = rep or {}
+    co = rep.get("cut_off")
+    reason = (co.get("reason") or "cut off") if isinstance(co, dict) else ("cut off" if co else "")
+    return reason, bool(rep.get("extent_is_minimum")), rep.get("boundary_outflow_pct")
+
+
 def cutoff_text(rep):
     """H4b: whether the results were cut off before the full downstream extent."""
     rep = rep or {}
@@ -3342,10 +3351,22 @@ class _Report(object):
             cut = [w for w in self.warnings if re.search(
                 r"Stopped after|maximum extent|still advancing|leaves the base domain", w)]
             stop = [w for w in self.warnings if "domain stops growing" in w]
-            if cut or over:
+            # Absaraka audit: the run report's own flags (cut_off, extent_is_minimum), not only
+            # the warning text, decide this row, so a flood that ran off the DEM can never read
+            # "Yes" here while the report says the extent is a minimum.
+            co_reason, emin, out_pct = extent_flags(rep)
+            if cut or over or co_reason:
                 add("Downstream extent criterion (5.1.1(f)) met", "No",
                     "The flood was still leaving the domain when the run stopped: "
-                    + (cut[0][:110] if cut else ", ".join(over)), "model")
+                    + (cut[0][:110] if cut else (", ".join(over) if over else
+                                                  "cut off ({})".format(co_reason))), "model")
+            elif emin:
+                add("Downstream extent criterion (5.1.1(f)) met", "Check",
+                    "{} of the breach volume left the model through its edges, so the flood "
+                    "area and the consequences are minimums; extend the model or confirm "
+                    "nothing lies beyond".format(
+                        "{:.0f}%".format(out_pct) if isinstance(out_pct, (int, float))
+                        else "A significant share"), "model")
             elif stop:
                 add("Downstream extent criterion (5.1.1(f)) met", "Check",
                     "Edges are below the tolerance, but the domain stopped growing where no "

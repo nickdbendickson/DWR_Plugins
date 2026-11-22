@@ -196,7 +196,7 @@ export const MAX_REACH_KM = 100;
 const METHOD_LABEL: Record<BreachMethod, string> = {
   froehlich: "Froehlich 2008",
   macdonald: "MacDonald & Langridge-Monopolis",
-  tr60: "TR-60 screening width",
+  tr60: "Height-multiple width (2H piping, 3H overtopping; screening)",
 };
 
 /**
