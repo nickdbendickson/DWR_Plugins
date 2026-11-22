@@ -77,17 +77,65 @@ def subfv_engine_runs_deck_and_writes_fine_outputs():
         shutil.rmtree(d, True)
 
 
+def _sloping_open_deck(folder, r, extra_rows, extra_cols, sim=600.0):
+    """A plane sloping down to the east under 1 m of start water, FREE east and south edges, on a
+    fine grid of (4 r + extra_rows) x (12 r + extra_cols) cells. Returns (par_path, start volume)."""
+    os.makedirs(folder, exist_ok=True)
+    ny, nx = 4 * r + extra_rows, 12 * r + extra_cols
+    dxf = 3.0
+    x = (np.arange(nx) + 0.5) * dxf
+    z = np.tile(10.0 - 0.01 * x, (ny, 1))
+    h0 = np.full((ny, nx), 1.0)
+    _write_asc(os.path.join(folder, "run.dem.asc"), z, 0.0, 0.0, dxf)
+    _write_asc(os.path.join(folder, "run.start"), h0, 0.0, 0.0, dxf)
+    with open(os.path.join(folder, "run.bci"), "w") as f:
+        f.write("E 0.000 {:.3f} FREE\n".format(ny * dxf))
+        f.write("S 0.000 {:.3f} FREE\n".format(nx * dxf))
+    lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results", "startfile run.start",
+             "bcifile run.bci", "sim_time {:.1f}".format(sim), "initial_tstep 1.0",
+             "massint {:.1f}".format(sim), "saveint {:.1f}".format(sim + 10.0), "fpfric 0.03",
+             "subgrid {}".format(r)]
+    with open(os.path.join(folder, "run.par"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return os.path.join(folder, "run.par"), float(h0.sum() * dxf * dxf)
+
+
+@test
+def subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r():
+    """A deck whose rows / columns are NOT a whole multiple of r is padded up to one. The padding
+    must not wall the open (FREE) east / south edges: the water has to leave the model exactly as it
+    does on a grid that needs no padding. (It once did not: the edge profile was read from the
+    padding, so nothing left and a real valley - Lake Delhi 2010, 1982 x 2314 cells at r = 4 - filled
+    like a bathtub, 17 to 25 ft over the surveyed high-water marks.)"""
+    for r, extra_rows, extra_cols in ((4, 0, 0), (4, 2, 2), (4, 0, 3), (3, 2, 1)):
+        d = tempfile.mkdtemp()
+        try:
+            par, v0 = _sloping_open_deck(d, r, extra_rows, extra_cols)
+            stats = es.run_par(par, backend="cpu")
+            drained = stats["outflow_m3"] / v0
+            assert drained > 0.9, "r={} with {} extra rows, {} extra columns drained only {:.1%}".format(
+                r, extra_rows, extra_cols, drained)
+            rel = abs(stats["mass_error_m3"]) / v0
+            assert rel < 1e-3, "mass error {:.3e} of {:.1f} m3".format(stats["mass_error_m3"], v0)
+        finally:
+            shutil.rmtree(d, True)
+
+
 def _main():
     import traceback
-    try:
-        subfv_engine_runs_deck_and_writes_fine_outputs()
-        print("ok    subfv_engine_runs_deck_and_writes_fine_outputs")
-        print("\n1 tests, 0 failed")
-        return 0
-    except Exception:
-        traceback.print_exc()
-        print("\n1 tests, 1 failed")
-        return 1
+    fns = [subfv_engine_runs_deck_and_writes_fine_outputs,
+           subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r]
+    f = 0
+    for fn in fns:
+        try:
+            fn()
+            print("ok   ", fn.__name__)
+        except Exception:
+            f += 1
+            print("FAIL ", fn.__name__)
+            traceback.print_exc()
+    print("\n{} tests, {} failed".format(len(fns), f))
+    return 1 if f else 0
 
 
 if __name__ == "__main__":

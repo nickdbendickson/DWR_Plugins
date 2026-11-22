@@ -83,7 +83,8 @@ class Engine:
         dxf = d.dx
         dxc = dxf * r
         self.dxc = dxc
-        t = self.t = sg.build_from_fine(dem, nn, dxc, r)
+        # fine_shape: the open-edge profiles come from the deck's true last row / column, not the pad
+        t = self.t = sg.build_from_fine(dem, nn, dxc, r, fine_shape=(nyf, nxf))
         nyc, nxc = t.ny, t.nx
         self.nyc, self.nxc = nyc, nxc
         # a coarse cell is active if any of its fine sub-cells is valid
