@@ -130,8 +130,8 @@ def subgrid_hllc_peak_velocity_is_a_speed_the_cell_held():
     """The peak-velocity grid (.maxVc) must hold a speed the cell really carried at the end of some
     step - never the speed BEFORE that step's friction. In a film of water behind a wetting front the
     pre-friction speed is momentum / (almost no volume): thousands of m/s for one step, which the
-    semi-implicit friction then takes away. It once went into the grid (60,500 m/s in a cell of the
-    real Lake Delhi run at r = 8) and into the next step's CFL limit (a 0.0006 s step)."""
+    semi-implicit friction then takes away. It once went into the grid: 60,500 m/s in a cell of the
+    real Lake Delhi run at r = 8, and a few percent too fast everywhere else."""
     t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
     ny, nx, r, m = t.ny, t.nx, t.r, t.r * t.r
     back = be.CpuBackend(sb.SUBFV_SPEC)
