@@ -9,8 +9,8 @@ Use GitHub's private vulnerability reporting for this repository:
 **Security → Advisories → Report a vulnerability**
 (<https://github.com/nickdbendickson/DWR_Plugins/security/advisories/new>).
 
-Include the version or commit, which component (a DamSafety plugin,
-`dwr_crest`, or `damit_ai`), the platform, and the steps to reproduce. You'll
+Include the version or commit, which component (a DamSafety plugin or
+`dwr_crest`), the platform, and the steps to reproduce. You'll
 get an acknowledgement, and a fix or an explanation of why it is not a
 problem.
 
@@ -22,7 +22,8 @@ privately rather than opening a public issue.
 ## Scope
 
 This repository holds the DamSafety QGIS plugins, the standalone Crest desktop
-app (`dwr_crest`), and the local AI tools (`damit_ai`). Data a user opens or
+app (`dwr_crest`). The local AI tools (Heim and Vor) moved to the damit
+repository (`damit_ai/`); report them there. Data a user opens or
 imports — QGIS project files, dam files, offline data packs, DSS-WISE
 packages, zip archives, and other shared records — is treated as untrusted
 input. Reports that matter most involve code execution, reading or writing
