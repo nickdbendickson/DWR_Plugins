@@ -2400,8 +2400,15 @@ def _classify_and_write(run, cfg, state):
                     continue
                 with open(rr, encoding="utf-8") as f:
                     rdata = json.load(f)
-                if isinstance(rdata, dict) and rdata.get("cut_off"):
+                if not isinstance(rdata, dict):
+                    continue
+                if rdata.get("cut_off"):
                     extra["cut_off"] = rdata["cut_off"]
+                # Absaraka audit: the flood that left the model (extent_is_minimum) reaches
+                # the Hazard headline too, not only a cut-off
+                if rdata.get("extent_is_minimum"):
+                    extra["extent_is_minimum"] = rdata.get("boundary_outflow_pct") or True
+                if rdata.get("cut_off") or rdata.get("extent_is_minimum"):
                     break
         except Exception:
             pass
