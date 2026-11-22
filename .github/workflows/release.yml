@@ -2,7 +2,7 @@ name: Release
 
 # Builds a GitHub Release of the eight DamSafety plugins (DamSafety Core and the seven that need it) and publishes the QGIS plugin
 # repository index (plugins.xml) to the gh-pages branch, so QGIS can install and update them
-# from https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml (docs/CI.md, "Release").
+# from https://nickdbendickson.github.io/DWR_Plugins/plugins.xml (docs/CI.md, "Release").
 #
 # Starts on a tag v* (git tag v2026.11.07 && git push origin v2026.11.07) or by hand (Actions >
 # Release > Run workflow; then the release is a draft named after the commit, for a look at the
@@ -13,6 +13,10 @@ name: Release
 #   lisflood-macos    the same on an Apple Silicon runner (macos-latest), libomp bundled with an rpath
 #   lisflood-windows  the same cross-compiled with MinGW-w64 on ubuntu, fully static
 #   lisflood-windows-check  starts that Windows build once on a Windows runner (tools/lisflood_smoke.py)
+#   boann-cpu-*       Boann's CPU libraries (tools/build_boann_cpu.py): every engine, OpenMP and
+#                     one-core, for linux-x64, windows-x64 (MinGW-w64, static), macos-arm64 and
+#                     macos-x64, each checked on its own OS (tools/boann_cpu_smoke.py); they go into
+#                     the Runner and Screening zips under core/metalflood/prebuilt/<platform>/
 #   os-tests          the plugin suites on Windows and macOS (os-tests.yml)
 #   release           plugin zips (tools/build_release.py, the Runner zip carrying the three
 #                     binaries under DamSafety_Runner/bin/<platform>/), SHA256SUMS, the GitHub
@@ -160,6 +164,92 @@ jobs:
         shell: bash
         run: python tools/lisflood_smoke.py lisflood-win/lisflood.exe
 
+  boann-cpu-linux:
+    runs-on: ubuntu-22.04      # the oldest glibc GitHub offers, as for LISFLOOD-FP
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build (g++, OpenMP, static libstdc++ / libgcc)
+        run: |
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out boann --cxx g++ --require-openmp \
+            --extra=-static-libstdc++ --extra=-static-libgcc
+      - name: Check them here (no compiler used)
+        run: python tools/boann_cpu_smoke.py boann
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boann-cpu-linux-x64
+          path: boann/
+          if-no-files-found: error
+
+  boann-cpu-windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Cross-compile with MinGW-w64 (posix threads, OpenMP, -static)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q g++-mingw-w64-x86-64-posix
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out boann --platform windows-x64 \
+            --cxx x86_64-w64-mingw32-g++-posix --require-openmp --extra=-static
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boann-cpu-windows-x64
+          path: boann/
+          if-no-files-found: error
+
+  boann-cpu-windows-check:
+    # cross-compiled on Linux, so started here once on a real Windows; a library that does not
+    # open or run stops the release
+    needs: boann-cpu-windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: boann-cpu-windows-x64
+          path: boann
+      - name: Open and run every engine's library on Windows
+        shell: bash
+        run: |
+          python -m pip install -q numpy
+          python tools/boann_cpu_smoke.py boann
+
+  boann-cpu-macos:
+    # Apple clang has no OpenMP, so the Mac libraries are the one-core build (a Mac runs Boann on
+    # its Metal GPU; these are the fallback). arm64 here, x86_64 cross-built with -arch.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build (clang, one-core)
+        run: |
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out boann --platform macos-arm64 --cxx clang++ --no-openmp
+          python tools/build_boann_cpu.py --out boann --platform macos-x64 --cxx clang++ --no-openmp \
+            --extra=-arch --extra=x86_64
+      - name: Check the arm64 ones here (no compiler used)
+        run: python tools/boann_cpu_smoke.py boann
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boann-cpu-macos
+          path: boann/
+          if-no-files-found: error
+
   os-tests:
     # The plugin suites on Windows and macOS (os-tests.yml). ci.yml runs them on Ubuntu only.
     uses: ./.github/workflows/os-tests.yml
@@ -167,7 +257,8 @@ jobs:
       contents: read
 
   release:
-    needs: [lisflood-linux, lisflood-macos, lisflood-windows, lisflood-windows-check, os-tests]
+    needs: [lisflood-linux, lisflood-macos, lisflood-windows, lisflood-windows-check, os-tests,
+            boann-cpu-linux, boann-cpu-windows, boann-cpu-windows-check, boann-cpu-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -181,6 +272,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: lisflood-bin
+          pattern: lisflood-*
+      - name: Collect Boann's CPU libraries (merged into boann/<platform>/)
+        uses: actions/download-artifact@v8
+        with:
+          path: boann
+          pattern: boann-cpu-*
+          merge-multiple: true
       - name: Lay the binaries out as bin/<platform>/ and write bin/README.txt
         run: |
           # download-artifact puts each artifact in a folder named after it
@@ -218,7 +316,8 @@ jobs:
           mv "$GITHUB_WORKSPACE/dist-src.zip" "$GITHUB_WORKSPACE/dist/lisflood-8.3-ndbreach-source.zip"
       - name: Plugin zips + SHA256SUMS (committed files of the tagged commit)
         run: |
-          python3 tools/build_release.py --ref "$GITHUB_SHA" --out dist --runner-bin bin
+          ls -laR boann
+          python3 tools/build_release.py --ref "$GITHUB_SHA" --out dist --runner-bin bin --boann-cpu boann
           # the binaries as separate assets too, each with its sha256 beside the zips' in SHA256SUMS
           cp bin/linux-x64/lisflood dist/lisflood-linux-x64
           cp bin/windows-x64/lisflood.exe dist/lisflood-windows-x64.exe
@@ -255,7 +354,7 @@ jobs:
             with the arrival-depth patch for Linux x64, Windows x64 and macOS Apple Silicon
             under `DamSafety_Runner/bin/`; the same binaries are attached on their own, with
             `lisflood-8.3-ndbreach-source.zip` as the GPL corresponding source. `SHA256SUMS` lists
-            every file. QGIS plugin repository: https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml
+            every file. QGIS plugin repository: https://nickdbendickson.github.io/DWR_Plugins/plugins.xml
           files: |
             dist/*.zip
             dist/SHA256SUMS

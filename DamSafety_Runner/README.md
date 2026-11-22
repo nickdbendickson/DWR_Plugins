@@ -729,10 +729,10 @@ by unit tests on synthetic grids and by runs of the workflow with the LISFLOOD-F
 
 ### 1. The plugin
 
-From the DamSafety plugin repository (`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`,
+From the DamSafety plugin repository (`https://nickdbendickson.github.io/DWR_Plugins/plugins.xml`,
 *Plugins > Manage and Install Plugins > Settings > Add…*, experimental plugins shown), or
 *Install from ZIP* with `DamSafety_Runner_<version>.zip` from the GitHub Release
-(https://github.com/nickdbendickson/dAmIt_Plugins/releases). The repository README has the
+(https://github.com/nickdbendickson/DWR_Plugins/releases). The repository README has the
 install order of the whole suite.
 
 ### 2. LISFLOOD-FP (required)
