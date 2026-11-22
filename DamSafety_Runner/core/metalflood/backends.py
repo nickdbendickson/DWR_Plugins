@@ -218,11 +218,21 @@ def _sgc_plan(p):
 SGC_SPEC = Spec("sgc", SGC_KERNEL_SOURCE, SHIM, SGC_CPU_SOURCE, SGC_KERNELS, Params, _sgc_plan)
 
 
+# The C++ flags of every CPU build. -ffp-contract=off: never fuse a * b + c into one FMA. A compiler
+# that targets a CPU with FMA (Ubuntu 26.04's g++, every Apple Silicon clang) otherwise fuses some
+# sums and not others depending on how it vectorises a loop, and the one-core and multi-core builds
+# vectorise differently, so their answers drifted apart in the last bit (DG2 on CI, 2026-11-22).
+# The flags are part of the library's name (_source_hash), so a build made with other flags is
+# never reused.
+CPU_FLAGS = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=off")
+
+
 def _source_hash(spec):
     h = hashlib.sha256()
     for p in (spec.kernel_source, spec.shim, spec.cpu_source):
         with open(p, "rb") as f:
             h.update(f.read())
+    h.update(" ".join(CPU_FLAGS).encode())
     return h.hexdigest()[:16]
 
 
@@ -274,7 +284,7 @@ def cpu_build_command(spec, cxx, out, openmp=True, extra=()):
     for d in dict.fromkeys(os.path.dirname(p) for p in
                            (spec.cpu_source, spec.shim, spec.kernel_source)):
         inc += ["-I", d]
-    cmd = [cxx, "-O3", "-std=c++14", "-fno-strict-aliasing", "-shared", "-fPIC"]
+    cmd = [cxx] + list(CPU_FLAGS) + ["-shared", "-fPIC"]
     if openmp:
         cmd.append("-fopenmp")
     return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + ["-o", out]
