@@ -1,6 +1,6 @@
 name: Boann real-dam gate
 
-# Boann's engines (ACC and sub-grid channels) on the Lake Delhi 2010 failure, on the CPU build of
+# Boann's engines (ACC, sub-grid channels and sub-grid FV) on the Lake Delhi 2010 failure, on the CPU build of
 # the GPU kernels (the same arithmetic as the Apple GPU; GPU == CPU is metal-engine.yml's gate).
 # Unlike validation.yml (a report), this is a GATE: the job is red when a run's mean or largest
 # difference at the 8 USGS high-water marks below the dam grows past the recorded baseline by more
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   lake-delhi-boann:
-    name: Lake Delhi Dam 2010 (Boann ACC + SGC, CPU build)
+    name: Lake Delhi Dam 2010 (Boann ACC + SGC + sub-grid FV, CPU build)
     runs-on: ubuntu-latest
     timeout-minutes: 150
     defaults:
@@ -53,18 +53,18 @@ jobs:
         run: |
           python tools/validation/lake_delhi_2010/build_case.py --out "$RUNNER_TEMP/delhi" --cell 30 --threads 1
           python tools/validation/lake_delhi_2010/boann_gate.py make "$RUNNER_TEMP/delhi"
-      # two runs side by side; each Boann run uses the CPU build (OpenMP where the compiler has it)
-      - name: Run the observed breach with Boann ACC and Boann SGC
+      # three runs side by side (sub-grid FV takes about 3 min); each Boann run uses the CPU build (OpenMP where the compiler has it)
+      - name: Run the observed breach with Boann ACC, SGC and sub-grid FV
         run: |
           cli="$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py"
           cd "$RUNNER_TEMP/delhi"
           export DAMSAFETY_MF_THREADS=2
-          for n in boann_acc boann_sgc; do
+          for n in boann_acc boann_sgc boann_subfv; do
             ( rc=0; python "$cli" run "$n.json" > "$n.log" 2>&1 || rc="$?"; echo "$rc" > "$n.rc" ) &
           done
           wait
           bad=0
-          for n in boann_acc boann_sgc; do
+          for n in boann_acc boann_sgc boann_subfv; do
             echo "::group::$n (exit $(cat "$n.rc"))"
             grep -v "^\[ *[0-9]*%\]" "$n.log" | tail -n 60
             echo "::endgroup::"
@@ -74,7 +74,7 @@ jobs:
       - name: Score against the surveyed high-water marks
         if: always()
         run: |
-          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi" --runs boann_acc,boann_sgc
+          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi" --runs boann_acc,boann_sgc,boann_subfv
           cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Gate on the baseline
         run: |

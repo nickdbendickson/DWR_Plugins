@@ -42,11 +42,16 @@ def test_make_and_baseline_file():
         json.dump({"model": {"cell_size_m": 30.0}, "output": {"folder": "runs/as_observed"},
                    "_run": "observed"}, f)
     paths = G.make(d)
-    assert [os.path.basename(p) for p in paths] == ["boann_acc.json", "boann_sgc.json"]
+    assert [os.path.basename(p) for p in paths] == ["boann_acc.json", "boann_sgc.json",
+                                                    "boann_subfv.json"]
     with open(paths[1]) as f:
         c = json.load(f)
     assert c["model"]["lisflood_exe"] == "gpu-sgc" and c["model"]["lisflood_sgc"] is True
     assert c["output"]["folder"] == "runs/boann_sgc" and c["model"]["cell_size_m"] == 30.0
+    with open(paths[2]) as f:
+        c = json.load(f)
+    assert c["model"]["lisflood_exe"] == "gpu-subfv" and "lisflood_sgc" not in c["model"]
+    assert c["output"]["folder"] == "runs/boann_subfv" and c["model"]["cell_size_m"] == 30.0
     with open(G.BASELINE) as f:
         b = json.load(f)
     assert set(b["runs"]) == set(G.RUNS), b["runs"].keys()
