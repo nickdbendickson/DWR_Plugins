@@ -180,7 +180,7 @@ def main(argv=None):
                                         rel[len("DamSafety_Runner/bin/"):]))
     date = git("log", "-1", "--format=%cs", commit, text=True).strip()
     with open(os.path.join(a.out, "SHA256SUMS"), "w") as fh:
-        fh.write("# dAmIt_Plugins (DamSafety) commit {} ({})\n".format(commit, date))
+        fh.write("# DWR_Plugins (DamSafety) commit {} ({})\n".format(commit, date))
         fh.write("\n".join(sums) + "\n")
     print("built from {} -> {}".format(commit[:7], a.out))
     return built
