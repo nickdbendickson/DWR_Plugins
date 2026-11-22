@@ -1124,6 +1124,11 @@ def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     # returns a real engine .py path for a word and the string unchanged for a path, so a true
     # executable path falls through to the file resolution below.
     resolved = lfmod.resolve_exe(raw) if raw else ""
+    if raw and lfmod.is_auto_word(raw):         # 3.44.0: "auto" / "recommended"
+        resolved, _why = lfmod.choose_auto(nd_data.detect_lisflood())
+        print(_why, file=sys.stderr)
+        if not resolved:
+            raise CliError(_why)
     if resolved and resolved != raw:
         exe = resolved
     else:
