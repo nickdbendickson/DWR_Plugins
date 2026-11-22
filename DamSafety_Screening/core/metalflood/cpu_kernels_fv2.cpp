@@ -10,8 +10,10 @@
 template <void (*K)(const float*, const float*, float*, float*, float*, float*, float*, float*,
                     float*, float*, const uchar*, const uint*, const uint*, const uint*,
                     const float*, const float*, uint*, uint*, float*, float*, float*, float*,
-                    float*, float*, float*, float*, float*, const Params&, uint2)>
+                    float*, float*, float*, float*, float*, const Params&, uint2),
+          bool SERIAL = false>
 static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
+    MF_PAR_FOR_IF(!SERIAL)
     for (uint y = 0; y < hgt; ++y) {
         for (uint x = 0; x < w; ++x) {
             uint2 g = {x, y};
@@ -34,6 +36,10 @@ int mf_params_size(void) { return (int)sizeof(Params); }
 
 // n SSP-RK2 steps on the window in p; the same dispatch order as the Metal backend's FV2 plan:
 // predictor (stage 0) then corrector (stage 1), each a begin -> slopes -> faces -> cont sweep.
+// k_cont_fv2 runs SERIAL on the CPU: it reads the neighbours' h (the inline eta slopes, mf_sle) while
+// it writes its own h, so its answer depends on the order the cells are done in (a read-after-write
+// race on the GPU too). The serial row-major order keeps the CPU build exactly as it was until the
+// kernel reads a stage-start copy of h instead; every other FV2 dispatch runs on all the cores.
 int mf_run_batch(void** b, const Params* pp, int nsteps) {
     const Params& p = *pp;
     for (int s = 0; s < nsteps; ++s) {
@@ -41,12 +47,12 @@ int mf_run_batch(void** b, const Params* pp, int nsteps) {
         mf_dispatch<k_begin_fv2>(b, p, 1, 1);
         mf_dispatch<k_save_fv2>(b, p, p.wc, p.wr);
         mf_dispatch<k_faces_fv2>(b, p, p.wc + 1, p.wr + 1);
-        mf_dispatch<k_cont_fv2>(b, p, p.wc, p.wr);
+        mf_dispatch<k_cont_fv2, true>(b, p, p.wc, p.wr);
         mf_dispatch<k_stage_c_fv2>(b, p, 1, 1);
         mf_dispatch<k_begin_fv2>(b, p, 1, 1);
         mf_dispatch<k_save_fv2>(b, p, p.wc, p.wr);
         mf_dispatch<k_faces_fv2>(b, p, p.wc + 1, p.wr + 1);
-        mf_dispatch<k_cont_fv2>(b, p, p.wc, p.wr);
+        mf_dispatch<k_cont_fv2, true>(b, p, p.wc, p.wr);
         mf_dispatch<k_end_fv2>(b, p, 1, 1);
     }
     return 0;
