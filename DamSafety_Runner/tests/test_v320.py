@@ -129,7 +129,9 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
         "lisflood_sgc", "sgc_min_area_km2", "sgc_upstream_sqmi", "sgc_channel_n", "sgc_start",
         "sgc_curve",
         # 3.35.0: dry potholes (the default) stay out of the key
-        "pothole_start_fill") and not k.startswith("class_stop")
+        "pothole_start_fill",
+        # 3.42.3: the sub-grid FV coarsening factor stays out of the key until it is set
+        "user_subgrid_r") and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old
     assert "refine_near" in workflow.key_settings(workflow.RunSettings(refine_near=True))
