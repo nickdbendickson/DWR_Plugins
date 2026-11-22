@@ -10,3 +10,5 @@ symbology-style.db
 DamSafety_Runner/bin/
 bin/
 dist/
+DamSafety_Runner/core/metalflood/prebuilt/
+DamSafety_Screening/core/metalflood/prebuilt/
