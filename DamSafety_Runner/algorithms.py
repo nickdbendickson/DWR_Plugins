@@ -72,13 +72,20 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
-FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc", "gpu-subfv")
-FLOOD_ENGINES_TEXT = ["LISFLOOD-FP", "Boann (ACC scheme on the Apple GPU)",
-                      "Boann, shock-capturing (HLLC finite volume on the Apple GPU)",
-                      "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 on the Apple GPU)",
-                      "Boann, discontinuous Galerkin 2nd order (RKDG2 on the Apple GPU)",
-                      "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels on the Apple GPU)",
-                      "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells on the Apple GPU)"]
+FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc", "gpu-subfv",
+                 "auto")
+# 3.44.0: plain labels (the engine runs on a Mac's GPU or any computer's CPU, so no label says
+# "Apple GPU"), research solvers marked Advanced, and "Recommended (auto)" APPENDED so saved
+# models and scripts keep their indices. LISFLOOD-FP stays index 0 and the default.
+FLOOD_ENGINES_TEXT = [
+    "LISFLOOD-FP (the standard engine)",
+    "Boann, fast (LISFLOOD-FP's ACC scheme; Mac GPU or any CPU)",
+    "Boann, shock-capturing (HLLC; sharp dam-break fronts and jumps)",
+    "Advanced: Boann, shock-capturing 2nd order (MUSCL + SSP-RK2)",
+    "Advanced: Boann, discontinuous Galerkin 2nd order (RKDG2)",
+    "Boann, sub-grid channels (narrow rivers the grid cannot resolve)",
+    "Advanced: Boann, sub-grid finite volume (coarse grid; research, can over-pond narrow channels)",
+    "Recommended (auto): picks for this computer"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1074,7 +1081,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "It matched LISFLOOD-FP 8.3 within millimetres on the test cases; "
                   "the run report says which engine ran. 'Boann, shock-capturing' is its HLLC "
                   "finite-volume solver (the analogue of LISFLOOD-FP's FV1). Typing 'gpu' or "
-                  "'shock' in the LISFLOOD-FP field does the same.")
+                  "'shock' in the LISFLOOD-FP field does the same. 'Recommended (auto)' picks for this "
+                  "computer: Boann's fast ACC on a Mac with an Apple GPU, else LISFLOOD-FP when "
+                  "installed, else Boann on the CPU; the report names the engine that ran. "
+                  "'Advanced' solvers are for research and special cases.")
         self.addParameter(p)
         # 3.39.0: the solver's Courant number and theta, exposed (were .par / env only). Empty =
         # each engine's stable default. Both reach LISFLOOD-FP and Boann through the .par; every
@@ -1138,6 +1148,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             # Delegate to resolve_exe so every Boann engine the dropdown offers (gpu / gpu-fv /
             # gpu-fv2 / gpu-dg2 / gpu-sgc) maps from one list. Inlining the branches here is what
             # left gpu-sgc unreachable from the dropdown when #446 added it (Runner 3.38.0).
+            if _eng == "auto":
+                _lf = exe if exe and os.path.isfile(exe) else nd_data.detect_lisflood()
+                return lfmod.choose_auto(_lf)[0]
             if _eng != "lisflood":
                 return lfmod.resolve_exe(_eng)
         # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
@@ -1148,6 +1161,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # so a new engine never has to be added here too. An empty field stays empty (resolve_exe
         # returns it unchanged), so the built-in numpy approximation is never silently selected
         # (M5 safety) and a real path falls through to the file check below.
+        if exe and lfmod.is_auto_word(exe):
+            return lfmod.choose_auto(nd_data.detect_lisflood())[0]
         if exe:
             _resolved = lfmod.resolve_exe(exe)
             if _resolved != str(exe).strip():
