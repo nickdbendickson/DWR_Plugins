@@ -42,7 +42,7 @@ changelog=0.28.0 (2026-11-21; a step stopped part-way is run again: the run-in-o
     0.18.9 - Shared damsuite 1.18.6: the offline pack builder is one engine for both suites (damsuite/packengine.py); this plugin does not build packs and is unchanged otherwise.
 author=Nick Bendickson
 about=Screening-level tool. Output is for prioritization only; official hazard classification is determined by the ND Department of Water Resources.
-repository=https://github.com/nickdbendickson/dAmIt_Plugins
-tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
-homepage=https://github.com/nickdbendickson/dAmIt_Plugins
+repository=https://github.com/nickdbendickson/DWR_Plugins
+tracker=https://github.com/nickdbendickson/DWR_Plugins/issues
+homepage=https://github.com/nickdbendickson/DWR_Plugins
 experimental=True

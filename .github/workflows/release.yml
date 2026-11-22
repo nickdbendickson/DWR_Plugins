@@ -2,7 +2,7 @@ name: Release
 
 # Builds a GitHub Release of the eight DamSafety plugins (DamSafety Core and the seven that need it) and publishes the QGIS plugin
 # repository index (plugins.xml) to the gh-pages branch, so QGIS can install and update them
-# from https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml (docs/CI.md, "Release").
+# from https://nickdbendickson.github.io/DWR_Plugins/plugins.xml (docs/CI.md, "Release").
 #
 # Starts on a tag v* (git tag v2026.11.07 && git push origin v2026.11.07) or by hand (Actions >
 # Release > Run workflow; then the release is a draft named after the commit, for a look at the
@@ -255,7 +255,7 @@ jobs:
             with the arrival-depth patch for Linux x64, Windows x64 and macOS Apple Silicon
             under `DamSafety_Runner/bin/`; the same binaries are attached on their own, with
             `lisflood-8.3-ndbreach-source.zip` as the GPL corresponding source. `SHA256SUMS` lists
-            every file. QGIS plugin repository: https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml
+            every file. QGIS plugin repository: https://nickdbendickson.github.io/DWR_Plugins/plugins.xml
           files: |
             dist/*.zip
             dist/SHA256SUMS

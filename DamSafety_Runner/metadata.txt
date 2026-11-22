@@ -74,9 +74,9 @@ changelog=3.42.0 (2026-11-21; Boann's sub-grid finite-volume flood engine (gpu-s
     3.16.5 (2026-11-07; audit, shared damsuite loss.py: a flooded structure with no known arrival time is counted as no warning, not the longest/best warning band. The population-at-risk warning-time split and, with a signed fatality-rate table, the loss-of-life total are no longer understated on runs with a missing or partial arrival raster; the unknown-arrival count is reported. No depth, velocity, breach or hazard number changes. Test in DamSafety_Hazard/tests/test_loss_unknown_arrival.py.)
     3.16.4 (2026-11-06; Nick, 8:41 PM CST: for a sunny-day breach the maximum pool from the DWR values is used (unless stated otherwise); PMF runs match what the ND Dam Safety Standards state. Vw in the breach equations (Froehlich 2008 / 1995, MLM, VTG, TR-60, the Froehlich 1995 peak check) is the dam's maximum storage (DWR MAX_STORAGE, or the storage you give) for a sunny-day breach, as in 3.16.2, and the storage at the pool when the breach starts (the elevation-volume curve) for a PMF / flood-inflow breach, as before 3.16.2. Report hydrograph vw_source. The HEC-RAS plan's Froehlich (2008) piping takes the run's Vw. Fixes from the review of 3.16.1 / 3.16.2: the 'curve vs maximum storage' warning is a plain note (the curve is anchored at the maximum storage, so it only said the pool starts below the crest); a local-datum dam tied to the NAVD88 DEM no longer gets 'elevations were not shifted to NAVD88' in the HEC-RAS notes; hec_breach_mode 'match_plugin' with no breach_f2008 option only fills missing breach values (it wrote an Overtopping plan with piping widths and slopes). Test: tests/test_v3164.py.)
 author=Nick Bendickson
-repository=https://github.com/nickdbendickson/dAmIt_Plugins
-tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
-homepage=https://github.com/nickdbendickson/dAmIt_Plugins
+repository=https://github.com/nickdbendickson/DWR_Plugins
+tracker=https://github.com/nickdbendickson/DWR_Plugins/issues
+homepage=https://github.com/nickdbendickson/DWR_Plugins
 category=Plugins
 tags=dam,breach,flood,inundation,LISFLOOD-FP,ANUGA,North Dakota,dam safety,processing
 experimental=True
