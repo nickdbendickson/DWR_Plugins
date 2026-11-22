@@ -51,12 +51,12 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
     await assert.doesNotReject(step(page, name).waitFor(), `step button "${name}"`);
   await page.getByText("Swan Buffalo Detention 12").first().waitFor();
 
-  // Settings: the shared defaults open from the header, a changed value saves, and the panel closes.
+  // Settings: the shared defaults open from the header, a changed value saves (0.045: the suite default is 0.05), and the panel closes.
   await page.getByTestId("settings-toggle").click();
   await page.getByTestId("settings-panel").waitFor();
   assert.equal(await page.getByTestId("setting-sunny_day_start_pool").inputValue(), "max_pool");
   assert.equal(await page.getByTestId("setting-failure_mode").inputValue(), "piping");
-  await page.getByTestId("setting-manning_n").fill("0.05");
+  await page.getByTestId("setting-manning_n").fill("0.045");
   await page.getByTestId("settings-save").click();
   await page.getByTestId("settings-note").waitFor();
   await page.getByTestId("settings-close").click();
@@ -131,10 +131,10 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
   // The record says what it used of the shared defaults (with the value saved in Settings above).
   assert.equal(damJson.assumptions?.tool, "Crest");
   assert.equal(damJson.assumptions.used.sunny_day_start_pool, "max_pool");
-  assert.equal(damJson.assumptions.shared_values.manning_n, 0.05);
+  assert.equal(damJson.assumptions.shared_values.manning_n, 0.045);
   // The Breach step's reset put the record on the saved value, so nothing differs.
-  assert.equal(damJson.assumptions.used.manning_n, 0.05);
-  assert.equal(damJson.manning_n_floodplain, 0.05);
+  assert.equal(damJson.assumptions.used.manning_n, 0.045);
+  assert.equal(damJson.manning_n_floodplain, 0.045);
   assert.deepEqual(damJson.assumptions.differs, {});
 
   await page.waitForTimeout(500);

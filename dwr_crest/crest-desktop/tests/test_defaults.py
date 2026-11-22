@@ -103,8 +103,8 @@ class ReadWriteTests(unittest.TestCase):
 
 DAM = {"id": "d1", "nid": "ND00199", "name": "Test", "heightFt": 27.5, "storageAcFt": 1612.59, "lengthFt": 1700,
        "method": "froehlich", "failureMode": "piping"}
-ASSUME = {"used": {"sunny_day_start_pool": "normal_pool", "manning_n": 0.06}, "differs": {"sunny_day_start_pool": {"used": "normal_pool", "shared": "max_pool"}},
-          "shared_values": {"sunny_day_start_pool": "max_pool", "manning_n": 0.06}, "tool": "Crest", "version": "1+abc", "when": "2026-11-13T18:00:00"}
+ASSUME = {"used": {"sunny_day_start_pool": "normal_pool", "manning_n": 0.05}, "differs": {"sunny_day_start_pool": {"used": "normal_pool", "shared": "max_pool"}},
+          "shared_values": {"sunny_day_start_pool": "max_pool", "manning_n": 0.05}, "tool": "Crest", "version": "1+abc", "when": "2026-11-13T18:00:00"}
 ANALYSIS = {"datum": {"crestNavdFt": 1071.09, "streambedNavdFt": 1043.59, "poolNavdFt": 1061.09},
             "breach": {"peakCfs": 9000, "widthFt": 80, "series": [], "startPool": "normal", "startPoolNavdFt": 1061.09, "startPoolLabel": "normal pool"},
             "screen": {"level": "Low", "label": "Low", "reasons": []}, "assumptions": ASSUME}

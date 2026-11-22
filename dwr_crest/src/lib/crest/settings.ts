@@ -96,7 +96,7 @@ export const SUITE_VALUES: Required<SharedValues> = {
   pmf_breach_volume: "storage_at_start_pool",
   failure_mode: "piping",
   breach_method: "froehlich2008",
-  manning_n: 0.06,
+  manning_n: 0.05,
 };
 
 const same = (a: SharedValue | undefined, b: SharedValue | undefined) =>

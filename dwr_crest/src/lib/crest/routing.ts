@@ -39,7 +39,7 @@ export type RoughnessOptions = {
   bankfullM: number;
 };
 
-export const DEFAULT_ROUGHNESS: RoughnessOptions = { nChannel: 0.035, nFloodplain: 0.06, bankfullM: 1.5 };
+export const DEFAULT_ROUGHNESS: RoughnessOptions = { nChannel: 0.035, nFloodplain: 0.05, bankfullM: 1.5 };
 
 /** The range a typed Manning's n is held to: the shared defaults file's range for `manning_n` (settings.ts). */
 export const MANNING_RANGE = { lo: 0.01, hi: 0.3 } as const;
