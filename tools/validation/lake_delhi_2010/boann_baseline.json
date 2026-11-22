@@ -1,0 +1,9 @@
+{
+ "about": "Boann's Lake Delhi 2010 baseline for boann_gate.py: the observed breach (as_observed.json) at the case's 30 m cell, run with the CPU build of the GPU kernels (bit-identical to one core; GPU == CPU is metal-engine.yml's gate). Differences are model minus surveyed over the 8 USGS high-water marks below the dam (OFR 2011-1301 table 8). Recorded 2026-11-22 from DWR_Plugins main 3f536222 (Runner 3.42.0) in the cloud. Re-record when an accuracy change is meant to move these numbers, and say so in the PR.",
+ "band_ft": 0.5,
+ "peak_band": 0.05,
+ "runs": {
+  "boann_acc": {"engine": "gpu", "mean_ft": 1.24, "mean_abs_ft": 1.28, "largest_ft": 2.67, "peak_outflow_cfs": 140855, "elapsed_min_cloud": 36.1},
+  "boann_sgc": {"engine": "gpu-sgc", "mean_ft": 0.28, "mean_abs_ft": 0.76, "largest_ft": 1.43, "peak_outflow_cfs": 140855, "elapsed_min_cloud": 56.2}
+ }
+}
