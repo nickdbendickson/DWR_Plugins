@@ -46,7 +46,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       GAUGE: USGS-04156000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:
@@ -107,7 +107,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       HOURS: "48"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:

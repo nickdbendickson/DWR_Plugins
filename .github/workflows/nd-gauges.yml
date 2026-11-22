@@ -41,7 +41,7 @@ jobs:
     outputs:
       combos: ${{ steps.gen.outputs.combos }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: gen
         env:
           GAUGES: ${{ inputs.gauges }}
@@ -79,7 +79,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Provision QGIS + a scipy-compatible numpy
         uses: mamba-org/setup-micromamba@v3
         with:
@@ -135,7 +135,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
