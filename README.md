@@ -49,7 +49,7 @@ with the Runner's patch, and the plugin zips (`tools/mac/README_MAC.md`).
 In QGIS: *Plugins → Manage and Install Plugins… → Settings → Add…*, name it `DamSafety` and give
 the URL
 
-    https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml
+    https://nickdbendickson.github.io/DWR_Plugins/plugins.xml
 
 Tick *Show also experimental plugins* (Runner, Screening, PMP, Hazard Lite and Finder are marked
 experimental), then install the plugins from the *All* / *Not installed* list in the order above.
@@ -60,7 +60,7 @@ Deploy from a branch → `gh-pages` / root* (docs/CI.md, "Release"). Until then 
 "not found".
 
 **4. Release zips (after the first release).** Download `DamSafety_<Plugin>_<version>.zip` for
-each plugin from [GitHub Releases](https://github.com/nickdbendickson/dAmIt_Plugins/releases)
+each plugin from [GitHub Releases](https://github.com/nickdbendickson/DWR_Plugins/releases)
 (check the file against `SHA256SUMS`), then *Install from ZIP* as in route 1. The Runner zip of a
 release carries the patched LISFLOOD-FP binary for Windows, Linux x64 and Apple Silicon.
 
@@ -115,7 +115,7 @@ release carries the patched LISFLOOD-FP binary for Windows, Linux x64 and Apple 
   that keeps it so.
 - Each plugin folder has its own README with the tool-by-tool detail.
 
-Repository: https://github.com/nickdbendickson/dAmIt_Plugins (issues:
-https://github.com/nickdbendickson/dAmIt_Plugins/issues). LISFLOOD-FP 8.3 is GPL-3.0 (University of
+Repository: https://github.com/nickdbendickson/DWR_Plugins (issues:
+https://github.com/nickdbendickson/DWR_Plugins/issues). LISFLOOD-FP 8.3 is GPL-3.0 (University of
 Bristol; the `LICENSE` file in the 8.3 source is the GNU GPL version 3, although the Zenodo
 record's licence tag reads GPL-2.0); the release ships the patched source it was built from.

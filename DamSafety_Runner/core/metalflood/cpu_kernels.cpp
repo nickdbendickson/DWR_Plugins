@@ -10,6 +10,7 @@ template <void (*K)(const float*, const float*, float*, float*, float*, float*, 
                     const float*, const float*, uint*, uint*, float*, float*, float*, float*,
                     const Params&, uint2)>
 static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
+    MF_PAR_FOR
     for (uint y = 0; y < hgt; ++y) {
         for (uint x = 0; x < w; ++x) {
             uint2 g = {x, y};
