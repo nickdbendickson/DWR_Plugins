@@ -157,3 +157,83 @@ def boann_dry_skip_is_off_with_rain_and_on_an_old_library():
     p.wr, p.wc = 3, 4
     b.run_batch(p, 5, mfe.SKIP_CHUNK)
     assert len(called) == 1 and b.cells_run == 60
+
+
+@test
+def boann_cpu_build_asks_apple_clang_for_openmp_through_libomp():
+    """Apple clang has no -fopenmp of its own: on a Mac the CPU build also tries -Xpreprocessor
+    -fopenmp against an LLVM libomp (this Python's conda prefix first, then Homebrew), and the
+    link flags go after the source. Before Runner 3.61.0 every Mac got the one-core build."""
+    d = tempfile.mkdtemp()
+    keep = (mfb.sys.platform, os.environ.get("DAMSAFETY_MF_LIBOMP"))
+    try:
+        os.makedirs(os.path.join(d, "include"))
+        os.makedirs(os.path.join(d, "lib"))
+        open(os.path.join(d, "include", "omp.h"), "w").close()
+        open(os.path.join(d, "lib", "libomp.dylib"), "w").close()
+        os.environ["DAMSAFETY_MF_LIBOMP"] = d
+        mfb.sys.platform = "linux"
+        assert mfb.openmp_flag_sets() == [(["-fopenmp"], [])]
+        mfb.sys.platform = "darwin"
+        sets = mfb.openmp_flag_sets()
+        assert sets[0] == (["-fopenmp"], []) and mfb.mac_libomp_prefixes()[0] == d
+        cflags, link = sets[1]
+        assert cflags == ["-Xpreprocessor", "-fopenmp", "-I", os.path.join(d, "include")]
+        lib = os.path.join(d, "lib")
+        assert link == ["-L", lib, "-lomp", "-Wl,-rpath," + lib]
+        cmd = mfb.cpu_build_command(mfb.FLOOD_SPEC, "clang++", "x.dylib", openmp=True,
+                                    omp_flags=sets[1])
+        assert cmd.index("-lomp") > cmd.index(mfb.FLOOD_SPEC.cpu_source) and cmd[-2:] == ["-o", "x.dylib"]
+        assert "-fopenmp" not in mfb.cpu_build_command(mfb.FLOOD_SPEC, "c++", "y", openmp=False)
+    finally:
+        mfb.sys.platform = keep[0]
+        if keep[1] is None:
+            os.environ.pop("DAMSAFETY_MF_LIBOMP", None)
+        else:
+            os.environ["DAMSAFETY_MF_LIBOMP"] = keep[1]
+        shutil.rmtree(d, True)
+
+
+@test
+def boann_cpu_build_retries_openmp_when_the_ways_to_ask_change():
+    """A ".failed" note stops the OpenMP build being retried every run, but only while it lists
+    the same ways to ask for OpenMP: a note from before (or a libomp installed since) is retried."""
+    _need_cpu_build()
+    if mfb.prebuilt_available() or not mfb.find_compiler():
+        raise Skip("a prebuilt library is used here")
+    d = tempfile.mkdtemp()
+    keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_CACHE", "DAMSAFETY_MF_OPENMP")}
+    try:
+        os.environ["DAMSAFETY_MF_CACHE"] = d
+        os.environ["DAMSAFETY_MF_OPENMP"] = "1"
+        omp = os.path.join(d, mfb.cpu_library_name(mfb.FLOOD_SPEC, mfb.library_ext(), True))
+        with open(omp + ".failed", "w") as f:
+            f.write("an old note: just the compiler's error")
+        lib = mfb.build_cpu_library(mfb.FLOOD_SPEC)
+        if lib != omp:
+            raise Skip("this C++ compiler has no OpenMP")
+        os.remove(omp)
+        tried = "\n".join(" ".join(v[0] + v[1]) for v in mfb.openmp_flag_sets())
+        with open(omp + ".failed", "w") as f:
+            f.write(tried + "\n--\nfailed before")
+        lib = mfb.build_cpu_library(mfb.FLOOD_SPEC)
+        assert not lib.endswith("_omp" + mfb.library_ext()), lib      # the same ways: not retried
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(d, True)
+
+
+if __name__ == "__main__":
+    for fn in (boann_dry_skip_gives_the_same_answer_bit_for_bit, boann_dry_skip_matches_one_core,
+               boann_dry_skip_is_off_with_rain_and_on_an_old_library,
+               boann_cpu_build_asks_apple_clang_for_openmp_through_libomp,
+               boann_cpu_build_retries_openmp_when_the_ways_to_ask_change):
+        try:
+            fn()
+            print("ok  ", fn.__name__, flush=True)
+        except Skip as e:
+            print("skip", fn.__name__, e, flush=True)

@@ -282,16 +282,46 @@ def cpu_library_name(spec, ext, openmp):
     return "{}_cpu_{}{}{}".format(spec.name, _source_hash(spec), "_omp" if openmp else "", ext)
 
 
-def cpu_build_command(spec, cxx, out, openmp=True, extra=()):
-    """The compiler command for the CPU build of spec (tools/build_boann_cpu.py uses it too)."""
+def mac_libomp_prefixes():
+    """Folders holding an LLVM OpenMP runtime (include/omp.h + lib/libomp.dylib) for Apple clang,
+    which has no OpenMP of its own: $DAMSAFETY_MF_LIBOMP, this Python's own prefix (a conda
+    environment's llvm-openmp: the same runtime numpy may already have loaded, and two OpenMP
+    runtimes in one process abort it), then Homebrew's libomp."""
+    found = []
+    for d in (os.environ.get("DAMSAFETY_MF_LIBOMP"), sys.prefix, "/opt/homebrew/opt/libomp",
+              "/usr/local/opt/libomp"):
+        if (d and os.path.isfile(os.path.join(d, "include", "omp.h"))
+                and os.path.isfile(os.path.join(d, "lib", "libomp.dylib")) and d not in found):
+            found.append(d)
+    return found
+
+
+def openmp_flag_sets():
+    """The ways to ask the compiler for OpenMP, in the order they are tried: (compile flags, link
+    flags). Plain -fopenmp (g++, LLVM clang); on a Mac also Apple clang's -Xpreprocessor -fopenmp
+    against each libomp found (Runner 3.61.0: before, a Mac built the one-core library)."""
+    sets = [(["-fopenmp"], [])]
+    if sys.platform == "darwin":
+        for d in mac_libomp_prefixes():
+            lib = os.path.join(d, "lib")
+            sets.append((["-Xpreprocessor", "-fopenmp", "-I", os.path.join(d, "include")],
+                         ["-L", lib, "-lomp", "-Wl,-rpath," + lib]))
+    return sets
+
+
+def cpu_build_command(spec, cxx, out, openmp=True, extra=(), omp_flags=None):
+    """The compiler command for the CPU build of spec (tools/build_boann_cpu.py uses it too).
+    omp_flags: one (compile, link) pair of openmp_flag_sets(); default plain -fopenmp."""
     inc = []
     for d in dict.fromkeys(os.path.dirname(p) for p in
                            (spec.cpu_source, spec.shim, spec.kernel_source)):
         inc += ["-I", d]
     cmd = [cxx] + list(CPU_FLAGS) + ["-shared", "-fPIC"]
+    link = []
     if openmp:
-        cmd.append("-fopenmp")
-    return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + ["-o", out]
+        cflags, link = omp_flags or (["-fopenmp"], [])
+        cmd += list(cflags)
+    return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + list(link) + ["-o", out]
 
 
 def prebuilt_available(spec=FLOOD_SPEC):
@@ -333,29 +363,44 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
         out = os.path.join(_cache_dir(), cpu_library_name(spec, ext, omp))
         if os.path.isfile(out):
             return out
-        failed = out + ".failed"                # this compiler has no OpenMP: do not retry each run
-        if not cxx or (omp and os.path.isfile(failed)):
+        # this compiler has no OpenMP: do not retry each run, unless the ways to ask for it have
+        # changed since (a libomp installed later)
+        failed = out + ".failed"
+        variants = openmp_flag_sets() if omp else [None]
+        tried = "\n".join(" ".join(v[0] + v[1]) for v in variants) if omp else ""
+        if not cxx:
             continue
-        fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
-        os.close(fd)
-        cmd = cpu_build_command(spec, cxx, tmp, openmp=omp)
-        if log:
-            log("Building the engine's CPU kernels: " + " ".join(cmd))
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           universal_newlines=True)
-        if r.returncode == 0:
-            os.replace(tmp, out)
-            return out
-        os.remove(tmp)
-        err = r.stdout[-3000:]
+        if omp and os.path.isfile(failed):
+            try:
+                with open(failed) as f:
+                    same = f.read().split("\n--\n", 1)[0] == tried
+            except OSError:
+                same = True
+            if same:
+                continue
+        for v in variants:
+            fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
+            os.close(fd)
+            cmd = cpu_build_command(spec, cxx, tmp, openmp=omp, omp_flags=v)
+            if log:
+                log("Building the engine's CPU kernels: " + " ".join(cmd))
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               universal_newlines=True)
+            if r.returncode == 0:
+                os.replace(tmp, out)
+                return out
+            os.remove(tmp)
+            err = r.stdout[-3000:]
         if omp:
             try:
                 with open(failed, "w") as f:
-                    f.write(err)
+                    f.write(tried + "\n--\n" + err)
             except OSError:
                 pass
             if log:
-                log("This compiler has no OpenMP; building the one-core CPU kernels instead.")
+                log("This compiler has no OpenMP{}; building the one-core CPU kernels instead.".format(
+                    " (on a Mac: brew install libomp, or conda install llvm-openmp)"
+                    if sys.platform == "darwin" else ""))
     if not cxx:
         raise BackendError("no C++ compiler (c++, clang++ or g++) for the engine's CPU build, and no "
                            "prebuilt library for {} in this plugin (a release zip ships them)".format(
