@@ -18,6 +18,7 @@ import os
 from ..core import hazard as hz, gridutil as gu
 from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri, handoff as ho
+from ..core import receptor_dump as RD
 from ..core.more_layers import pick, layer_name
 from . import _common as cm
 from ..damsuite import structure_flags as SF
@@ -565,6 +566,20 @@ class HazardClassification(UnitAlgorithm):
                                        lifelines=l_in, downstream_dams=d_in, unknown_trains=unknown_trains)
                 except nh.ChartsNotDigitized as e:
                     raise QgsProcessingException(str(e))
+                if RD.folder():                     # known-class benchmark fixtures (off by default)
+                    try:
+                        RD.write(dam_id, {"method": crit, "wet_m": wet_m, "rule_depth_ft": rule_ft,
+                                          "unknown_aadt": unknown_aadt, "unknown_trains": unknown_trains,
+                                          "struct_min_m": mind, "road_min_m": rdep,
+                                          "incremental": bool(itif)},
+                                 s_in, r_in, t_in, l_in, d_in,
+                                 result={"hz_class": c.hazard_class, "governing": hz.governing_summary(c),
+                                         "counts": dict(c.counts), "data_gaps": list(c.data_gaps),
+                                         "borderline_raised": bool(c.borderline_raised)},
+                                 extra={"sim": {k: get(f, k) for k in ("sim_engine", "edge_flag", "store_af",
+                                                                       "height_m", "peak_cms")}})
+                    except Exception as e:              # a fixture must never stop the classification
+                        feedback.pushWarning("dam {}: receptor dump not written: {}".format(dam_id, e))
                 for fnd in c.findings:
                     w = where.get((fnd.kind, fnd.id))
                     if w is None:

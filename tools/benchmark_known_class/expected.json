@@ -1,0 +1,1819 @@
+{
+ "dams": {
+  "DWR-11409": {
+   "cmp_feinberg": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "damit:AK": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AL": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AZ": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "manual_method:M12d",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:BIA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:CA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M7",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:CO": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:FEMA333": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:ID": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NC": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:ND": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined"
+     ]
+    }
+   },
+   "damit:NE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined"
+     ]
+    }
+   },
+   "damit:NRCS": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "preset_status",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NY": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M8f",
+      "missing_input:R8",
+      "not_determined",
+      "preset_status"
+     ]
+    }
+   },
+   "damit:RI": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M8g",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:TVA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:TX": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:USACE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:USBR": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "conditional_scenario",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:VA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "nd": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "nd_1d_rule": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "nd_all_wet": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "nd_borderline_higher": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "nd_judgment_zone_high": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   },
+   "nd_unknown_aadt_low": {
+    "class": "Low",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 0
+     },
+     "data_gaps": 0,
+     "governing": {}
+    }
+   }
+  },
+  "DWR-2663": {
+   "cmp_feinberg": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "damit:AK": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AL": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AZ": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "manual_method:M12d",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:BIA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:CA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M7",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:CO": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined"
+     ]
+    }
+   },
+   "damit:FEMA333": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:ID": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M6",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NC": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:ND": {
+    "class": "Medium",
+    "drivers": {
+     "driving": [
+      "M8a:r"
+     ],
+     "flags": [
+      "missing_input:M8a"
+     ]
+    }
+   },
+   "damit:NE": {
+    "class": "Low",
+    "drivers": {
+     "driving": [
+      "M8c:r"
+     ],
+     "flags": [
+      "missing_input:M8c"
+     ]
+    }
+   },
+   "damit:NRCS": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "preset_status",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NY": {
+    "class": "Class A",
+    "drivers": {
+     "driving": [
+      "M8d:r"
+     ],
+     "flags": [
+      "missing_input:M8d",
+      "missing_input:M8f",
+      "missing_input:R8",
+      "preset_status"
+     ]
+    }
+   },
+   "damit:RI": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M8g",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:TVA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:TX": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:USACE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:USBR": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "conditional_scenario",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:VA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "advisory_only_hit:M8e",
+      "missing_input:M13",
+      "missing_input:M8e",
+      "not_determined"
+     ]
+    }
+   },
+   "nd": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "nd_1d_rule": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "nd_all_wet": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "nd_borderline_higher": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "nd_judgment_zone_high": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 3
+     }
+    }
+   },
+   "nd_unknown_aadt_low": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 0,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 5
+     },
+     "data_gaps": 3,
+     "governing": {
+      "road 5.2.1.2": 1
+     }
+    }
+   }
+  },
+  "DWR-3007": {
+   "cmp_feinberg": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 16,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "road 5.2.1.2": 8,
+      "structure 5.2.2": 16
+     }
+    }
+   },
+   "damit:AK": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AL": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AZ": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "manual_method:M12d",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:BIA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:CA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M7",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:CO": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M6",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:FEMA333": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:ID": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M2:s"
+     ],
+     "flags": [
+      "missing_input:M6",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NC": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:ND": {
+    "class": "Medium",
+    "drivers": {
+     "driving": [
+      "M1:s",
+      "M8a:r"
+     ],
+     "flags": [
+      "m1_judgment_zone:M1",
+      "missing_input:M8a",
+      "r7_judgment:R7"
+     ]
+    }
+   },
+   "damit:NE": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M3:s"
+     ],
+     "flags": [
+      "missing_input:M3",
+      "missing_input:M4a",
+      "missing_input:M8c"
+     ]
+    }
+   },
+   "damit:NRCS": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "preset_status",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NY": {
+    "class": "Class C",
+    "drivers": {
+     "driving": [
+      "M1:s",
+      "M4b:count"
+     ],
+     "flags": [
+      "missing_input:M8d",
+      "missing_input:M8f",
+      "preset_status",
+      "r2_presumption:R2"
+     ]
+    }
+   },
+   "damit:RI": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M8g",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:TVA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:TX": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M4c:count"
+     ],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M4c",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:USACE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:USBR": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "conditional_scenario",
+      "m1_judgment_zone:M1",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:VA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "advisory_only_hit:M8e",
+      "missing_input:M13",
+      "missing_input:M8e",
+      "not_determined"
+     ]
+    }
+   },
+   "nd": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 16,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "road 5.2.1.2": 8,
+      "structure 5.2.1.1 Fig. 5.1": 4,
+      "structure 5.2.2": 12
+     }
+    }
+   },
+   "nd_1d_rule": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 4,
+      "habitable_wet": 16,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "structure 5.2.1.1": 4
+     }
+    }
+   },
+   "nd_all_wet": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 16,
+      "habitable_wet": 16,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "structure 5.2.1.1/5.3": 16
+     }
+    }
+   },
+   "nd_borderline_higher": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 16,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "road 5.2.1.2": 8,
+      "structure 5.2.1.1 Fig. 5.1": 4,
+      "structure 5.2.2": 12
+     }
+    }
+   },
+   "nd_judgment_zone_high": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 4,
+      "habitable_wet": 16,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "structure 5.2.1.1 Fig. 5.1, 5.3": 4
+     }
+    }
+   },
+   "nd_unknown_aadt_low": {
+    "class": "Medium",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 0,
+      "habitable_wet": 16,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 10
+     },
+     "data_gaps": 7,
+     "governing": {
+      "road 5.2.1.2": 3,
+      "structure 5.2.1.1 Fig. 5.1": 4,
+      "structure 5.2.2": 12
+     }
+    }
+   }
+  },
+  "DWR-3037": {
+   "cmp_feinberg": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure comparison: feinberg": 7
+     }
+    }
+   },
+   "damit:AK": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AL": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AZ": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "manual_method:M12d",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:BIA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:CA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M7",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:CO": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M6",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:FEMA333": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:ID": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M2:s"
+     ],
+     "flags": [
+      "missing_input:M6",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NC": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:ND": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M1:s"
+     ],
+     "flags": [
+      "missing_input:M8a",
+      "missing_input:M9a"
+     ]
+    }
+   },
+   "damit:NE": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M3:s"
+     ],
+     "flags": [
+      "missing_input:M3",
+      "missing_input:M4a",
+      "missing_input:M8c",
+      "missing_input:M9b"
+     ]
+    }
+   },
+   "damit:NRCS": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "preset_status",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NY": {
+    "class": "Class C",
+    "drivers": {
+     "driving": [
+      "M1:s",
+      "M4b:count"
+     ],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M8d",
+      "missing_input:M8f",
+      "missing_input:M9c",
+      "preset_status",
+      "r2_presumption:R2"
+     ]
+    }
+   },
+   "damit:RI": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M8g",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:TVA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:TX": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M4c:count"
+     ],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M4c",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:USACE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:USBR": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "conditional_scenario",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:VA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "advisory_only_hit:M8e",
+      "missing_input:M13",
+      "missing_input:M5",
+      "missing_input:M8e",
+      "not_determined"
+     ]
+    }
+   },
+   "nd": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1 Fig. 5.1": 7
+     }
+    }
+   },
+   "nd_1d_rule": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1": 7
+     }
+    }
+   },
+   "nd_all_wet": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": true,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 63,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1/5.3": 63
+     }
+    }
+   },
+   "nd_borderline_higher": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1 Fig. 5.1": 7
+     }
+    }
+   },
+   "nd_judgment_zone_high": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1 Fig. 5.1": 7
+     }
+    }
+   },
+   "nd_unknown_aadt_low": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 7,
+      "habitable_wet": 63,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 1,
+      "roads_overtopped": 49
+     },
+     "data_gaps": 29,
+     "governing": {
+      "structure 5.2.1.1 Fig. 5.1": 7
+     }
+    }
+   }
+  },
+  "DWR-5728": {
+   "cmp_feinberg": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 6,
+      "habitable_wet": 19,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure comparison: feinberg": 6
+     }
+    }
+   },
+   "damit:AK": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AL": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:AZ": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "manual_method:M12d",
+      "missing_input:M13",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:BIA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:CA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M7",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:CO": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M6",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:FEMA333": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:ID": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M2:s"
+     ],
+     "flags": [
+      "missing_input:M6",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NC": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:ND": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M1:s",
+      "M8a:r"
+     ],
+     "flags": [
+      "m1_judgment_zone:M1",
+      "missing_input:M8a",
+      "r7_judgment:R7"
+     ]
+    }
+   },
+   "damit:NE": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M3:s"
+     ],
+     "flags": [
+      "missing_input:M3",
+      "missing_input:M4a",
+      "missing_input:M8c"
+     ]
+    }
+   },
+   "damit:NRCS": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "not_determined",
+      "preset_status",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:NY": {
+    "class": "Class C",
+    "drivers": {
+     "driving": [
+      "M1:s",
+      "M4b:count"
+     ],
+     "flags": [
+      "missing_input:M5",
+      "missing_input:M8d",
+      "missing_input:M8f",
+      "preset_status",
+      "r2_presumption:R2"
+     ]
+    }
+   },
+   "damit:RI": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M8g",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:TVA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:TX": {
+    "class": "High",
+    "drivers": {
+     "driving": [
+      "M4c:count"
+     ],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M4c",
+      "scenario_unconfirmed"
+     ]
+    }
+   },
+   "damit:USACE": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "method_fallback_m13",
+      "missing_input:M13",
+      "missing_input:M5",
+      "not_determined",
+      "scenario_unconfirmed",
+      "unverified_or_secondary:M5"
+     ]
+    }
+   },
+   "damit:USBR": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "conditional_scenario",
+      "m1_judgment_zone:M1",
+      "missing_input:M5",
+      "not_determined"
+     ]
+    }
+   },
+   "damit:VA": {
+    "class": "Not determined",
+    "drivers": {
+     "driving": [],
+     "flags": [
+      "missing_input:M13",
+      "missing_input:M5",
+      "missing_input:M8e",
+      "not_determined"
+     ]
+    }
+   },
+   "nd": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 5,
+      "habitable_wet": 19,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1 Fig. 5.1": 5
+     }
+    }
+   },
+   "nd_1d_rule": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 12,
+      "habitable_wet": 19,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1": 12
+     }
+    }
+   },
+   "nd_all_wet": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 19,
+      "habitable_wet": 19,
+      "judgment_zone": 0,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1/5.3": 19
+     }
+    }
+   },
+   "nd_borderline_higher": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 5,
+      "habitable_wet": 19,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1 Fig. 5.1": 5
+     }
+    }
+   },
+   "nd_judgment_zone_high": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 9,
+      "habitable_wet": 19,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1 Fig. 5.1": 5,
+      "structure 5.2.1.1 Fig. 5.1, 5.3": 4
+     }
+    }
+   },
+   "nd_unknown_aadt_low": {
+    "class": "High",
+    "drivers": {
+     "borderline_raised": false,
+     "counts": {
+      "downstream_dams": 0,
+      "habitable_lethal": 5,
+      "habitable_wet": 19,
+      "judgment_zone": 4,
+      "lifelines_wet": 0,
+      "railroads_overtopped": 0,
+      "roads_overtopped": 16
+     },
+     "data_gaps": 8,
+     "governing": {
+      "road 5.2.1.2": 2,
+      "structure 5.2.1.1 Fig. 5.1": 5
+     }
+    }
+   }
+  }
+ },
+ "schema": "known-class-expected/1"
+}

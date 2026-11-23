@@ -28,8 +28,14 @@ def _wanted(f, names, only, dam_id=None):
     matching dam_id alone dropped the one dam of a one-dam chain here."""
     if not only:
         return True
-    ids = (dam_id if dam_id is not None else (cm.fval(f, names, "dam_id") or f.id()),
-           cm.fval(f, names, "nid_id"))
+    did = dam_id if dam_id is not None else (cm.fval(f, names, "dam_id") or f.id())
+    ids = [did, cm.fval(f, names, "nid_id")]
+    # known-class benchmark (2026-11-23): tool 1 also takes the bare DWR structure ID
+    # ('6122' for DWR-6122, its parameter help says so); here it matched nothing, so a chain
+    # run with DAM_ID=6122 dropped the dam at step 6, simulated 0 dams and reported OK with no class
+    sid = str(did).strip()
+    if sid.upper().startswith("DWR-"):
+        ids.append(sid[4:])
     return any(str(i).strip().upper() in only for i in ids if i not in (None, ""))
 
 def _road_name(r):

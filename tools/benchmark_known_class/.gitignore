@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# diagnostic / scratch run output (not part of the committed baseline)
+fixtures_notriage/
+work/

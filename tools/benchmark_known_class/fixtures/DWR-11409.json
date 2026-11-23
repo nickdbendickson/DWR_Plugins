@@ -1,0 +1,43 @@
+{
+ "dam_id": "DWR-11409",
+ "downstream_dams": [],
+ "lifelines": [],
+ "railroads": [],
+ "result": {
+  "borderline_raised": false,
+  "counts": {
+   "downstream_dams": 0,
+   "habitable_lethal": 0,
+   "habitable_wet": 0,
+   "judgment_zone": 0,
+   "lifelines_wet": 0,
+   "near_boundary": 0,
+   "railroads_overtopped": 0,
+   "roads_overtopped": 0,
+   "structures_wet": 0
+  },
+  "data_gaps": [],
+  "governing": "nothing listed in ND 5.2 reached",
+  "hz_class": "Low"
+ },
+ "roads": [],
+ "schema": "damsafety-receptors/1",
+ "settings": {
+  "incremental": false,
+  "method": "acer_tm11",
+  "road_min_m": 0.030480000000000004,
+  "rule_depth_ft": 2.0,
+  "struct_min_m": 0.030480000000000004,
+  "unknown_aadt": "Medium",
+  "unknown_trains": "Medium",
+  "wet_m": 0.030480000000000004
+ },
+ "sim": {
+  "edge_flag": "no",
+  "height_m": 7.010400000000001,
+  "peak_cms": null,
+  "sim_engine": "builtin",
+  "store_af": 50.55740963790249
+ },
+ "structures": []
+}
