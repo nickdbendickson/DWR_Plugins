@@ -1,11 +1,13 @@
 // CPU build of kernels.metal: the same kernel source, called once per "thread" in the order
 // the GPU would run the dispatches of one step. backends.CpuBackend compiles this file with the
 // system C++ compiler at first use and calls mf_run_batch (or mf_run_batch_skip) through ctypes.
-#include "mf_shim.h"
-#include "kernels.metal"
-
+// the standard headers come before the shim: it defines kernel / device / constant / thread
+// as empty macros for the Metal source, which would break libc++'s own headers (macOS)
 #include <algorithm>
 #include <vector>
+
+#include "mf_shim.h"
+#include "kernels.metal"
 
 // the kernel is a template argument, so the compiler inlines it into the loop
 template <void (*K)(const float*, const float*, float*, float*, float*, float*, float*, float*,
