@@ -239,6 +239,10 @@ MODEL_KEYS = {
     # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
     # (Devi & Kuiry 2024 Eq. 7-8). Off unless set; it reads deep on reaches that cross the grid.
     "subgrid_upwind": ("user_subgrid_upwind", ("bool",)),
+    # the run tool's CFL and THETA: the Courant number of the flood solver and the ACC / SGC
+    # momentum weighting (0.7 with cfl 0.5 are the stable settings). Left out = each engine's own.
+    "cfl": ("user_cfl", ("num", 0.05, 1.0)),
+    "theta": ("user_theta", ("num", 0.05, 1.0)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),

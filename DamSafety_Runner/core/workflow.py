@@ -373,6 +373,10 @@ class RunSettings:
         # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
         # (off by default). The CLI sets it from model.subgrid_upwind.
         self.user_subgrid_upwind = False
+        # the run tool's CFL / THETA (None = each engine's own). The CLI sets them from model.cfl
+        # and model.theta; workflow threads them into the solver settings.
+        self.user_cfl = None
+        self.user_theta = None
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
         # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
         # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
@@ -670,6 +674,9 @@ def key_settings(st):
     # 3.79.0: likewise the sub-grid local-inertial flux weighting, off unless asked for
     if not getattr(st, "user_subgrid_upwind", False):
         d.pop("user_subgrid_upwind", None)
+    for k in ("user_cfl", "user_theta"):           # in the key only when set
+        if getattr(st, k, None) is None:
+            d.pop(k, None)
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
