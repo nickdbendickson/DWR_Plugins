@@ -31,6 +31,13 @@
 //     weighted combination cancels, so the slopes stay zero;
 //   - positivity / wetting-drying: a cell at or below the dry depth is treated as first order (its
 //     slopes are read as zero), and every reconstructed edge/Gauss depth is clamped to >= 0;
+//   - edge / Gauss VELOCITIES are reconstructed as primitives (Runner 3.67.0): u at a reconstruction
+//     point is u0 + fac (w1_hu - u0 w1_h) / h0 (fac = +/-sqrt(3) at an edge, +/-1 at an internal Gauss
+//     point), with the cell-mean depth h0 as the denominator (mf_pvel). Before, the point velocity was
+//     the reconstructed point discharge divided by the reconstructed point depth eta_point - z, which
+//     on a steep bank collapses to a few mm under a full cell's discharge: the velocity (and so the
+//     result) swung with the last bit of float32 rounding, which is why DG2 on the Metal GPU differed
+//     from the CPU build by ~1 cm. This is the FV2 fix of Runner 3.66.0, carried to DG2;
 //   - an optional local slope limiter (Params.limiter != 0, the LISFLOOD-FP "limitslopes" option):
 //     a minmod limiter of the modal slopes against the neighbour element-average jumps, limiting the
 //     free surface eta for mass (so it stays well balanced) and the discharge slopes directly. Off
@@ -246,6 +253,19 @@ inline float mf_sy(device const float* U, uint i, float h0c) {
     return (h0c > MF_DRYSLOPE) ? U[3u * i + 2u] : 0.0f;
 }
 
+// velocity at a reconstruction point, as a PRIMITIVE (quotient rule): u = q0/h0 + fac*(sq - u0*sh)/h0,
+// where sq, sh are the cell's modal discharge and depth slopes and fac is the basis value at the point
+// (+/-sqrt(3) at an edge, +/-1 at an internal Gauss point). This never divides a reconstructed point
+// discharge by a reconstructed point depth, which on a steep bank collapses to a few mm and makes the
+// velocity (and so the result) swing with the last bit of float32 rounding - the GPU-vs-CPU gap Nick
+// saw on DG2 (1 cm), the same cause as the FV2 fix in Runner 3.66.0. The cell-mean depth h0c is the
+// denominator, so the edge/Gauss velocity stays bounded by the cell's.
+inline float mf_pvel(float q0, float h0c, float sq, float sh, float fac) {
+    if (h0c <= MF_HVEL) { return 0.0f; }
+    float u0 = q0 / h0c;
+    return u0 + fac * (sq - u0 * sh) / h0c;
+}
+
 // -- kernels --------------------------------------------------------------------------------
 
 // one thread each: set the RK2 stage for the dispatches that follow in the plan.
@@ -407,14 +427,10 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float zf = fmax(z[l], z[rr]);
                 float hLs = fmax(0.0f, etaL - zf);
                 float hRs = fmax(0.0f, etaR - zf);
-                float huL = Uhu[3u * l] + MF_SQ3 * mf_sx(Uhu, l, h0l);
-                float hvL = Uhv[3u * l] + MF_SQ3 * mf_sx(Uhv, l, h0l);
-                float huR = Uhu[3u * rr] - MF_SQ3 * mf_sx(Uhu, rr, h0r);
-                float hvR = Uhv[3u * rr] - MF_SQ3 * mf_sx(Uhv, rr, h0r);
-                float uL = mf_vel(huL, fmax(0.0f, etaL - z[l]));
-                float vL = mf_vel(hvL, fmax(0.0f, etaL - z[l]));
-                float uR = mf_vel(huR, fmax(0.0f, etaR - z[rr]));
-                float vR = mf_vel(hvR, fmax(0.0f, etaR - z[rr]));
+                float uL = mf_pvel(Uhu[3u * l], h0l, mf_sx(Uhu, l, h0l), sel,  MF_SQ3);
+                float vL = mf_pvel(Uhv[3u * l], h0l, mf_sx(Uhv, l, h0l), sel,  MF_SQ3);
+                float uR = mf_pvel(Uhu[3u * rr], h0r, mf_sx(Uhu, rr, h0r), ser, -MF_SQ3);
+                float vR = mf_pvel(Uhv[3u * rr], h0r, mf_sx(Uhv, rr, h0r), ser, -MF_SQ3);
                 fl = mf_hllc(hLs, uL, vL, hRs, uR, vR, g);
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
@@ -476,10 +492,10 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float zf = fmax(z[u], z[d]);
                 float hUs = fmax(0.0f, etaU - zf);
                 float hDs = fmax(0.0f, etaD - zf);
-                float nU = mf_vel(Uhv[3u * u] + MF_SQ3 * mf_sy(Uhv, u, h0u), fmax(0.0f, etaU - z[u]));
-                float tU = mf_vel(Uhu[3u * u] + MF_SQ3 * mf_sy(Uhu, u, h0u), fmax(0.0f, etaU - z[u]));
-                float nD = mf_vel(Uhv[3u * d] - MF_SQ3 * mf_sy(Uhv, d, h0d), fmax(0.0f, etaD - z[d]));
-                float tD = mf_vel(Uhu[3u * d] - MF_SQ3 * mf_sy(Uhu, d, h0d), fmax(0.0f, etaD - z[d]));
+                float nU = mf_pvel(Uhv[3u * u], h0u, mf_sy(Uhv, u, h0u), seu,  MF_SQ3);
+                float tU = mf_pvel(Uhu[3u * u], h0u, mf_sy(Uhu, u, h0u), seu,  MF_SQ3);
+                float nD = mf_pvel(Uhv[3u * d], h0d, mf_sy(Uhv, d, h0d), sed, -MF_SQ3);
+                float tD = mf_pvel(Uhu[3u * d], h0d, mf_sy(Uhu, d, h0d), sed, -MF_SQ3);
                 fl = mf_hllc(hUs, nU, tU, hDs, nD, tD, g);
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side
@@ -587,19 +603,21 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     // x direction: states w0 +/- w1x
     float hxp = fmax(0.0f, h0 + hx), hxm = fmax(0.0f, h0 - hx);
     float huxp = hu0 + ux, huxm = hu0 - ux;
-    float hvxp = hv0 + vx, hvxm = hv0 - vx;
-    float uxp = mf_vel(huxp, hxp), uxm = mf_vel(huxm, hxm);
+    // (hv at the x-Gauss points is no longer formed: the tangential velocity vxp/vxm is primitive)
+    float uxp = mf_pvel(hu0, h0, ux, hx,  1.0f), uxm = mf_pvel(hu0, h0, ux, hx, -1.0f);
+    float vxp = mf_pvel(hv0, h0, vx, hx,  1.0f), vxm = mf_pvel(hv0, h0, vx, hx, -1.0f);
     float Fh_xp = huxp,                         Fh_xm = huxm;                       // mass
     float Fhu_xp = huxp * uxp + half_g * hxp * hxp, Fhu_xm = huxm * uxm + half_g * hxm * hxm;
-    float Fhv_xp = huxp * mf_vel(hvxp, hxp),    Fhv_xm = huxm * mf_vel(hvxm, hxm);  // tangential
+    float Fhv_xp = huxp * vxp,                  Fhv_xm = huxm * vxm;                // tangential
     // y direction: states w0 +/- w1y
     float hyp = fmax(0.0f, h0 + hy), hym = fmax(0.0f, h0 - hy);
-    float huyp = hu0 + uy, huym = hu0 - uy;
+    // (hu at the y-Gauss points is no longer formed: the tangential velocity uyp/uym is primitive)
     float hvyp = hv0 + vy, hvym = hv0 - vy;
-    float vyp = mf_vel(hvyp, hyp), vym = mf_vel(hvym, hym);
+    float vyp = mf_pvel(hv0, h0, vy, hy,  1.0f), vym = mf_pvel(hv0, h0, vy, hy, -1.0f);
+    float uyp = mf_pvel(hu0, h0, uy, hy,  1.0f), uym = mf_pvel(hu0, h0, uy, hy, -1.0f);
     float Gh_yp = hvyp,                         Gh_ym = hvym;                       // mass
     float Ghv_yp = hvyp * vyp + half_g * hyp * hyp, Ghv_ym = hvym * vym + half_g * hym * hym;
-    float Ghu_yp = hvyp * mf_vel(huyp, hyp),    Ghu_ym = hvym * mf_vel(huym, hym);  // tangential
+    float Ghu_yp = hvyp * uyp,                  Ghu_ym = hvym * uym;                // tangential
 
     float invdx = dt / dx;
     float s3 = MF_SQ3 * invdx;

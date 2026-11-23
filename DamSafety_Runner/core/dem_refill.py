@@ -213,7 +213,7 @@ def fill_grid(grid, tif_path):
 
 
 # --------------------------------------------------------------- interior hole fill --
-#: 3.68.0 (batch 44, DWR-2631): a marker in the workflow's refill list. model_dem fills the
+#: 3.71.0 (batch 44, DWR-2631): a marker in the workflow's refill list. model_dem fills the
 #: grid's enclosed no-data holes (fill_interior_holes) where it meets it, after the 3DEP tiles.
 HOLE_FILL = "::fill-interior-holes::"
 #: the largest enclosed hole filled, in acres; a bigger hole is left as no-data (a guess over
