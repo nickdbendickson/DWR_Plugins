@@ -3,7 +3,8 @@
 LiDAR sees the water surface, not the channel bed, so a fine DEM is missing the below-water prism
 exactly where a flood model needs conveyance. This carves a trapezoidal channel prism along a
 flowline into the DEM, sized by a regional hydraulic-geometry regression on drainage area
-(Bieger et al. 2015, US: W = 2.70*DA^0.352 m, depth = 0.30*DA^0.213 m, DA in km^2). The bank stays
+(since 3.53.0 the North Dakota curve from 79 USGS gauges, ND_USGS_2026: W = 1.946*DA^0.304 m,
+depth = 0.221*DA^0.256 m, DA in km^2; before, Bieger et al. 2015, US). The bank stays
 the DEM; the bed is carved depth below it, with the centerline forced to fall downstream.
 
 `carve_channels` runs the whole stage from a DEM alone: it derives the channel network and the
@@ -12,10 +13,9 @@ flowlines, carves each with `carve_prism`, honours the embankment / dam-crest fr
 returns per-flowline records for the delta-log (delta_log.log_prism). A real 3DHP / NHD flowline
 is used instead by rasterising it to (row, col) and passing it straight to `carve_prism`.
 
-RESEARCH on the regression, not production: the default coefficients are the Bieger et al. (2015)
-national curves, NOT calibrated for North Dakota. A hazard-affecting carve MUST pass a verified
-regional (State / StreamStats) regression through `coeffs`, as the suite's regression-constant
-rule requires; this module is not wired into the default model-terrain conditioner run. The
+The default coefficients are the ND curve (Nick, 2026-11-23; fit and gauges in
+tools/validation/nd_hydraulic_geometry/). It is not a published regression; `coeffs` takes
+another. This module is not wired into the default model-terrain conditioner run. The
 subgrid-topography variant (Devi & Kuiry 2024 tables) is a separate research item with the flood
 engine.
 
@@ -36,7 +36,7 @@ BIEGER_2015_US = {"a_w": 2.70, "b_w": 0.352, "a_d": 0.30, "b_d": 0.213}
 # the 1.5-year peak from each gauge's open-water discharge measurements. Method, every gauge and
 # the fit: tools/validation/nd_hydraulic_geometry/ (fit.py, RESULTS.md). ND channels are about
 # half as wide as the national curve at the same area (median 0.53) and as deep (median 1.03).
-# Pass it as `coeffs=ND_USGS_2026`. Not a published regression: the carve stays RESEARCH.
+# The default `coeffs` since 3.53.0 (Nick, 2026-11-23); pass coeffs=BIEGER_2015_US for the old one.
 ND_USGS_2026 = {"a_w": 1.946, "b_w": 0.304, "a_d": 0.221, "b_d": 0.256}
 
 
@@ -48,9 +48,8 @@ def bieger_geometry(da_km2, a_w=2.70, b_w=0.352, a_d=0.30, b_d=0.213):
     are NOT calibrated for North Dakota: a national curve can be wide of a given physiographic
     region by a large factor, so do not carve a prism into a hazard-affecting DEM on these defaults
     without first checking them against a local/State hydraulic-geometry regression (and pass that
-    regression's a_w/b_w/a_d/b_d here). This is why the module is labelled RESEARCH; a production
-    carve must verify the coefficients against the printed source for the region, as the suite's
-    regression-constant rule requires."""
+    regression's a_w/b_w/a_d/b_d here). `carve_prism` / `carve_channels` pass ND_USGS_2026 by
+    default (3.53.0)."""
     da = max(float(da_km2), 0.0)
     return a_w * da ** b_w, a_d * da ** b_d
 
@@ -80,7 +79,7 @@ def carve_prism(dem, flowline, da_km2, cell_m=1.0, min_da_km2=0.05, coeffs=None,
     out = np.asarray(dem, dtype=np.float64).copy()
     bank = out if bank_src is None else np.asarray(bank_src, dtype=np.float64)
     ny, nx = out.shape
-    kw = coeffs or {}
+    kw = coeffs or ND_USGS_2026
     run_bank = math.inf
     reaches = []
     for (r, c), da in zip(flowline, da_km2):
@@ -179,8 +178,7 @@ def carve_channels(dem, cell_m=1.0, eps=1e-5, min_da_km2=0.05, coeffs=None, free
     `conn` is the flow connectivity for channel extraction (8 = D8, the GIS standard, by default).
     Pass a precomputed `direction`/`accum`/`filled` to skip the flow solve. `min_da_km2` sets both
     the channel threshold and the smallest reach `carve_prism` will cut. `coeffs` overrides the
-    hydraulic-geometry regression (see `bieger_geometry`; a production carve MUST pass a verified
-    regional regression, not the national default). `freeze_mask` protects embankment / dam-crest
+    hydraulic-geometry regression (default ND_USGS_2026; see `bieger_geometry` for the form). `freeze_mask` protects embankment / dam-crest
     cells: a flowline whose centreline runs through a frozen cell is REFUSED whole (returned in
     `refusals`, never carved), the dam-safety invariant, rather than burning a channel through a dam.
 

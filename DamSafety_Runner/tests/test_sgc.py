@@ -28,11 +28,18 @@ def _hy():
 
 
 @test
-def sgc_hydraulic_geometry_is_bieger_2015_us():
+def sgc_hydraulic_geometry_is_the_nd_curve_by_default():
     from nd_breach_runner.core import sgc
+    # 3.53.0 (Nick, 2026-11-23): the ND curve from 79 USGS gauges is the default
+    assert sgc.DEFAULT_CURVE == sgc.ND_USGS_2026 == (1.946, 0.304, 0.221, 0.256)
     w, d = sgc.hydraulic_geometry(np.array([1.0, 100.0]))
-    assert np.allclose(w, [2.70, 2.70 * 100 ** 0.352]) and np.allclose(d, [0.30, 0.30 * 100 ** 0.213])
+    assert np.allclose(w, [1.946, 1.946 * 100 ** 0.304]) and np.allclose(d, [0.221, 0.221 * 100 ** 0.256])
+    # Bieger et al. 2015 (US), the default before 3.53.0, is still there to name
     assert sgc.BIEGER_2015_US == (2.70, 0.352, 0.30, 0.213)
+    w, d = sgc.hydraulic_geometry(np.array([1.0, 100.0]), sgc.BIEGER_2015_US)
+    assert np.allclose(w, [2.70, 2.70 * 100 ** 0.352]) and np.allclose(d, [0.30, 0.30 * 100 ** 0.213])
+    from nd_breach_runner.core.workflow import RunSettings
+    assert tuple(RunSettings().sgc_curve) == sgc.ND_USGS_2026
 
 
 @test
@@ -57,9 +64,9 @@ def sgc_channels_follow_the_valley_and_take_the_dam_watershed():
     ch = sgc.build(dem, inflow_rc=rc, upstream_km2=50.0, start="empty")
     mid = ch.width[rc[0], rc[1]:]
     assert (mid > 0).all(), "the thalweg below the inflow is one channel"
-    # sized from 50 km2 + the valley: W = 2.70 A^0.352, capped at the 20 m cell
-    assert np.isclose(ch.width[rc[0], rc[1]], min(20.0, 2.70 * ch.area_km2[rc[0], rc[1]] ** 0.352))
-    assert np.isclose(ch.depth[rc[0], -1], 0.30 * ch.area_km2[rc[0], -1] ** 0.213)
+    # sized from 50 km2 + the valley on the ND curve: W = 1.946 A^0.304, capped at the 20 m cell
+    assert np.isclose(ch.width[rc[0], rc[1]], min(20.0, 1.946 * ch.area_km2[rc[0], rc[1]] ** 0.304))
+    assert np.isclose(ch.depth[rc[0], -1], 0.221 * ch.area_km2[rc[0], -1] ** 0.256)
     assert ch.info["area_at_inflow_km2"] > 50.0 and ch.info["upstream_km2"] == 50.0
     assert np.allclose(ch.bed[ch.mask], dem.data[ch.mask] - ch.depth[ch.mask])
     assert ch.start_volume_m3() == 0.0 and ch.capacity_m3() > 0
