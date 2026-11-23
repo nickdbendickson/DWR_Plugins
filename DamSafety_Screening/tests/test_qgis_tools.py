@@ -169,6 +169,15 @@ _, o6c = run("triage", DAMS=lay(extra), BPTS=BPTS, DEMDIR=demdir, AUDIT=0.0, OUT
 r3 = rows(o6c["OUT"])["DWR-3"]
 assert r3["tri_result"] == "needs 2D" and "dam" in r3["tri_reason"], r3["tri_reason"]
 print("tool 6: a lifeline or another dam inside the envelope prevents 'clear'")
+# 0.50.0 rating guard: the same empty envelope never clears a dam DWR rates above Low (DWR-2636 / DWR-10551)
+for rated in ("High", "Significant"):
+    up = make_layer(F5, [(f.geometry(), {k: (rated if k == "haz_existing" and f["dam_id"] == "DWR-3" else f[k])
+                                         for k, _ in F5}) for f in o5["OUT"].getFeatures()], "point", "dams_rated")
+    _, o6d = run("triage", DAMS=lay(up), BPTS=BPTS, DEMDIR=demdir, AUDIT=0.0,
+                 OUTDIR=os.path.join(work, f"triage_{rated}"))
+    r3 = rows(o6d["OUT"])["DWR-3"]
+    assert r3["tri_result"] == "needs 2D" and f"DWR rates it {rated}" in r3["tri_reason"], r3["tri_reason"]
+print("tool 6: a dam DWR rates High or Significant is never cleared")
 
 # ---------------- tool 7 built-in engine, 2 at a time, clip growth from the local folder, cascade breach
 _, o7 = run("runbreachsim", DAMS=T6, BPTS=BPTS, DEMDIR=demdir, TSRC=2, LOCAL=regional, ENGINE=2,

@@ -16,6 +16,8 @@ from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, NUM
 from ._common import UnitAlgorithm
 
 AF_M3 = 1233.4818375
+# 0.50.0: existing DWR classes triage may never clear (DWR says Significant where ND rules say Medium)
+RATED_ABOVE_LOW = frozenset({"high", "significant", "medium"})
 NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
        ("tri_reach_m", FT_DOUBLE), ("tri_hits", FT_INT),
        ("tri_audit", FT_STRING), ("tri_tif", FT_STRING)]
@@ -397,6 +399,15 @@ class Triage(UnitAlgorithm):
                         reason = "envelope reaches the terrain edge"
                     else:
                         result, reason = "clear", f"nothing inside the envelope ({env['end']} limit, {reach:,.0f} m)"
+                    rated = str(get(f, "haz_existing") or "").strip().lower()
+                    if result == "clear" and rated in RATED_ABOVE_LOW:
+                        # 0.50.0 rating guard: the envelope's reach is a cheap estimate that can stop
+                        # well short of a real breach flood (DWR-2636 and DWR-10551, both DWR High, were
+                        # cleared on a 446 m / 1,568 m envelope while the 2D flood ran 4.9 / 7.1 km).
+                        # Triage may send a dam DWR rates above Low to 2D, never clear it.
+                        result = "needs 2D"
+                        reason = (f"DWR rates it {rated.title()}; triage never clears a dam rated above Low "
+                                  f"(envelope alone: {reason})")
             except _NoFlood as e:
                 result, reason = "clear", "no breach flood: {}".format(e)
             except Exception as e:  # keep the batch going
