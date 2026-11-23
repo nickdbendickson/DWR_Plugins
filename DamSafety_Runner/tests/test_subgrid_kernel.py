@@ -137,7 +137,7 @@ def subgrid_hllc_free_edge_drains_and_matches_reference():
 
 @test
 def subgrid_subfv_layout_matches_kernel():
-    """subfv_buffer_layout is in the exact order of the kernel's buffer indices B(0)..B(28), and the
+    """subfv_buffer_layout is in the exact order of the kernel's buffer indices B(0)..B(29), and the
     CPU build's Params struct is the same size as SubFVParams (the load-time check in CpuBackend)."""
     import ctypes
     names = [n for n, _, _ in sb.subfv_buffer_layout(3, 4, 1, 1, 2, 2)]
@@ -248,11 +248,67 @@ def subgrid_hllc_gpu_matches_cpu():
     assert dvold < 1e-5, "GPU vs CPU total volume (FREE edge) off {:.3e}".format(dvold)
 
 
+def _spreading_film():
+    """A 1 cm film on one cell of a flat, dry 5 x 5 closed basin (r = 2): it spreads four ways at
+    once at the full CFL step, so the HLLC fluxes out of the wet cell add up to more than it holds.
+    Before Runner 3.59.0 the V >= 0 clip put the overdraft back from nowhere: the oracle made 44 %
+    of the water this way (0.071 of 0.16 m3 in 30 s)."""
+    R, ny, nx, dxf = 2, 5, 5, 2.0
+    dem = np.zeros((ny * R, nx * R))
+    t = sg.build_from_fine(dem, np.full(dem.shape, 0.03), dxf * R, R)
+    eta0 = t.zbed.copy()
+    eta0[2, 2] += 0.01
+    return t, sg.cell_volume(eta0, t.s, t.asub)
+
+
+@test
+def subgrid_hllc_positivity_limiter_makes_no_water():
+    """Runner 3.59.0: no cell sends out more than it holds in one step, so nothing is clipped and a
+    closed basin keeps its volume exactly - in the float64 oracle and in the kernel (CPU build) at
+    the full CFL step."""
+    t, V0 = _spreading_film()
+    vol0 = float(V0.sum())
+    ref = hv.SubFVHLLCRef(t, free_mask=0)
+    ref.V = V0.copy()
+    ref.run(30.0)
+    assert ref.clipped == 0.0, ref.clipped
+    assert abs(float(ref.V.sum()) - vol0) < 1e-12 * vol0 and ref.V.min() >= 0.0
+    assert (ref.V > 0).sum() > 9, "the film did not spread"
+
+    back = be.CpuBackend(sb.SUBFV_SPEC)
+    ny, nx, r = t.ny, t.nx, t.r
+    a = back.allocate(sb.subfv_buffer_layout(ny, nx, 1, 1, 1, r))
+    a["s"][:] = t.s.reshape(-1).astype(np.float32)
+    a["nc2"][:] = (t.ncell ** 2).reshape(-1).astype(np.float32)
+    a["V"][:] = V0.reshape(-1).astype(np.float32)
+    a["ok"][:] = 1
+    a["arr"][:] = -9999.0
+    zfx, nf2x, zfy, nf2y = sg.all_faces(t)
+    a["zfx"][:] = zfx.reshape(-1).astype(np.float32)
+    a["nf2x"][:] = nf2x.reshape(-1).astype(np.float32)
+    a["zfy"][:] = zfy.reshape(-1).astype(np.float32)
+    a["nf2y"][:] = nf2y.reshape(-1).astype(np.float32)
+    a["ser_off"][:] = np.array([0, 1], np.uint32)
+    a["st"][2] = np.float32(np.sqrt(sg.G * 0.01)).view(np.uint32)      # S_WMAX: the first CFL step
+    p = sb.SubFVParams(nx=nx, ny=ny, r0=0, c0=0, wr=ny, wc=nx, free_mask=0, n_src=0,
+                       n_series=1, r=r, m=r * r, clip_end=0, dx=t.dx, dt0=0.0, alpha=hv.CFL_CAP,
+                       g=sg.G, dry=1e-3, arr_depth=0.05, t0=0.0, t_end=30.0, wsub=t.wsub, pad=0.0)
+    back.run_batch(p, 400)
+    st = a["st"]
+    assert float(st.view(np.float32)[be_S_T]) > 29.9, "the kernel did not reach 30 s"
+    assert int(st[6]) == 0, "the kernel clipped {} m3".format(int(st[6]) * 1e-4)   # S_CLIP
+    V = a["V"].astype(np.float64)
+    assert V.min() >= 0.0 and abs(V.sum() - vol0) < 1e-5 * vol0, (V.min(), V.sum(), vol0)
+    lim = a["lim"]
+    assert lim.min() >= 0.0 and lim.max() <= 1.0
+
+
 def _main():
     import traceback
     fns = [subgrid_subfv_layout_matches_kernel, subgrid_hllc_kernel_matches_reference,
            subgrid_hllc_free_edge_drains_and_matches_reference,
-           subgrid_hllc_peak_velocity_is_a_speed_the_cell_held, subgrid_hllc_gpu_matches_cpu]
+           subgrid_hllc_peak_velocity_is_a_speed_the_cell_held, subgrid_hllc_gpu_matches_cpu,
+           subgrid_hllc_positivity_limiter_makes_no_water]
     f = 0
     for fn in fns:
         try:

@@ -24,7 +24,7 @@ from . import deckio as bl
 from . import backends as be
 
 NAME = "DamSafety GPU flood engine (local inertial on Metal, LISFLOOD-FP compatible)"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 G = bl.G
 ALPHA = bl.ALPHA
 DRY_M = bl.DRY_M
