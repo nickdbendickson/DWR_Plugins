@@ -311,6 +311,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                 if (fm & MF_W) {
                     float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i + 1u], A, W, nc2[i], dx) : 0.0f;
                     if (und > 0.0f) u = fmin(u, -und);     // at least und outward (-x)
+                    u = fmin(u, 0.0f);                       // outflow only: nothing enters from outside
                     f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
                     outflow += fmax(-f.A, 0.0f);
                 }
@@ -324,6 +325,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                 if (fm & MF_E) {
                     float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i - 1u], A, W, nc2[i], dx) : 0.0f;
                     if (und > 0.0f) u = fmax(u, und);      // at least und outward (+x)
+                    u = fmax(u, 0.0f);                       // outflow only: nothing enters from outside
                     f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
                     outflow += fmax(f.A, 0.0f);
                 }
@@ -361,6 +363,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                 if (fm & MF_N) {
                     float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i + nx], A, W, nc2[i], dx) : 0.0f;
                     if (und > 0.0f) nv = fmin(nv, -und);   // at least und outward (-y)
+                    nv = fmin(nv, 0.0f);                     // outflow only: nothing enters from outside
                     f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
                     outflow += fmax(-f.A, 0.0f);
                 }
@@ -374,6 +377,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                 if (fm & MF_S) {
                     float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i - nx], A, W, nc2[i], dx) : 0.0f;
                     if (und > 0.0f) nv = fmax(nv, und);    // at least und outward (+y)
+                    nv = fmax(nv, 0.0f);                     // outflow only: nothing enters from outside
                     f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
                     outflow += fmax(f.A, 0.0f);
                 }

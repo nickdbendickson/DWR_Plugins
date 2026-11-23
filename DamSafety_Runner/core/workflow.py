@@ -2953,7 +2953,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if stability["on"] and getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == \
                 lfmod.SOLVER_ACC:
             kw["theta"] = lfmod.STABLE_THETA
-            kw["cfl"] = lfmod.STABLE_CFL
+            kw["cfl"] = lfmod.stable_cfl(st.lisflood_exe)
             return kw
         # 3.39.0: the Courant number / theta the user set in the run tool (None = engine default).
         # The stability fallback above still wins once a run has lost its mass balance.
@@ -3076,7 +3076,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             eng_nm = lfmod.engine_name(st.lisflood_exe)   # "LISFLOOD-FP" or the Boann engine
             log("{} lost its mass balance ({:.1f}% of the injected volume); running "
                 "it again with theta {:g} and CFL {:g}.".format(eng_nm, err, lfmod.STABLE_THETA,
-                                                                lfmod.STABLE_CFL))
+                                                                lfmod.stable_cfl(st.lisflood_exe)))
             lst = settings()
             par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
             runtime += lfmod.run(wd, par, lst, prog, cancel, log)
@@ -3084,25 +3084,25 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             env = lfmod.read_results(wd, dem, lst, hyd)
             err2 = env.stats.get("max_volume_error_pct")
             ev = {"run": "lisflood" + tag, "error_pct": err, "stable_error_pct": err2,
-                  "theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
+                  "theta": lfmod.STABLE_THETA, "cfl": lfmod.stable_cfl(st.lisflood_exe)}
             stability["events"].append(ev)
             report["lisflood_stability"] = {"stable_settings": True,
                                             "theta": lfmod.STABLE_THETA,
-                                            "cfl": lfmod.STABLE_CFL,
+                                            "cfl": lfmod.stable_cfl(st.lisflood_exe),
                                             "events": stability["events"]}
             warnings.append(
                 "{} lost its mass balance with its default settings (volume error "
                 "{:.1f}% of the injected volume: the solver made water). The run was repeated "
                 "with theta {:g} and CFL {:g} (volume error now {}%), and every later run of "
                 "this dam uses them. The results come from the repeated run.".format(
-                    eng_nm, err, lfmod.STABLE_THETA, lfmod.STABLE_CFL,
+                    eng_nm, err, lfmod.STABLE_THETA, lfmod.stable_cfl(st.lisflood_exe),
                     "?" if err2 is None else "{:.2f}".format(err2)))
         if stability["on"] and lst.solver == lfmod.SOLVER_ACC:
             with open(marker, "w") as f:
                 json.dump({"theta": lst.theta, "cfl": lst.cfl}, f)
             report.setdefault("lisflood_stability", {"stable_settings": True,
                                                      "theta": lfmod.STABLE_THETA,
-                                                     "cfl": lfmod.STABLE_CFL,
+                                                     "cfl": lfmod.stable_cfl(st.lisflood_exe),
                                                      "events": stability["events"]})
         # 3.16.0: a main-run solver other than ACC must write the maximum velocity (checked
         # before the run by _check_solver; this catches a build that stops doing so)

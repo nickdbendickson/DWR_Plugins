@@ -225,7 +225,8 @@ class SubFVHLLCRef:
             I1yD[1:ny, :] = ilD
             smax = max(smax, float(np.max(np.where(okf, sm, 0.0))) if sm.size else 0.0)
 
-        # domain-boundary faces: FREE = transmissive outflow with a Manning normal-depth floor (so a
+        # domain-boundary faces: FREE = transmissive OUTFLOW ONLY (an inward velocity is cut to 0, so no
+        # water enters from outside the model) with a Manning normal-depth floor (so a
         # coarse cell's diluted bulk velocity still drains the valley), else a reflective wall. Either
         # way the cell reconstructs against its own edge sub-bed; the first moment is stored so the bed
         # source cancels the wall/edge pressure at rest. nc2 = self.ncell2 (per-cell roughness n^2).
@@ -239,6 +240,7 @@ class SubFVHLLCRef:
             if nx > 1:
                 und = _free_und(eta[:, 0], eta[:, 1], Aw, Ww, nc2[:, 0], dx)
                 uw = np.where(und > 0.0, np.minimum(uw, -und), uw)   # at least und outward (-x)
+            uw = np.minimum(uw, 0.0)                     # outflow only: nothing enters from outside
             FAx[:, 0] = np.where(self.ok[:, 0], Aw * uw, 0.0)
             FNx[:, 0] = np.where(self.ok[:, 0], Aw * uw * uw + G * ilw, 0.0)
             FTx[:, 0] = np.where(self.ok[:, 0], Aw * uw * v[:, 0], 0.0)
@@ -253,6 +255,7 @@ class SubFVHLLCRef:
             if nx > 1:
                 und = _free_und(eta[:, -1], eta[:, -2], Ae, We, nc2[:, -1], dx)
                 ue = np.where(und > 0.0, np.maximum(ue, und), ue)   # at least und outward (+x)
+            ue = np.maximum(ue, 0.0)                     # outflow only
             FAx[:, nx] = np.where(self.ok[:, -1], Ae * ue, 0.0)
             FNx[:, nx] = np.where(self.ok[:, -1], Ae * ue * ue + G * ile, 0.0)
             FTx[:, nx] = np.where(self.ok[:, -1], Ae * ue * v[:, -1], 0.0)
@@ -267,6 +270,7 @@ class SubFVHLLCRef:
             if ny > 1:
                 und = _free_und(eta[0, :], eta[1, :], An, Wn, nc2[0, :], dx)
                 vn = np.where(und > 0.0, np.minimum(vn, -und), vn)   # at least und outward (-y)
+            vn = np.minimum(vn, 0.0)                     # outflow only
             FAy[0, :] = np.where(self.ok[0, :], An * vn, 0.0)
             FNy[0, :] = np.where(self.ok[0, :], An * vn * vn + G * iln, 0.0)
             FTy[0, :] = np.where(self.ok[0, :], An * vn * u[0, :], 0.0)
@@ -281,6 +285,7 @@ class SubFVHLLCRef:
             if ny > 1:
                 und = _free_und(eta[-1, :], eta[-2, :], As, Ws, nc2[-1, :], dx)
                 vs = np.where(und > 0.0, np.maximum(vs, und), vs)   # at least und outward (+y)
+            vs = np.maximum(vs, 0.0)                     # outflow only
             FAy[ny, :] = np.where(self.ok[-1, :], As * vs, 0.0)
             FNy[ny, :] = np.where(self.ok[-1, :], As * vs * vs + G * ils, 0.0)
             FTy[ny, :] = np.where(self.ok[-1, :], As * vs * u[-1, :], 0.0)

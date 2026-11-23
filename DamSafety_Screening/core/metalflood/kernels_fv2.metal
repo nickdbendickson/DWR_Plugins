@@ -24,7 +24,9 @@
 //     depth>=0 clip and the running maxima are applied as in FV1, the maxima on the final stage;
 //   - dt = min(initial_tstep, cfl dx / max_cell(|u|+c, |v|+c)), cfl capped at MF_CFL_CAP, computed
 //     on the GPU every step from the wave speeds of U^n;
-//   - FREE domain edges are transmissive (zero-gradient ghost); closed edges are reflective walls.
+//   - FREE domain edges are transmissive (zero-gradient ghost) for OUTFLOW only: an inward velocity
+//     is cut to 0, so no water enters from outside the model (as ACC / LISFLOOD-FP FREE edges);
+//     closed edges are reflective walls.
 //
 // Compiled two ways, exactly like kernels_fv.metal: by Metal at run time on a Mac, and as C++ with
 // mf_shim.h (cpu_kernels_fv2.cpp) everywhere else. So: plain functions, B(i)/GID for the Metal
@@ -322,7 +324,10 @@ kernel void k_begin_fv2(MF_ARGS_FV2) {
         sf[S_VIN] += qin * dt;
     }
     st[S_WNEXT] = 0u;
-    st[S_QOUT] = 0u;
+    // the edge outflow is summed over BOTH stages: the Heun blend U^n+1 = (U^n + U* + dt L(U*)) / 2
+    // moves 0.5 dt (F(U^n) + F(U*)) through each face, so k_end books half the two-stage sum
+    // (counting only the corrector's flux mis-booked up to ~1 % of a draining basin's volume)
+    if (stage == 0u) st[S_QOUT] = 0u;
 }
 
 // every cell of the window, at both stages: save the stage-start depth into hs, which k_cont_fv2
@@ -415,6 +420,7 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                         float und = mf_free_und(z[ii] + h[ii], z[ii + 1u] + h[ii + 1u], h[ii], n2[ii], p.dx);
                         if (und > 0.0f) uo = fmin(ui, -und);          // at least und outward (-x)
                     }
+                    uo = fmin(uo, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[ii], uo, vi, h[ii], uo, vi, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
@@ -432,6 +438,7 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                         float und = mf_free_und(z[ii] + h[ii], z[ii - 1u] + h[ii - 1u], h[ii], n2[ii], p.dx);
                         if (und > 0.0f) uo = fmax(ui, und);           // at least und outward (+x)
                     }
+                    uo = fmax(uo, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[ii], uo, vi, h[ii], uo, vi, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
@@ -479,6 +486,7 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                         float und = mf_free_und(z[ii] + h[ii], z[ii + nx] + h[ii + nx], h[ii], n2[ii], p.dx);
                         if (und > 0.0f) no = fmin(ni, -und);          // at least und outward (-y)
                     }
+                    no = fmin(no, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[ii], no, ti, h[ii], no, ti, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
@@ -496,6 +504,7 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                         float und = mf_free_und(z[ii] + h[ii], z[ii - nx] + h[ii - nx], h[ii], n2[ii], p.dx);
                         if (und > 0.0f) no = fmax(ni, und);           // at least und outward (+y)
                     }
+                    no = fmax(no, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[ii], no, ti, h[ii], no, ti, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
@@ -682,6 +691,6 @@ kernel void k_end_fv2(MF_ARGS_FV2) {
     st[S_STEPS] = st[S_STEPS] + 1u;
     sf[S_MINDT] = fmin(sf[S_MINDT], dt);
     sf[S_LASTDT] = dt;
-    sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
+    sf[S_VOUT] += 0.5f * float(st[S_QOUT]) * MF_FIX * dt;   // half the two-stage sum (k_begin)
     st[S_WMAX] = st[S_WNEXT];
 }
