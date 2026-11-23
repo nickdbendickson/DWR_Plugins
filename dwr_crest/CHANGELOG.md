@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-22 (desk TR-60 is not handed off as NRCS TR-60)
+
+- **The desk's "TR-60 width" is now "Height-multiple width (2H piping, 3H overtopping; screening)", and the flood-model
+  hand-off refuses it.** The Runner's TR-60 is the NRCS 1,100·Br^1.35 peak, a different breach (Absaraka audit). A shared
+  NRCS TR-60 default starts new records on Froehlich (2008) with a note. Desk results are unchanged.
+
+## 2026-11-21 (default Manning's n 0.05)
+
+- **Default floodplain Manning's n is 0.05 (was 0.06). This changes results for records without their own n.**
+  Crest follows the suite: DamSafety_Core/defaults.json (Runner 3.27.0) and DamIT Core 0.3.3 (damit#160) moved
+  the shared `manning_n` to 0.05, and DamIT Desk followed in damit-desk #8. `SUITE_VALUES.manning_n` (the copy of
+  the shared defaults file) and the built-in floodplain n (`DEFAULT_ROUGHNESS.nFloodplain`, `routing.ts`) are now
+  0.05. A record that sets its own n (Breach step, Advanced) is unchanged. A record left on the default gets a
+  slower, deeper routed flood and needs its terrain layer built again. The LISFLOOD export writes `fpfric 0.0500`.
+  The channel n stays 0.035. damit's `damit_crest` copy moved in the same pair (damit #165), so the engine files
+  match line for line and `engine-sync-allow.json` is unchanged.
+
 ## 2026-11-21 (install test fixes)
 
 - **Settings > Save writes the shared defaults file on Linux.** With the Qt window (Linux), pywebview's link to the

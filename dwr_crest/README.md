@@ -1,5 +1,12 @@
 # Crest
 
+> **Retired (2026-11-22).** DamIT Desk ([nickdbendickson/damit-desk](https://github.com/nickdbendickson/damit-desk)) is
+> the one desk now. Its **North Dakota profile** (*Settings > Dam inventory profile*, `?profile=nd`, or
+> `bin/damit-desk --profile nd`) carries this desk's work: the NID with DWR's dam values, the DWR dams, dugouts and
+> unknown structures list on the Batch screen, DWR's NAVD 88 crests, and the hand-off to the DamSafety plugins
+> (`nddam:*`, `ndbreach:*`, `ndhazard:classify`). The dam-suite installer installs DamIT Desk instead of this folder.
+> This folder stays until its removal is agreed; fixes go to damit-desk.
+
 > Crest lives in **nickdbendickson/DWR_Plugins**, folder `dwr_crest/` (it was the `nickdbendickson/crest` repository
 > until 2026-11-19; its full history came along). Run every `npm` command below from `dwr_crest/`.
 
@@ -91,7 +98,7 @@ note (`src/lib/crest/desk-file.ts`).
 ## Settings: starting pool, roughness and the shared defaults
 
 Crest's presets are the pool at the top of dam, a piping failure, Froehlich (2008) and Manning's n of 0.035 in the
-channel and 0.06 on the floodplain. They can be changed in two places.
+channel and 0.05 on the floodplain (0.06 before 2026-11-21, following the suite's shared default). They can be changed in two places.
 
 **On one record (Breach step, "Advanced: starting pool and roughness").**
 

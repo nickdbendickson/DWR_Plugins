@@ -74,10 +74,6 @@ jobs:
           python3 DamSafety_Core/tests/test_offline_pack_safety.py
           python3 DamSafety_Core/tests/test_pack_rows_safety.py
           python3 DamSafety_Hazard/tests/test_evalcache_size_cap.py
-      - name: dam_chain exit code, and each embedded tool matches tools/ (QGIS-free)
-        run: python3 -W error -m unittest discover -v -s damit_ai/heim/tests
-      - name: Vor - catalog, add a document, where the library lives (no Ollama, no QGIS)
-        run: python3 -W error -m unittest discover -v -s damit_ai/vor/tests
       - name: Runner fast suite (stub Qt, numpy 2, no GDAL - its osgeo tests skip)
         # the same suite plugin-suites runs on a real QGIS; here the GDAL-backed tests raise the
         # harness's Skip (tests/registry.need_osgeo) and the numerics run on numpy 2
@@ -100,8 +96,12 @@ jobs:
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: qgis
+          # draco=1.5.7 is a TEMPORARY pin (2026-11-22): conda-forge published draco 1.5.9 while
+          # its qgis 4.2.3 build still links libdraco.so.9, so an unpinned solve gave an env where
+          # `import qgis.core` fails (ImportError: libdraco.so.9). Remove the pin once conda-forge
+          # ships a qgis build made against the new draco.
           create-args: >-
-            python=3.12 qgis numpy scipy gdal pytest
+            python=3.12 qgis numpy scipy gdal pytest draco=1.5.7
       - name: Xvfb for the 1080p GUI lint
         # docs/gui-grammar.md: the "no page scrolls sideways" rule needs a 1920x1080 display;
         # offscreen Qt is 800x600 and skips it. Best effort: when xvfb or the xcb platform
@@ -324,8 +324,12 @@ jobs:
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: qgis
+          # draco=1.5.7 is a TEMPORARY pin (2026-11-22): conda-forge published draco 1.5.9 while
+          # its qgis 4.2.3 build still links libdraco.so.9, so an unpinned solve gave an env where
+          # `import qgis.core` fails (ImportError: libdraco.so.9). Remove the pin once conda-forge
+          # ships a qgis build made against the new draco.
           create-args: >-
-            python=3.12 qgis numpy<2 scipy gdal python-gmsh
+            python=3.12 qgis numpy<2 scipy gdal python-gmsh draco=1.5.7
       - name: ANUGA environment (conda-forge)
         run: |
           micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy

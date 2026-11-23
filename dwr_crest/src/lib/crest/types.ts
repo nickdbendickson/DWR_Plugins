@@ -95,7 +95,7 @@ export type DamRecord = {
   startPoolFt?: number;
   /**
    * Manning's n for the routed flood, when it differs from the built-in values (routing.ts DEFAULT_ROUGHNESS:
-   * channel 0.035, floodplain 0.06). Absent, or a key absent = the built-in value.
+   * channel 0.035, floodplain 0.05). Absent, or a key absent = the built-in value.
    */
   roughness?: { nChannel?: number; nFloodplain?: number };
   /** Dam location (decimal degrees). Used for the VERTCON NGVD29 offset; the drawn breach point is the fallback. */
