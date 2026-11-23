@@ -107,6 +107,16 @@ def add_settings_action(plugin, iface):
     return action
 
 
+def _holder_layout(holder):
+    """A tab holder's layout, made again when Qt has none for it."""
+    lay = holder.layout()
+    if lay is None:
+        lay = QVBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 0, 0)
+        holder._suite_layout = lay
+    return lay
+
+
 class SuiteSettingsWindow(QDialog):
     """The window: file row, one tab per registered plugin (built when first shown), Close."""
 
@@ -175,7 +185,9 @@ class SuiteSettingsWindow(QDialog):
             if key not in self.holders:
                 holder = QWidget()
                 holder.setProperty("section_key", key)
-                QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+                hl = QVBoxLayout(holder)
+                hl.setContentsMargins(0, 0, 0, 0)
+                holder._suite_layout = hl          # keep it: some sip builds let the wrapper delete it
                 self.holders[key] = holder
                 self.tabs.insertTab(order.index(key), holder, secs[key]["title"])
         if self.isVisible():
@@ -192,7 +204,7 @@ class SuiteSettingsWindow(QDialog):
             if not keep_tab:
                 page.deleteLater()
         if holder is not None and _alive(holder):
-            lay = holder.layout()
+            lay = _holder_layout(holder)
             while lay.count():
                 item = lay.takeAt(0)
                 w = item.widget()
@@ -220,7 +232,7 @@ class SuiteSettingsWindow(QDialog):
             return self.built.get(key)
         sec_def = _registry().settings_sections.get(key)
         holder = self.holders[key]
-        lay = holder.layout()
+        lay = _holder_layout(holder)
         while lay.count():
             item = lay.takeAt(0)
             if item.widget() is not None:
