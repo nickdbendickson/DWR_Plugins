@@ -236,6 +236,9 @@ MODEL_KEYS = {
     # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r, 1-8 (the run tool's SUBGRID_R).
     # Left out = the engine's own default (4). Only that engine reads it.
     "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
+    # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
+    # (Devi & Kuiry 2024 Eq. 7-8). Off unless set; it reads deep on reaches that cross the grid.
+    "subgrid_upwind": ("user_subgrid_upwind", ("bool",)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),

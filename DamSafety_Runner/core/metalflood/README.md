@@ -55,7 +55,7 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 **As a program of its own (Runner 3.62.0, Boann 1.0.0)** - no QGIS, only Python 3 and numpy:
 
 ```
-python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
+python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv|subli] [--backend auto|metal|cpu]
                               [--no-limiter] [--progress] [--quiet] [--stats-json stats.json]
 python3 boann.py check        # the device a run would use here
 python3 boann.py solvers      # the solvers and the Runner engine words that pick each
@@ -133,6 +133,95 @@ counts the step's inflow as available water (the `inflow_lf_order` Param gates t
 term in `avail`), the cell settles where outflow balances inflow (2.09 m here) the same at any cfl -
 a mass-conserving order that differs from LISFLOOD-FP at the breach cell and its next cells by up to
 0.2 m, under 4 mm beyond about 300 m.
+
+## The sub-grid local-inertial scheme (`gpu-subli`, Runner 3.79.0, Boann 5.3.0)
+
+The ACC scheme run on **coarse cells that keep the DEM's detail**. The deck's DEM is the fine grid;
+`subgrid <r>` in the `.par` (1 to 8, default 4) makes each solver cell r x r DEM cells. A coarse
+cell holds one water level and knows, from its own DEM cells, how much water that level stores and
+how much of each of its four edges is under water. The step is r times longer and there are r x r
+fewer cells, and every result raster is still written at the DEM cell. It follows Nithila Devi and
+Kuiry (2024, *Water Resources Research* 60, e2023WR035334), with two departures made on purpose:
+
+- **Exact stage curves.** The paper fits a polynomial per cell (level against volume, face area
+  against level). Here both come from the cell's sorted DEM cells, so level is the exact inverse of
+  volume and there is no fit to check.
+- **Compound-channel friction.** The paper applies Manning to one mean depth across the whole face,
+  which spreads a channel narrower than the cell over the full cell width and runs it
+  (cell width / channel width)^0.4 too deep in bank (1.74 times for a channel a quarter of the
+  cell). Here the face's conveyance is the sum over its sub-segments, `K = sum w h^(5/3) / n`, and
+  an in-bank channel runs at the Manning normal depth (`subli_narrow_channel_runs_at_manning_normal_depth`).
+
+| File | What it is |
+|---|---|
+| `subgrid.py` | Builds the per-cell and per-face tables from the fine DEM (shared with sub-grid FV). |
+| `subli_ref.py` | The float64 reference: states the scheme, the paper's equations and the departures. |
+| `kernels_subli.metal`, `cpu_kernels_subli.cpp` | The kernels (seven per step, 28 buffers) and their CPU build. |
+| `subli_backend.py` | The kernel's `Params`, buffer layout and dispatch plan (Runner only, not in Screening). |
+| `engine_subli.py` | The driver: reads an ordinary deck, runs on the wet window, writes fine rasters. |
+
+**Deck keywords** beyond the ACC engine's: `subgrid <r>`; `upwind` turns on the paper's flux
+weighting (its Eq. 7 and 8, adaptive theta after Sridharan et al. 2020). `cfl`, `1Dfriction`,
+`physicalinflow` work as for ACC. `theta` is ignored. In the Runner: Flood engine "Advanced:
+Boann, sub-grid local inertial", the engine word `gpu-subli`, `SUBGRID_R` / `model.subgrid_r`, and
+`model.subgrid_upwind` for the weighting.
+
+**The flux weighting is off by default** (Nick, 2026-11-23, on these numbers). It blends each
+face's discharge with the face upwind along the grid axis. On a reach that crosses the grid at an
+angle that neighbour lies partly outside the channel, and the blend takes momentum out of the flow.
+Two more things it needed before it ran a breach deck at all, both in the code: an open edge takes
+the same blend with the next face inward (otherwise a reach ponds level behind the edge and
+empties in surges), and the faces of a cell a point source is feeding are not weighted (otherwise
+the source cell mounds by metres).
+
+**Checks (cloud, CPU build, 2026-11-23).** Maximum depth against the 5 m plain ACC run of the same
+meandering test valley (0.9 km, slope 0.004, 250 m3/s peak), where that run is over 0.1 m:
+
+| Run | Mean difference | Median size | Steps (5 m run: 3,549) |
+|---|---|---|---|
+| sub-grid, 10 m cells (r = 2) | -0.004 m | 0.009 m | 1,495 |
+| sub-grid, 20 m cells (r = 4) | -0.014 m | 0.024 m | 713 |
+| sub-grid, 40 m cells (r = 8) | -0.022 m | 0.057 m | 357 |
+| sub-grid, 20 m cells, `upwind` | +0.227 m | 0.231 m | 740 |
+| plain ACC on a 20 m DEM | +0.223 m | 0.232 m | |
+
+- r = 1 gives the plain ACC engine's flood on a whole deck (same steps, maximum depths within
+  1 mm), and the kernel on flat cells is the shipped ACC kernel to 1e-4 m.
+- The kernel matches the float64 reference to 5e-7 m over a dam break with a source and an open
+  edge on terrain 1,400 m up, with and without the weighting; a lake at rest stays at rest; a
+  closed basin keeps its volume at the full CFL step with nothing clipped.
+- The wet window changes no number; the multi-core CPU build equals one core bit for bit.
+- Lake Delhi 2010 (the validation gate's 30 m case, 8 surveyed high-water marks below the dam,
+  cloud CPU build on 2 cores; model minus surveyed, feet):
+
+  | Run | Mean | Mean size | Largest | Steps | Whole run |
+  |---|---|---|---|---|---|
+  | Boann ACC, 30 m cells | +1.24 | 1.28 | 2.67 | | 36 min |
+  | sub-grid, 60 m cells (r = 2) | +1.13 | 1.19 | 2.55 | 34,625 | 4.3 min |
+  | sub-grid, 120 m cells (r = 4, the gate's run) | +0.76 | 0.94 | 2.25 | 17,733 | 2.0 min |
+  | sub-grid, 240 m cells (r = 8) | +0.39 | 0.82 | 1.56 | 17,280 | 0.7 min |
+  | sub-grid, 120 m cells, `upwind` | +1.88 | 1.88 | 3.69 | | 2.0 min |
+  | sub-grid FV (`gpu-subfv`), 120 m cells | +1.57 | 1.61 | 4.31 | | 2.8 min |
+
+  Read it with care. The coarse runs sit LOWER than the 30 m run as the cells grow (0.11, 0.48,
+  0.85 ft lower), and the 30 m run reads high against the survey, so the coarser runs land closer
+  to the marks. That is the coarse cells drifting from the fine answer in a helpful direction on
+  this reach, not the method getting more accurate with bigger cells: r = 2 is the honest "same
+  flood, 8 times sooner" case, r = 4 trades half a foot for another factor of two. Volume error
+  5 to 10 m3 of 1.11e8 m3 at every r. The weighting reads 1.1 ft higher than without it.
+
+**What a fine cell is given.** Depth and water surface: the coarse cell's highest level less the
+DEM cell's own ground, for water over 1 mm. Arrival time, time of maximum and maximum velocity:
+those of the coarse cell the DEM cell lies in, where the DEM cell got wet. So arrival is a little
+early for DEM cells high in a coarse cell (1.6 min early at r = 2, 4.3 at r = 4, 7.4 at r = 8 on
+the test valley) and the velocity is the coarse cell's fastest face (discharge over the WET face
+area), which is high for DEM cells at the water's edge (+0.07, +0.22 and +0.42 m/s on average
+against 1.69 m/s; the 99th percentile agrees within 2 %).
+
+**Not done.** The Apple-GPU build has run only in the macOS CI job, not on a real dam; there is no
+3 m or 1 m real-dam run yet (the gain is there: a 10 m or 30 m DEM has already averaged the
+channel away). One level per coarse cell cannot hold a leveed or perched channel apart from the
+land beside it inside the same cell. No per-sub-segment velocity. Not in Screening.
 
 ## Not done (phase 2 and later)
 
