@@ -131,7 +131,12 @@ describe("a new record starts from the shared defaults", () => {
       assert.equal(r.method, "froehlich");
       assert.match(r.notes.join(" "), /Crest does not have/);
     }
-    assert.equal(recordDefaults({ ...SUITE_VALUES, breach_method: "tr60_curvilinear" }).method, "tr60");
+    // Absaraka audit: an NRCS TR-60 default is never turned into the desk's height-multiple width
+    for (const m of ["tr60", "tr60_curvilinear"]) {
+      const r = recordDefaults({ ...SUITE_VALUES, breach_method: m });
+      assert.equal(r.method, "froehlich");
+      assert.match(r.notes.join(" "), /TR-60 .*does not have/);
+    }
     assert.deepEqual(recordDefaults(SUITE_VALUES).notes, []);
   });
 });
