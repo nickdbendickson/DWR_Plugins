@@ -846,7 +846,7 @@ def write_summary(path, rows):
 def merge_batch_row(path, row):
     """Put one dam's Runner summary row into a batch summary CSV (Batch_Breach_Runs.csv):
     the dam's earlier row is replaced, every other dam's row is kept, a column the file
-    does not have yet is added at the end. Written through a temp file. 3.57.1 (batch 44,
+    does not have yet is added at the end. Written through a temp file. 3.58.1 (batch 44,
     2026-11-23): the chain ran the Runner one dam at a time into the batch folder, so each
     dam overwrote the file and only the last dam was left in it."""
     if not row or not norm_id(row.get("Dam")):
@@ -868,7 +868,7 @@ def merge_batch_row(path, row):
     return path
 
 
-RUNNER_ROW_NAME = "runner_summary.csv"          # 3.57.1: the Runner's row for this dam, in _chain
+RUNNER_ROW_NAME = "runner_summary.csv"          # 3.58.1: the Runner's row for this dam, in _chain
 
 
 def settings_used(dam, versions, files, settings_path=""):

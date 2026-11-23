@@ -345,7 +345,7 @@ def _ops(results, calls):
 
 @test
 def chain_runner_rows_accumulate_in_batch_summary():
-    """3.57.1 (batch 44, 2026-11-23): Nick's 40-dam run left only the LAST dam in
+    """3.58.1 (batch 44, 2026-11-23): Nick's 40-dam run left only the LAST dam in
     Batch_Breach_Runs.csv - the chain ran the Runner one dam at a time into the batch folder
     and each run overwrote the file. The Runner now writes the dam's row to _chain and the
     chain merges it in: every dam's row stays, a re-run dam's row is replaced, others kept."""

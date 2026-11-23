@@ -215,7 +215,7 @@ class QgisOps(object):
         pt = os.path.join(CH.chain_dir(dam.folder), "dam_point.gpkg")
         write_point(dam.feature, pt)
         tier = 2 if dam.mode == "run_linux" else int(dam.cv.get("RUNNER_MODELS") or 0)
-        # 3.57.1 (batch 44): the Runner writes this dam's row to its own file in _chain, and
+        # 3.58.1 (batch 44): the Runner writes this dam's row to its own file in _chain, and
         # the chain merges it into the batch folder's Batch_Breach_Runs.csv, which used to be
         # overwritten by every dam (only the last dam was left in it)
         own = os.path.join(CH.chain_dir(dam.folder), CH.RUNNER_ROW_NAME)

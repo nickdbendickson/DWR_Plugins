@@ -6,6 +6,17 @@
         time the fill and report sweeps to convergence
     python -m nd_breach_runner.core.metalterrain fill in.asc out.asc [-backend ...]
         fill an ESRI ASCII-grid DEM (NODATA_value / NaN = outlet)
+    python -m nd_breach_runner.core.metalterrain condition in.tif out.tif [options]
+        condition a GeoTIFF DEM for road / rail crossings, 4-way from one fill (condition.py):
+          --keepout FILE      building footprints / address points / town limits (repeatable)
+          --dam-folder DIR    also use the keep-out layers found in a dam folder by name
+          --buffer-m M        margin around each keep-out feature (default 25)
+          --freeze FILE       raster on the DEM grid, non-zero = frozen embankment / dam crest
+          --min-accum N       drainage cells a crossing must carry (default 20)
+          --max-cut M         deepest cut allowed, m (default 6); --no-cap for none
+          --all-classes       carve every depression class (the pre-3.57.0 sweep; not advised)
+          --acknowledge TEXT  export even with an unresolved freeze refusal, recording why
+        writes out.tif, out.tif.json (counts), out.tif.deltalog.sqlite and .deltalog.md
 """
 import hashlib
 import sys
@@ -79,7 +90,39 @@ def _write_asc(path, a, hdr):
     np.savetxt(path, a, fmt="%.4f", header=head, comments="")
 
 
+def condition_cli(argv):
+    import argparse
+    from . import burn as B
+    from . import condition as C
+    ap = argparse.ArgumentParser(prog="metalterrain condition")
+    ap.add_argument("dem")
+    ap.add_argument("out")
+    ap.add_argument("--keepout", action="append", default=[])
+    ap.add_argument("--dam-folder")
+    ap.add_argument("--buffer-m", type=float, default=C.DEFAULT_BUFFER_M)
+    ap.add_argument("--freeze")
+    ap.add_argument("--min-accum", type=int, default=20)
+    ap.add_argument("--max-cut", type=float, default=B.DEFAULT_MAX_CUT_M)
+    ap.add_argument("--no-cap", action="store_true")
+    ap.add_argument("--all-classes", action="store_true")
+    ap.add_argument("--acknowledge")
+    ap.add_argument("--backend", default="auto")
+    a = ap.parse_args(argv)
+    t0 = time.time()
+    info = C.condition_file(
+        a.dem, a.out, keepout_layers=a.keepout, dam_folder=a.dam_folder, buffer_m=a.buffer_m,
+        freeze_path=a.freeze, min_accum_cells=a.min_accum,
+        classes=None if a.all_classes else B.DEFAULT_CLASSES,
+        max_cut_m=None if a.no_cap else a.max_cut, backend=a.backend,
+        acknowledge=a.acknowledge, log=print)
+    print("done in {:.1f} s: {carved:,} carved, {cells_lowered:,} cells lowered, deepest cut "
+          "{max_cut_m:.2f} m, {flow_dead_ends:,} flow dead ends".format(time.time() - t0, **info))
+    return 0
+
+
 def main(argv):
+    if len(argv) > 1 and argv[1] == "condition":
+        return condition_cli(argv[2:])
     args = [x for x in argv[1:] if not x.startswith("-")]
     backend = "auto"
     size = "small"
