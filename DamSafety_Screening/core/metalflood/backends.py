@@ -90,14 +90,15 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
 
 
 def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..26: the FV1
-    layout (0..23) plus the previous-step state h0/hu0/hv0 for the RK2 blend. The minmod slopes are
-    not stored (Metal caps the buffer table at 31 slots); they are recomputed inline in the
-    kernels."""
+    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..27: the FV1
+    layout (0..23), the previous-step state h0/hu0/hv0 for the RK2 blend, and hs, the stage-start
+    depth k_cont_fv2 reads for its neighbours' slopes (so the in-place update has no read-after-write
+    race). Params is bound at 28. The minmod slopes are not stored (Metal caps the buffer table at
+    31 slots); they are recomputed inline in the kernels."""
     cells = ny * nx
     f = np.float32
     base = fv_buffer_layout(ny, nx, n_src, n_series, n_values)
-    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells)]
+    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells), ("hs", f, cells)]
 
 
 def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -180,7 +181,8 @@ def _fv2_plan(p):
     faces = (p.wc + 1, p.wr + 1, 1)
     cells = (p.wc, p.wr, 1)
     # one SSP-RK2 step: predictor sweep (stage 0), then corrector sweep (stage 1), then close.
-    # k_save_fv2 copies U^n once at stage 0; the slopes are recomputed inline in faces/cont.
+    # k_save_fv2 saves the stage-start depth hs at both stages and U^n once at stage 0; the slopes are
+    # recomputed inline in faces/cont (cont reads its neighbours from hs, not the h it overwrites).
     return [("k_stage_p_fv2", one), ("k_begin_fv2", one), ("k_save_fv2", cells),
             ("k_faces_fv2", faces), ("k_cont_fv2", cells),
             ("k_stage_c_fv2", one), ("k_begin_fv2", one), ("k_save_fv2", cells),
