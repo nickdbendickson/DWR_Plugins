@@ -121,10 +121,30 @@ def subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r():
             shutil.rmtree(d, True)
 
 
+@test
+def subfv_engine_open_edge_does_not_strand_a_pool():
+    """Water that runs down a short plane into an open (FREE) edge must leave, not come to rest
+    against it. With a purely transmissive edge the arriving water piled up at the boundary, the edge
+    cell's outward velocity fell to zero, and a level pool sat against the open edge for good (30 % of
+    this start water drained, then nothing, however long the run). The Manning normal-depth floor on
+    the FREE edge keeps the outflow going while the surface still slopes outward, as the ACC engine's
+    LISFLOOD-FP edge does."""
+    d = tempfile.mkdtemp()
+    try:
+        par, v0 = _sloping_open_deck(d, 1, 2, 2)             # 6 x 14 cells at r = 1
+        stats = es.run_par(par, backend="cpu")
+        drained = stats["outflow_m3"] / v0
+        assert drained > 0.9, "a pool was left against the open edge: only {:.1%} drained".format(drained)
+        assert abs(stats["mass_error_m3"]) / v0 < 5e-3, stats["mass_error_m3"]
+    finally:
+        shutil.rmtree(d, True)
+
+
 def _main():
     import traceback
     fns = [subfv_engine_runs_deck_and_writes_fine_outputs,
-           subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r]
+           subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r,
+           subfv_engine_open_edge_does_not_strand_a_pool]
     f = 0
     for fn in fns:
         try:

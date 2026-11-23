@@ -38,6 +38,9 @@ G = sg.G
 DRY = 1e-3
 HVEL = 1e-6          # depth floor for velocity desingularisation (matches kernels_fv MF_HVEL)
 CFL_CAP = 0.45       # 2-D explicit Godunov stability ceiling (kernels_fv MF_CFL_CAP)
+SLOPE_EPS = 1e-6     # FREE-edge normal-depth floor deadband (matches kernels_* MF_SLOPE_EPS): a
+#                      surface flat to within this slope has no drainage drive, and sqrt(slope) is
+#                      ill-conditioned as slope -> 0, so below it the transmissive flux stands.
 FREE_N, FREE_S, FREE_E, FREE_W = 1, 2, 4, 8
 
 
@@ -107,6 +110,18 @@ def _hllc(AL, WL, I1L, uL, vL, AR, WR, I1R, uR, vR):
     smax = np.maximum(np.abs(SL), np.abs(SR))
     smax = np.where(both, 0.0, smax)
     return FA, FN, FT, smax
+
+
+def _free_und(etac, etain, A, W, nc2, dx):
+    """Manning normal-depth outflow velocity driven by the water-surface slope to the inner cell
+    (0 where the surface does not slope outward, or the face is dry). The FREE-edge drainage floor:
+    at a coarse cell a narrow sub-grid outlet carries flow far faster than the cell's bulk velocity,
+    so the transmissive flux under-drains and the valley ponds; this restores it. Mirrors
+    mf_subfv_und in kernels_subfv.metal."""
+    slope = np.maximum((etain - etac) / dx, 0.0)
+    Rh = A / np.maximum(W, 1e-9)
+    und = np.sqrt(slope) * Rh ** (2.0 / 3.0) / np.sqrt(np.maximum(nc2, 1e-12))
+    return np.where((A > 0.0) & (slope > SLOPE_EPS), und, 0.0)
 
 
 class SubFVHLLCRef:
@@ -210,17 +225,23 @@ class SubFVHLLCRef:
             I1yD[1:ny, :] = ilD
             smax = max(smax, float(np.max(np.where(okf, sm, 0.0))) if sm.size else 0.0)
 
-        # domain-boundary faces: FREE = transmissive (ghost = the edge cell), else reflective wall.
-        # Either way the cell reconstructs against its own edge sub-bed; the first moment is stored so
-        # the bed source cancels the wall/edge pressure at rest.
+        # domain-boundary faces: FREE = transmissive outflow with a Manning normal-depth floor (so a
+        # coarse cell's diluted bulk velocity still drains the valley), else a reflective wall. Either
+        # way the cell reconstructs against its own edge sub-bed; the first moment is stored so the bed
+        # source cancels the wall/edge pressure at rest. nc2 = self.ncell2 (per-cell roughness n^2).
         fm = self.free_mask
+        nc2 = self.ncell2
         zfw, _ = t.edges["W"]
         Aw, Ww, ilw = _recon(eta[:, 0], zfw, wsub)
         I1xR[:, 0] = ilw                                 # cell 0 is the + side of the west face
         if fm & FREE_W:
-            FAx[:, 0] = np.where(self.ok[:, 0], Aw * u[:, 0], 0.0)
-            FNx[:, 0] = np.where(self.ok[:, 0], Aw * u[:, 0] * u[:, 0] + G * ilw, 0.0)
-            FTx[:, 0] = np.where(self.ok[:, 0], Aw * u[:, 0] * v[:, 0], 0.0)
+            uw = u[:, 0]
+            if nx > 1:
+                und = _free_und(eta[:, 0], eta[:, 1], Aw, Ww, nc2[:, 0], dx)
+                uw = np.where(und > 0.0, np.minimum(uw, -und), uw)   # at least und outward (-x)
+            FAx[:, 0] = np.where(self.ok[:, 0], Aw * uw, 0.0)
+            FNx[:, 0] = np.where(self.ok[:, 0], Aw * uw * uw + G * ilw, 0.0)
+            FTx[:, 0] = np.where(self.ok[:, 0], Aw * uw * v[:, 0], 0.0)
         else:
             FNx[:, 0] = np.where(self.ok[:, 0], G * ilw, 0.0)   # reflective: pressure only
 
@@ -228,9 +249,13 @@ class SubFVHLLCRef:
         Ae, We, ile = _recon(eta[:, -1], zfe, wsub)
         I1xL[:, nx] = ile                                # cell nx-1 is the - side of the east face
         if fm & FREE_E:
-            FAx[:, nx] = np.where(self.ok[:, -1], Ae * u[:, -1], 0.0)
-            FNx[:, nx] = np.where(self.ok[:, -1], Ae * u[:, -1] * u[:, -1] + G * ile, 0.0)
-            FTx[:, nx] = np.where(self.ok[:, -1], Ae * u[:, -1] * v[:, -1], 0.0)
+            ue = u[:, -1]
+            if nx > 1:
+                und = _free_und(eta[:, -1], eta[:, -2], Ae, We, nc2[:, -1], dx)
+                ue = np.where(und > 0.0, np.maximum(ue, und), ue)   # at least und outward (+x)
+            FAx[:, nx] = np.where(self.ok[:, -1], Ae * ue, 0.0)
+            FNx[:, nx] = np.where(self.ok[:, -1], Ae * ue * ue + G * ile, 0.0)
+            FTx[:, nx] = np.where(self.ok[:, -1], Ae * ue * v[:, -1], 0.0)
         else:
             FNx[:, nx] = np.where(self.ok[:, -1], G * ile, 0.0)
 
@@ -238,9 +263,13 @@ class SubFVHLLCRef:
         An, Wn, iln = _recon(eta[0, :], zfn, wsub)
         I1yD[0, :] = iln                                 # row 0 is the + (south) side of the north face
         if fm & FREE_N:
-            FAy[0, :] = np.where(self.ok[0, :], An * v[0, :], 0.0)
-            FNy[0, :] = np.where(self.ok[0, :], An * v[0, :] * v[0, :] + G * iln, 0.0)
-            FTy[0, :] = np.where(self.ok[0, :], An * v[0, :] * u[0, :], 0.0)
+            vn = v[0, :]
+            if ny > 1:
+                und = _free_und(eta[0, :], eta[1, :], An, Wn, nc2[0, :], dx)
+                vn = np.where(und > 0.0, np.minimum(vn, -und), vn)   # at least und outward (-y)
+            FAy[0, :] = np.where(self.ok[0, :], An * vn, 0.0)
+            FNy[0, :] = np.where(self.ok[0, :], An * vn * vn + G * iln, 0.0)
+            FTy[0, :] = np.where(self.ok[0, :], An * vn * u[0, :], 0.0)
         else:
             FNy[0, :] = np.where(self.ok[0, :], G * iln, 0.0)
 
@@ -248,9 +277,13 @@ class SubFVHLLCRef:
         As, Ws, ils = _recon(eta[-1, :], zfs, wsub)
         I1yU[ny, :] = ils                                # row ny-1 is the - side of the south face
         if fm & FREE_S:
-            FAy[ny, :] = np.where(self.ok[-1, :], As * v[-1, :], 0.0)
-            FNy[ny, :] = np.where(self.ok[-1, :], As * v[-1, :] * v[-1, :] + G * ils, 0.0)
-            FTy[ny, :] = np.where(self.ok[-1, :], As * v[-1, :] * u[-1, :], 0.0)
+            vs = v[-1, :]
+            if ny > 1:
+                und = _free_und(eta[-1, :], eta[-2, :], As, Ws, nc2[-1, :], dx)
+                vs = np.where(und > 0.0, np.maximum(vs, und), vs)   # at least und outward (+y)
+            FAy[ny, :] = np.where(self.ok[-1, :], As * vs, 0.0)
+            FNy[ny, :] = np.where(self.ok[-1, :], As * vs * vs + G * ils, 0.0)
+            FTy[ny, :] = np.where(self.ok[-1, :], As * vs * u[-1, :], 0.0)
         else:
             FNy[ny, :] = np.where(self.ok[-1, :], G * ils, 0.0)
 
