@@ -1098,7 +1098,7 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edi
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
-            if _p == dem_refill.HOLE_FILL:       # 3.71.0: enclosed holes from the ground around
+            if _p == dem_refill.HOLE_FILL:       # 3.74.0: enclosed holes from the ground around
                 g, _n = dem_refill.fill_interior_holes(g)
             else:
                 g = dem_refill.fill_grid(g, _p)
@@ -1482,7 +1482,9 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
     (dam._point_original, set before prepare() snapped it to the line, else dam_xy) and the
     move. A breach position on the crest line (st.breach_xy) keeps the point where it is (the
     record has moved=False and the mid-crest DEM crest is still used). Without a line or DEM:
-    (dam_xy, {"warning": ...}) - the point is used as given."""
+    (dam_xy, {"warning": ...}) - the point is used as given. 3.73.0 (batch 44 DWR-2976): a
+    midpoint in a dip of the crest (a spillway, a road cut, the line running off the dam) moves
+    to the middle of the line's longest level stretch (midcrest avoid_dip; rec["dip_note"])."""
     orig = getattr(dam, "_point_original", None) or dam_xy
     line = getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None)
     base = {"original_xy": [round(float(orig[0]), 3), round(float(orig[1]), 3)]}
@@ -1497,7 +1499,7 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
         g = read((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad), float(cell_m))
         z = np.where(g.valid(), g.data, np.nan)
         rec = mcmod.midcrest(pts, mcmod.bilinear(z, (g.x0, g.dx, 0.0, g.y0, 0.0, -g.dx)),
-                             original_xy=orig)
+                             original_xy=orig, avoid_dip=True)
     except Exception as e:                                   # noqa - never stop a run for this
         base["warning"] = "mid-crest not read ({}: {}): the dam point is used as given".format(
             type(e).__name__, e)
@@ -2391,6 +2393,17 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append(msg)
             log(msg)
             report["crest_line_refused"] = crf
+        rpt = getattr(dam, "_record_point", None)
+        if rpt:
+            # 3.73.0: the batch point was far from the DWR record's x_coord / y_coord (the old
+            # 4D latitude / longitude) and was moved there
+            msg = "CHECK THE DAM POINT: " + dwr_lines.RECORD_MOVE.format(
+                rpt["moved_m"], dwr_lines.RECORD_TEXT, rpt["xy"][0], rpt["xy"][1],
+                dwr_lines.NEAR_M) + "."
+            if msg not in warnings:
+                warnings.append(msg)
+            log(msg)
+            report["record_point"] = dict(rpt)
         dli = getattr(dam, "_dam_line_info", None)
         if dli:
             report["dam_line"] = {k: v for k, v in dli.items()}
@@ -2417,7 +2430,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             warnings.append("Dam point: " + mc_rec["warning"] + ".")
             mc_why = mc_rec["warning"]
             mc_rec = None if "z_m" not in mc_rec else mc_rec
-        elif mc_rec.get("review"):
+        if mc_rec is not None and mc_rec.get("dip_note"):
+            # 3.73.0: told as a warning so the run's reader checks the crest pick
+            warnings.append("Dam point: " + mc_rec["dip_note"] + ". Check the top of dam.")
+        if mc_rec is not None and not mc_rec.get("warning") and mc_rec.get("review"):
             # 3.12.5 (Nick 2026-10-29): the highest point at the edge of the +-25 m profile -
             # the pick is kept (method unchanged) but flagged
             warnings.append("REVIEW: Dam point: " + mc_rec["review"] + ".")
@@ -3205,7 +3221,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
     refilled = False
-    hole_filled = False                      # 3.71.0: enclosed holes filled from their rim
+    hole_filled = False                      # 3.74.0: enclosed holes filled from their rim
     hole_held = False
     stop_reason = None
     while it <= max_it:
@@ -3348,7 +3364,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             elif touch_n and refilled:
                 hole_held = True
                 stop_reason = "no-data after one refill"
-            # 3.71.0 (batch 44, DWR-2631: Low against a record of Significant, the flood held
+            # 3.74.0 (batch 44, DWR-2631: Low against a record of Significant, the flood held
             # back by 28 wet cells of a 1 m LiDAR gap the 3DEP refill did not close): before
             # calling the run held, fill the ENCLOSED holes the flood touches from the ground
             # around them (dem_refill.fill_interior_holes) and run the same domain run again,

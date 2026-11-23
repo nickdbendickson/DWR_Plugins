@@ -102,7 +102,7 @@ def _stop(proc):
                 except (AttributeError, OSError):
                     proc.kill()
                 proc.wait(timeout=5)
-    except Exception:                                            # noqa: never raises
+    except Exception:                                            # never raises
         pass
 
 

@@ -1,4 +1,4 @@
-"""3.71.0 (batch 44, DWR-2631): enclosed DEM no-data holes the flood reaches are filled from the
+"""3.74.0 (batch 44, DWR-2631): enclosed DEM no-data holes the flood reaches are filled from the
 ground around them before a run is called "held up by a hole".
 
 Nick's run1118 put DWR-2631 (Short Creek Dam 1, 38 ft, 2,765 ac-ft, Significant of record) at
@@ -119,7 +119,7 @@ def hole_fill_lets_the_flood_through_a_lidar_gap():
         assert "were filled from the ground around them" in warns, warns
         assert "held up by a hole" not in warns, warns
         below = np.nan_to_num(depth[:, xs > 800]) > 0.3          # metres, past the gap
-        # 3.71.0 measured: 60 of 2,460 cells past the gap wet on the old code (around its ends),
+        # 3.74.0 measured: 60 of 2,460 cells past the gap wet on the old code (around its ends),
         # 882 with the fill (the same as with no gap)
         assert below.sum() > 500, below.sum()
         runs = rep["lisflood_runs"]
