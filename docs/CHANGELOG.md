@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Runner 3.58.1 / Hazard 2.25.10: batch 44 review fixes (NO class or result change).** From Nick's run1118 logs (40 dams, DamSafety chain, 10 m).
+  - **Batch_Breach_Runs.csv kept only the last dam.** The chain ran the Runner one dam at a time into the batch folder and each run overwrote the file. The Runner now writes the dam's row to `<dam>/_chain/runner_summary.csv` (its `SUMMARY_FILE`) and the chain merges it into `Batch_Breach_Runs.csv` (`chain.merge_batch_row`): a re-run dam's row is replaced, the rest kept. Test `chain_runner_rows_accumulate_in_batch_summary`.
+  - **Hazard's evaluation cache was never written.** Every dam logged "the evaluation could not be kept on disk (cannot keep a date)": 911 record / NAIP flight dates are in the state. `evalcache` now keeps `date` / `datetime` as ISO text. Test `test_dates_are_kept`.
+  - `structures.py`: `utcfromtimestamp` (deprecated, one warning per dam) → `fromtimestamp(..., timezone.utc)`; same date.
 - **Runner 3.58.0: BoannGrid conditioning in one call, 4-way from one fill, with a keep-out mask built from building footprints, address points and town limits (NO change to ordinary runs; THIS MOVES the opt-in `sgc.from_boanngrid`'s census to 4-way).**
   - **Why.** #483 added the keep-out mask, but only a hand script that built and passed it could use it. The Absaraka #473 rerun had none and carved 108 notches through Casselton house lots. Conditioning also filled twice: an 8-way fill for the census, then flow refilled 4-way.
   - **`core/metalterrain/condition.py`.** `condition(z, cell_m, keepout, freeze_mask)` runs the 4-way fill, census, flow and `reconnect_crossings` (crossings only, 6 m cap) from one fill. `condition_file(dem.tif, out.tif, keepout_layers, dam_folder)` reads and writes GeoTIFFs, and writes `out.tif.json` (counts), `out.tif.deltalog.sqlite` and `.deltalog.md`.
