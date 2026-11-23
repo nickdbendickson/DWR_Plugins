@@ -625,6 +625,41 @@ def metalflood_fv2_conserves_water():
 
 
 @test
+def metalflood_fv2_gpu_matches_cpu_build_and_repeats_exactly():
+    """FV2 on the Metal GPU against the CPU build, and two GPU runs of the same deck against each other.
+    Before Runner 3.52.0 k_cont_fv2 read its neighbours' h while overwriting its own, a read-after-write
+    race: the GPU answer depended on the order the threads happened to run in. It now reads the
+    stage-start copy hs, so the GPU repeats bit for bit and agrees with the CPU build to float
+    round-off. Runs only on a Mac with a Metal GPU (the macOS CI job, Nick's Mac)."""
+    ok, why = mfb.metal_available()
+    if not ok:
+        raise Skip("no Metal GPU here ({})".format(why))
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        runs = {}
+        for tag, backend in (("cpu", "cpu"), ("gpu1", "metal"), ("gpu2", "metal")):
+            deck = valley_deck(os.path.join(d, tag))
+            s = fve.run_par(deck, backend=backend, order=2)
+            assert s["scheme"] == "fv2" and s["backend"] == backend, (tag, s)
+            runs[tag] = s
+        for ext in ("max", "maxVc", "inittm"):
+            g1 = _res(os.path.join(d, "gpu1"), ext)
+            g2 = _res(os.path.join(d, "gpu2"), ext)
+            assert np.array_equal(g1, g2), (ext, "GPU FV2 runs differ: a cell-order race is back")
+        assert runs["gpu1"]["steps"] == runs["gpu2"]["steps"], runs
+        sa, sb = runs["cpu"], runs["gpu1"]
+        assert abs(sa["steps"] - sb["steps"]) <= max(3, sa["steps"] // 200), (sa, sb)
+        for ext, tol in (("max", 0.01), ("maxVc", 0.1), ("inittm", 0.01)):
+            x = _res(os.path.join(d, "cpu"), ext)
+            y = _res(os.path.join(d, "gpu1"), ext)
+            m = (x != bl.NODATA) & (y != bl.NODATA)
+            assert np.abs(x - y)[m].max() <= tol, (ext, np.abs(x - y)[m].max())
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
 def metalflood_dg2_lake_at_rest_is_well_balanced():
     """The 2nd-order DG2 (RKDG2) engine holds a lake at rest over a bumpy bed: no spurious velocity
     and the still-water depth unchanged. DG2's slope limiter (on by default) collapses the evolved
