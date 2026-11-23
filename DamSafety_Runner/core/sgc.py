@@ -45,6 +45,9 @@ from .terrain import priority_flood
 
 # Bieger, Rathjens, Allen & Arnold (2015), conterminous US: W = a A^b, D = c A^f (m, A km2)
 BIEGER_2015_US = (2.70, 0.352, 0.30, 0.213)
+# North Dakota, fitted 2026-11-23 to 79 USGS gauges (tools/validation/nd_hydraulic_geometry/; the
+# same curve as metalterrain.prism.ND_USGS_2026). Not the default: sgc_curve can name it.
+ND_USGS_2026 = (1.946, 0.304, 0.221, 0.256)
 DEFAULT_MIN_AREA_KM2 = 2.0      # about 0.8 sq mi: W ~ 3.4 m, D ~ 0.35 m
 DEFAULT_CHANNEL_N = 0.035       # LISFLOOD-FP's own SGCn default (a clean natural channel)
 START_MODES = ("auto", "empty", "full")

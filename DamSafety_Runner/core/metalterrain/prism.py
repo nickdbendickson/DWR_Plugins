@@ -30,6 +30,16 @@ import numpy as np
 from . import flow as FL
 
 
+BIEGER_2015_US = {"a_w": 2.70, "b_w": 0.352, "a_d": 0.30, "b_d": 0.213}
+# North Dakota bankfull hydraulic geometry (W = a_w DA^b_w, D = a_d DA^b_d; m, DA km2 that
+# contributes), fitted 2026-11-23 to 79 USGS gauges (45 to 10,600 km2): width and mean depth at
+# the 1.5-year peak from each gauge's open-water discharge measurements. Method, every gauge and
+# the fit: tools/validation/nd_hydraulic_geometry/ (fit.py, RESULTS.md). ND channels are about
+# half as wide as the national curve at the same area (median 0.53) and as deep (median 1.03).
+# Pass it as `coeffs=ND_USGS_2026`. Not a published regression: the carve stays RESEARCH.
+ND_USGS_2026 = {"a_w": 1.946, "b_w": 0.304, "a_d": 0.221, "b_d": 0.256}
+
+
 def bieger_geometry(da_km2, a_w=2.70, b_w=0.352, a_d=0.30, b_d=0.213):
     """Regional channel width (m) and bankfull depth (m) for drainage area `da_km2` (km^2).
 
