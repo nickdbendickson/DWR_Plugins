@@ -137,7 +137,7 @@ def test_shell_no_project():
         assert not d.raster_group.isChecked() and d.raster_hint.isVisible()
         assert "Depth is always needed" in d.raster_hint.text()
         # one ellipsis character on every button of the window and its two windows
-        for host in (d, d.readme_dialog, d.suite_settings_dialog):
+        for host in (d, d.readme_dialog, d.suite_settings_page):
             bad = [b.text() for b in host.findChildren(QAbstractButton) if "..." in b.text()]
             assert not bad, bad
     finally:
@@ -220,8 +220,15 @@ def test_settings_and_readme_windows_open():
     try:
         s = d._open_suite_settings()
         _pump()
-        assert s is d.suite_settings_dialog and s.isVisible() and not s.isModal()
+        # Core 1.6.0: the one suite settings window, on Hazard's tab, holding Hazard's page
+        from DamSafety_Core.ui import suite_settings_window as SW
+        assert s is SW.window(create=False) and s.isVisible() and not s.isModal()
+        assert s.windowTitle().startswith("DamSafety ")
+        assert s.tabs.currentWidget() is s.holders["ndhazard"]
+        assert d.suite_settings_page.parent() is s.holders["ndhazard"]
         assert d.suite_grid is not None
+        assert not d.suite_settings_file_edit.isVisible()          # the window has the one file row
+        assert d._open_suite_settings() is s                       # one window, raised again
         r = d._open_readme()
         _pump()
         assert r.isVisible() and not r.isModal()
@@ -236,7 +243,7 @@ def test_settings_and_readme_windows_open():
         DLG.NDDamHazardDialog._build_suite_settings_tab = boom
         try:
             d2 = _make()
-            assert d2.suite_settings_dialog is None
+            assert d2.suite_settings_page is None
             with _NoPopups() as np_:
                 assert d2._open_suite_settings() is None
             assert np_.calls and "no catalog" in str(np_.calls[0])

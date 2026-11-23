@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Core 1.6.0 / Hazard 2.25.9 / Runner 3.54.0 / Screening 0.33.0: one suite settings window instead of three (window-simplification plan change 1; Nick, 2026-11-23; NO tool, default or run changes).** Hazard, the Runner and Screening each opened their own settings window on the same settings file: three windows, three file boxes (96, 1,016 and 183 rows).
+  - **The window.** `DamSafety_Core/ui/suite_settings_window.py`, "DamSafety Suite — Settings", is one window per QGIS. It has one settings-file row (File…, New…) and a tab per plugin: Hazard, Breach Runner, Screening.
+  - **Tabs.** Each tab holds that plugin's settings page as before (its grid, and for Screening its Run options). A tab is built the first time it is shown, so opening the window does not open every plugin.
+  - **One file.** The file row, New…, or a Load / Save as in any tab's grid moves every tab to that file. A tab built later reads it too.
+  - **Where it opens.** Plugins > Dam safety > Suite settings… (new; added once per QGIS, like the home's entry), and each plugin's gear or Settings, focused on that plugin's tab.
+  - **Plugins.** Each plugin registers its tab when it loads (`register_section`, with a factory that builds its window hidden if needed) and removes it on unload. A tab whose window Qt destroyed is rebuilt when next shown.
+  - **Screening.** The settings-file box and presets stay on Screening's Run tab.
+  - **Removed.** Hazard's `suite_settings_dialog`, the Runner's `settings_dialog` and Screening's `settings_window` are gone; `suite_settings_page` / `settings_page` remain. The plugins need Core 1.6.0. `tools/ci_checks.py` adds the `suite_settings_window.py` shim to the three plugins.
+  - **Checks.** `tools/gui_lint.py` opens the one window with every tab built (0 failures at 1080p in real QGIS 3.34).
+  - **Tests.** New `DamSafety_Hazard/tests/test_suite_settings_window.py` (real Qt: one window, tab order, tabs built when shown, the one file row, New, Load propagating, unload, a destroyed window rebuilt, a tab that cannot be built). Updated: Hazard `test_window_shell` / `test_ui_polish`, Runner `realqt_window_shell` / `test_popup` (the menu now has the Suite settings… entry), Screening `test_ui_shell_01723` / `test_popup`.
 - **Runner 3.53.0: sub-grid channels and BoannGrid's channel carve are sized on a North Dakota bankfull width / depth curve (THIS MOVES sub-grid-channel results: LISFLOOD-FP SGC and Boann `gpu-sgc`; runs without sub-grid channels are unchanged; Nick, 2026-11-23).** `carve_channels` has been research-gated on the national Bieger et al. (2015) curve (W = 2.70 DA^0.352, D = 0.30 DA^0.213). New `tools/validation/nd_hydraulic_geometry/fit.py` builds an ND curve from the USGS Water Data API:
   - **Method.** Bankfull flow is the 1.5-year annual peak (log-Pearson III on log10 Q). Peaks marked regulated, estimated, ice, backwater, historic, a daily mean, a bound or a dam failure are left out.
   - **Width and depth.** Each gauge's own at-a-station W(Q) and A(Q) are fitted to its open-water (May to October, not ice) discharge measurements between Q1.5 / 10 and 2 x Q1.5, then read at Q1.5.
