@@ -70,7 +70,7 @@ def run_batch(ids, work, sett_path, log):
            "DAM_ID=" + ",".join(ids), "INCLUDE=1", "LOG=" + os.path.join(work, "chain.txt")]
     log("run {} dam(s) in {}: {}".format(len(ids), work, ", ".join(ids)))
     with open(os.path.join(work, "qgis_process.txt"), "w", encoding="utf-8") as fh:
-        p = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT)
+        p = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- fixed argv list, no shell; QGIS_PROCESS and the dam IDs/work paths are the benchmark operator's own CLI args
     log("  exit {}".format(p.returncode))
     return p.returncode
 
