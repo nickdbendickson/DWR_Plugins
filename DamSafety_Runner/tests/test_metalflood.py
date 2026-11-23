@@ -543,6 +543,34 @@ def metalflood_fv_conserves_water():
 
 
 @test
+def metalflood_fv_free_edge_drains_a_sloping_basin():
+    """A basin pre-filled with water sloping down to a FREE east edge drains off the boundary (the
+    transmissive outflow with its Manning normal-depth floor) and keeps mass, for every HLLC order
+    (FV1/FV2/DG2). Exercises the FREE-edge path the lake/Ritter/closed-valley cases never reach."""
+    _need_cpu_build()
+    for order in (1, 2, 3):
+        d = _tmp()
+        try:
+            ny, nx, dx = 16, 40, 10.0
+            z = (40.0 - 0.02 * np.arange(nx))[None, :] * np.ones((ny, 1))   # bed tilts down to the east
+            hi = z[:, 0].max() + 3.0
+            lo = z[:, -1].max() + 0.5
+            surf = lo + (hi - lo) * np.linspace(1.0, 0.0, nx)              # water surface sloping east
+            h0 = np.maximum(surf[None, :] - z, 0.0) * np.ones((ny, 1))
+            vol0 = float(h0.sum()) * dx * dx
+            a = _fv_deck(os.path.join(d, "fe"), z, h0, dx=dx, sim=1800.0, n=0.035, free="E")
+            s = fve.run_par(a, backend="cpu", order=order)
+            assert s["outflow_m3"] > 0.3 * vol0, \
+                "order {}: little drained off the FREE edge: {:.3g} of {:.3g}".format(
+                    order, s["outflow_m3"], vol0)
+            # a one-sided outflow tally over a 2nd-order boundary draining almost the whole basin
+            # carries a sub-percent accounting truncation (0 at 1st order), so allow 0.5% here
+            assert abs(s["mass_error_m3"]) < 5e-3 * max(vol0, 1.0), (order, s["mass_error_m3"])
+        finally:
+            shutil.rmtree(d, True)
+
+
+@test
 def metalflood_fv2_lake_at_rest_is_well_balanced():
     """The 2nd-order FV2 (MUSCL + SSP-RK2) engine holds a lake at rest over a bumpy bed: no
     spurious velocity and the still-water depth unchanged to float32 round-off. The minmod limiter
@@ -1467,6 +1495,7 @@ if __name__ == "__main__":
                metalflood_dg2_lake_at_rest_is_well_balanced,
                metalflood_dg2_reproduces_the_ritter_dam_break, metalflood_dg2_conserves_water,
                metalflood_dg2_limiter_is_a_deck_keyword,
+               metalflood_fv_free_edge_drains_a_sloping_basin,
                fv_engine_is_a_runner_engine_choice,
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,

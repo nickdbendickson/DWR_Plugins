@@ -26,11 +26,22 @@ HVEL = hv.HVEL
 
 # --- a faithful float64 port of the plain well-balanced HLLC engine (kernels_fv.metal) -----------
 # Same Audusse hydrostatic reconstruction, same mf_hllc flux and Einfeldt wave speeds, same Audusse
-# bed source and semi-implicit friction. Boundaries match subfv_hllc_ref: transmissive FREE edges,
-# ideal reflective walls (zero mass flux, pure pressure).
+# bed source and semi-implicit friction. Boundaries match subfv_hllc_ref: a FREE edge is a
+# transmissive outflow with a Manning normal-depth floor (flat cell -> Rh = h, so it reduces to
+# subfv_hllc_ref's _free_und on flat tables), and a wall is ideal reflective (zero mass flux, pure
+# pressure).
 
 def _vel(hq, hh):
     return np.where(hh > HVEL, hq / np.where(hh > HVEL, hh, 1.0), 0.0)
+
+
+def _plain_free_und(etac, etain, hc, n2, dx):
+    """Manning normal-depth outflow velocity at a flat-cell FREE edge (Rh = h). Mirrors
+    subfv_hllc_ref._free_und at a flat bed, where its Rh = A/W = h, and mf_free_und in
+    kernels_fv.metal."""
+    slope = np.maximum((etain - etac) / dx, 0.0)
+    und = np.sqrt(slope) * np.maximum(hc, 0.0) ** (2.0 / 3.0) / np.sqrt(np.maximum(n2, 1e-12))
+    return np.where((hc > 0.0) & (slope > hv.SLOPE_EPS), und, 0.0)
 
 
 def _mf_hllc(hL, unL, utL, hR, unR, utR):
@@ -118,24 +129,41 @@ class _PlainHLLC:
             fyh[1:ny, :] = Fh; fyn[1:ny, :] = Fn; fyt[1:ny, :] = Ft
         # boundaries (match subfv_hllc_ref: transmissive FREE, ideal reflective wall)
         pr = 0.5 * G * h * h
+        n2 = self.n2
         if fm & hv.FREE_W:
-            fxh[:, 0] = h[:, 0] * u[:, 0]; fxn[:, 0] = h[:, 0] * u[:, 0] ** 2 + pr[:, 0]
-            fxt[:, 0] = h[:, 0] * u[:, 0] * v[:, 0]
+            uw = u[:, 0]
+            if nx > 1:
+                und = _plain_free_und(z[:, 0] + h[:, 0], z[:, 1] + h[:, 1], h[:, 0], n2[:, 0], dx)
+                uw = np.where(und > 0.0, np.minimum(uw, -und), uw)   # at least und outward (-x)
+            fxh[:, 0] = h[:, 0] * uw; fxn[:, 0] = h[:, 0] * uw ** 2 + pr[:, 0]
+            fxt[:, 0] = h[:, 0] * uw * v[:, 0]
         else:
             fxn[:, 0] = pr[:, 0]
         if fm & hv.FREE_E:
-            fxh[:, nx] = h[:, -1] * u[:, -1]; fxn[:, nx] = h[:, -1] * u[:, -1] ** 2 + pr[:, -1]
-            fxt[:, nx] = h[:, -1] * u[:, -1] * v[:, -1]
+            ue = u[:, -1]
+            if nx > 1:
+                und = _plain_free_und(z[:, -1] + h[:, -1], z[:, -2] + h[:, -2], h[:, -1], n2[:, -1], dx)
+                ue = np.where(und > 0.0, np.maximum(ue, und), ue)   # at least und outward (+x)
+            fxh[:, nx] = h[:, -1] * ue; fxn[:, nx] = h[:, -1] * ue ** 2 + pr[:, -1]
+            fxt[:, nx] = h[:, -1] * ue * v[:, -1]
         else:
             fxn[:, nx] = pr[:, -1]
         if fm & hv.FREE_N:
-            fyh[0, :] = h[0, :] * v[0, :]; fyn[0, :] = h[0, :] * v[0, :] ** 2 + pr[0, :]
-            fyt[0, :] = h[0, :] * v[0, :] * u[0, :]
+            vn = v[0, :]
+            if ny > 1:
+                und = _plain_free_und(z[0, :] + h[0, :], z[1, :] + h[1, :], h[0, :], n2[0, :], dx)
+                vn = np.where(und > 0.0, np.minimum(vn, -und), vn)   # at least und outward (-y)
+            fyh[0, :] = h[0, :] * vn; fyn[0, :] = h[0, :] * vn ** 2 + pr[0, :]
+            fyt[0, :] = h[0, :] * vn * u[0, :]
         else:
             fyn[0, :] = pr[0, :]
         if fm & hv.FREE_S:
-            fyh[ny, :] = h[-1, :] * v[-1, :]; fyn[ny, :] = h[-1, :] * v[-1, :] ** 2 + pr[-1, :]
-            fyt[ny, :] = h[-1, :] * v[-1, :] * u[-1, :]
+            vs = v[-1, :]
+            if ny > 1:
+                und = _plain_free_und(z[-1, :] + h[-1, :], z[-2, :] + h[-2, :], h[-1, :], n2[-1, :], dx)
+                vs = np.where(und > 0.0, np.maximum(vs, und), vs)   # at least und outward (+y)
+            fyh[ny, :] = h[-1, :] * vs; fyn[ny, :] = h[-1, :] * vs ** 2 + pr[-1, :]
+            fyt[ny, :] = h[-1, :] * vs * u[-1, :]
         else:
             fyn[ny, :] = pr[-1, :]
         # Audusse bed source (reconstructed depths at the cell's own four faces)

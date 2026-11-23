@@ -31,6 +31,9 @@ using namespace metal;
 #define MF_NODATA (-9999.0f)
 #define MF_CFL_CAP 0.45f
 #define MF_HVEL 1.0e-6f          // depth floor for velocity desingularisation
+#define MF_SLOPE_EPS 1.0e-6f     // FREE-edge normal-depth floor deadband: a surface flat to
+//                                 within this slope has no drainage drive (sqrt(slope) ill-
+//                                 conditioned as slope -> 0); below it the transmissive flux stands.
 #define MF_DRY 1.0e-3f
 #define MF_MSUB 64               // max r*r supported (r <= 8); local scratch for the curve loops
 
@@ -259,6 +262,20 @@ kernel void k_eta_subfv(MF_ARGS_SUBFV) {
     eta[i] = (ok[i] != 0) ? mf_invert_eta(sc, p.m, asub, V[i]) : sc[0];
 }
 
+// FREE-edge outflow floor: the Manning normal-depth velocity that the water-surface slope to the
+// inner cell drives through this face's sub-grid conveyance (area A, top width W, roughness nc2).
+// At a coarse cell a narrow sub-grid outlet carries the flow at a far higher velocity than the
+// cell's bulk u, so the pure transmissive flux (A * bulk u) under-drains and the valley ponds; this
+// floor restores the drainage. It is 0 when the surface does not slope outward (slope <= 0), so a
+// lake at rest at a FREE edge stays at rest, and at native resolution the bulk u already exceeds it.
+inline float mf_subfv_und(float etac, float etain, float A, float W, float nc2c, float dx) {
+    if (A <= 0.0f) return 0.0f;
+    float slope = (etain - etac) / dx;
+    if (slope <= MF_SLOPE_EPS) return 0.0f;   // deadband: no drainage drive below this surface slope
+    float Rh = A / fmax(W, 1e-9f);
+    return sqrt(slope) * pow(Rh, 2.0f / 3.0f) / sqrt(fmax(nc2c, 1e-12f));
+}
+
 // every face: HLLC flux of the Audusse-reconstructed sub-grid states
 kernel void k_faces_subfv(MF_ARGS_SUBFV) {
     device float* sf = (device float*)st;
@@ -291,8 +308,12 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             if (ok[i] != 0) {
                 float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
                 float u = mf_vel(Px[i], V[i], vfloor), v = mf_vel(Py[i], V[i], vfloor);
-                if (fm & MF_W) { f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
-                                 outflow += fmax(-f.A, 0.0f); }
+                if (fm & MF_W) {
+                    float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i + 1u], A, W, nc2[i], dx) : 0.0f;
+                    if (und > 0.0f) u = fmin(u, -und);     // at least und outward (-x)
+                    f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
+                    outflow += fmax(-f.A, 0.0f);
+                }
                 else { f.Fn = g * I1; }
             }
         } else {                      // east edge, cell is the - side
@@ -300,8 +321,12 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             if (ok[i] != 0) {
                 float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
                 float u = mf_vel(Px[i], V[i], vfloor), v = mf_vel(Py[i], V[i], vfloor);
-                if (fm & MF_E) { f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
-                                 outflow += fmax(f.A, 0.0f); }
+                if (fm & MF_E) {
+                    float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i - 1u], A, W, nc2[i], dx) : 0.0f;
+                    if (und > 0.0f) u = fmax(u, und);      // at least und outward (+x)
+                    f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
+                    outflow += fmax(f.A, 0.0f);
+                }
                 else { f.Fn = g * I1; }
             }
         }
@@ -333,8 +358,12 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             if (ok[i] != 0) {
                 float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
                 float nv = mf_vel(Py[i], V[i], vfloor), tu = mf_vel(Px[i], V[i], vfloor);
-                if (fm & MF_N) { f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
-                                 outflow += fmax(-f.A, 0.0f); }
+                if (fm & MF_N) {
+                    float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i + nx], A, W, nc2[i], dx) : 0.0f;
+                    if (und > 0.0f) nv = fmin(nv, -und);   // at least und outward (-y)
+                    f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
+                    outflow += fmax(-f.A, 0.0f);
+                }
                 else { f.Fn = g * I1; }
             }
         } else {                      // south edge, cell is the - side
@@ -342,8 +371,12 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             if (ok[i] != 0) {
                 float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
                 float nv = mf_vel(Py[i], V[i], vfloor), tu = mf_vel(Px[i], V[i], vfloor);
-                if (fm & MF_S) { f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
-                                 outflow += fmax(f.A, 0.0f); }
+                if (fm & MF_S) {
+                    float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i - nx], A, W, nc2[i], dx) : 0.0f;
+                    if (und > 0.0f) nv = fmax(nv, und);    // at least und outward (+y)
+                    f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
+                    outflow += fmax(f.A, 0.0f);
+                }
                 else { f.Fn = g * I1; }
             }
         }

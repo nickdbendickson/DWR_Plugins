@@ -33,6 +33,9 @@ using namespace metal;
 #define MF_CFL_CAP 0.45f         // 2-D explicit Godunov stability ceiling (per the sum of the
                                  // two directional CFLs staying under 1)
 #define MF_HVEL 1.0e-6f          // depth below which a cell carries no velocity: a
+#define MF_SLOPE_EPS 1.0e-6f     // FREE-edge normal-depth floor deadband: a surface flat to
+//                                 within this slope has no drainage drive (sqrt(slope) ill-
+//                                 conditioned as slope -> 0); below it the transmissive flux stands.
                                  // desingularisation floor, far finer than the 1 mm output "dry",
                                  // so a dam-break film's momentum is not thrown away at the front
 
@@ -242,6 +245,20 @@ kernel void k_begin_fv(MF_ARGS_FV) {
     sf[S_VIN] += qin * dt;
 }
 
+// FREE-edge outflow floor: the Manning normal-depth velocity that the water-surface slope to the
+// inner cell drives, so a flooded basin that decelerates into a FREE boundary still drains instead
+// of ponding. 0 when the surface does not slope outward, and at an established outflow the cell's
+// own velocity already exceeds it, so the transmissive outflow is only ever raised, never cut.
+inline float mf_free_und(float etac, float etain, float hc, float n2c, float dx) {
+    float slope = (etain - etac) / dx;
+    // deadband: a surface flat to within MF_SLOPE_EPS has no drainage drive, and sqrt(slope) is
+    // ill-conditioned as slope -> 0, so below it the transmissive flux stands (keeps engines matched).
+    if (slope <= MF_SLOPE_EPS || hc <= MF_HVEL) {
+        return 0.0f;
+    }
+    return sqrt(slope) * pow(hc, 2.0f / 3.0f) / sqrt(fmax(n2c, 1e-12f));
+}
+
 // every face of the window: HLLC flux of the hydrostatically reconstructed states. Thread (x, y)
 // owns the x-face (row r0+y, face col c0+x) when y < wr, and the y-face (face row r0+y, col c0+x)
 // when x < wc. Domain-edge faces use a ghost cell (transmissive if FREE, else a reflecting wall)
@@ -283,7 +300,12 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float ui = mf_vel(hu[i], h[i]);
                 float vi = mf_vel(hv[i], h[i]);
                 if ((p.free_mask & MF_W) != 0u) {
-                    fl = mf_hllc(h[i], ui, vi, h[i], ui, vi, g);   // transmissive
+                    float uo = ui;
+                    if (nx > 1u) {
+                        float und = mf_free_und(z[i] + h[i], z[i + 1u] + h[i + 1u], h[i], n2[i], p.dx);
+                        if (und > 0.0f) uo = fmin(ui, -und);          // at least und outward (-x)
+                    }
+                    fl = mf_hllc(h[i], uo, vi, h[i], uo, vi, g);      // transmissive, normal-depth floor
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h[i], -ui, vi, h[i], ui, vi, g);  // wall
@@ -295,7 +317,12 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float ui = mf_vel(hu[i], h[i]);
                 float vi = mf_vel(hv[i], h[i]);
                 if ((p.free_mask & MF_E) != 0u) {
-                    fl = mf_hllc(h[i], ui, vi, h[i], ui, vi, g);
+                    float uo = ui;
+                    if (nx > 1u) {
+                        float und = mf_free_und(z[i] + h[i], z[i - 1u] + h[i - 1u], h[i], n2[i], p.dx);
+                        if (und > 0.0f) uo = fmax(ui, und);           // at least und outward (+x)
+                    }
+                    fl = mf_hllc(h[i], uo, vi, h[i], uo, vi, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h[i], ui, vi, h[i], -ui, vi, g);
@@ -331,7 +358,12 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float ni = mf_vel(hv[i], h[i]);
                 float ti = mf_vel(hu[i], h[i]);
                 if ((p.free_mask & MF_N) != 0u) {
-                    fl = mf_hllc(h[i], ni, ti, h[i], ni, ti, g);
+                    float no = ni;
+                    if (ny > 1u) {
+                        float und = mf_free_und(z[i] + h[i], z[i + nx] + h[i + nx], h[i], n2[i], p.dx);
+                        if (und > 0.0f) no = fmin(ni, -und);          // at least und outward (-y)
+                    }
+                    fl = mf_hllc(h[i], no, ti, h[i], no, ti, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h[i], -ni, ti, h[i], ni, ti, g);
@@ -343,7 +375,12 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float ni = mf_vel(hv[i], h[i]);
                 float ti = mf_vel(hu[i], h[i]);
                 if ((p.free_mask & MF_S) != 0u) {
-                    fl = mf_hllc(h[i], ni, ti, h[i], ni, ti, g);
+                    float no = ni;
+                    if (ny > 1u) {
+                        float und = mf_free_und(z[i] + h[i], z[i - nx] + h[i - nx], h[i], n2[i], p.dx);
+                        if (und > 0.0f) no = fmax(ni, und);           // at least und outward (+y)
+                    }
+                    fl = mf_hllc(h[i], no, ti, h[i], no, ti, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
                     fl = mf_hllc(h[i], ni, ti, h[i], -ni, ti, g);
