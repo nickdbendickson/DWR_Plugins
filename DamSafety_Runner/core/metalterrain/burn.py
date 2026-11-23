@@ -98,36 +98,56 @@ def _carve_path(dem, valid, depr, floor):
     """Multi-source BFS from the depression `depr` outward over valid cells to the nearest cell
     below `floor` (the downstream channel). Returns the path (list of (r,c)) from a depression-edge
     cell across the barrier to that exit, or None. 4-connected."""
+    rr, cc = np.nonzero(depr)
+    return _carve_path_from(dem, valid, depr, rr, cc, floor)
+
+
+def _carve_path_from(dem, valid, in_depr, rows, cols, floor):
+    """_carve_path's BFS from the depression cells (rows, cols) in row-major order. `in_depr` is
+    anything indexable by [r, c] that is True inside the depression (a bool mask, or a label grid
+    compared to one id). The visited set is a dict, so the cost is the cells the search reaches,
+    not the whole grid (Runner 3.51.0: a full-grid parent array per depression made
+    reconnect_crossings O(n_depressions x cells))."""
     ny, nx = dem.shape
-    parent = -np.ones((ny, nx), dtype=np.int64)
+    parent = {}
     q = deque()
-    for r, c in np.argwhere(depr):
-        parent[r, c] = r * nx + c          # a source points to itself
+    for r, c in zip(rows.tolist(), cols.tolist()):
+        parent[(r, c)] = (r, c)            # a source points to itself
         q.append((r, c))
     exit_rc = None
     while q:
         r, c = q.popleft()
-        if (not depr[r, c]) and valid[r, c] and dem[r, c] < floor:
+        if (not in_depr[r, c]) and valid[r, c] and dem[r, c] < floor:
             exit_rc = (r, c)
             break
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             rr, cc = r + dr, c + dc
-            if 0 <= rr < ny and 0 <= cc < nx and valid[rr, cc] and parent[rr, cc] < 0:
-                parent[rr, cc] = r * nx + c
+            if 0 <= rr < ny and 0 <= cc < nx and valid[rr, cc] and (rr, cc) not in parent:
+                parent[(rr, cc)] = (r, c)
                 q.append((rr, cc))
     if exit_rc is None:
         return None
     path = []
-    r, c = exit_rc
+    cur = exit_rc
     while True:
-        path.append((r, c))
-        p = int(parent[r, c])
-        pr, pc = divmod(p, nx)
-        if (pr, pc) == (r, c):
+        path.append(cur)
+        p = parent[cur]
+        if p == cur:
             break
-        r, c = pr, pc
+        cur = p
     path.reverse()                         # depression edge -> ... -> exit
     return path
+
+
+class _IsLabel:
+    """labels[r, c] == lid, read cell by cell (no full-grid mask)."""
+    __slots__ = ("labels", "lid")
+
+    def __init__(self, labels, lid):
+        self.labels, self.lid = labels, lid
+
+    def __getitem__(self, rc):
+        return self.labels[rc] == self.lid
 
 
 def freeze_refusals(records):
@@ -172,13 +192,26 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
         _dirn, accum, _ = FL.flow_accum(a, filled=filled, backend=backend)
     out = a.copy()
     records = []
+    # Each depression's cells and peak drainage area from one pass over the grid (Runner 3.51.0),
+    # not a `labels == id` mask per depression: same cells, same order, same max, same carves.
+    labels = np.asarray(labels)
+    nx = labels.shape[1]
+    n_lab = int(labels.max()) if labels.size else 0
     for it in items:
-        m = labels == it["id"]
-        amax = float(np.nanmax(np.where(m, accum, np.nan)))
+        n_lab = max(n_lab, int(it["id"]))
+    _flat, cells, starts = A.label_cells(labels, n_lab)
+    acc_flat = np.asarray(accum, dtype=np.float64).ravel()
+    for it in items:
+        lid = int(it["id"])
+        ci = cells[starts[lid - 1]:starts[lid]] if 1 <= lid <= n_lab else cells[:0]
+        vals = acc_flat[ci]
+        vals = vals[~np.isnan(vals)]
+        amax = float(vals.max()) if vals.size else float("nan")
         if amax < min_accum_cells:
             continue                       # a puddle, not a blocked channel
         floor = it["floor_elev_m"]
-        path = _carve_path(a, valid, m, floor)
+        rr, cc = np.divmod(ci, nx)
+        path = _carve_path_from(a, valid, _IsLabel(labels, lid), rr, cc, floor)
         if path is None or len(path) < 2:
             continue
         exit_rc = path[-1]
