@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Runner 3.57.1 / Hazard 2.25.10: batch 44 review fixes (NO class or result change).** From Nick's run1118 logs (40 dams, DamSafety chain, 10 m).
+  - **Batch_Breach_Runs.csv kept only the last dam.** The chain ran the Runner one dam at a time into the batch folder and each run overwrote the file. The Runner now writes the dam's row to `<dam>/_chain/runner_summary.csv` (its `SUMMARY_FILE`) and the chain merges it into `Batch_Breach_Runs.csv` (`chain.merge_batch_row`): a re-run dam's row is replaced, the rest kept. Test `chain_runner_rows_accumulate_in_batch_summary`.
+  - **Hazard's evaluation cache was never written.** Every dam logged "the evaluation could not be kept on disk (cannot keep a date)": 911 record / NAIP flight dates are in the state. `evalcache` now keeps `date` / `datetime` as ISO text. Test `test_dates_are_kept`.
+  - `structures.py`: `utcfromtimestamp` (deprecated, one warning per dam) → `fromtimestamp(..., timezone.utc)`; same date.
 - **Runner 3.57.0: BoannGrid's crossing reconnect is limited, and flow accumulation has no dead ends (THIS MOVES BoannGrid-conditioned terrain: hand-run conditioning and the opt-in `sgc.from_boanngrid`; the default Runner path never calls `reconnect_crossings`, so ordinary runs are unchanged).**
   - **Why.** The Absaraka (DWR-2801) 30 m rerun on Runner 3.51.0 carved every drained depression of any class: 39,048 notches (the earlier crossing-only test made 418), cuts up to 19.5 m, 108 of them through Casselton house lots. 107 houses read as lethal and TM-11 went High, in water that sits below the uncut ground (median -7.8 ft).
   - **Crossings only.** `reconnect_crossings(classes=("crossing",))` by default: only a depression the census classes as a crossing (long and thin, a channel ponded behind a road or rail fill) is a candidate. `classes=None` is the old every-class sweep.

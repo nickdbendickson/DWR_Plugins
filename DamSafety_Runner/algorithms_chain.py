@@ -19,6 +19,7 @@ fails that stage with a plain message (the preflight says so before anything sta
   classify       ndhazard:classify     (ND + TM11), then ndhazard:savedamstate (the dam's
                                         Hazard window state, to add scenarios later)
 """
+import csv
 import json
 import os
 
@@ -214,13 +215,22 @@ class QgisOps(object):
         pt = os.path.join(CH.chain_dir(dam.folder), "dam_point.gpkg")
         write_point(dam.feature, pt)
         tier = 2 if dam.mode == "run_linux" else int(dam.cv.get("RUNNER_MODELS") or 0)
+        # 3.57.1 (batch 44): the Runner writes this dam's row to its own file in _chain, and
+        # the chain merges it into the batch folder's Batch_Breach_Runs.csv, which used to be
+        # overwritten by every dam (only the last dam was left in it)
+        own = os.path.join(CH.chain_dir(dam.folder), CH.RUNNER_ROW_NAME)
         fixed = {"DAMS": pt, "DAMS_FOLDER": os.path.dirname(dam.folder),
                  "DEM": str(dam.cv.get("DEM") or ""), "TIER": tier, "SKIP_DONE": False,
-                 "CLASSIFY": False, "F_ID": dam.id_field}
+                 "CLASSIFY": False, "F_ID": dam.id_field, "SUMMARY_FILE": own}
         aid, params = self.tool_params(dam, "runner", fixed)
         res = self._run(aid, params) or {}
-        row = batch_row(res.get("SUMMARY") or os.path.join(os.path.dirname(dam.folder),
-                                                           "Batch_Breach_Runs.csv"), dam.dam_id)
+        row = batch_row(res.get("SUMMARY") or own, dam.dam_id)
+        if row:
+            try:
+                CH.merge_batch_row(os.path.join(os.path.dirname(dam.folder),
+                                                "Batch_Breach_Runs.csv"), row)
+            except (OSError, csv.Error) as e:
+                self.log("{}: Batch_Breach_Runs.csv not updated ({})".format(dam.dam_id, e))
         depth = os.path.join(dam.folder, CH.FINAL_RASTERS["depth"])
         status = (row or {}).get("Status", "")
         msg = (row or {}).get("Message", "")

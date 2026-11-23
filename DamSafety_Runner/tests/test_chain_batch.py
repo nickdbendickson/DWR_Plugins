@@ -344,6 +344,58 @@ def _ops(results, calls):
 
 
 @test
+def chain_runner_rows_accumulate_in_batch_summary():
+    """3.57.1 (batch 44, 2026-11-23): Nick's 40-dam run left only the LAST dam in
+    Batch_Breach_Runs.csv - the chain ran the Runner one dam at a time into the batch folder
+    and each run overwrote the file. The Runner now writes the dam's row to _chain and the
+    chain merges it in: every dam's row stays, a re-run dam's row is replaced, others kept."""
+    root = _tmp()
+    try:
+        summ = os.path.join(root, "Batch_Breach_Runs.csv")
+        with open(summ, "w", newline="") as f:              # an earlier dam, another column set
+            w = csv.DictWriter(f, ["Dam", "Status", "Old_Col"])
+            w.writeheader()
+            w.writerow({"Dam": "OLD", "Status": "done", "Old_Col": "kept"})
+        dams = _dams(root, ["A", "B", "A"], mode="skip")
+        for d in dams:
+            d.id_field = "dam_id"
+            os.makedirs(CH.chain_dir(d.folder), exist_ok=True)
+            open(os.path.join(d.folder, CH.FINAL_RASTERS["depth"]), "w").close()
+        seen = []
+
+        def fake_runner(params):
+            own = params["SUMMARY_FILE"]
+            assert own.endswith(os.path.join(CH.CHAIN_DIR, CH.RUNNER_ROW_NAME)), own
+            dam_id = os.path.basename(os.path.dirname(os.path.dirname(own)))
+            seen.append(dam_id)
+            with open(own, "w", newline="") as f:           # what the Runner batch writes
+                w = csv.DictWriter(f, ["Dam", "Status", "Final_Model", "Message",
+                                       "Peak_Breach_cfs"])
+                w.writeheader()
+                w.writerow({"Dam": dam_id, "Status": "done", "Final_Model": "LISFLOOD-FP",
+                            "Peak_Breach_cfs": str(100 * len(seen))})
+            return {"SUMMARY": own}
+        calls = []
+        ops = _ops({"ndbreach:batch": fake_runner}, calls)
+        import nd_breach_runner.algorithms_chain as AC
+        orig, AC.write_point = AC.write_point, lambda feat, p: p
+        try:
+            for d in dams:
+                assert ops.run("runner", d)["final_model"] == "LISFLOOD-FP"
+        finally:
+            AC.write_point = orig
+        with open(summ, newline="") as f:
+            rows = list(csv.DictReader(f))
+        by = {r["Dam"]: r for r in rows}
+        assert [r["Dam"] for r in rows] == ["OLD", "B", "A"], rows
+        assert by["OLD"]["Old_Col"] == "kept"
+        assert by["A"]["Peak_Breach_cfs"] == "300" and by["B"]["Peak_Breach_cfs"] == "200", by
+        assert "Peak_Breach_cfs" in rows[0]                  # the new column was added
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@test
 def chain_qgis_ops_runner_and_classify():
     root = _tmp()
     try:
