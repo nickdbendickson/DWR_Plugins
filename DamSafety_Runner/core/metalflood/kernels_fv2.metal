@@ -132,7 +132,8 @@ struct Params {
     device float* h0 B(24), \
     device float* hu0 B(25), \
     device float* hv0 B(26), \
-    constant Params& p B(27), \
+    device float* hs B(27), \
+    constant Params& p B(28), \
     uint2 gid GID
 
 struct F3 { float h, mn, mt; };   // flux: mass, normal momentum, tangential momentum
@@ -172,6 +173,25 @@ inline float mf_sle(device const float* z, device const float* h, uint i, uint l
     float c = z[i] + h[i];
     float dl = hlo ? (c - (z[lo] + h[lo])) : 0.0f;
     float dh = hhi ? ((z[hi] + h[hi]) - c) : 0.0f;
+    return mf_minmod(dl, dh);
+}
+
+// the stage-start depth of cell (r, c) for k_cont_fv2's neighbour slopes: hs inside the compute
+// window (k_save_fv2 refreshed it this stage), h outside it (no kernel writes h there, and hs may be
+// stale from a batch when the window was bigger).
+inline float mf_hstart(device const float* h, device const float* hs, uint r, uint c, uint nx,
+                       constant Params& p) {
+    uint i = r * nx + c;
+    bool in = r >= p.r0 && r < p.r0 + p.wr && c >= p.c0 && c < p.c0 + p.wc;
+    return in ? hs[i] : h[i];
+}
+
+// mf_sle on stage-start depths: the cell's own (hc) and its two neighbours' (hlo_d, hhi_d).
+inline float mf_sle_d(device const float* z, uint i, uint lo, uint hi, float hc, float hlo_d,
+                      float hhi_d, bool hlo, bool hhi) {
+    float c = z[i] + hc;
+    float dl = hlo ? (c - (z[lo] + hlo_d)) : 0.0f;
+    float dh = hhi ? ((z[hi] + hhi_d) - c) : 0.0f;
     return mf_minmod(dl, dh);
 }
 
@@ -310,17 +330,23 @@ kernel void k_begin_fv2(MF_ARGS_FV2) {
     if (stage == 0u) st[S_QOUT] = 0u;
 }
 
-// every cell of the window: at the predictor (stage 0) save U^n into h0/hu0/hv0 for the RK2 blend,
-// before k_cont_fv2 overwrites the state. The minmod slopes are no longer stored (Metal's 31-buffer
-// cap); they are recomputed inline in k_faces_fv2 and k_cont_fv2. A no-op at the corrector.
+// every cell of the window, at both stages: save the stage-start depth into hs, which k_cont_fv2
+// reads for its neighbours' eta-slopes (it overwrites h in place, so reading h there would be a
+// read-after-write race between cells: the answer would depend on the order the cells run in). At the
+// predictor (stage 0) it also saves U^n into h0/hu0/hv0 for the RK2 blend. The minmod slopes are not
+// stored (Metal's 31-buffer cap); they are recomputed inline in k_faces_fv2 and k_cont_fv2.
 kernel void k_save_fv2(MF_ARGS_FV2) {
     device float* sf = (device float*)st;
-    if (sf[S_DT] <= 0.0f || st[S_STAGE] != 0u) {
+    if (sf[S_DT] <= 0.0f) {
         return;
     }
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
     uint i = r * p.nx + c;
+    hs[i] = h[i];
+    if (st[S_STAGE] != 0u) {
+        return;
+    }
     h0[i] = h[i];
     hu0[i] = hu[i];
     hv0[i] = hv[i];
@@ -519,15 +545,23 @@ kernel void k_cont_fv2(MF_ARGS_FV2) {
     float dx = p.dx;
     float g = p.g;
 
-    float h0c = h[i];
+    // stage-start depths (hs, saved by k_save_fv2): this kernel writes h in place, so a neighbour's h
+    // may already hold its new value here; hs never does, whatever order the cells run in
+    float h0c = hs[i];
     float etaI = z[i] + h0c;
     // the cell's own eta-slopes, recomputed inline (consistent with k_faces_fv2's reconstruction)
     bool hlx = (c > 0u) && ok[i - 1u] != 0;
     bool hhx = (c + 1u < nx) && ok[i + 1u] != 0;
-    float sxe_i = mf_sle(z, h, i, (c > 0u) ? i - 1u : i, (c + 1u < nx) ? i + 1u : i, hlx, hhx);
+    float hW = (c > 0u) ? mf_hstart(h, hs, r, c - 1u, nx, p) : h0c;
+    float hE = (c + 1u < nx) ? mf_hstart(h, hs, r, c + 1u, nx, p) : h0c;
+    float sxe_i = mf_sle_d(z, i, (c > 0u) ? i - 1u : i, (c + 1u < nx) ? i + 1u : i, h0c, hW, hE,
+                           hlx, hhx);
     bool hly = (r > 0u) && ok[i - nx] != 0;
     bool hhy = (r + 1u < ny) && ok[i + nx] != 0;
-    float sye_i = mf_sle(z, h, i, (r > 0u) ? i - nx : i, (r + 1u < ny) ? i + nx : i, hly, hhy);
+    float hN = (r > 0u) ? mf_hstart(h, hs, r - 1u, c, nx, p) : h0c;
+    float hS = (r + 1u < ny) ? mf_hstart(h, hs, r + 1u, c, nx, p) : h0c;
+    float sye_i = mf_sle_d(z, i, (r > 0u) ? i - nx : i, (r + 1u < ny) ? i + nx : i, h0c, hN, hS,
+                           hly, hhy);
     // reconstructed cell-edge depths for the Audusse source, consistent with k_faces_fv2
     float etaxR = etaI + 0.5f * sxe_i;
     float etaxL = etaI - 0.5f * sxe_i;

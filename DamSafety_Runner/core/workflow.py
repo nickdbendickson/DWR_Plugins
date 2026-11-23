@@ -354,7 +354,8 @@ class RunSettings:
         # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; off by default). On, every
         # LISFLOOD-FP pass of the main run gets channels built from its own DEM: cells draining
         # sgc_min_area_km2 or more, bankfull width / depth from drainage area (W = a A^b,
-        # D = c A^f, sgc_curve, Bieger et al. 2015 by default), Manning n sgc_channel_n.
+        # D = c A^f, sgc_curve, the ND USGS curve by default
+        # since 3.53.0, Bieger et al. 2015 before), Manning n sgc_channel_n.
         # sgc_upstream_sqmi = the drainage area at the dam (sq mi; 0 = not known), added at the
         # breach inflow so the channel below the dam is sized for its watershed. sgc_start:
         # "auto" (channels on hydro-flattened water start full, the rest empty), "empty", "full".
@@ -365,7 +366,7 @@ class RunSettings:
         self.sgc_upstream_sqmi = 0.0
         self.sgc_channel_n = sgcmod.DEFAULT_CHANNEL_N
         self.sgc_start = "auto"
-        self.sgc_curve = list(sgcmod.BIEGER_2015_US)
+        self.sgc_curve = list(sgcmod.DEFAULT_CURVE)
         # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
         # own default (4). The QGIS run tool sets it from SUBGRID_R, the CLI from model.subgrid_r.
         self.user_subgrid_r = None

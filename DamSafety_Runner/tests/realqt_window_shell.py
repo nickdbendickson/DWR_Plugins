@@ -233,12 +233,18 @@ dlg.rail.setCurrentRow(3)
 shot(dlg, "tools_tab_postprocess")
 dlg.tabs.setCurrentIndex(0)
 
-# 5. the settings window: non-modal, behind the gear, the gear shows the changed count
-assert not dlg.settings_dialog.isVisible() and not dlg.settings_dialog.isModal()
+# 5. the settings: the Runner's tab of the one suite settings window (Core 1.6.0), non-modal,
+# behind the gear; the gear shows the changed count
+from DamSafety_Core.ui import suite_settings_window as SW  # noqa: E402
+assert SW.window(create=False) is None or not SW.window(create=False).isVisible()
 assert dlg.gear.text() == "⚙"
 dlg.gear.click()
 pump()
-assert dlg.settings_dialog.isVisible()
+sw = SW.window(create=False)
+assert sw is not None and sw.isVisible() and not sw.isModal()
+assert sw.tabs.currentWidget() is sw.holders["ndbreach"]
+assert dlg.settings_page.parent() is sw.holders["ndbreach"]
+assert not dlg.settings_file_edit.isVisible()            # the suite window's file row instead
 cell = ("ndbreach", "rundam", "CELL")
 sf = os.path.join(dams, "damsuite_settings.csv")
 dlg.settings_file_edit.setText(sf)
@@ -246,8 +252,8 @@ dlg.grid.settings.path = sf
 dlg.grid.save(sf, name="test")
 assert dlg.grid.set_value(cell, "5") == ""
 assert dlg.gear.text() == "⚙ 1", dlg.gear.text()
-shot(dlg.settings_dialog, "settings_dialog")
-dlg.settings_dialog.close()
+shot(sw, "settings_dialog")
+sw.close()
 
 # 5b. the window title and the size remembered on close (QSettings of the test profile)
 assert dlg.windowTitle().startswith("DamSafety Runner"), dlg.windowTitle()

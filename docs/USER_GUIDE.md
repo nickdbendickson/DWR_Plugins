@@ -228,7 +228,7 @@ How it works:
 - `FORCE_ANUGA`: since #38 it is hidden and folded into the engine choice. An old `FORCE_ANUGA = True` (from saved settings, models or history) selects "LISFLOOD-FP then ANUGA".
 - **"Runner: near-dam refine with the FV1 solver"** (`REFINE_NEAR`, default off).
 - **"Culverts and bridges for the Runner (lines, upstream end first; used by ANUGA)"** (`CULVERTS`, optional): pick the layer in the window's Inputs. Optional field parameters (`C_KIND` ... `C_NAME`) name its kind, width, height, barrels, shape and name fields. If a field is left empty, the Runner matches its own synonyms.
-- In the Screening window, these are on the Settings tab as runner_tier, runner_force_anuga and runner_refine, and they're saved in the settings file.
+- In Screening, these are on its tab of the suite settings window (Plugins > Dam safety > Suite settings…) as runner_tier, runner_force_anuga and runner_refine, and they're saved in the settings file.
 
 ## Culvert matching (#30, merged 10:34Z)
 Labels below are from main (checked at 18ae1f5). These are advanced Runner parameters:

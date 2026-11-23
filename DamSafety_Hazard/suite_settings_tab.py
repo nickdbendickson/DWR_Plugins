@@ -36,7 +36,8 @@ class SuiteSettingsTabMixin(object):
         info.setWordWrap(True)
         lay.addWidget(info)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Settings file:"))
+        file_label = QLabel("Settings file:")
+        row.addWidget(file_label)
         self.suite_settings_file_edit = QLineEdit()
         self.suite_settings_file_edit.setText(DS.current_path() or "")
         self.suite_settings_file_edit.editingFinished.connect(lambda: self._suite_settings_file_edited())
@@ -48,6 +49,8 @@ class SuiteSettingsTabMixin(object):
         row.addWidget(b)
         row.addWidget(n)
         lay.addLayout(row)
+        # Core 1.6.0: the one suite settings window has the file row (and says what the file is)
+        self._suite_file_row_widgets = [info, file_label, self.suite_settings_file_edit, b, n]
         # status area: save failures, a refused file, a catalog that did not load (Heim 2.7.1/2.7.3/2.7.5)
         self.suite_settings_status = QLabel("")
         self.suite_settings_status.setWordWrap(True)
