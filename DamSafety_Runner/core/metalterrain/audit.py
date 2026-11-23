@@ -96,14 +96,16 @@ def label_cells(labels, n=None):
     return flat, cells, starts
 
 
-def depression_census(dem, filled=None, cell_m=1.0, eps=1e-5, backend="auto"):
+def depression_census(dem, filled=None, cell_m=1.0, eps=1e-5, backend="auto", conn=8):
     """Census every filled depression on `dem` (NaN / -9999 = NoData). Returns (labels, items).
     `labels` is int32 (0 = not filled). Each item: id, n_cells, area_m2, volume_m3, max_depth_m,
     floor_elev_m (lowest original ground), spill_elev_m (the level it filled to), centroid (row,
-    col) and `klass` (classify()). Pass `filled` to skip re-filling."""
+    col) and `klass` (classify()). Pass `filled` to skip re-filling. `conn` is the fill's
+    connectivity when it fills (8 default; 4 = the 4-way fill flow and the ACC engine use, so a
+    cell that only drains across a corner counts as a depression)."""
     a = np.asarray(dem, dtype=np.float64)
     if filled is None:
-        filled, _ = F.fill_dem(a, eps=eps, backend=backend)
+        filled, _ = F.fill_dem(a, eps=eps, backend=backend, conn=conn)
     else:
         filled = np.asarray(filled, dtype=np.float64)
     delta = fill_delta(a, filled)
