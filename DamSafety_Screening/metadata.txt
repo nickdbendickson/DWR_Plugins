@@ -9,7 +9,7 @@ version=0.45.0
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 category=Plugins
-changelog=0.45.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.69.0: the ACC engine reads LISFLOOD-FP's "rainfall" keyword (rain on the grid); the other Boann engines refuse a deck with rainfall. NO change for tool 7's decks, which have no rainfall.)
+changelog=0.45.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.75.0: the ACC engine reads LISFLOOD-FP's "rainfall" keyword (rain on the grid); the other Boann engines refuse a deck with rainfall. NO change for tool 7's decks, which have no rainfall.)
     0.44.0 - (2026-11-23) NO change to Screening's results: Boann's version number (core/metalflood/version.py, kept byte-identical with the Runner's copy) goes to 5.0.0 because the Runner's sub-grid FV engine got a positivity limiter (Runner 3.68.0). Screening has no sub-grid FV.
     0.43.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.67.0: DG2 reconstructs edge/Gauss velocities as primitives, removing a float32 GPU-vs-CPU sensitivity; THIS MOVES DG2 results.)
     0.42.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.66.0: FV2 reconstructs face velocities, not discharges, which removes 20-30 m/s velocity spikes; THIS MOVES FV2 results.)

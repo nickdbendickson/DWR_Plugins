@@ -28,6 +28,7 @@ from nd_breach_runner.core.grid import Grid  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
 from nd_breach_runner.tests.registry import test  # noqa: E402
 from nd_breach_runner.tests.test_gmsh_mesher import _case  # noqa: E402
+from nd_breach_runner.tests.anuga_no_worker import worker_fails  # noqa: E402
 
 try:
     import gmsh  # noqa: F401
@@ -221,10 +222,11 @@ def gmsh_spec_puts_crest_lines_in_the_mesh_lines_and_keeps_settings_out():
 
 def _run(workdir, st, road, dip=None, structures=None):
     dem, flooded, inflow, hy, _st, refine = _case()
-    try:   # sys.executable has no anuga: the worker fails after the job file is written
-        AM.run(workdir, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=refine,
-               embankment_lines=[road], terrain_read=_reader(dem, road, dip=dip),
-               structures=structures)
+    try:   # the worker fails after the job file is written (anuga_no_worker)
+        with worker_fails():
+            AM.run(workdir, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=refine,
+                   embankment_lines=[road], terrain_read=_reader(dem, road, dip=dip),
+                   structures=structures)
     except ModelError:
         pass
     return np.load(os.path.join(workdir, "anuga_job.npz"), allow_pickle=False), dem
