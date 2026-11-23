@@ -1662,6 +1662,58 @@ def merge_csv_prefers_the_dam_id_column_and_mapping_errors_are_clear():
     shutil.rmtree(d)
 
 
+def _mod_label(fn):
+    """Short module name for the summary. This file's own tests are `__main__` when the
+    file is the script and `nd_breach_runner.tests.run_tests` when it is imported."""
+    mod = getattr(fn, "__module__", "") or ""
+    if mod in ("__main__", "nd_breach_runner.tests.run_tests"):
+        return "run_tests"
+    if mod.startswith("nd_breach_runner.tests."):
+        return mod.rsplit(".", 1)[-1]
+    return mod or "?"
+
+
+def silent_test_modules(on_disk, registered_modules, prefix="nd_breach_runner.tests."):
+    """test_*.py stems that imported and registered nothing.
+
+    `registered_modules` is `{fn.__module__ for fn in TESTS + MODEL_TESTS}`, not the
+    list about to run. A model-only module is registered even when `--models` is off,
+    so that run does not warn about it. The prefix is the package the loader uses;
+    `tests.` alone would warn about every healthy module.
+    """
+    registered = set(registered_modules)
+    return [name for name in sorted(on_disk)
+            if name.startswith("test_") and (prefix + name) not in registered]
+
+
+def module_count_lines(todo, model_held, silent):
+    """One line per module: how many tests this run executed, model tests left for
+    `--models`, and a zero for a module that registered nothing."""
+    from collections import Counter
+    ran = Counter(_mod_label(fn) for fn in todo)
+    held = Counter(_mod_label(fn) for fn in model_held)
+    names = sorted(set(ran) | set(held) | set(silent))
+    lines = []
+    for name in names:
+        extra = ""
+        if held[name]:
+            extra = ", {} model tests not run (pass --models)".format(held[name])
+        lines.append("  {:<28} {}{}".format(name, ran[name], extra))
+    return lines
+
+
+def empty_collection_status(todo):
+    """(exit code or None, message or None). None means the run may continue.
+
+    Fired only after the extra test modules have imported. An ImportError never
+    reaches here, and neither does a missing scipy (`sys.exit` above).
+    """
+    if not todo:
+        return 1, ("FATAL: no tests collected — an import that registered nothing must not "
+                   "look green (repo audit 2026-11-23 follow-up)")
+    return None, None
+
+
 def _load_extra_test_modules():
     """tests/test_*.py register their tests through tests.registry."""
     import importlib
@@ -1684,6 +1736,18 @@ def main():
     _load_extra_test_modules()
     run_models = "--models" in sys.argv
     todo = TESTS + (MODEL_TESTS if run_models else [])
+    code, fatal = empty_collection_status(todo)
+    if code:
+        print(fatal)
+        return code
+    import pkgutil
+    from nd_breach_runner import tests as tests_pkg
+    on_disk = [m.name for m in pkgutil.iter_modules(tests_pkg.__path__)
+               if m.name.startswith("test_")]
+    registered = {fn.__module__ for fn in TESTS + MODEL_TESTS}
+    silent = silent_test_modules(on_disk, registered)
+    if silent:
+        print("WARN: imported but registered no tests: " + ", ".join(silent))
     failed = skipped = 0
     for fn in todo:
         try:
@@ -1700,6 +1764,10 @@ def main():
             traceback.print_exc()
     print("\n{} tests, {} failed{}".format(len(todo), failed,
                                            ", {} skipped".format(skipped) if skipped else ""))
+    held = () if run_models else MODEL_TESTS
+    print("modules:")
+    for line in module_count_lines(todo, held, silent):
+        print(line)
     return 1 if failed else 0
 
 
