@@ -26,6 +26,7 @@ data is not trusted forever: downloads (NSI, roads ...) change, so the
 default age limit is MAX_AGE_DAYS.
 """
 
+import datetime
 import io
 import json
 import os
@@ -158,6 +159,12 @@ class _Pickler(pickle.Pickler):
         if getattr(obj, "__module__", None) in _NUMPY_MODULES and \
                 getattr(obj, "__name__", None) in _NUMPY_NAMES:
             return None
+        # 2.25.10 (batch 44, 2026-11-23): 911 record and NAIP flight dates sit in the
+        # state, so every save was refused ("cannot keep a date"); kept as ISO text
+        if t is datetime.datetime:
+            return ("dt", obj.isoformat())
+        if t is datetime.date:
+            return ("date", obj.isoformat())
         from qgis.core import (QgsGeometry, QgsRectangle, QgsPointXY,
                                QgsCoordinateReferenceSystem)
         from .scenarios import Scenario
@@ -191,6 +198,10 @@ class _Unpickler(pickle.Unpickler):
             return QgsPointXY(pid[1], pid[2])
         if kind == "crs":
             return _crs_from(pid)
+        if kind == "date":
+            return datetime.date.fromisoformat(pid[1])
+        if kind == "dt":
+            return datetime.datetime.fromisoformat(pid[1])
         if kind == "scn":
             # one object per scenario, as in the run that made it (results
             # and the scenario list share it)
