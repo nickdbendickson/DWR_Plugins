@@ -70,10 +70,9 @@ def find_keepout_layers(folder, max_depth=3):
 
 
 def _gdal():
+    # never gdal.UseExceptions(): it is process-wide in QGIS (test_v341); opens and creates go
+    # through damsuite.gdalsafe, which raises in both modes
     from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
-    ogr.UseExceptions()
-    osr.UseExceptions()
     return gdal, ogr, osr
 
 
@@ -83,7 +82,9 @@ def keepout_mask(shape, geotransform, wkt, layers, buffer_m=DEFAULT_BUFFER_M):
     metres). Returns (mask bool array, n_features, per-layer counts dict)."""
     gdal, ogr, osr = _gdal()
     ny, nx = shape
-    mem = gdal.GetDriverByName("MEM").Create("", int(nx), int(ny), 1, gdal.GDT_Byte)
+    from ...damsuite import gdalsafe as GS
+    mem = GS.checked(gdal.GetDriverByName("MEM").Create("", int(nx), int(ny), 1, gdal.GDT_Byte),
+                     "creating the keep-out mask")
     mem.SetGeoTransform(tuple(geotransform))
     mem.SetProjection(wkt)
     dst = osr.SpatialReference()
@@ -97,9 +98,10 @@ def keepout_mask(shape, geotransform, wkt, layers, buffer_m=DEFAULT_BUFFER_M):
         a=xa - pad, b=xb + pad, c=ya - pad, d=yb + pad))
     total, per = 0, {}
     for path in layers:
-        src = ogr.Open(path)
-        if src is None:
-            raise IOError("cannot open keep-out layer {}".format(path))
+        try:
+            src = GS.open_vector(path)
+        except RuntimeError as e:
+            raise IOError("cannot open keep-out layer {} ({})".format(path, e))
         n_here = 0
         for li in range(src.GetLayerCount()):
             lyr = src.GetLayer(li)
@@ -182,8 +184,8 @@ def condition(dem, cell_m, keepout=None, freeze_mask=None, min_accum_cells=20,
 
 
 def _read_raster(path):
-    gdal, _ogr, _osr = _gdal()
-    ds = gdal.Open(path)
+    from ...damsuite import gdalsafe as GS
+    ds = GS.open_raster(path)
     b = ds.GetRasterBand(1)
     a = b.ReadAsArray().astype(np.float64)
     nd = b.GetNoDataValue()
@@ -194,9 +196,11 @@ def _read_raster(path):
 
 
 def _write_geotiff(path, a, gt, wkt, nodata=-9999.0):
+    from ...damsuite import gdalsafe as GS
     gdal, _ogr, _osr = _gdal()
-    ds = gdal.GetDriverByName("GTiff").Create(path, a.shape[1], a.shape[0], 1, gdal.GDT_Float32,
-                                              options=["COMPRESS=DEFLATE", "TILED=YES"])
+    ds = GS.checked(gdal.GetDriverByName("GTiff").Create(
+        path, a.shape[1], a.shape[0], 1, gdal.GDT_Float32,
+        options=["COMPRESS=DEFLATE", "TILED=YES"]), "creating {}".format(path))
     ds.SetGeoTransform(gt)
     ds.SetProjection(wkt)
     b = ds.GetRasterBand(1)
