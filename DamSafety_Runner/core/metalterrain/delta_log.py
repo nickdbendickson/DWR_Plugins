@@ -82,6 +82,10 @@ CLASS_NAMES = {
 # dam-crest cell lay on the carve path. It is a CROSSING_STITCH that did not happen, FLAGGED, and
 # summary() lifts it into the Bottom line (see DeltaLog.freeze_refusals).
 REFUSE_FREEZE_ACTION = "REFUSE_FREEZE"
+# A crossing reconnect_crossings did not carve because a limit stopped it (Runner 3.57.0): deeper
+# than max_cut_m, or through the protect mask (houses, towns). FLAGGED for review, but it does not
+# block an export: leaving the ground uncut is the conservative side.
+REFUSE_LIMIT_ACTION = "REFUSE_LIMIT"
 
 
 class ExportRefused(RuntimeError):
@@ -350,6 +354,17 @@ def log_reconnect(log, records, cell_m=1.0, algo_ref="CROSSING_RECONNECT_V1+PD20
                                "refused by the dam-safety invariant - resolve before use "
                                "(real culvert? mask wrong?)".format(len(cells)))
             refused += 1
+        elif r.get("refused") in ("max_cut", "protected"):
+            why = ("the carve would cut {:.1f} m below the ground, past the cap".format(
+                       float(r.get("max_cut_m") or 0.0)) if r["refused"] == "max_cut" else
+                   "the carve path lowers {} protected cell(s) (building footprint / town "
+                   "limits)".format(int(r.get("protected_cells", 0))))
+            e = Edit(EditClass.CROSSING_STITCH, REFUSE_LIMIT_ACTION, evidence="GEOMORPHIC_SIGNAL",
+                     n_cells=int(r.get("barrier_cells", 0)), spill_before=r.get("spill_before_m"),
+                     dz_max=r.get("max_cut_m"), algo_ref=algo_ref, evidence_ref=ev,
+                     params={"refused": r["refused"], "accum_cells": r.get("accum_cells"),
+                             "klass": r.get("klass")})
+            log.flag(e, reason=why + "; NOT carved - a real culvert here needs a surveyed invert")
         else:
             e = Edit(EditClass.CROSSING_STITCH, "STITCH", evidence="GEOMORPHIC_SIGNAL",
                      n_cells=int(r.get("barrier_cells", 0)), spill_before=r.get("spill_before_m"),

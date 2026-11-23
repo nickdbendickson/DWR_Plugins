@@ -284,7 +284,8 @@ def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_
                      "source": "boanngrid-d4",
                      "conn": 4,
                      "freeze_refusals": len(refused),
-                     "crossings_carved": int(sum(1 for r in records if r.get("refused") != "freeze")),
+                     "crossings_carved": int(sum(1 for r in records if "refused" not in r)),
+                     "crossings_limited": len(_burn.limit_refusals(records)),
                      "flow_converged": bool(finfo.get("converged")),
                  })
 

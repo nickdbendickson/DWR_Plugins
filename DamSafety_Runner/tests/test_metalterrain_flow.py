@@ -209,12 +209,59 @@ def flow_gpu_matches_cpu_build():
     assert np.array_equal(a_cpu, a_gpu), "drainage areas differ CPU vs Metal"
 
 
+def _flat_basin(ny=30, nx=40):
+    """A level floor (a filled pond, as the float32 fill leaves it on a high-relief grid) inside a
+    rim, with one outlet channel falling to the east edge; the rim itself is a level plateau."""
+    z = np.full((ny, nx), 20.0)
+    z[5:25, 5:35] = 10.0
+    z[15, 35:] = [10.0, 9.0, 8.0, 7.0, 6.0][:nx - 35]
+    return z
+
+
+@test
+def flow_resolves_flats_so_no_interior_cell_is_a_dead_end():
+    """Runner 3.57.0: a level floor gives the kernels no strictly lower neighbour, so before the
+    fix every floor cell was a dead end and the drainage area stopped at the floor's edge (Absaraka
+    at 30 m: 180,730 dead ends, largest area 1,565 cells). Now every interior cell drains to the
+    model edge, the network stays acyclic, directions the kernels set are unchanged, and the outlet
+    carries the whole grid; topo and iterate still agree."""
+    _need_cpu_build()
+    z = _flat_basin()
+    for conn in (4, 8):
+        none_c = FL.none_code(conn)
+        d0, a0, i0 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn, resolve_flats=False)
+        assert i0["interior_sinks"] > 500 and i0["flats_resolved"] == 0, i0
+        d1, a1, i1 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn)
+        assert i1["interior_sinks"] == 0 and i1["converged"], i1
+        assert i1["flats_resolved"] == i0["interior_sinks"], (i0, i1)
+        kept = d0 != none_c
+        assert np.array_equal(d1[kept], d0[kept]), "a direction the kernels set was changed"
+        assert a1[15, -1] >= 20 * 30, a1[15, -1]           # the whole floor leaves by the outlet
+        assert np.nansum(a1[FL._real_outlets(d1, np.isfinite(z), conn)]) == z.size
+        d2, a2, i2 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn, method="iterate")
+        assert np.array_equal(d1, d2) and np.array_equal(a1, a2, equal_nan=True), conn
+        assert i2["interior_sinks"] == 0
+
+
+@test
+def flow_leaves_a_real_pit_as_a_sink():
+    """A cell lower than every neighbour by more than flat_tol (a real pit on an unfilled surface)
+    is not a flat: it stays a sink and is counted, rather than being drained uphill."""
+    _need_cpu_build()
+    z = np.fromfunction(lambda r, c: 10.0 + 0.1 * c, (12, 16))
+    z[6, 8] -= 1.0
+    d, a, info = FL.flow_accum(z, backend="cpu", filled=z)
+    assert d[6, 8] == FL.NONE and info["interior_sinks"] == 1, info
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
     for fn in (flow_cpu_build_matches_oracle, flow_accum_matches_kahn_oracle,
                flow_accum_invariants, flow_is_deterministic, flow_nodata_drains_out,
-               flow_params_layout_matches_kernel, flow_gpu_matches_cpu_build):
+               flow_params_layout_matches_kernel, flow_gpu_matches_cpu_build,
+               flow_resolves_flats_so_no_interior_cell_is_a_dead_end,
+               flow_leaves_a_real_pit_as_a_sink):
         try:
             fn()
             print("ok    ", fn.__name__)

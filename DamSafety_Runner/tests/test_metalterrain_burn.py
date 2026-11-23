@@ -238,6 +238,108 @@ def reconnect_leaves_a_clean_dem_alone():
     assert (out <= z + 1e-9).all()
 
 
+def _blocked_channel():
+    z = cases.channel_with_barrier(ny=50, nx=120, chan_depth=3.0, sill=1.0)
+    filled, _ = F.fill_dem(z, backend="cpu")
+    labels, items = A.depression_census(z, filled, cell_m=10.0)
+    return z, filled, labels, items
+
+
+@test
+def reconnect_carves_only_crossings_by_default():
+    """Runner 3.57.0: only a depression the census classed "crossing" is a candidate by default.
+    The same depression relabelled a pit is left alone; classes=None carves every class (the
+    pre-3.57.0 sweep that made 39,048 notches through Casselton at Absaraka)."""
+    _need_cpu_build()
+    z, filled, labels, items = _blocked_channel()
+    assert [it["klass"] for it in items] == ["crossing"], [it["klass"] for it in items]
+    kw = dict(min_accum_cells=10, cell_m=10.0, backend="cpu", filled=filled, labels=labels)
+    out, recs = B.reconnect_crossings(z, items=items, **kw)
+    assert len(recs) == 1 and "refused" not in recs[0], recs
+    pits = [dict(it, klass="pit") for it in items]
+    out_p, recs_p = B.reconnect_crossings(z, items=pits, **kw)
+    assert recs_p == [] and np.array_equal(out_p, z), recs_p
+    nok = [{k: v for k, v in it.items() if k != "klass"} for it in items]
+    assert B.reconnect_crossings(z, items=nok, **kw)[1] == []     # no class = not a crossing
+    out_all, recs_all = B.reconnect_crossings(z, items=pits, classes=None, **kw)
+    assert np.array_equal(out_all, out) and recs_all == recs
+
+
+@test
+def reconnect_refuses_a_carve_deeper_than_the_cap():
+    """A carve that would cut deeper than max_cut_m is refused WHOLE (no cell lowered, so no plug
+    is left half way) and recorded with the depth it needed; a higher cap carves it."""
+    _need_cpu_build()
+    z, filled, labels, items = _blocked_channel()
+    kw = dict(min_accum_cells=10, cell_m=10.0, backend="cpu", filled=filled, labels=labels,
+              items=items)
+    out, recs = B.reconnect_crossings(z, max_cut_m=None, **kw)
+    need = float((z - out).max())
+    assert 1.0 < need < B.DEFAULT_MAX_CUT_M, need
+    logs = []
+    out_c, recs_c = B.reconnect_crossings(z, max_cut_m=1.0, log=logs.append, **kw)
+    assert np.array_equal(out_c, z), "a refused carve lowered ground"
+    assert [r["refused"] for r in recs_c] == ["max_cut"], recs_c
+    assert abs(recs_c[0]["max_cut_m"] - need) < 1e-9, (recs_c[0]["max_cut_m"], need)
+    assert B.limit_refusals(recs_c) == recs_c and B.freeze_refusals(recs_c) == []
+    assert any("NOT carved by a limit" in m for m in logs), logs
+    out_ok, recs_ok = B.reconnect_crossings(z, max_cut_m=need + 0.01, **kw)
+    assert np.array_equal(out_ok, out) and recs_ok == recs
+
+
+@test
+def reconnect_refuses_a_carve_through_a_protected_cell():
+    """A carve whose path lowers a protected cell (a house lot, a town) is refused whole; a protect
+    mask away from the path changes nothing. grow_mask adds a margin."""
+    _need_cpu_build()
+    z, filled, labels, items = _blocked_channel()
+    kw = dict(min_accum_cells=10, cell_m=10.0, backend="cpu", filled=filled, labels=labels,
+              items=items)
+    out, recs = B.reconnect_crossings(z, **kw)
+    lowered = (z - out) > 1e-9
+    r0, c0 = np.argwhere(lowered)[0]
+    house = np.zeros(z.shape, dtype=bool)
+    house[r0, c0] = True
+    out_p, recs_p = B.reconnect_crossings(z, protect_mask=house, **kw)
+    assert np.array_equal(out_p, z), "a carve went through a protected cell"
+    assert recs_p[0]["refused"] == "protected" and recs_p[0]["protected_cells"] == 1, recs_p
+    far = np.zeros(z.shape, dtype=bool)
+    far[0, 0] = True
+    out_f, recs_f = B.reconnect_crossings(z, protect_mask=far, **kw)
+    assert np.array_equal(out_f, out) and recs_f == recs
+    # a one-cell margin around a neighbour of the path reaches it
+    near = np.zeros(z.shape, dtype=bool)
+    near[min(r0 + 1, z.shape[0] - 1), c0] = True
+    near[r0, c0] = False
+    out_n, recs_n = B.reconnect_crossings(z, protect_mask=B.grow_mask(near, 1), **kw)
+    assert recs_n[0]["refused"] == "protected", recs_n
+    g = B.grow_mask(far, 2)
+    assert g.sum() == 9 and g[:3, :3].all()
+    try:
+        B.reconnect_crossings(z, protect_mask=np.zeros((3, 3), bool), **kw)
+    except ValueError:
+        pass
+    else:
+        assert False, "a protect mask of the wrong shape was accepted"
+
+
+@test
+def reconnect_limit_refusals_are_flagged_but_do_not_block_export():
+    """A limit refusal reaches the delta-log FLAGGED (REFUSE_LIMIT, with why) so a reviewer sees
+    the crossing left blocked; it is not a freeze refusal, so it does not stop an export."""
+    _need_cpu_build()
+    z, filled, labels, items = _blocked_channel()
+    _o, recs = B.reconnect_crossings(z, min_accum_cells=10, cell_m=10.0, backend="cpu",
+                                     filled=filled, labels=labels, items=items, max_cut_m=1.0)
+    log = dl.DeltaLog(run_id="LIMIT_TEST")
+    assert dl.log_reconnect(log, recs) == 0             # no freeze refusals
+    assert log.freeze_refusals() == []
+    flagged = log.flagged()
+    assert len(flagged) == 1 and flagged[0][2] == dl.REFUSE_LIMIT_ACTION, flagged
+    assert any("past the cap" in str(x) for x in flagged[0]), flagged
+    log.close()
+
+
 if __name__ == "__main__":
     import sys
     fails = 0
@@ -247,7 +349,10 @@ if __name__ == "__main__":
                burn_channel_refuses_frozen_cell, reconnect_respects_freeze_mask,
                reconnect_freeze_refusal_reaches_the_bottom_line,
                reconnect_raise_mode_aborts_on_frozen_crossing,
-               reconnect_leaves_a_clean_dem_alone):
+               reconnect_leaves_a_clean_dem_alone, reconnect_carves_only_crossings_by_default,
+               reconnect_refuses_a_carve_deeper_than_the_cap,
+               reconnect_refuses_a_carve_through_a_protected_cell,
+               reconnect_limit_refusals_are_flagged_but_do_not_block_export):
         try:
             fn()
             print("ok    ", fn.__name__)

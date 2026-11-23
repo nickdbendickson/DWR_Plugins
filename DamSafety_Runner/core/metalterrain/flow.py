@@ -121,8 +121,127 @@ def _topo_accum(direction, valid, conn):
     return acc, levels, drained == int(ok.sum())
 
 
+def _real_outlets(direction, valid, conn):
+    """The cells with no downstream neighbour that really are outlets: on the grid edge or next to
+    NoData (water leaves the model there). Every other no-direction cell is an interior sink."""
+    ny, nx = direction.shape
+    none_c = none_code(conn)
+    sink = valid & (direction == none_c)
+    edge = np.zeros_like(valid)
+    edge[0, :] = edge[-1, :] = True
+    edge[:, 0] = edge[:, -1] = True
+    pad = np.pad(~valid, 1, constant_values=True)
+    near_nodata = np.zeros_like(valid)
+    for dr, dc in drc(conn).values():
+        near_nodata |= pad[1 + dr:1 + dr + ny, 1 + dc:1 + dc + nx]
+    return sink & (edge | near_nodata)
+
+
+def _resolve_flats(direction, valid, w32, conn, tol=1e-3):
+    """Give every interior no-direction cell (a flat or a float32 tie left by the fill) a direction
+    toward ground that already drains out of the model, so the network has no dead ends.
+
+    The fill works in float32, so on a grid with a lot of relief its eps drainage ramp rounds away
+    and large flats come back level; the direction kernels then find no strictly lower neighbour
+    and stop. Absaraka at 30 m had 180,730 such cells and the biggest drainage area was 1,565 cells,
+    so the "channel drains >= N cells" tests downstream ran on a broken network (Runner 3.57.0).
+
+    A breadth-first search grows out from the cells that already drain to a real outlet (grid edge
+    or NoData). A dead-end cell next to one of them, at no more than `tol` metres above it on the
+    filled surface, points to it (the lowest such neighbour; ties by direction code) and then drains
+    too, as does every cell whose own path ends there. Cells only ever point to cells that already
+    drain out, so the network stays acyclic. Directions that were already set are never changed.
+    A cell lower than all its neighbours by more than `tol` (a real pit on an unfilled surface) is
+    left as it is and counted. Returns (direction, n_resolved, n_left)."""
+    ny, nx = direction.shape
+    n = ny * nx
+    none_c = none_code(conn)
+    d = direction.ravel().astype(np.int16)
+    ok = valid.ravel()
+    w = w32.ravel().astype(np.float64)
+    outlet = _real_outlets(direction, valid, conn).ravel()
+    dead = ok & (d == none_c) & ~outlet
+    if not dead.any():
+        return direction, 0, 0
+    # downstream index and each cell's terminal (the no-direction cell its path ends at)
+    down = np.arange(n, dtype=np.int64)
+    codes = list(drc(conn).items())
+    for code, (dr, dc) in codes:
+        idx = np.nonzero(ok & (d == code))[0]
+        if idx.size:
+            r, c = np.divmod(idx, nx)
+            r2, c2 = r + dr, c + dc
+            inb = (r2 >= 0) & (r2 < ny) & (c2 >= 0) & (c2 < nx)
+            t = idx.copy()
+            t[inb] = r2[inb] * nx + c2[inb]
+            down[idx] = np.where(ok[t], t, idx)
+    term = down.copy()
+    while True:                                        # pointer jumping: log2(longest path) steps
+        nxt = term[term]
+        if np.array_equal(nxt, term):
+            break
+        term = nxt
+    good = ok & outlet[term]
+    # cells grouped by terminal, so a dead end that is resolved hands "drains" to its whole basin
+    order = np.argsort(term, kind="stable")
+    tsorted = term[order]
+    frontier = np.nonzero(good)[0]
+    resolved = 0
+    while frontier.size:
+        fr, fc = np.divmod(frontier, nx)
+        cand_u, cand_code, cand_w = [], [], []
+        for code, (dr, dc) in codes:
+            # a dead cell u at (fr - dr, fc - dc) would point with `code` to the frontier cell
+            ur, uc = fr - dr, fc - dc
+            inb = (ur >= 0) & (ur < ny) & (uc >= 0) & (uc < nx)
+            u = ur[inb] * nx + uc[inb]
+            v = frontier[inb]
+            sel = dead[u] & (w[v] <= w[u] + tol)
+            if sel.any():
+                cand_u.append(u[sel])
+                cand_code.append(np.full(int(sel.sum()), code, dtype=np.int16))
+                cand_w.append(w[v[sel]])
+        if not cand_u:
+            break
+        cu = np.concatenate(cand_u)
+        cc = np.concatenate(cand_code)
+        cw = np.concatenate(cand_w)
+        o = np.lexsort((cc, cw, cu))                   # by cell, then lowest target, then code
+        cu, cc = cu[o], cc[o]
+        first = np.ones(cu.size, dtype=bool)
+        first[1:] = cu[1:] != cu[:-1]
+        cu, cc = cu[first], cc[first]
+        d[cu] = cc
+        dead[cu] = False
+        resolved += int(cu.size)
+        # every cell whose path ended at a newly resolved cell now drains out too
+        lo = np.searchsorted(tsorted, cu, side="left")
+        hi = np.searchsorted(tsorted, cu, side="right")
+        lens = hi - lo
+        tot = int(lens.sum())
+        if tot:
+            starts = np.repeat(lo - np.concatenate([[0], np.cumsum(lens)[:-1]]), lens)
+            members = order[np.arange(tot) + starts]
+            members = members[~good[members]]
+        else:
+            members = cu[:0]
+        good[members] = True
+        good[cu] = True
+        frontier = np.unique(np.concatenate([cu, members]))
+    out = d.reshape(ny, nx).astype(np.int8)
+    return out, resolved, int(dead.sum())
+
+
+def _flats(direction, valid, w32, conn, resolve, tol):
+    """_resolve_flats when `resolve`, else only the count of interior dead ends."""
+    if resolve:
+        return _resolve_flats(direction, valid, w32, conn, tol)
+    dead = valid & (direction == none_code(conn)) & ~_real_outlets(direction, valid, conn)
+    return direction, 0, int(dead.sum())
+
+
 def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, max_sweeps=0,
-               conn=4, log=None, method="topo"):
+               conn=4, log=None, method="topo", resolve_flats=True, flat_tol=1e-3):
     """Flow direction and accumulation for `dem` (2-D; NaN or -9999 = NoData). Returns
     (direction, accum, info).
 
@@ -139,7 +258,14 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
           moves area one cell downstream, so it needs about as many sweeps as the longest flow path;
           a 2001 x 2001 prairie-pothole grid on the CPU build was still running after 12 minutes.
     Both give identical directions and identical drainage areas (tests/test_metalterrain_flow.py
-    pins that); "iterate" stays for that comparison."""
+    pins that); "iterate" stays for that comparison.
+
+    `resolve_flats` (default True, Runner 3.57.0): an interior cell the kernels left with no
+    downstream neighbour (a float32 flat or tie on the filled surface) is pointed, by a breadth-first
+    search, toward ground that already drains out of the model (see _resolve_flats); only cells
+    lower than every neighbour by more than `flat_tol` metres stay sinks. `info` reports
+    "flats_resolved" and "interior_sinks" (dead ends left; 0 on a properly filled surface). False
+    keeps the kernels' directions as they are (the pre-3.57.0 network)."""
     if conn not in (4, 8):
         raise ValueError("conn must be 4 or 8")
     if method not in ("topo", "iterate"):
@@ -177,11 +303,13 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
             bk.run_batch(p, 1)
             direction = arr["dir"].reshape(ny, nx).astype(np.int16)
             direction = np.where(valid, direction, -1).astype(np.int8)
+            direction, n_res, n_left = _flats(direction, valid, w32, conn, resolve_flats, flat_tol)
             acc, levels, drained = _topo_accum(direction, valid, conn)
             accum = np.where(valid, acc.reshape(ny, nx).astype(np.float64), np.nan)
             info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": 1,
                     "converged": bool(drained), "valid": nvalid, "conn": conn,
-                    "method": "topo", "levels": levels}
+                    "method": "topo", "levels": levels, "flats_resolved": n_res,
+                    "interior_sinks": n_left}
             if not drained:
                 info["note"] = "the direction field has a cycle; some cells were never drained"
             return direction, accum, info
@@ -196,9 +324,14 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
         direction = arr["dir"].reshape(ny, nx).astype(np.int16)
         direction = np.where(valid, direction, -1).astype(np.int8)
         accum = arr["a0"].reshape(ny, nx).astype(np.float64)
+        direction, n_res, n_left = _flats(direction, valid, w32, conn, resolve_flats, flat_tol)
+        if n_res:                          # the kernels summed the unresolved network; re-sum
+            acc, _lv, _dr = _topo_accum(direction, valid, conn)
+            accum = acc.reshape(ny, nx).astype(np.float64)
         accum = np.where(valid, accum, np.nan)
         info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": sweeps,
-                "converged": changed == 0, "valid": nvalid, "conn": conn, "method": "iterate"}
+                "converged": changed == 0, "valid": nvalid, "conn": conn, "method": "iterate",
+                "flats_resolved": n_res, "interior_sinks": n_left}
         if not info["converged"]:
             info["note"] = "accumulation did not converge in {} sweeps (raise max_sweeps)".format(
                 cap)

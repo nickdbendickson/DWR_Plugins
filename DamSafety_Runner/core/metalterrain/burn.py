@@ -150,6 +150,41 @@ class _IsLabel:
         return self.labels[rc] == self.lid
 
 
+def limit_refusals(records):
+    """The `reconnect_crossings` records refused by a limit rather than the freeze mask: a carve
+    deeper than `max_cut_m` ("max_cut") or through the `protect_mask` ("protected"). The ground is
+    left as it was; the delta-log FLAGs each one for review (delta_log.log_reconnect)."""
+    return [r for r in records if r.get("refused") in ("max_cut", "protected")]
+
+
+def grow_mask(mask, cells):
+    """`mask` (bool) grown by `cells` cells in every direction (a square buffer), e.g. building
+    footprints plus a 25 m margin on a 30 m grid is grow_mask(footprints, 1)."""
+    m = np.asarray(mask, dtype=bool)
+    k = int(cells)
+    if k <= 0:
+        return m.copy()
+    ny, nx = m.shape
+    pad = np.pad(m, k, constant_values=False)
+    out = np.zeros_like(m)
+    for dr in range(-k, k + 1):
+        for dc in range(-k, k + 1):
+            out |= pad[k + dr:k + dr + ny, k + dc:k + dc + nx]
+    return out
+
+
+# What reconnect_crossings carves by default (Runner 3.57.0). Absaraka at 30 m (DWR-2801, PR #473
+# rerun): carving every drained depression of any class made 39,048 notches up to 19.5 m deep,
+# 108 of them through Casselton house lots, and 107 houses read as "lethal" in water that sits
+# below the uncut ground. Carving only the census' "crossing" class (a long, thin depression, the
+# shape of a channel ponded behind a road or rail fill) gave 418 carves and none of that.
+DEFAULT_CLASSES = ("crossing",)
+# The deepest cut one carve may make, in metres below the ground it cuts. A culvert-less road or
+# rail fill on a prairie channel is a few metres high; a carve deeper than this is not a missing
+# culvert, so it is refused and flagged instead.
+DEFAULT_MAX_CUT_M = 6.0
+
+
 def freeze_refusals(records):
     """The subset of `reconnect_crossings` records that were refused because their carve path hit a
     frozen (embankment / dam-crest) cell. `len(freeze_refusals(records))` is the aggregate count the
@@ -159,7 +194,8 @@ def freeze_refusals(records):
 
 def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="auto",
                         filled=None, labels=None, items=None, accum=None, freeze_mask=None,
-                        refuse_freeze="record", log=None):
+                        refuse_freeze="record", log=None, classes=DEFAULT_CLASSES,
+                        max_cut_m=DEFAULT_MAX_CUT_M, protect_mask=None):
     """Carve a notch through the barrier of every filled depression a real channel drains into (at
     least `min_accum_cells` of upstream area), so the channel reconnects. Returns (conditioned_dem,
     records). Each carved record: id, pour (r,c), exit (r,c), barrier_cells, accum_cells,
@@ -179,7 +215,21 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
       "raise": any freeze-refusal raises RuntimeError naming the aggregate count and the dams - the
           mode for a single-dam / interactive run where a frozen crossing should stop the conditioner
           outright rather than be deferred to a register.
-    Nothing is lowered silently through the mask in either mode."""
+    Nothing is lowered silently through the mask in either mode.
+
+    Three limits (Runner 3.57.0) keep the carve to real crossings:
+      classes      : only depressions the census classed as one of these are candidates (default
+                     ("crossing",); an item with no "klass" is not one). None = every class, the
+                     pre-3.57.0 behaviour that carved ponds, pits and noise alike.
+      max_cut_m    : a carve whose deepest cut below the ground it crosses is more than this many
+                     metres is refused whole (never cut short, which would leave a plug) and
+                     recorded as {"refused": "max_cut", "max_cut_m": <needed>}. None = no cap.
+      protect_mask : bool array, True = keep out (building footprints, town limits; grow it with
+                     grow_mask for a margin). A carve whose path lowers a protected cell is
+                     refused whole and recorded as {"refused": "protected", "protected_cells": n}.
+    Limit refusals leave the ground as it was and are FLAGGED in the delta-log for review
+    (delta_log.log_reconnect); limit_refusals(records) lists them. They do not stop an export the
+    way a freeze refusal does: not carving is the conservative side."""
     if refuse_freeze not in ("record", "raise"):
         raise ValueError("refuse_freeze must be 'record' or 'raise', not {!r}".format(refuse_freeze))
     a = np.asarray(dem, dtype=np.float64)
@@ -201,7 +251,15 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
         n_lab = max(n_lab, int(it["id"]))
     _flat, cells, starts = A.label_cells(labels, n_lab)
     acc_flat = np.asarray(accum, dtype=np.float64).ravel()
+    keep = None if classes is None else frozenset(classes)
+    if protect_mask is not None:
+        protect_mask = np.asarray(protect_mask, dtype=bool)
+        if protect_mask.shape != a.shape:
+            raise ValueError("protect_mask shape {} != dem shape {}".format(
+                protect_mask.shape, a.shape))
     for it in items:
+        if keep is not None and it.get("klass") not in keep:
+            continue                       # not a crossing-shaped depression
         lid = int(it["id"])
         ci = cells[starts[lid - 1]:starts[lid]] if 1 <= lid <= n_lab else cells[:0]
         vals = acc_flat[ci]
@@ -226,14 +284,35 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
                                 "spill_before_m": it["spill_elev_m"],
                                 "refused": "freeze", "frozen_cells": frozen})
                 continue                   # never lower through the freeze mask
+        cut = []
         for k, (r, c) in enumerate(path):
             t = k / (n - 1)
             ramp = floor + t * (ze - floor)          # floor at the depression, exit level downstream
             if ramp < out[r, c]:
+                cut.append((r, c, ramp, float(a[r, c]) - ramp))
+        base = {"id": it["id"], "pour": path[0], "exit": exit_rc, "barrier_cells": n,
+                "accum_cells": amax, "floor_elev_m": floor, "spill_before_m": it["spill_elev_m"]}
+        deepest = max((x[3] for x in cut), default=0.0)
+        if protect_mask is not None:
+            hit = sum(1 for (r, c, _z, _d) in cut if protect_mask[r, c])
+            if hit:
+                records.append(dict(base, refused="protected", protected_cells=hit,
+                                    max_cut_m=deepest, klass=it.get("klass")))
+                continue                   # never carve through a house lot or a town
+        if max_cut_m is not None and deepest > max_cut_m:
+            records.append(dict(base, refused="max_cut", max_cut_m=deepest,
+                                klass=it.get("klass")))
+            continue                       # deeper than a missing culvert: leave it, flag it
+        for (r, c, ramp, _d) in cut:
+            if ramp < out[r, c]:
                 out[r, c] = ramp                     # carve: only ever lower
-        records.append({"id": it["id"], "pour": path[0], "exit": exit_rc,
-                        "barrier_cells": n, "accum_cells": amax, "floor_elev_m": floor,
-                        "spill_before_m": it["spill_elev_m"]})
+        records.append(base)
+    limited = limit_refusals(records)
+    if limited and log is not None:
+        nc = sum(1 for r in limited if r["refused"] == "max_cut")
+        log("[boanngrid] {} crossing(s) NOT carved by a limit ({} deeper than {} m, {} through the "
+            "protect mask); FLAGGED in the delta-log for review.".format(
+                len(limited), nc, max_cut_m, len(limited) - nc))
     refused = freeze_refusals(records)
     if refused:
         msg = ("{} crossing(s) refused: a frozen embankment / dam-crest cell lies on the carve "
