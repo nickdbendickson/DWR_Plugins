@@ -141,10 +141,10 @@ def _resolve_flats(direction, valid, w32, conn, tol=1e-3):
     """Give every interior no-direction cell (a flat or a float32 tie left by the fill) a direction
     toward ground that already drains out of the model, so the network has no dead ends.
 
-    The fill works in float32, so on a grid with a lot of relief its eps drainage ramp rounds away
-    and large flats come back level; the direction kernels then find no strictly lower neighbour
-    and stop. Absaraka at 30 m had 180,730 such cells and the biggest drainage area was 1,565 cells,
-    so the "channel drains >= N cells" tests downstream ran on a broken network (Runner 3.57.0).
+    The fill works in float32, so on a grid with a lot of relief its eps drainage ramp can round
+    away and a flat comes back level; the direction kernels then find no strictly lower neighbour
+    and stop (Runner 3.57.0). (Most of Absaraka's 180,730 dead ends were the other cause, a D8 fill
+    under D4 flow; flow_accum refills those with D4 connectivity.)
 
     A breadth-first search grows out from the cells that already drain to a real outlet (grid edge
     or NoData). A dead-end cell next to one of them, at no more than `tol` metres above it on the
@@ -242,6 +242,39 @@ def _flats(direction, valid, w32, conn, resolve, tol):
 
 def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, max_sweeps=0,
                conn=4, log=None, method="topo", resolve_flats=True, flat_tol=1e-3):
+    """Flow direction and accumulation for `dem` (see _flow_accum_once for every argument).
+
+    With `resolve_flats` and D4, a surface that still has interior dead ends after the flat
+    search (a D8-filled surface, where the only way down from a cell can be across a corner, or a
+    surface that was never filled) is filled again with D4 connectivity (fill.fill_dem(conn=4)) and
+    the network recomputed on that, so every interior cell drains to the model edge the way the
+    4-connected flood engine moves water. info["refilled_d4"] says it happened; it costs one more
+    fill (Runner 3.57.0)."""
+    if filled is None and conn not in (4, 8):
+        raise ValueError("conn must be 4 or 8")
+    if filled is None:
+        filled, _fi = F.fill_dem(np.asarray(dem, dtype=np.float64), eps=eps, backend=backend,
+                                 log=log, conn=conn)
+    kw = dict(eps=eps, backend=backend, sweeps_per_batch=sweeps_per_batch, max_sweeps=max_sweeps,
+              conn=conn, log=log, method=method, resolve_flats=resolve_flats, flat_tol=flat_tol)
+    direction, accum, info = _flow_accum_once(dem, filled=filled, **kw)
+    info["refilled_d4"] = False
+    if resolve_flats and conn == 4 and info.get("interior_sinks"):
+        left = info["interior_sinks"]
+        if log is not None:
+            log("[boanngrid] flow: {:,} interior dead end(s) on the given surface; filling it "
+                "again with D4 connectivity".format(left))
+        f4, _fi = F.fill_dem(np.asarray(filled, dtype=np.float64), eps=eps, backend=backend,
+                             log=log, conn=4)
+        direction, accum, info = _flow_accum_once(dem, filled=f4, **kw)
+        info["refilled_d4"] = True
+        info["dead_ends_before_refill"] = left
+    return direction, accum, info
+
+
+def _flow_accum_once(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0,
+                     max_sweeps=0, conn=4, log=None, method="topo", resolve_flats=True,
+                     flat_tol=1e-3):
     """Flow direction and accumulation for `dem` (2-D; NaN or -9999 = NoData). Returns
     (direction, accum, info).
 
