@@ -25,6 +25,7 @@ from nd_breach_runner.core import breach as br  # noqa: E402
 from nd_breach_runner.core.grid import Grid  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
 from nd_breach_runner.tests.registry import test, Skip  # noqa: E402
+from nd_breach_runner.tests.anuga_no_worker import worker_fails  # noqa: E402
 
 try:
     import gmsh  # noqa: F401
@@ -65,8 +66,9 @@ def _job(st_mesher=None, workdir=None):
     if st_mesher is not None:
         st.mesher = st_mesher
     workdir = workdir or tempfile.mkdtemp(prefix="gmshjob_")
-    try:   # sys.executable has no anuga: the worker fails after the job file is written
-        AM.run(workdir, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads)
+    try:   # the worker fails after the job file is written (anuga_no_worker)
+        with worker_fails():
+            AM.run(workdir, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads)
     except ModelError:
         pass
     return os.path.join(workdir, "anuga_job.npz")

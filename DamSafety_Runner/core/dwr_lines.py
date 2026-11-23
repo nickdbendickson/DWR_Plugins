@@ -74,7 +74,23 @@ _NID_RE = re.compile(r"^\s*[A-Z]{2}\d{3,6}\s*$")
 
 # the chain's runner-stage fingerprint (core/chain.stage_inputs): a resume reruns the Runner
 # once when the placement rules change (3.20.13: DWR lines in batches, dam point check move)
-PLACEMENT_RULE = "3.20.13"
+PLACEMENT_RULE = "3.73.0"   # 3.73.0: the DWR record x/y as the reference; the dip check
+
+# 3.73.0 (batch 44 DWR-2659): the DWR dams carry two locations - latitude / longitude (the old
+# 4D inventory: DWR-2659's is 7.2 km off) and x_coord / y_coord (ND State Plane, international
+# feet, North or South zone). On the pack's 9,948 dams with a line the x/y lies on the dam's own
+# line (median 0 m; nearer than the lat/lon for 9,780) while the lat/lon is a median 134 m off
+# and 297 are more than 500 m off (x/y: 22). When the line is refused from the batch point, the
+# guard is tried again from the record's x/y; with no usable line, a batch point more than NEAR_M
+# from the record's x/y is moved to it (a warning).
+XY_FIELDS = (("x_coord", "y_coord"),)
+LL_FIELDS = (("longitude", "latitude"), ("lon", "lat"))
+# EPSG:2265 / 2266 (NAD83 / North Dakota North / South, ft): lat_1, lat_2, lat_0, lon_0
+SP_ZONES = {"north": (48.73333333333333, 47.43333333333333, 47.0, -100.5),
+            "south": (47.48333333333333, 46.18333333333333, 45.666666666666664, -100.5)}
+SP_FE_M = 600000.0
+FT_INTL = 0.3048
+RECORD_TEXT = "the DWR record location (x_coord / y_coord)"
 
 SOURCE_LAYER = "the DAM_LINES layer"
 SOURCE_PACK = "the pack"
@@ -604,6 +620,115 @@ def nid_lookup_for(path):
     return lambda nid: hit[1].get(str(nid or "").strip().upper(), "")
 
 
+def _lcc_inverse(x_ft, y_ft, zone):
+    """(lon, lat) NAD83 degrees of a North Dakota State Plane point (international feet; Lambert
+    conformal conic, 2SP, GRS80 - pure Python, as PROJ to 1e-6 m)."""
+    a, f = 6378137.0, 1.0 / 298.257222101
+    e = math.sqrt(f * (2.0 - f))
+    p1, p2, p0, l0 = (math.radians(v) for v in SP_ZONES[zone])
+
+    def m(p):
+        return math.cos(p) / math.sqrt(1.0 - (e * math.sin(p)) ** 2)
+
+    def t(p):
+        es = e * math.sin(p)
+        return math.tan(math.pi / 4.0 - p / 2.0) / ((1.0 - es) / (1.0 + es)) ** (e / 2.0)
+    n = (math.log(m(p1)) - math.log(m(p2))) / (math.log(t(p1)) - math.log(t(p2)))
+    F = m(p1) / (n * t(p1) ** n)
+    r0 = a * F * t(p0) ** n
+    x = float(x_ft) * FT_INTL - SP_FE_M
+    y = r0 - float(y_ft) * FT_INTL
+    r = math.copysign(math.hypot(x, y), n)
+    th = math.atan2(x, y)
+    tt = (r / (a * F)) ** (1.0 / n)
+    lat = math.pi / 2.0 - 2.0 * math.atan(tt)
+    for _i in range(15):
+        es = e * math.sin(lat)
+        lat = math.pi / 2.0 - 2.0 * math.atan(tt * ((1.0 - es) / (1.0 + es)) ** (e / 2.0))
+    return math.degrees(th / n + l0), math.degrees(lat)
+
+
+def record_lonlat(x_ft, y_ft, lon=None, lat=None):
+    """(lon, lat) NAD83 of a DWR record's x_coord / y_coord, or None. The zone is the one that
+    lands nearer the record's own longitude / latitude (the zones lie ~100 km apart; even a lat
+    / lon 7 km off picks right); None without them (both zones give a point in North Dakota)."""
+    try:
+        x, y = float(x_ft), float(y_ft)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(x) and math.isfinite(y)) or x <= 0 or y <= 0:
+        return None
+    try:
+        cand = {z: _lcc_inverse(x, y, z) for z in SP_ZONES}
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    try:
+        lo, la = float(lon), float(lat)
+        ok = math.isfinite(lo) and math.isfinite(la) and -105 < lo < -95 and 45 < la < 50
+    except (TypeError, ValueError):
+        ok = False
+    if not ok:
+        return None                  # the zones overlap in x / y: no lat / lon, no zone
+    z = min(cand, key=lambda k: math.hypot((cand[k][0] - lo) * math.cos(math.radians(la)),
+                                           cand[k][1] - la))
+    ll = cand[z]
+    if not (-105.0 < ll[0] < -95.0 and 45.5 < ll[1] < 49.5):
+        return None
+    return ll
+
+
+_RECS = {}
+
+
+def record_lookup_for(path):
+    """A function structure id -> (lon, lat) NAD83 (LINE_CRS) of the DWR record's x_coord /
+    y_coord, None when the record has none; None (no function) without a DWR dams GeoPackage
+    carrying those fields."""
+    if not path:
+        return None
+    file_ = str(path).split("|")[0]
+    if not file_.lower().endswith(".gpkg") or not os.path.isfile(file_):
+        return None
+    try:
+        stamp = os.path.getmtime(file_)
+    except OSError:
+        return None
+    hit = _RECS.get(file_)
+    if hit is None or hit[0] != stamp:
+        table = {}
+        try:
+            con = _connect_ro(file_)
+            try:
+                t = _gpkg_table(con, "", False)
+                if t is not None:
+                    cols = {r[1].lower(): r[1] for r in con.execute(
+                        'PRAGMA table_info("{}")'.format(t[0].replace('"', '""')))}
+                    idc = next((cols[n] for n in SID_FIELDS if n in cols), None)
+                    xy = next(((cols[a], cols[b]) for a, b in XY_FIELDS
+                               if a in cols and b in cols), None)
+                    ll = next(((cols[a], cols[b]) for a, b in LL_FIELDS
+                               if a in cols and b in cols), None)
+                    if idc and xy:
+                        sel = [idc, xy[0], xy[1]] + (list(ll) if ll else [])
+                        q = 'SELECT {} FROM "{}"'.format(
+                            ", ".join('"{}"'.format(c.replace('"', '""')) for c in sel),
+                            t[0].replace('"', '""'))
+                        for row in con.execute(q):
+                            k = sid_key(row[0])
+                            if not k or k in table:
+                                continue
+                            v = record_lonlat(row[1], row[2], *(row[3:5] if ll else ()))
+                            if v is not None:
+                                table[k] = v
+            finally:
+                con.close()
+        except sqlite3.Error:
+            table = {}
+        hit = (stamp, table)
+        _RECS[file_] = hit
+    return lambda sid: hit[1].get(sid_key(sid))
+
+
 def unknown_crs_text(path, crs):
     """The batch's one message for a DWR lines file whose CRS cannot be used (3.20.13 review:
     said once, not as a distance refusal for every dam)."""
@@ -756,7 +881,25 @@ def rule_state(environ=None):
             "dam_point_check_env": dam_point_check_env(env)}
 
 
-def find(ids, index, to_work, inv_xy, label=None):
+def _record_ref(sid, record, to_work, inv_xy):
+    """(reference xy in the work CRS, metres from the batch point) of a structure's DWR record
+    location, or (None, None)."""
+    if record is None or to_work is None:
+        return None, None
+    try:
+        ll = record(sid)
+        if ll is None:
+            return None, None
+        q = list(to_work([ll]))[0]
+        q = (float(q[0]), float(q[1]))
+    except Exception:                                         # noqa: BLE001 - never stop a run
+        return None, None
+    if not (math.isfinite(q[0]) and math.isfinite(q[1])):
+        return None, None
+    return q, math.hypot(q[0] - inv_xy[0], q[1] - inv_xy[1])
+
+
+def find(ids, index, to_work, inv_xy, label=None, record=None):
     """(line in the work CRS or None, info) of the structure ids of `ids` the index has, in
     order: the first whose line passes the guard; when none does, the first refusal. info:
     source, structure_id, matched_by, used, text (and refused when the line is not used); None
@@ -773,6 +916,18 @@ def find(ids, index, to_work, inv_xy, label=None):
                                            "({}: {})".format(type(e).__name__, e)}
         else:
             line, info = choose(work, inv_xy)
+            if line is None:
+                # 3.73.0: refused from the batch point - tried again from the DWR record's
+                # x_coord / y_coord (a batch point that passes keeps its own choice: DWR-2665's
+                # two embankments, Nick kept the line by his point)
+                ref, off = _record_ref(sid, record, to_work, inv_xy)
+                if ref is not None:
+                    line2, info2 = choose(work, ref)
+                    if line2 is not None:
+                        info2.update(reference="record", point_off_m=round(off, 1),
+                                     record_xy=[round(ref[0], 2), round(ref[1], 2)],
+                                     batch_point_refused=info.get("refused"))
+                        line, info = line2, info2
         info.update(source=label or index.label, structure_id=sid, matched_by=how)
         info["used"] = line is not None
         info["text"] = describe(info)
@@ -817,10 +972,15 @@ def describe(info):
     head = "{} from {}{}".format(info.get("kind") or "DWR dam line",
                                  info.get("source") or SOURCE_PACK,
                                  ", structure {}".format(sid) if sid else "")
+    ref = "the DWR record location" if info.get("reference") == "record" else \
+        "the inventory point"
     if info.get("refused"):
-        return "{}, not used: {}".format(head, info["refused"])
-    return "{} ({:.0f} m long, centre {:.0f} m from the inventory point)".format(
-        head, info.get("length_m") or 0.0, info.get("centre_m") or 0.0)
+        r = info["refused"]
+        if info.get("reference") == "record":
+            r = r.replace("the inventory point", ref)
+        return "{}, not used: {}".format(head, r)
+    return "{} ({:.0f} m long, centre {:.0f} m from {})".format(
+        head, info.get("length_m") or 0.0, info.get("centre_m") or 0.0, ref)
 
 
 def batch_text(info):
@@ -870,18 +1030,42 @@ def not_used(dam, why):
     return info
 
 
-def resolve(dam, xy, ids, index=None, to_work=None, layer=None, source_why=""):
+RECORD_MOVE = ("the batch point is {:.0f} m from {} ({:.2f}, {:.2f}), more than {:.0f} m: the "
+               "point is moved there (the batch layer's latitude / longitude is likely the old "
+               "4D location). Check the dam point")
+
+
+def _record_move(dam, xy, ids, record, to_work):
+    """(xy, warning) - the DWR record location when the batch point is more than NEAR_M from it
+    (3.73.0), else (xy, None)."""
+    for sid, _how in ids or ():
+        ref, off = _record_ref(sid, record, to_work, xy)
+        if ref is None:
+            continue
+        if off <= NEAR_M:
+            return xy, None
+        dam._point_original = (float(xy[0]), float(xy[1]))
+        dam._record_point = {"structure_id": sid, "xy": [round(ref[0], 2), round(ref[1], 2)],
+                             "moved_m": round(off, 1)}
+        return ref, RECORD_MOVE.format(off, RECORD_TEXT, ref[0], ref[1], NEAR_M)
+    return xy, None
+
+
+def resolve(dam, xy, ids, index=None, to_work=None, layer=None, source_why="", record=None):
     """A batch dam's DWR line: from `layer` ((lines in the work CRS with attributes, id field)
     of a DAM_LINES layer read round the dam) first, else from `index` (a LineIndex, its parts
     converted with to_work). Returns (xy, info, warning): xy is the line's length midpoint when
     the line is used (dam.crest_line_xy is set, see apply), else the point as given; warning is
-    the run warning of a refused line, else None. Never raises."""
+    the run warning of a refused line, else None. Never raises. 3.73.0: record (structure id ->
+    (lon, lat) in LINE_CRS, record_lookup_for): a pack line refused from the batch point is tried
+    again from the DWR record's x_coord / y_coord; with no usable line, a point more than NEAR_M
+    from that location is moved to it (the warning says so)."""
     try:
         line = info = None
         if layer is not None:
             line, info = find_in_lines(layer[0], layer[1], ids, xy)
         if info is None and index is not None and to_work is not None:
-            line, info = find(ids, index, to_work, xy)
+            line, info = find(ids, index, to_work, xy, record=record)
     except Exception as e:                                    # noqa: BLE001 - never stop a run
         info = {"used": False, "why": "DWR dam line not read ({}: {})".format(
             type(e).__name__, e)}
@@ -892,8 +1076,10 @@ def resolve(dam, xy, ids, index=None, to_work=None, layer=None, source_why=""):
                "no DWR line for structure {}".format("/".join(s for s, _h in ids))
                if (index is not None or layer is not None) else
                source_why or "no DWR dam lines")
-        return xy, not_used(dam, why), None
+        new, mv = _record_move(dam, xy, ids, record, to_work)
+        return new, not_used(dam, why), mv
     if line is None:
         note_only(dam, info)
-        return xy, info, warning_text(info)
+        new, mv = _record_move(dam, xy, ids, record, to_work)
+        return new, info, warning_text(info) + (" " + mv + "." if mv else "")
     return apply(dam, xy, line, info), info, None
