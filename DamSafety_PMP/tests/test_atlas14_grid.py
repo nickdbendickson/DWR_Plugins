@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from unittest import mock
@@ -200,7 +201,12 @@ class RealDownload(unittest.TestCase):
             self.assertEqual(cm.exception.status, 404)
         self.assertEqual(os.listdir(os.path.dirname(dest)), [])           # no .part_ file, no half zip
         if before is not None:
-            self.assertEqual(_open_fds(), before)                         # the temporary file was closed
+            # the temporary file was closed. The local server's handler thread closes its end of
+            # the socket a moment after the client has its 404, so give it up to 2 s.
+            deadline = time.time() + 2.0
+            while _open_fds() > before and time.time() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(_open_fds(), before)
 
     def test_404_through_fetch_zip_is_not_published(self):
         def dl(url, dest):
