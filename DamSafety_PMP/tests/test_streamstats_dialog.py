@@ -90,7 +90,7 @@ def test_menu_action_label():
     p.initGui()
     try:
         assert [(m, a.text()) for m, a in iface.menu] == [
-            ("DamSafety PMP", "Get basin data from StreamStats\u2026")]
+            ("&Dam safety", "Get basin data from StreamStats\u2026")]
         assert not p.action.icon().isNull()
     finally:
         p.unload()
