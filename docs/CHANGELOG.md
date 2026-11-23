@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Runner 3.67.0: enclosed DEM no-data holes the flood reaches are filled from the ground around them (THIS MOVES RESULTS of runs whose flood reached an enclosed hole the 3DEP refill did not close, or when the refill failed; other runs unchanged; Nick "go", 2026-11-23).**
+- **Runner 3.68.0: enclosed DEM no-data holes the flood reaches are filled from the ground around them (THIS MOVES RESULTS of runs whose flood reached an enclosed hole the 3DEP refill did not close, or when the refill failed; other runs unchanged; Nick "go", 2026-11-23).**
   - **Why.** Batch 44 run1118: DWR-2631 (38 ft, 2,765 ac-ft, Significant of record) came out Low / Low. 28 wet cells sat on a 1 m LiDAR gap the one 3DEP refill did not close, and LISFLOOD-FP treats no-data as high ground, so the gap dammed the valley.
   - **What.** Before a run is called "held up by a hole", `dem_refill.interior_holes` picks the no-data patches (8-connected) that do not touch the model grid's border and are at most `HOLE_FILL_MAX_AC` (100 ac); if the flood touches one, `fill_interior_holes` fills them once (nearest ground, then 400 Laplace sweeps with the rim fixed, as GDAL FillNodata) through the `HOLE_FILL` marker in the refill list `model_dem` applies, and the same domain run is run again (marked `followed_by_dem_refill`). A warning says how many cells were filled. Border-touching or larger holes still hold the run with the old warning.
   - **Tests.** `tests/test_dem_hole_fill.py`: a plane is recovered through a hole; the DEM's edge and an over-cap hole are left; the marker in `model_dem`; end to end on the built-in engine, a gap across a synthetic valley: 60 of 2,460 cells past it wet before, 882 after (the same as with no gap).
