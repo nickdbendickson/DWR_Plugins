@@ -1544,6 +1544,61 @@ def metalflood_cpu_prefers_a_prebuilt_library():
                 os.environ[k] = v
 
 
+
+def _fv2_wetdry_case(ny=30, nx=48, dx=10.0):
+    """A dam break onto a dry, rough 1 % slope with ridges and a pit, every edge closed."""
+    rng = np.random.default_rng(1)
+    xx = np.mgrid[0:ny, 0:nx][1].astype(float)
+    z = 0.01 * dx * xx + rng.uniform(0.0, 0.6, (ny, nx))     # rising east, bumps and pits
+    z[::7, 24:] += 1.5                                        # ridges across the slope
+    z[5:9, 32:36] -= 2.0                                      # a pit
+    h0 = np.zeros((ny, nx))
+    h0[:, :10] = np.maximum(4.0 + z[:, :10].min() - z[:, :10], 0.0)   # the reservoir
+    return z, h0, dx
+
+
+@test
+def metalflood_fv2_wet_dry_front_conserves_mass():
+    """Runner 3.69.0 regression for the Runner 3.66.0 FV2 fix (#492; Absaraka DWR-2801, FV2 ended 58 %
+    over the injected volume with Qout 0): a dam break onto a dry rough slope in a closed box must
+    keep its volume to round-off, with no depth clip and no collapse of the time step. Before 3.66.0
+    FV2 reconstructed the DISCHARGE hu and divided it by the reconstructed edge depth; on a thin edge
+    that velocity was unbounded (tens of km/s on a 0.3 m cell here), dt fell below 1e-4 s and the
+    depth >= 0 clip created water (+4.4 % by 217 s). The step budget makes that code fail rather
+    than hang."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        z, h0, dx = _fv2_wetdry_case()
+        sim = 900.0
+        p = _fv_deck(os.path.join(d, "wd"), z, h0, dx=dx, sim=sim, n=0.03, free="")
+        deck = fve.Deck(p)
+        eng = fve.Engine(deck, mfb.CpuBackend(mfb.FV2_SPEC))
+        vol0 = float(eng.h2().sum(dtype=np.float64)) * dx * dx
+        t, clip, min_dt, batches = 0.0, 0.0, 1e9, 0
+        while t < sim - 1e-3 and batches < 120:          # ~20 batches of 64 steps are needed
+            out = eng.batch(t, sim, 64, True)
+            t += out["t_local"]
+            clip += out["clip"]
+            min_dt = min(min_dt, out["min_dt"])
+            batches += 1
+        vol = float(eng.h2().sum(dtype=np.float64)) * dx * dx
+        err = (vol - vol0) / vol0
+        assert t >= sim - 1e-3, "FV2 did not reach {:.0f} s in {} batches (t {:.1f} s, min dt "\
+            "{:.2e} s, volume {:+.3%})".format(sim, batches, t, min_dt, err)
+        assert abs(err) < 1e-5, "FV2 volume changed {:+.4%} over a closed wet/dry run".format(err)
+        assert clip < 1e-6 * vol0, "the depth clip added {:.3g} m3".format(clip)
+        assert min_dt > 0.05, "dt collapsed to {:.2e} s".format(min_dt)
+        h = eng.h2()
+        hu = eng.a["hu"].reshape(h.shape)
+        hv = eng.a["hv"].reshape(h.shape)
+        wet = h > 1e-3
+        spd = np.hypot(hu, hv)[wet] / h[wet]
+        assert spd.max() < 15.0, "unphysical speed {:.1f} m/s".format(spd.max())
+    finally:
+        shutil.rmtree(d, True)
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
@@ -1558,6 +1613,7 @@ if __name__ == "__main__":
                metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
                metalflood_fv2_lake_at_rest_is_well_balanced,
                metalflood_fv2_reproduces_the_ritter_dam_break, metalflood_fv2_conserves_water,
+               metalflood_fv2_wet_dry_front_conserves_mass,
                metalflood_dg2_lake_at_rest_is_well_balanced,
                metalflood_dg2_reproduces_the_ritter_dam_break, metalflood_dg2_conserves_water,
                metalflood_dg2_limiter_is_a_deck_keyword,

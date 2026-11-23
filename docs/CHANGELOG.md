@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Runner 3.69.0: a mass-conservation regression for Boann FV2 at a wet/dry front (test only, NO result change; SWE (Grok Bot) for Nick, 2026-11-23).** This guards the 3.66.0 fix (#492) for the Absaraka DWR-2801 FV2 run, which ended at 3.14e6 m3 against 1.989e6 m3 injected (+58 %) with Qout 0.
+  - **The test.** `test_metalflood.metalflood_fv2_wet_dry_front_conserves_mass`: a closed 30 × 48, 10 m box; a dam break onto a dry, rough 1 % slope with ridges and a pit; n 0.03; 900 s. It asserts |volume change| < 1e-5, clip < 1e-6 of the volume, min dt > 0.05 s and speed < 15 m/s, all within 120 batches.
+  - **Evidence.**
+    - Pre-3.66.0 kernel: +4.4 %, clip 4.3e3 m3 (about the whole gain), min dt 7.6e-5 s, stuck at 217 s, so the test FAILS.
+    - 3.66.0 kernel: +8e-8, clip 5e-3 m3, min dt 0.30 s, so it passes in about 1 s.
+    - FV1 on the same case: −9e-9.
 - **Runner 3.66.0 / Screening 0.42.0 / Boann 3.0.0: FV2 reconstructs face velocities, not discharges (THIS MOVES FV2 (`gpu-fv2`) results; ACC, SGC, FV1, DG2, sub-grid FV and LISFLOOD-FP are not touched).** Found 2026-11-23 from Nick's M2 Pro check of #490: FV2 on the GPU differed from the CPU build by 6.4 cm (DG2 1.0 cm, the rest 0 to 1 mm).
   - **Cause.** `kernels_fv2.metal` reconstructed the discharges `hu`, `hv` and divided them by the reconstructed face depth `eta_face - z`. On a steep bank that depth can be a few mm under a full cell's discharge, so face velocities reached 20-30 m/s and put momentum spikes into cells holding 0.5-2 m of water. On `cases.valley_deck` (3 h): maxVc 30.4 m/s, p99 16.6 m/s, 43 cells over 5 m/s (FV1 7.8 m/s, 1 cell; DG2 6.2 m/s, 1 cell).
   - **Why GPU and CPU differed.** These spikes amplify the last bit of rounding. Building the CPU kernels with FMA on (`-ffp-contract=fast -mfma`), and changing nothing else, moved FV2's maximum depth by up to 5.5 cm (1 h) and 14.6 cm (3 h). ACC and FV1 did not move, and DG2 moved by 1 mm. Metal fuses multiply-adds where the CPU build does not.
