@@ -1559,9 +1559,12 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     saved = mfb.CPU_FLAGS
     try:
         runs = {}
-        for tag, flags in (("off", saved),
-                           ("fma", ("-O3", "-std=c++14", "-fno-strict-aliasing",
-                                    "-ffp-contract=fast", "-mfma"))):
+        # -mfma is x86 only (clang refuses it for arm64, where FMA is always there and
+        # -ffp-contract=fast alone fuses; macOS Metal CI, repo audit 2026-11-23)
+        fma = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=fast")
+        if mfb.platform_tag().endswith("-x64"):
+            fma += ("-mfma",)
+        for tag, flags in (("off", saved), ("fma", fma)):
             mfb.CPU_FLAGS = flags
             deck = valley_deck(os.path.join(d, tag), sim_s=10800.0)
             fve.run_par(deck, backend="cpu", order=3)
