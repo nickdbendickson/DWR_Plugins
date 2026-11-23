@@ -14,12 +14,19 @@
 //   - well-balanced Audusse bed source g*(I1 at the +face - I1 at the -face), recomputed in k_cont
 //     from the cell's own eta; keeps a lake at rest over any sub-grid topography;
 //   - semi-implicit Manning friction on the updated momentum, cell hydraulic depth V/P and the
-//     per-cell composite roughness nc2.
+//     per-cell composite roughness nc2;
+//   - positivity (Runner 3.59.0): a cell's outgoing face fluxes may not move more water in one step
+//     than it holds. k_limit_subfv sets lim = min(1, V / (dt * outflow)) per cell and every face
+//     flux (mass and momenta) is scaled by its DONOR cell's lim, the same number on both sides, so
+//     volume stays conserved and V never goes below 0. Before, the update overdrew thin partly-wet
+//     coarse cells and a V >= 0 clip put the missing water back from nowhere (Lake Delhi at r = 8:
+//     1.7 % of the inflow). lim is exactly 1 wherever no cell is overdrawn, so those runs are
+//     unchanged bit for bit.
 //
 // Compiled two ways, exactly like kernels_fv.metal: by Metal at run time on a Mac, and as C++ with
 // mf_shim.h (cpu_kernels_subfv.cpp) everywhere else. Buffers: the all-x-faces profiles (0..nx)
 // carry the FREE-edge sub-bed in their boundary slots, so no separate edge buffers; csum, zbed and
-// the face first moments are recomputed inline. 29 buffers + Params at 29 = 30 slots (<= Metal's 31).
+// the face first moments are recomputed inline. 30 buffers + Params at 30 = 31 slots (Metal's 31).
 
 #ifndef MF_CPU
 #include <metal_stdlib>
@@ -83,7 +90,7 @@ struct Params {
     float pad;
 };
 
-// Buffer layout (0..28; Params at 29):
+// Buffer layout (0..29; Params at 30):
 #define MF_ARGS_SUBFV \
     device const float* s B(0), \
     device const float* nc2 B(1), \
@@ -114,7 +121,8 @@ struct Params {
     device const float* nf2x B(26), \
     device const float* zfy B(27), \
     device const float* nf2y B(28), \
-    constant Params& p B(29), \
+    device float* lim B(29), \
+    constant Params& p B(30), \
     uint2 gid GID
 
 // -- cell stage curves (sorted sub-elevations s[0..m-1] for one cell) ------------------------------
@@ -285,7 +293,6 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
     uint c = p.c0 + gid.x;
     float g = p.g, wsub = p.wsub, dx = p.dx;
     float vfloor = MF_HVEL * dx * dx;
-    float outflow = 0.0f;
     uint fm = p.free_mask;
 
     if (gid.y < p.wr) {               // x-face at (row, face col c), 0..nx
@@ -313,7 +320,6 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                     if (und > 0.0f) u = fmin(u, -und);     // at least und outward (-x)
                     u = fmin(u, 0.0f);                       // outflow only: nothing enters from outside
                     f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
-                    outflow += fmax(-f.A, 0.0f);
                 }
                 else { f.Fn = g * I1; }
             }
@@ -327,7 +333,6 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                     if (und > 0.0f) u = fmax(u, und);      // at least und outward (+x)
                     u = fmax(u, 0.0f);                       // outflow only: nothing enters from outside
                     f.A = A * u; f.Fn = A * u * u + g * I1; f.Ft = A * u * v;
-                    outflow += fmax(f.A, 0.0f);
                 }
                 else { f.Fn = g * I1; }
             }
@@ -365,7 +370,6 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                     if (und > 0.0f) nv = fmin(nv, -und);   // at least und outward (-y)
                     nv = fmin(nv, 0.0f);                     // outflow only: nothing enters from outside
                     f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
-                    outflow += fmax(-f.A, 0.0f);
                 }
                 else { f.Fn = g * I1; }
             }
@@ -379,7 +383,6 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
                     if (und > 0.0f) nv = fmax(nv, und);    // at least und outward (+y)
                     nv = fmax(nv, 0.0f);                     // outflow only: nothing enters from outside
                     f.A = A * nv; f.Fn = A * nv * nv + g * I1; f.Ft = A * nv * tu;
-                    outflow += fmax(f.A, 0.0f);
                 }
                 else { f.Fn = g * I1; }
             }
@@ -390,11 +393,31 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             atomic_fetch_max_explicit((device atomic_uint*)(st + S_WNEXT), as_type<uint>(f.smax),
                                       memory_order_relaxed);
     }
+}
 
-    float tot = simd_sum(outflow);
-    if (simd_is_first() && tot != 0.0f)
-        atomic_fetch_add_explicit((device atomic_uint*)(st + S_QOUT),
-                                  uint(tot / MF_FIX + 0.5f), memory_order_relaxed);
+// every cell: the positivity limiter. lim = the share of this cell's outgoing face fluxes it can
+// pay for from its volume this step (1 = all of it, the usual case). The edge outflow is booked in
+// k_cont, after the limit.
+kernel void k_limit_subfv(MF_ARGS_SUBFV) {
+    device float* sf = (device float*)st;
+    float dt = sf[S_DT];
+    if (dt <= 0.0f) return;
+    uint nx = p.nx;
+    uint row = p.r0 + gid.y;
+    uint c = p.c0 + gid.x;
+    uint i = row * nx + c;
+    uint fx = row * (nx + 1u) + c;
+    float out = fmax(fxA[fx + 1u], 0.0f) + fmax(-fxA[fx], 0.0f)
+              + fmax(fyA[i + nx], 0.0f) + fmax(-fyA[i], 0.0f);
+    float need = out * dt;
+    float have = fmax(V[i], 0.0f);
+    lim[i] = (ok[i] != 0 && need > have) ? have / need : 1.0f;
+}
+
+// the scale of one face's flux: its donor cell's lim (the cell the water leaves); 1 when no water
+// crosses, so a pressure-only flux (still water against a wall or a dry neighbour) is never scaled
+inline float mf_face_lim(float fa, device const float* lim, uint minus, uint plus) {
+    return (fa > 0.0f) ? lim[minus] : ((fa < 0.0f) ? lim[plus] : 1.0f);
 }
 
 // every cell: finite-volume update with the well-balanced bed source, friction, V>=0 clip, maxima
@@ -425,9 +448,23 @@ kernel void k_cont_subfv(MF_ARGS_SUBFV) {
     float bedx = g * (I1xR - I1xL);
     float bedy = g * (I1yD - I1yU);
 
-    float dV = -dt * ((fxA[fx + 1u] - fxA[fx]) + (fyA[i + nx] - fyA[i])) + src[i] * dt;
-    float dPx = -dt * ((fxN[fx + 1u] - fxN[fx]) + (fyT[i + nx] - fyT[i])) + dt * bedx;
-    float dPy = -dt * ((fxT[fx + 1u] - fxT[fx]) + (fyN[i + nx] - fyN[i])) + dt * bedy;
+    // each face's flux scaled by its donor cell's lim (k_limit_subfv); a domain-edge face has this
+    // cell on both sides (the edge only lets water out, so this cell is its donor)
+    uint iW = (c > 0u) ? i - 1u : i, iE = (c + 1u < nx) ? i + 1u : i;
+    uint iN = (row > 0u) ? i - nx : i, iS = (row + 1u < ny) ? i + nx : i;
+    float sW = mf_face_lim(fxA[fx], lim, iW, i), sE = mf_face_lim(fxA[fx + 1u], lim, i, iE);
+    float sN = mf_face_lim(fyA[i], lim, iN, i), sS = mf_face_lim(fyA[i + nx], lim, i, iS);
+    float aW = sW * fxA[fx], aE = sE * fxA[fx + 1u], aN = sN * fyA[i], aS = sS * fyA[i + nx];
+    float dV = -dt * ((aE - aW) + (aS - aN)) + src[i] * dt;
+    float dPx = -dt * ((sE * fxN[fx + 1u] - sW * fxN[fx]) + (sS * fyT[i + nx] - sN * fyT[i])) + dt * bedx;
+    float dPy = -dt * ((sE * fxT[fx + 1u] - sW * fxT[fx]) + (sS * fyN[i + nx] - sN * fyN[i])) + dt * bedy;
+    // the domain-edge outflow, after the limit (an edge face only lets water out; a closed edge
+    // carries no water)
+    float outflow = 0.0f;
+    if (c == 0u) outflow += fmax(-aW, 0.0f);
+    if (c + 1u == nx) outflow += fmax(aE, 0.0f);
+    if (row == 0u) outflow += fmax(-aN, 0.0f);
+    if (row + 1u == ny) outflow += fmax(aS, 0.0f);
 
     float Vn = V[i] + dV;
     float Pxn = Px[i] + dPx;
@@ -478,7 +515,11 @@ kernel void k_cont_subfv(MF_ARGS_SUBFV) {
 
     float cl = simd_sum(clip);
     float wm = simd_max(wcell);
+    float tot = simd_sum(outflow);
     if (simd_is_first()) {
+        if (tot != 0.0f)
+            atomic_fetch_add_explicit((device atomic_uint*)(st + S_QOUT),
+                                      uint(tot / MF_FIX + 0.5f), memory_order_relaxed);
         if (wm > 0.0f)
             atomic_fetch_max_explicit((device atomic_uint*)(st + S_WNEXT), as_type<uint>(wm),
                                       memory_order_relaxed);
