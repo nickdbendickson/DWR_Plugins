@@ -323,7 +323,8 @@ def build(gid, out, say=print, gauge=None):
 
 # -------------------------------------------------------------------------------- run
 def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
-        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto"):
+        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto", sgc_curve=None,
+        tag_suffix=""):
     from DamSafety_Runner.core import lisflood as lf
     from DamSafety_Runner.core import nd_data
     from DamSafety_Runner.core.breach import Hydrograph
@@ -334,6 +335,12 @@ def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
     tag = "nlcd" if nlcd else "n{:.3f}".format(n)
     if sgc:
         tag += "+sgc"
+        from DamSafety_Runner.core import sgc as sgcmod
+        _ck = sgcmod.curve_key(sgc_curve)
+        if _ck and _ck != "nd":                        # keep the ND default tag as plain "+sgc"
+            tag += "-" + _ck
+    if tag_suffix:
+        tag += tag_suffix                              # e.g. "+subfv" to compare engines side by side
     man = None
     if nlcd:
         codes = np.load(os.path.join(folder, "nlcd.npy")).astype(float)
@@ -362,7 +369,8 @@ def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
         channels = sgcmod.build(
             dem, inflow_rc=dem.rc(*inflow_xy), upstream_km2=up_km2,
             min_area_km2=float(sgc_min_area_km2 or sgcmod.DEFAULT_MIN_AREA_KM2),
-            channel_n=float(sgc_channel_n or sgcmod.DEFAULT_CHANNEL_N), start=sgc_start)
+            channel_n=float(sgc_channel_n or sgcmod.DEFAULT_CHANNEL_N), start=sgc_start,
+            curve=sgc_curve)
         say("{} {}: {}{}".format(
             meta["gauge"]["id"], tag, sgcmod.describe(channels.info),
             "" if up_km2 else "  (no drainage area on this gauge; channel sized from the "
@@ -517,6 +525,12 @@ def main(argv=None):
     r.add_argument("--sgc-min-area-km2", type=float, default=None)
     r.add_argument("--sgc-channel-n", type=float, default=None)
     r.add_argument("--sgc-start", default="auto", choices=["auto", "empty", "full"])
+    r.add_argument("--sgc-curve", default=None,
+                   help="sub-grid-channel hydraulic-geometry curve: a preset name (nd [default], "
+                        "bieger-us) or four numbers a,b,c,f for W=a*A^b, D=c*A^f (A in km2, W/D m)")
+    r.add_argument("--tag-suffix", default="",
+                   help="append this to the run-folder tag (e.g. +subfv) so a different engine's "
+                        "run sits in its own column instead of overwriting the baseline")
     s = sub.add_parser("score")
     s.add_argument("root")
     sub.add_parser("list")
@@ -526,9 +540,16 @@ def main(argv=None):
     elif a.cmd == "run":
         if not a.nlcd and not a.n:
             ap.error("give --n or --nlcd")
+        curve = a.sgc_curve
+        if curve and "," in curve:
+            try:
+                curve = tuple(float(x) for x in curve.split(","))
+            except ValueError:
+                ap.error("--sgc-curve must be a preset name or four numbers a,b,c,f")
         run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours,
             sgc=a.sgc, sgc_min_area_km2=a.sgc_min_area_km2,
-            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start)
+            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start, sgc_curve=curve,
+            tag_suffix=a.tag_suffix)
     elif a.cmd == "score":
         score(a.root)
     else:
