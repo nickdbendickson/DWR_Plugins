@@ -178,7 +178,7 @@ def boann_cpu_build_asks_apple_clang_for_openmp_through_libomp():
         sets = mfb.openmp_flag_sets()
         assert sets[0] == (["-fopenmp"], []) and mfb.mac_libomp_prefixes()[0] == d
         cflags, link = sets[1]
-        assert cflags == ["-Xpreprocessor", "-fopenmp", "-I", os.path.join(d, "include")]
+        assert cflags == ["-Xpreprocessor", "-fopenmp"]          # no omp.h: the shim declares the calls
         lib = os.path.join(d, "lib")
         assert link == ["-L", lib, "-lomp", "-Wl,-rpath," + lib]
         cmd = mfb.cpu_build_command(mfb.FLOOD_SPEC, "clang++", "x.dylib", openmp=True,

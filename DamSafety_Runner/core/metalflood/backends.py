@@ -283,15 +283,14 @@ def cpu_library_name(spec, ext, openmp):
 
 
 def mac_libomp_prefixes():
-    """Folders holding an LLVM OpenMP runtime (include/omp.h + lib/libomp.dylib) for Apple clang,
+    """Folders holding an LLVM OpenMP runtime (lib/libomp.dylib) for Apple clang,
     which has no OpenMP of its own: $DAMSAFETY_MF_LIBOMP, this Python's own prefix (a conda
     environment's llvm-openmp: the same runtime numpy may already have loaded, and two OpenMP
     runtimes in one process abort it), then Homebrew's libomp."""
     found = []
     for d in (os.environ.get("DAMSAFETY_MF_LIBOMP"), sys.prefix, "/opt/homebrew/opt/libomp",
               "/usr/local/opt/libomp"):
-        if (d and os.path.isfile(os.path.join(d, "include", "omp.h"))
-                and os.path.isfile(os.path.join(d, "lib", "libomp.dylib")) and d not in found):
+        if d and os.path.isfile(os.path.join(d, "lib", "libomp.dylib")) and d not in found:
             found.append(d)
     return found
 
@@ -304,8 +303,8 @@ def openmp_flag_sets():
     if sys.platform == "darwin":
         for d in mac_libomp_prefixes():
             lib = os.path.join(d, "lib")
-            sets.append((["-Xpreprocessor", "-fopenmp", "-I", os.path.join(d, "include")],
-                         ["-L", lib, "-lomp", "-Wl,-rpath," + lib]))
+            # no -I: mf_shim.h declares the two runtime calls itself (omp.h may not parse)
+            sets.append((["-Xpreprocessor", "-fopenmp"], ["-L", lib, "-lomp", "-Wl,-rpath," + lib]))
     return sets
 
 
