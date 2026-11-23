@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Runner 3.62.0 / Screening 0.37.0: Boann runs as a program of its own, without QGIS (NO result changes).** Nick, 2026-11-23: give Boann a standalone command line and its own version, but keep it in this repository for now.
+- **Runner 3.62.0 / Screening 0.38.0: Boann runs as a program of its own, without QGIS (NO result changes).** Nick, 2026-11-23: give Boann a standalone command line and its own version, but keep it in this repository for now.
   - **Run it.** `python3 DamSafety_Runner/core/metalflood/boann.py run DECK.par --solver fv2 --backend auto` needs only Python 3 and numpy (and a C++ compiler for the CPU build, unless a release shipped it prebuilt). Solvers `acc` (default), `sgc`, `fv`, `fv2`, `dg2`, `subfv`; the Runner's engine words (`gpu`, `gpu-fv`, `gpu-fv2`, `gpu-dg2`, `gpu-sgc`, `gpu-subfv`) work too. `boann.py check` names the device a run would use; `solvers` lists them; `version` prints Boann's and each solver's. `--stats-json PATH` writes the run statistics. Inside a plugin, `python -m <plugin>.core.metalflood run ...` is the same command.
   - **Same deck, same files.** It reads the deck the Runner writes for LISFLOOD-FP and writes LISFLOOD-FP's result files where the `.par` says (`.max` depth, `.maxVc` velocity, `.inittm` arrival time, `.mxe` water surface, `.maxtm`, `.mass`, `.discharge`). The Runner still turns them into the Depth / Velocity / Arrival Time / WSE GeoTIFFs.
   - **Own version.** `core/metalflood/version.py` `BOANN_VERSION = "1.0.0"`, recorded in `run_manifest.json` as `software.boann` (`version`, `solver`, `engine`, `engine_version`) beside the Runner's version (`lisflood.boann_info`). Each solver's own NAME / VERSION (the first line of `lisflood.log`) is unchanged.
