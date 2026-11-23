@@ -95,7 +95,7 @@ python3 -m nd_breach_runner.core.metalflood.bench --size medium --case diagonal 
 |---|---|---|
 | Python encoding, s and us a step | Wall time building and committing each batch's command buffer. The GPU is idle for it. | Whether to overlap encoding with GPU work, or encode less (fewer dispatches a step). |
 | GPU's own time, us a step | `GPUEndTime - GPUStartTime` of each batch's command buffer. | The base every GPU-side change is measured against. |
-| GPU time by kernel | The first 2 steps of each batch go one kernel per command buffer (Apple GPUs sample counters at pass boundaries only). Small kernels read high: each buffer has a fixed cost. | Which kernels a fusion would be worth. |
+| GPU time by kernel | The first 2 steps of each batch go one kernel per command buffer (Apple GPUs sample counters at pass boundaries only). Each buffer costs the GPU a fixed time whatever it holds (on the CI Mac, more than a whole batched step), so read the **net** columns: the time above the cheapest one-thread kernel's. | Which kernels a fusion would be worth. |
 | The window's share of the grid | The wet bounding box plus its margin, over the grid. | |
 | Wet share of the window | Cells holding water, of the cells the kernels run. | How much any dry skip could save at best. |
 | Tiles 16 / 32 / 64 | Cells in the tiles that hold water or touch a tile that does. | What a dry-tile skip on the GPU would still run, by tile size. |

@@ -274,6 +274,14 @@ def boann_profile_changes_no_result_on_the_gpu():
             assert set(names) == set(SPECS[solver].kernels), (solver, names)
             assert abs(sum(k["share"] for k in pn["kernels"]) - 1.0) < 1e-3, (solver, pn)
             assert all(k["calls"] > 0 and k["gpu_s"] >= 0 for k in pn["kernels"]), (solver, pn)
+            # net of the fixed cost of a command buffer: the cheapest one-thread kernel is the
+            # floor, so it nets to zero; the net shares are among the grid kernels
+            assert all(k["net_share"] == 0.0 for k in pn["kernels"]
+                       if k["threads_per_call"] == 1), (solver, pn)
+            assert pn["kernel_floor_us"] > 0, (solver, pn)
+            assert min(k["net_us_per_call"] for k in pn["kernels"]) == 0.0, (solver, pn)
+            nets = sum(k["net_share"] for k in pn["kernels"])
+            assert nets == 0.0 or abs(nets - 1.0) < 1e-3, (solver, pn)
             assert pn["wet"]["looks"] >= 1 and 0.0 < pn["wet"]["wet"] < 1.0, (solver, pn)
             assert pn["threadgroup"], (solver, pn)
         assert len(ran) >= len(SOLVERS) - 1, ran

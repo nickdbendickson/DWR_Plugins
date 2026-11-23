@@ -165,10 +165,17 @@ def profile_lines(stats):
     if kern:
         lines.append("  GPU time by kernel (from the first {} steps of each batch, one kernel "
                      "per command buffer):".format((pr.get("split") or {}).get("steps_per_batch", 0)))
+        lines.append("    {:<18s} {:>10s} {:>8s}   {:>10s} {:>6s} {:>12s}".format(
+            "", "us a call", "share", "net us", "share", "threads"))
         for k in kern:
-            lines.append("    {:<18s} {:5.1f}%  {:9.1f} us a call  {:>10,} threads".format(
-                k["name"], 100.0 * k["share"], 1e6 * k["gpu_s"] / max(k["calls"], 1),
+            lines.append("    {:<18s} {:10.1f} {:7.1f}%   {:10.1f} {:5.1f}% {:>12,}".format(
+                k["name"], 1e6 * k["gpu_s"] / max(k["calls"], 1), 100.0 * k["share"],
+                k.get("net_us_per_call", 0.0), 100.0 * k.get("net_share", 0.0),
                 k["threads_per_call"]))
+        lines.append("    net: above the {:.1f} us a command buffer costs the GPU whatever it "
+                     "holds (the cheapest one-thread kernel); its share is among the grid "
+                     "kernels, the nearer guide to their shares of a real step".format(
+                         pr.get("kernel_floor_us", 0.0)))
     wet = pr.get("wet") or {}
     if "wet" in wet:
         lines.append("  the window is {:.1f}% of the grid; of the window's cells, on average:"

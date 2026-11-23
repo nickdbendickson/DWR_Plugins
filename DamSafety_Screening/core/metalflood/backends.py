@@ -464,11 +464,26 @@ class Profile:
                 gpu["mcups_window"] = round(cells / self.gpu_s / 1e6, 3)
             out["gpu"] = gpu
             tot = sum(v[0] for v in self.kern.values())
+            # A command buffer costs the GPU a fixed time whatever it holds, and on a small
+            # window that is most of a one-kernel buffer's time. The floor is the cheapest
+            # one-thread kernel's time a call (it does next to nothing); a kernel's net time
+            # is what it takes above that, the nearer estimate of its share of a real step.
+            # The net share is among the grid kernels only: the first buffer after a pause
+            # also pays the GPU's start-up, and that one is a one-thread kernel.
+            per = {k: v[0] / max(v[1], 1) for k, v in self.kern.items()}
+            one = {k: bool(v[1]) and v[2] == v[1] for k, v in self.kern.items()}
+            floor = min([per[k] for k in per if one[k]] or [0.0])
+            net = {k: max(per[k] - floor, 0.0) for k in per}
+            net_tot = sum(net[k] for k in net if not one[k])
             out["kernels"] = [{"name": k, "gpu_s": r6(self.kern[k][0]),
                                "share": round(self.kern[k][0] / tot, 4) if tot > 0 else 0.0,
+                               "net_us_per_call": round(1e6 * net[k], 3),
+                               "net_share": round(net[k] / net_tot, 4)
+                               if net_tot > 0 and not one[k] else 0.0,
                                "calls": self.kern[k][1],
                                "threads_per_call": int(self.kern[k][2] / max(self.kern[k][1], 1))}
                               for k in self.kern_order]
+            out["kernel_floor_us"] = round(1e6 * floor, 3)
             out["split"] = {"steps": self.split_steps, "steps_per_batch": PROFILE_SPLIT_STEPS,
                             "host_s": r6(self.split_s)}
         if self.full:
