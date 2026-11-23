@@ -81,6 +81,21 @@ def classify(area_cells, max_depth_m, aspect, cell_m,
     return "fill"
 
 
+def label_cells(labels, n=None):
+    """Every labelled cell grouped by label, in one pass: returns (flat_labels, cells, starts),
+    where the flat (row-major) indices of label `lid`'s cells are cells[starts[lid-1]:starts[lid]],
+    in row-major order (what np.nonzero(labels == lid) gives), from a label bincount."""
+    flat = np.asarray(labels).ravel()
+    if n is None:
+        n = int(flat.max()) if flat.size else 0
+    idx = np.nonzero(flat > 0)[0]
+    lab = flat[idx]
+    cells = idx[np.argsort(lab, kind="stable")]
+    counts = np.bincount(lab, minlength=n + 1)[1:n + 1]
+    starts = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+    return flat, cells, starts
+
+
 def depression_census(dem, filled=None, cell_m=1.0, eps=1e-5, backend="auto"):
     """Census every filled depression on `dem` (NaN / -9999 = NoData). Returns (labels, items).
     `labels` is int32 (0 = not filled). Each item: id, n_cells, area_m2, volume_m3, max_depth_m,
@@ -96,18 +111,27 @@ def depression_census(dem, filled=None, cell_m=1.0, eps=1e-5, backend="auto"):
     labels, n = _label4(mask)
     cell_area = cell_m * cell_m
     items = []
+    # One pass over the grid, not one per depression: group the labelled cells by label (a stable
+    # sort keeps each depression's cells in row-major order, the order `labels == lid` gave), then
+    # read each depression from its slice. The per-depression numbers are bit-identical to the old
+    # mask-per-label loop (same values, same order), but the cost is O(cells log cells + n) instead
+    # of O(n x cells): 86,402 depressions on a 2001 x 2001 grid took 7+ minutes before (Runner 3.51.0).
+    nx = labels.shape[1]
+    _flat, cells, starts = label_cells(labels, n)
+    dflat, aflat, fflat = delta.ravel(), a.ravel(), filled.ravel()
     for lid in range(1, n + 1):
-        m = labels == lid
-        rr, cc = np.nonzero(m)
-        d = delta[m]
+        ci = cells[starts[lid - 1]:starts[lid]]
+        rr, cc = np.divmod(ci, nx)
+        d = dflat[ci]
+        k = np.int64(ci.size)
         items.append({
             "id": lid,
-            "n_cells": int(m.sum()),
-            "area_m2": float(m.sum() * cell_area),
+            "n_cells": int(k),
+            "area_m2": float(k * cell_area),
             "volume_m3": float(d.sum() * cell_area),
             "max_depth_m": float(d.max()),
-            "floor_elev_m": float(a[m].min()),
-            "spill_elev_m": float(filled[m].max()),
+            "floor_elev_m": float(aflat[ci].min()),
+            "spill_elev_m": float(fflat[ci].max()),
             "centroid": (float(rr.mean()), float(cc.mean())),
         })
         h = rr.max() - rr.min() + 1
