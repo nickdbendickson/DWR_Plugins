@@ -9,6 +9,8 @@ from qgis.core import (QgsApplication, QgsProcessingAlgorithm, QgsProcessingProv
 
 from . import core
 
+MENU = "&Dam safety"   # the one suite menu (window-simplification plan change 4)
+
 LAYER_PARAMS = [("address", "911 address points"), ("outlines", "Structure outlines (FEMA USA Structures)"),
                 ("roads", "Road centerlines (NG9-1-1)"), ("counts", "NDDOT traffic counts"),
                 ("rail", "Rail lines (NARN)"), ("crossings", "FRA grade crossings")]
@@ -104,7 +106,7 @@ class Plugin:
         self.action = QAction(QIcon(os.path.join(here, "icon.svg")),
                               "DamSafety Hazard Lite…", self.iface.mainWindow())
         self.action.triggered.connect(self.open)
-        self.iface.addPluginToMenu("DamSafety Hazard Lite", self.action)
+        self.iface.addPluginToMenu(MENU, self.action)
 
     def open(self):
         from .dialog import HazardLiteDialog
@@ -117,4 +119,4 @@ class Plugin:
         if self.provider:
             QgsApplication.processingRegistry().removeProvider(self.provider)
         if self.action is not None:
-            self.iface.removePluginMenu("DamSafety Hazard Lite", self.action)
+            self.iface.removePluginMenu(MENU, self.action)

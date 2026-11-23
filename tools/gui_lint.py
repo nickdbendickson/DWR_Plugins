@@ -318,7 +318,6 @@ def main():
     haz = opened("Hazard main", lambda: NDDamHazardDialog(parent=None))
     check("Hazard main", haz)
     if haz is not None:
-        check("Hazard suite settings", getattr(haz, "suite_settings_dialog", None))
         check("Hazard documentation", getattr(haz, "readme_dialog", None))
     from DamSafety_Hazard.add_results_dialog import AddResultsDialog
     check("Hazard add model results",
@@ -327,8 +326,6 @@ def main():
     from DamSafety_Runner.dialog import NDBreachRunnerDialog
     run = opened("Runner main", lambda: NDBreachRunnerDialog())
     check("Runner main", run)
-    if run is not None:
-        check("Runner settings", getattr(run, "settings_dialog", None))
     from DamSafety_Runner.chain_dialog import ChainDialog
     check("Runner batch chain", opened("Runner batch chain", lambda: ChainDialog(None)))
     from DamSafety_Runner import wizard
@@ -338,8 +335,20 @@ def main():
     from DamSafety_Screening.dialog import NDDamScreeningDialog
     scr = opened("Screening main", lambda: NDDamScreeningDialog(parent=None, iface=None))
     check("Screening main", scr)
-    if scr is not None:
-        check("Screening settings", getattr(scr, "settings_window", None))
+
+    # Core 1.6.0: one suite settings window, a tab per plugin (was a settings window per plugin)
+    from DamSafety_Core.ui import suite_settings_window as SW
+    sw = None
+    for key, win in (("ndhazard", haz), ("ndbreach", run), ("nddam", scr)):
+        if win is not None:
+            sw = SW.open_settings(key, win.settings_section)
+    if sw is not None:
+        for key in sw.keys():
+            sw.show_section(key)
+            pump()
+            if key in sw.errors:
+                fail("Suite settings", "{} tab not built: {}".format(key, sw.errors[key]))
+        check("Suite settings", sw)
 
     from DamSafety_Hazard.suite_home import SuiteHomeDialog
     check("Dam suite home", opened("Dam suite home", lambda: SuiteHomeDialog(None, None, "lint")),

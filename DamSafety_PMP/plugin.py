@@ -3,7 +3,7 @@ import os
 from qgis.core import QgsApplication
 from .provider import NDPMPProvider
 
-MENU = "DamSafety PMP"
+MENU = "&Dam safety"   # the one suite menu (window-simplification plan change 4)
 STREAMSTATS_LABEL = "Get basin data from StreamStats\u2026"
 
 

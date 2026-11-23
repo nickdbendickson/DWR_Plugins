@@ -425,3 +425,18 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_every_plugin_uses_the_one_dam_safety_menu():
+    assert C.menu_problems() == []
+
+
+def test_a_menu_of_its_own_is_reported(tmp_path):
+    plug = tmp_path / "DamSafety_Extra"
+    plug.mkdir()
+    (plug / "plugin.py").write_text('MENU = "&Dam safety"\n'
+                                    'iface.addPluginToMenu("Extra tools", action)\n')
+    (plug / "tests").mkdir()
+    (plug / "tests" / "test_x.py").write_text('iface.addPluginToMenu("Fake", a)\n')
+    probs = C.menu_problems(str(tmp_path))
+    assert len(probs) == 1 and "plugin.py:2" in probs[0] and "Extra tools" in probs[0]
