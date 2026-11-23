@@ -98,12 +98,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: qgis
-          # draco=1.5.7 is a TEMPORARY pin (2026-11-22): conda-forge published draco 1.5.9 while
-          # its qgis 4.2.3 build still links libdraco.so.9, so an unpinned solve gave an env where
-          # `import qgis.core` fails (ImportError: libdraco.so.9). Remove the pin once conda-forge
-          # ships a qgis build made against the new draco.
+          # qgis=4.2.3 draco=1.5.7 is a TEMPORARY pin pair. 2026-11-22: conda-forge published
+          # draco 1.5.9 while its qgis 4.2.3 build still linked libdraco.so.9, so draco was pinned
+          # to 1.5.7. 2026-11-23: conda-forge published qgis 4.4.0, which links libdraco.so.11, and
+          # the solver paired it with the pinned draco 1.5.7 (`import qgis.core`: ImportError:
+          # libdraco.so.11), so qgis is pinned to the last green pair too. Lift both together once
+          # a qgis 4.4 env is checked green (the unpinned validation workflows show it).
           create-args: >-
-            python=3.12 qgis numpy scipy gdal pytest draco=1.5.7
+            python=3.12 qgis=4.2.3 numpy scipy gdal pytest draco=1.5.7
       - name: Xvfb for the 1080p GUI lint
         # docs/gui-grammar.md: the "no page scrolls sideways" rule needs a 1920x1080 display;
         # offscreen Qt is 800x600 and skips it. Best effort: when xvfb or the xcb platform
@@ -326,12 +328,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: qgis
-          # draco=1.5.7 is a TEMPORARY pin (2026-11-22): conda-forge published draco 1.5.9 while
-          # its qgis 4.2.3 build still links libdraco.so.9, so an unpinned solve gave an env where
-          # `import qgis.core` fails (ImportError: libdraco.so.9). Remove the pin once conda-forge
-          # ships a qgis build made against the new draco.
+          # qgis=4.2.3 draco=1.5.7 is a TEMPORARY pin pair. 2026-11-22: conda-forge published
+          # draco 1.5.9 while its qgis 4.2.3 build still linked libdraco.so.9, so draco was pinned
+          # to 1.5.7. 2026-11-23: conda-forge published qgis 4.4.0, which links libdraco.so.11, and
+          # the solver paired it with the pinned draco 1.5.7 (`import qgis.core`: ImportError:
+          # libdraco.so.11), so qgis is pinned to the last green pair too. Lift both together once
+          # a qgis 4.4 env is checked green (the unpinned validation workflows show it).
           create-args: >-
-            python=3.12 qgis numpy<2 scipy gdal python-gmsh draco=1.5.7
+            python=3.12 qgis=4.2.3 numpy<2 scipy gdal python-gmsh draco=1.5.7
       - name: ANUGA environment (conda-forge)
         run: |
           micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy
