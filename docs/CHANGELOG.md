@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Runner 3.60.0 / Screening 0.36.0: Boann rain on the grid. The ACC engine reads LISFLOOD-FP's `rainfall` keyword (NO change for a deck without it; the Runner does not write it yet).**
+  - **Input.** LISFLOOD-FP 8.3's `.rain` file: a comment line, `<count> <units>`, then `<mm/hr> <time>` lines. One rate over the whole grid, linear between its times, read at each step's start (`deckio.read_rain`). A negative rate (the old evaporation trick) is refused.
+  - **Kernels.** `k_begin` evaluates the rate; the rain series rides after the inflow series, and Params' spare last word is now the `rain` flag. `k_cont` adds `rate x dt` to every valid cell; NoData stays dry. With rain the wet window is the whole grid.
+  - **Water balance.** Rain is booked as inflow, so the volume error still closes. The `.mass` file's last column carries the cumulative rain volume, as LISFLOOD-FP's does, and `stats['rain_m3']` reports it.
+  - **Against LISFLOOD-FP 8.3** (40 x 60 sloping plane with a pond and an open edge, 36 mm/hr for 1 h, 3 h run): the same 3,820 steps, rain 8,686.55 m3 in both, final volume 2,443.25 vs 2,443.30 m3, max depths within 1 mm.
+  - **Other engines.** FV1 / FV2 / DG2 / SGC / sub-grid FV stop with a message on a deck with rainfall instead of running it dry. Screening's engine files re-synced byte for byte.
+  - **Tests.** `tests/test_boann_rain.py`: the reader; a closed box fills to exactly rate x time; a slope balances to 1e-4; the other engines refuse; GPU == CPU (Mac); against LISFLOOD-FP (`--models`).
 - **Runner 3.57.0: BoannGrid's crossing reconnect is limited, and flow accumulation has no dead ends (THIS MOVES BoannGrid-conditioned terrain: hand-run conditioning and the opt-in `sgc.from_boanngrid`; the default Runner path never calls `reconnect_crossings`, so ordinary runs are unchanged).**
   - **Why.** The Absaraka (DWR-2801) 30 m rerun on Runner 3.51.0 carved every drained depression of any class: 39,048 notches (the earlier crossing-only test made 418), cuts up to 19.5 m, 108 of them through Casselton house lots. 107 houses read as lethal and TM-11 went High, in water that sits below the uncut ground (median -7.8 ft).
   - **Crossings only.** `reconnect_crossings(classes=("crossing",))` by default: only a depression the census classes as a crossing (long and thin, a channel ponded behind a road or rail fill) is a candidate. `classes=None` is the old every-class sweep.

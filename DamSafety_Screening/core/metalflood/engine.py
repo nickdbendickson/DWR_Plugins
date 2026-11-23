@@ -41,7 +41,7 @@ Cancelled = bl.Cancelled
 
 _FREE_BITS = {"N": 1, "S": 2, "E": 4, "W": 8}
 S_T, S_DT, S_HMAX, S_HNEXT, S_VIN, S_VOUT, S_CLIP, S_STEPS, S_MINDT = range(9)
-S_RMIN, S_RMAX, S_CMIN, S_CMAX, S_QIN, S_QOUT, S_LASTDT = range(9, 16)
+S_RMIN, S_RMAX, S_CMIN, S_CMAX, S_QIN, S_QOUT, S_LASTDT, S_RAIN, S_RAIND = range(9, 18)
 MF_FIX = 1.0e-4       # kernels.metal: fixed-point unit of the summed outflow and clip
 
 
@@ -119,6 +119,10 @@ class Deck:
                 self.src_cells.append((r, c, k))
         self.gauges = bl._load("gauge file", bl.read_gauges, path("gaugefile")) \
             if "gaugefile" in par else []
+        # LISFLOOD-FP's "rainfall" keyword: one rate (m/s) over every valid cell. Only the ACC
+        # engine adds it (Runner 3.60.0); the other Boann engines refuse a deck that has it.
+        self.rain = bl._load("rainfall (.rain) file", bl.read_rain, path("rainfall")) \
+            if "rainfall" in par else None
         self.solver = "fv1" if "fv1" in par else "acceleration"
         # LISFLOOD-FP 8.3's ACC options: cfl (0.7), theta (1.0: Bates et al. 2010; the Runner's
         # damped rerun writes 0.7) and the 2-D friction term (on unless "1Dfriction")
@@ -149,13 +153,23 @@ class Deck:
         self.root = os.path.join(res, str(par.get("resroot", "run")))
 
 
+def refuse_rain(deck, engine):
+    """The engines other than ACC do not add rainfall yet: stop rather than silently drop it."""
+    if getattr(deck, "rain", None) is not None:
+        raise EngineError("the .par file asks for rainfall ('rainfall'), which Boann's {} engine "
+                          "does not add yet; run it with Boann ACC (acceleration) or LISFLOOD-FP"
+                          .format(engine))
+
+
 class Engine:
     def __init__(self, deck, backend):
         self.d = d = deck
         self.b = backend
         ny, nx = d.ny, d.nx
-        n_values = sum(len(s[1]) for s in d.series)
-        layout = be.buffer_layout(ny, nx, len(d.src_cells), len(d.series), n_values)
+        # rainfall rides as one more series after the inflow series (index n_series)
+        series = list(d.series) + ([("rain",) + tuple(d.rain)] if d.rain is not None else [])
+        n_values = sum(len(s[1]) for s in series)
+        layout = be.buffer_layout(ny, nx, len(d.src_cells), len(series), n_values)
         a = self.a = backend.allocate(layout)
         # bed relative to the lowest valid cell: float32 then resolves depths to ~1e-5 m
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
@@ -168,12 +182,12 @@ class Engine:
         a["tmax"][:] = NODATA
         a["arr"][:] = NODATA
         off = 0
-        for k, (_, ts, qs) in enumerate(d.series):
+        for k, (_, ts, qs) in enumerate(series):
             a["ser_off"][k] = off
             a["ser_t"][off:off + len(ts)] = ts
             a["ser_q"][off:off + len(ts)] = qs
             off += len(ts)
-        a["ser_off"][len(d.series)] = off
+        a["ser_off"][len(series)] = off
         for i, (r, c, k) in enumerate(d.src_cells):
             a["s_cell"][i] = r * nx + c
             a["s_series"][i] = k
@@ -188,6 +202,8 @@ class Engine:
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
         p.inflow_lf_order = int(d.inflow_lf_order)
+        p.rain = int(d.rain is not None)
+        self.rain_area = float(d.valid.sum()) * d.dx * d.dx
         p.dry, p.maxhflow, p.velmin, p.arr_depth = DRY_M, MAX_HFLOW, VEL_MIN_DEPTH_M, d.arr_depth
         self.win = self._window_from(self.h2() > 0)
 
@@ -196,6 +212,8 @@ class Engine:
 
     def _bbox(self, rmin, rmax, cmin, cmax):
         d = self.d
+        if d.rain is not None:
+            return (0, d.ny, 0, d.nx)        # rain falls on every cell: the window is the grid
         if len(self.src_rc[0]):
             rmin, rmax = min(rmin, self.src_rc[0].min()), max(rmax, self.src_rc[0].max())
             cmin, cmax = min(cmin, self.src_rc[1].min()), max(cmax, self.src_rc[1].max())
@@ -231,7 +249,9 @@ class Engine:
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
                "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
-               "qout": int(st[S_QOUT]) * MF_FIX}
+               "qout": int(st[S_QOUT]) * MF_FIX,
+               # engines built on this class without rain (SGC) leave rain_area unset: no rain
+               "vrain": _f(st, S_RAIND) * getattr(self, "rain_area", 0.0)}
         rmin, rmax, cmin, cmax = (int(st[k]) for k in (S_RMIN, S_RMAX, S_CMIN, S_CMAX))
         if out["steps"]:
             # every cell wet during the batch lies in this box; cells still wet from before
@@ -313,7 +333,7 @@ def _run(d, bk, progress, cancel, say):
     snap_k = 0
     next_snap = 0.0 if saveint <= sim else None
     vol0 = volume()
-    vin = vout = clip = 0.0
+    vin = vout = clip = vrain = 0.0
     qin = qout = 0.0
     batches = 0
     t_start = time.time()
@@ -326,7 +346,7 @@ def _run(d, bk, progress, cancel, say):
         mass_f.write("{:<12.3f} {:<10.4f} {:<10.4f} {:<12d} {:<12.1f} {:<12.3f} {:<12.4f} "
                      "{:<10.4f} {:<13.4f} {:<14.6f} {:<12.4f} {:<12.4f}\n".format(
                          tt, last_dt, min_dt if steps else last_dt, steps, area, vol, qin,
-                         0.0, qout, 0.0, verr - write_mass.last_err, 0.0))
+                         0.0, qout, 0.0, verr - write_mass.last_err, vrain))
         write_mass.last_err = verr
         write_mass.last_t = tt
         mass_f.flush()
@@ -356,7 +376,8 @@ def _run(d, bk, progress, cancel, say):
             out = eng.batch(t, t_event, n, cut)
             batches += 1
             if out["steps"]:
-                vin += out["vin"]
+                vin += out["vin"] + out["vrain"]
+                vrain += out["vrain"]
                 vout += out["vout"]
                 clip += out["clip"]
                 steps += out["steps"]
@@ -405,7 +426,8 @@ def _run(d, bk, progress, cancel, say):
     stats = {"engine": NAME, "version": VERSION, "backend": bk.kind, "device": bk.device,
              "steps": steps, "batches": batches, "sim_time_s": t, "wall_s": round(wall, 2),
              "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
-             "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip}
+             "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip,
+             "rain_m3": vrain}
     say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))
