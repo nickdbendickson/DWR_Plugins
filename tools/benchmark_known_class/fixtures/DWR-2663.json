@@ -1,0 +1,98 @@
+{
+ "dam_id": "DWR-2663",
+ "downstream_dams": [],
+ "lifelines": [],
+ "railroads": [],
+ "result": {
+  "borderline_raised": true,
+  "counts": {
+   "downstream_dams": 0,
+   "habitable_lethal": 0,
+   "habitable_wet": 0,
+   "judgment_zone": 0,
+   "lifelines_wet": 0,
+   "near_boundary": 0,
+   "railroads_overtopped": 0,
+   "roads_overtopped": 5,
+   "structures_wet": 0
+  },
+  "data_gaps": [
+   "road 107201: US / State highway without AADT; classified Medium (High if AADT > 2,000)",
+   "road 109228: AADT not given; classified Medium by assumption",
+   "road 45538: AADT not given; classified Medium by assumption"
+  ],
+  "governing": "3 roads, e.g. US / State highway overtopped, AADT unknown (assumed Medium) [5.2.1.2(b)] (1.5 ft) (5.2.1.2)",
+  "hz_class": "Medium"
+ },
+ "roads": [
+  {
+   "aadt": null,
+   "depth_m": 0.45619669556617737,
+   "id": "107201",
+   "name": "HIGHWAY 5 STHY",
+   "road_class": "",
+   "sole_access": false,
+   "x": -143912.53883113916,
+   "y": 2863437.373835736
+  },
+  {
+   "aadt": null,
+   "depth_m": 2.304713487625122,
+   "id": "109228",
+   "name": "COUNTY ROAD 6",
+   "road_class": "",
+   "sole_access": false,
+   "x": -143347.19078468683,
+   "y": 2862626.7685632724
+  },
+  {
+   "aadt": null,
+   "depth_m": 0.49967730045318604,
+   "id": "45538",
+   "name": "HANKS RD",
+   "road_class": "",
+   "sole_access": false,
+   "x": -144502.51790892155,
+   "y": 2863381.1609319984
+  },
+  {
+   "aadt": 133,
+   "depth_m": 0.49967730045318604,
+   "id": "ND_county_roads:45160",
+   "name": "",
+   "road_class": "7",
+   "sole_access": false,
+   "x": -144508.5292471546,
+   "y": 2863381.8491105596
+  },
+  {
+   "aadt": 86,
+   "depth_m": 2.304713487625122,
+   "id": "ND_county_roads:45172",
+   "name": "",
+   "road_class": "7",
+   "sole_access": false,
+   "x": -143348.57745269622,
+   "y": 2862628.2117865332
+  }
+ ],
+ "schema": "damsafety-receptors/1",
+ "settings": {
+  "incremental": false,
+  "method": "acer_tm11",
+  "road_min_m": 0.030480000000000004,
+  "rule_depth_ft": 2.0,
+  "struct_min_m": 0.030480000000000004,
+  "unknown_aadt": "Medium",
+  "unknown_trains": "Medium",
+  "wet_m": 0.030480000000000004
+ },
+ "sim": {
+  "edge_flag": "no",
+  "height_m": 17.6784,
+  "peak_cms": null,
+  "sim_engine": "builtin",
+  "store_af": 281.8000147488998
+ },
+ "structures": []
+}

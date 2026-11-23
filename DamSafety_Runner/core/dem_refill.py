@@ -210,3 +210,66 @@ def fill_grid(grid, tif_path):
         return grid
     data[fill] = arr[fill]
     return grid.like(data)
+
+
+# --------------------------------------------------------------- interior hole fill --
+#: 3.74.0 (batch 44, DWR-2631): a marker in the workflow's refill list. model_dem fills the
+#: grid's enclosed no-data holes (fill_interior_holes) where it meets it, after the 3DEP tiles.
+HOLE_FILL = "::fill-interior-holes::"
+#: the largest enclosed hole filled, in acres; a bigger hole is left as no-data (a guess over
+#: that much ground would decide the flood, not record the terrain)
+HOLE_FILL_MAX_AC = 100.0
+HOLE_FILL_SWEEPS = 400                       # Laplace sweeps after the nearest-ground start
+_ACRE_M2 = 4046.8564224
+
+
+def interior_holes(grid, max_ac=HOLE_FILL_MAX_AC):
+    """(fillable, left) boolean masks of this grid's no-data. A no-data patch (8-connected) is
+    fillable when it does not touch the grid's border (so it is a hole inside surveyed ground,
+    not the edge of the DEM's coverage) and is at most `max_ac` acres; every other no-data cell
+    is `left`."""
+    import numpy as np
+    from scipy.ndimage import label
+    hole = ~grid.valid()
+    if not hole.any():
+        z = np.zeros(hole.shape, bool)
+        return z, z.copy()
+    lab, n = label(hole, structure=np.ones((3, 3), bool))
+    border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+    sizes = np.bincount(lab.ravel(), minlength=n + 1)
+    max_cells = max_ac * _ACRE_M2 / float(grid.dx * grid.dx)
+    ok = np.zeros(n + 1, bool)
+    for i in range(1, n + 1):
+        ok[i] = i not in border and sizes[i] <= max_cells
+    fill = ok[lab] & hole
+    return fill, hole & ~fill
+
+
+def fill_interior_holes(grid, max_ac=HOLE_FILL_MAX_AC, sweeps=HOLE_FILL_SWEEPS):
+    """The grid with its enclosed no-data holes (interior_holes) filled from the ground around
+    them: each hole cell starts at its nearest real cell's elevation, then Laplace sweeps
+    (the hole's rim held fixed) smooth it into a surface that meets the rim on every side, as
+    GDAL's FillNodata does. Real cells, border-touching no-data and holes over `max_ac` are
+    left alone. Returns (grid, cells filled)."""
+    import numpy as np
+    from scipy.ndimage import distance_transform_edt
+    fill, _left = interior_holes(grid, max_ac)
+    n = int(fill.sum())
+    if not n:
+        return grid, 0
+    valid = grid.valid()
+    _d, (ri, ci) = distance_transform_edt(~valid, return_indices=True)
+    data = np.where(valid, grid.data, grid.data[ri, ci]).astype(np.float64)
+    rows, cols = np.nonzero(fill)
+    r0, r1 = max(rows.min() - 1, 0), min(rows.max() + 2, data.shape[0])
+    c0, c1 = max(cols.min() - 1, 0), min(cols.max() + 2, data.shape[1])
+    sub, m = data[r0:r1, c0:c1], fill[r0:r1, c0:c1]
+    for _ in range(int(sweeps)):
+        p = np.pad(sub, 1, mode="edge")
+        avg = (p[:-2, 1:-1] + p[2:, 1:-1] + p[1:-1, :-2] + p[1:-1, 2:]) / 4.0
+        sub = np.where(m, avg, sub)
+    data[r0:r1, c0:c1] = sub
+    out = grid.data.copy()
+    out[fill] = data[fill]
+    return grid.like(out), n
+
