@@ -1048,7 +1048,7 @@ def sgc_engine_is_a_runner_engine_choice():
         # that drift for every entry, not just sgc.
         exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
-                   "gpu-subfv": lf.GPU_SUBFV_EXE}
+                   "gpu-subfv": lf.GPU_SUBFV_EXE, "gpu-subli": lf.GPU_SUBLI_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
             if _w == "auto":                            # 3.44.0: picked per computer, tested below
                 continue
