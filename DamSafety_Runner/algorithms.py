@@ -2910,6 +2910,12 @@ class BatchAlgorithm(_Base):
                 cache["f"] = dwr_lines.nid_lookup_for(dwr_lines.dams_source())
             return cache["f"](v) if cache["f"] else ""
         out["nid"] = nid
+
+        def record(sid):                       # 3.73.0: the DWR record's x_coord / y_coord
+            if "r" not in cache:
+                cache["r"] = dwr_lines.record_lookup_for(dwr_lines.dams_source())
+            return cache["r"](sid) if cache["r"] else None
+        out["record"] = record
         return out
 
     def _dwr_line(self, dam, st, dwr, attrs, ids, work, xy, context, dam_id, feedback):
@@ -2951,12 +2957,14 @@ class BatchAlgorithm(_Base):
                     out.append((q.x(), q.y()))
                 return out
         new, info, warn = dwr_lines.resolve(dam, xy, ids, dwr["index"], to_work, layer,
-                                            dwr["why"])
+                                            dwr["why"], record=dwr.get("record"))
         if info and info.get("used"):
             feedback.pushInfo("{}: {}".format(dam_id, info.get("text")))
             return new
         if warn:
             feedback.pushInfo("{}: {}".format(dam_id, warn))
+        if getattr(dam, "_record_point", None):           # 3.73.0: moved to the DWR record x/y
+            return new
         return None
 
     def processAlgorithm(self, parameters, context, feedback):
