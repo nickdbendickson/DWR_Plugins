@@ -7,4 +7,4 @@ The Runner records it in the run manifest (software.boann) beside its own versio
 
 Each solver module still carries its own NAME / VERSION, written as the first line of the
 lisflood.log a run leaves; those are unchanged."""
-BOANN_VERSION = "5.0.0"   # 5.0.0 (Runner 3.68.0): sub-grid FV positivity limiter (sub-grid FV results move); 4.0.0 (Runner 3.67.0): DG2 primitive edge velocities (DG2 results move)
+BOANN_VERSION = "5.2.0"   # 5.2.0 (Runner 3.80.0): the profile (--profile, stats["profile"]; no result moves; 5.1.x are held by the rain and dry-cell-skip PRs); 5.0.0 (Runner 3.68.0): sub-grid FV positivity limiter (sub-grid FV results move); 4.0.0 (Runner 3.67.0): DG2 primitive edge velocities (DG2 results move)

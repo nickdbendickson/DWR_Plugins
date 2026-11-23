@@ -41,7 +41,7 @@ name them and say so. Confirm a final hazard classification with a LISFLOOD-FP r
 | `engine.py` | ACC driver: reads the deck, runs batches of steps, writes the results. `run_par()` is the same call as `builtin_lisflood.run_par()`. |
 | `engine_fv.py` | FV driver: the same deck and result files, the HLLC scheme. `run_par()` is the same call. |
 | `cases.py` | Synthetic valley decks for the tests and the speed test. |
-| `bench.py` | The speed test (GPU, CPU build, LISFLOOD-FP if found). |
+| `bench.py` | The speed test (GPU, CPU build, LISFLOOD-FP if found), with `--profile`. |
 | `cli.py`, `boann.py`, `version.py` | The standalone command line, its launcher, and Boann's own version number. |
 
 Nothing to install on a Mac: Metal compiles the kernel source at run time, and the framework is
@@ -57,6 +57,7 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 ```
 python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
                               [--no-limiter] [--progress] [--quiet] [--stats-json stats.json]
+                              [--profile]
 python3 boann.py check        # the device a run would use here
 python3 boann.py solvers      # the solvers and the Runner engine words that pick each
 python3 boann.py version      # Boann's version (version.py) and each solver's
@@ -78,6 +79,39 @@ From inside a plugin (and the older ACC-only form):
 
 (`nd_breach_runner` is the repository's test alias for `DamSafety_Runner`; inside QGIS it is
 `DamSafety_Runner.core.metalflood`.)
+
+## Where the time goes (Runner 3.80.0, Boann 5.2.0)
+
+`--profile` on `boann.py run` and on the speed test (or `DAMSAFETY_MF_PROFILE=1` for a run from
+the plugin) reports where a run's time went. It changes no result: every result file is byte
+for byte the same with it on (`tests/test_boann_profile.py`, on the CPU build and on the GPU).
+
+```
+python3 boann.py run DECK.par --profile --stats-json stats.json
+python3 -m nd_breach_runner.core.metalflood.bench --size medium --case diagonal --profile
+```
+
+| Number | What it is | What it decides |
+|---|---|---|
+| Python encoding, s and us a step | Wall time building and committing each batch's command buffer. The GPU is idle for it. | Whether to overlap encoding with GPU work, or encode less (fewer dispatches a step). |
+| GPU's own time, us a step | `GPUEndTime - GPUStartTime` of each batch's command buffer. | The base every GPU-side change is measured against. |
+| GPU time by kernel | The first 2 steps of each batch go one kernel per command buffer (Apple GPUs sample counters at pass boundaries only). Small kernels read high: each buffer has a fixed cost. | Which kernels a fusion would be worth. |
+| The window's share of the grid | The wet bounding box plus its margin, over the grid. | |
+| Wet share of the window | Cells holding water, of the cells the kernels run. | How much any dry skip could save at best. |
+| Tiles 16 / 32 / 64 | Cells in the tiles that hold water or touch a tile that does. | What a dry-tile skip on the GPU would still run, by tile size. |
+| Row ranges | Cells in each row's column range under the CPU dry-cell skip's rule (water only: a little low). | What the CPU dry-cell skip would still run, for the solvers that do not have it. |
+
+The host's times are kept on every run (`stats["profile"]`, mode `basic`); the GPU's times and the
+wet shares only with the profile on (mode `full`), since they cost a little: the split steps add
+command buffers, and the wet look reads the window (it is skipped while it would cost more than
+2% of the run). The speed test's `--case diagonal` (a corner-to-corner valley: the window is
+mostly dry ground) and `--case compact` (a breach on a closed plain: the window is mostly water)
+are the two ends.
+
+`DAMSAFETY_MF_TG=WxH` sets the Metal threadgroup size of every kernel in place of the default
+(the execution width by up to 8 rows), for A/B speed tests. The kernels use no threadgroup
+memory, so the grids do not change; the outflow and clipped totals are summed per SIMD group
+before rounding, so the `.mass` file's totals can move by a rounding unit.
 
 ## The scheme, and how it follows LISFLOOD-FP 8.3
 

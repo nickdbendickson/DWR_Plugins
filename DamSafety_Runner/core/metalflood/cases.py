@@ -12,6 +12,15 @@ CPU-build vs Metal on Mac):
   the flood engine does not create artificial barriers after BoannGrid conditioning.
 - breach_inflow_cell: focused on the source cell and its immediate neighbours so the
   intentional DryCheck vs donor-cell difference can be isolated and regression-tested.
+
+Two more for the speed test's profile (bench.py --case, Boann 5.2.0), the two ends of how much
+of the wet window is water:
+
+- diagonal_valley_deck: a narrow valley from the north-west corner to the south-east one. The
+  wet window grows to nearly the whole grid while the water stays a thin band: the most a
+  dry-cell or dry-tile skip could save.
+- compact_deck: a breach onto a nearly flat plain with closed edges. The water spreads as a
+  blob that fills most of its window: the least a skip could save.
 """
 import os
 
@@ -201,6 +210,58 @@ def breach_inflow_cell(folder, n=21, dx=10.0, bed=100.0, peak_cms=200.0,
         for tv, qv in zip(t, q):
             f.write("{:.6f} {:.1f}\n".format(qv / dx, tv))
     return os.path.join(folder, "run.par")
+
+
+def _inflow_deck(folder, z, dx, src_rc, peak_cms, sim_s, free, fric, extra=()):
+    """run.par and its files for a bed z with one breach inflow at cell src_rc (row, column)."""
+    os.makedirs(folder, exist_ok=True)
+    ny, nx = z.shape
+    xll, yll = 500000.0, 5200000.0
+    write_asc(os.path.join(folder, "run.dem.asc"), z, xll, yll, dx)
+    lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results",
+             "sim_time {:.1f}".format(sim_s), "initial_tstep 10.0", "massint 300.0",
+             "saveint {:.1f}".format(sim_s + 10.0), "fpfric {:g}".format(fric),
+             "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
+    with open(os.path.join(folder, "run.par"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    r_src, c_src = src_rc
+    with open(os.path.join(folder, "run.bci"), "w") as f:
+        f.write("P {:.3f} {:.3f} QVAR breach\n".format(xll + (c_src + 0.5) * dx,
+                                                     yll + (ny - r_src - 0.5) * dx))
+        for e in free:
+            lo, hi = (xll, xll + nx * dx) if e in "NS" else (yll, yll + ny * dx)
+            f.write("{} {:.3f} {:.3f} FREE\n".format(e, lo, hi))
+    t = np.array([0.0, 0.25, 0.6, 1.0, 1.6, 2.2, 10.0]) * 3600.0
+    q = np.array([0.0, 0.3, 1.0, 0.55, 0.2, 0.0, 0.0]) * peak_cms
+    with open(os.path.join(folder, "run.bdy"), "w") as f:
+        f.write("test inflow\nbreach\n{} seconds\n".format(len(t)))
+        for tv, qv in zip(t, q):
+            f.write("{:.6f} {:.1f}\n".format(qv / dx, tv))
+    return os.path.join(folder, "run.par")
+
+
+def diagonal_valley_deck(folder, ny=60, nx=90, dx=20.0, peak_cms=400.0, sim_s=3 * 3600.0,
+                         bed=300.0, extra=()):
+    """A narrow valley from the north-west corner down to the south-east one, FREE edges, the
+    breach inflow at its head. The water is a thin diagonal band, so its bounding box (the wet
+    window) is mostly dry ground."""
+    yy, xx = np.mgrid[0:ny, 0:nx].astype(float)
+    u, v = xx / max(nx - 1, 1), yy / max(ny - 1, 1)
+    length = float(np.hypot(ny, nx)) * dx
+    along = 0.5 * (u + v) * length                    # 0 at the north-west corner
+    across = np.abs(v - u) * min(ny, nx) * dx / np.sqrt(2.0)
+    z = bed + 0.004 * (length - along) + 0.03 * across + 1.5 * np.tanh(across / 60.0)
+    z += 0.10 * np.sin(xx * 0.9) * np.cos(yy * 0.7)
+    return _inflow_deck(folder, z, dx, (2, 2), peak_cms, sim_s, "NSEW", 0.05, extra)
+
+
+def compact_deck(folder, ny=60, nx=90, dx=20.0, peak_cms=400.0, sim_s=3 * 3600.0, bed=300.0,
+                 extra=()):
+    """A breach at the middle of a nearly flat plain with closed edges: the water spreads as a
+    blob, so most of its window is wet."""
+    yy, xx = np.mgrid[0:ny, 0:nx].astype(float)
+    z = bed + 0.02 * np.sin(xx * 0.9) * np.cos(yy * 0.7)
+    return _inflow_deck(folder, z, dx, (ny // 2, nx // 2), peak_cms, sim_s, "", 0.05, extra)
 
 
 def read_asc(path):

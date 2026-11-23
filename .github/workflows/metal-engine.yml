@@ -13,6 +13,7 @@ on:
     paths:
       - "DamSafety_Runner/core/metalflood/**"
       - "DamSafety_Runner/tests/test_metalflood.py"
+      - "DamSafety_Runner/tests/test_boann_profile.py"
       - "DamSafety_Runner/tests/test_subgrid_kernel.py"
       - ".github/workflows/metal-engine.yml"
 
@@ -43,7 +44,13 @@ jobs:
         run: python -m nd_breach_runner.tests.test_metalflood
       - name: Sub-grid FV kernel tests (Metal and the CPU build)
         run: python -m nd_breach_runner.tests.test_subgrid_kernel
+      - name: Profile tests (profile on == off, on the GPU and the CPU build)
+        run: python -m nd_breach_runner.tests.test_boann_profile
       - name: Speed test (small valley)
         run: python -m nd_breach_runner.core.metalflood.bench --size small --out "$RUNNER_TEMP"
       - name: Speed test (medium valley, GPU only)
         run: python -m nd_breach_runner.core.metalflood.bench --size medium --no-cpu --out "$RUNNER_TEMP"
+      - name: Profile (small diagonal valley, ACC, GPU only)
+        run: python -m nd_breach_runner.core.metalflood.bench --size small --case diagonal --profile --no-cpu --out "$RUNNER_TEMP"
+      - name: Profile (small diagonal valley, FV2, GPU only)
+        run: python -m nd_breach_runner.core.metalflood.bench --size small --case diagonal --solver fv2 --profile --no-cpu --out "$RUNNER_TEMP"
