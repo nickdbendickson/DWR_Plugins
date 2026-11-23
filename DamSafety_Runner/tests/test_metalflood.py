@@ -1616,3 +1616,35 @@ def metalflood_fv2_has_no_velocity_spikes():
         assert np.abs(h[2] - h[1])[wet].mean() < 0.05, np.abs(h[2] - h[1])[wet].mean()
     finally:
         shutil.rmtree(d, True)
+
+
+@test
+def metalflood_dg2_is_insensitive_to_fma_rounding():
+    """Runner 3.67.0: DG2 reconstructed the edge/Gauss discharge and divided it by the reconstructed
+    point depth eta_point - z, a few mm on a steep bank, so the velocity swung with the last bit of
+    float32 rounding. On the Metal GPU vs the CPU build that was a ~1 cm max-depth gap (Nick's M2 Pro,
+    2026-11-23); the same cause as the FV2 fix (Runner 3.66.0). DG2 now reconstructs the velocity as a
+    primitive with the cell-mean depth as the denominator. As a cloud proxy for the GPU-vs-CPU gap
+    (Metal fuses multiply-adds, the CPU build does not), build the DG2 kernels twice - once with the
+    default -ffp-contract=off, once with FMA contraction on - and run the valley deck with each: the
+    maximum depth must not move. On 3.66.0 it moved ~1 mm; it is now bit-identical."""
+    import importlib
+    if not mfb.find_compiler():
+        raise Skip("no C++ compiler for the engine's CPU build")
+    d = _tmp()
+    saved = mfb.CPU_FLAGS
+    try:
+        runs = {}
+        for tag, flags in (("off", saved),
+                           ("fma", ("-O3", "-std=c++14", "-fno-strict-aliasing",
+                                    "-ffp-contract=fast", "-mfma"))):
+            mfb.CPU_FLAGS = flags
+            deck = valley_deck(os.path.join(d, tag), sim_s=10800.0)
+            fve.run_par(deck, backend="cpu", order=3)
+            runs[tag] = _res(os.path.join(d, tag), "max")
+        a, b = runs["off"], runs["fma"]
+        m = (a != bl.NODATA) & (b != bl.NODATA)
+        assert np.abs(a - b)[m].max() <= 1e-4, np.abs(a - b)[m].max()
+    finally:
+        mfb.CPU_FLAGS = saved
+        shutil.rmtree(d, True)
