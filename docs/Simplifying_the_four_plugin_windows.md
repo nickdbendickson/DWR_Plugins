@@ -7,6 +7,43 @@ adopted and Absaraka (DWR-2801) chosen, and photographed tab by tab. The screens
 
 This is the simplification half of what you asked for. The code audit is in `CODE-AUDIT.md`.
 
+## Status, re-measured 2026-11-23
+
+Main as of 2026-11-23 (Runner 3.50, Hazard 2.25.8, Screening 0.31), opened in real QGIS 3.34 with
+an empty profile. Counts are for each main window alone; its settings window is counted separately.
+
+| | 2026-10-13 | 2026-11-23 |
+|---|---|---|
+| Hazard window | 9 tabs, 270 controls | 3 views (Classify, Results, Review), 286 controls |
+| Runner window | 7 tabs, 285 controls, 43 launcher buttons | 2 tabs (Run, Tools), 74 controls |
+| Screening window | 7 tabs, 270 controls | 3 tabs (Run, Review, Results), 127 controls |
+| Settings grids | 3 copies, 1,057 rows | still 3 windows: Hazard 96, Runner 1,016, Screening 183 rows (1,295) |
+| Dam suite home | one per plugin, up to 3 open | one per QGIS |
+| Suite data and servers | its own 920 x 800 window | gone (left with the nd_ plugins) |
+| Processing tools | 83, all visible | the same three plugins: 78, 7 hidden, 71 visible; with PMP, Finder and Lite: 99, 92 visible |
+| Plugins menu | 58 entries in 6 menus | one "Dam safety" menu (Hazard Lite and PMP joined it on 2026-11-23) |
+
+The ten changes:
+
+| # | Change | Status |
+|---|---|---|
+| 1 | One settings editor, not three | **Open.** Three windows still edit the same file, and the Runner grid has grown to 1,016 rows (Boann engine settings). |
+| 2 | Start on YOUR values, runs out of the grid | Done (Core suite_settings, PER_RUN_KEYS) |
+| 3 | Hide the tools nobody runs by hand | Done: 7 hidden (checked in real QGIS) |
+| 4 | One Plugins menu | Done; Hazard Lite and PMP moved in 2026-11-23, and a fast check keeps it so |
+| 5 | Runner window: fewer tabs | Done: Run and Tools |
+| 6 | One Run button in Hazard | Done |
+| 7 | Download a DEM once | Done: one row per window |
+| 8 | Hazard tool launchers in a menu | Done: the gear's "Dam suite tools" |
+| 9 | Updater reads the suite folder | Done |
+| 10 | Fold Suite data and servers into the home | Done: that window no longer exists |
+
+Of the "broken" list, every item is fixed or was decided (the Screening tool defaults stay on
+LISFLOOD-FP, Nick 2026-11-09). The guide no longer names "Setup & Run", "Reports" or "Run all".
+
+The one change left is 1. It moves where every engineer edits settings, so it waits for the
+owner's go-ahead.
+
 ## What the suite asks of you today
 
 | | Count | Where |

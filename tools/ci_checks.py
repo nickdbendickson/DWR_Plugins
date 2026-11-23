@@ -291,6 +291,40 @@ def check_window_colours(problems):
                         os.path.relpath(path, ROOT), n))
 
 
+SUITE_MENU = "Dam safety"
+_MENU_RE = re.compile(r"""(?:addPluginToMenu\(\s*|^\s*MENU(?:_NAME)?\s*=\s*)(["'])([^"']*)\1""", re.M)
+
+
+def menu_problems(root=None):
+    """Every DamSafety plugin puts its entries in the one Plugins > Dam safety menu (the
+    2026-10-13 window plan, change 4: six menus became one; Hazard Lite and PMP were still in
+    menus of their own on 2026-11-23). QGIS ignores the "&" when it matches a menu name."""
+    root = root or ROOT
+    out = []
+    for plugin in sorted(os.listdir(root)):
+        folder = os.path.join(root, plugin)
+        if not plugin.startswith("DamSafety_") or not os.path.isdir(folder):
+            continue
+        for dirpath, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__")]
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, f)
+                text = _read(path)
+                for m in _MENU_RE.finditer(text):
+                    if m.group(2).replace("&", "") != SUITE_MENU:
+                        out.append("{}:{}: menu \"{}\" - use the one \"{}\" menu".format(
+                            os.path.relpath(path, root), text.count("\n", 0, m.start()) + 1,
+                            m.group(2), SUITE_MENU))
+    return out
+
+
+def check_one_menu(problems):
+    for p in menu_problems():
+        _fail(problems, p)
+
+
 def check_message_box_checks(problems):
     """2026-11-08 (docs/gui-grammar.md "Checks: CheckPanel, never a message box"): no
     QMessageBox.warning / .critical inside a run handler of a window file. The rule and its
@@ -818,6 +852,7 @@ def main():
                      ("cross-plugin identical", check_cross_plugin_identical),
                      ("window colours", check_window_colours),
                      ("message-box checks in run handlers", check_message_box_checks),
+                     ("one Plugins menu", check_one_menu),
                      ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),
