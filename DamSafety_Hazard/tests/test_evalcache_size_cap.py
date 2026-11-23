@@ -163,6 +163,26 @@ def test_corrupt_blob_is_unreadable_not_a_crash():
         assert state is None and why.startswith("unreadable"), why
 
 
+
+def test_dates_are_kept():
+    """Batch 44 (2026-11-23): every dam logged "the evaluation could not be kept on disk
+    (cannot keep a date)" - 911 record and NAIP flight dates are in the state. Dates and
+    datetimes are now kept (as ISO text) and come back as the same objects."""
+    import datetime
+    d = datetime.date(2022, 4, 8)
+    dt = datetime.datetime(2025, 7, 2, 13, 5, 9)
+    dtz = datetime.datetime(2025, 7, 2, 13, 5, 9, tzinfo=datetime.timezone.utc)
+    state = {"structs": [{"id": 1, "rec_date": d, "naip": dt}], "when": (dtz, None),
+             "dates": [d, d]}
+    with _Tmp():
+        path, size = EC.save("out", KEY, state, "when", VER)
+        assert path, size
+        got, _, why = EC.load("out", KEY, VER)
+        assert why is None, why
+        assert got == state, got
+        assert type(got["structs"][0]["rec_date"]) is datetime.date
+        assert type(got["structs"][0]["naip"]) is datetime.datetime
+
 if __name__ == "__main__":
     n = 0
     for name, fn in sorted(globals().items()):

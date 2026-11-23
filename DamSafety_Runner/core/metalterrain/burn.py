@@ -195,7 +195,7 @@ def freeze_refusals(records):
 def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="auto",
                         filled=None, labels=None, items=None, accum=None, freeze_mask=None,
                         refuse_freeze="record", log=None, classes=DEFAULT_CLASSES,
-                        max_cut_m=DEFAULT_MAX_CUT_M, protect_mask=None):
+                        max_cut_m=DEFAULT_MAX_CUT_M, protect_mask=None, conn=4):
     """Carve a notch through the barrier of every filled depression a real channel drains into (at
     least `min_accum_cells` of upstream area), so the channel reconnects. Returns (conditioned_dem,
     records). Each carved record: id, pour (r,c), exit (r,c), barrier_cells, accum_cells,
@@ -227,6 +227,12 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
       protect_mask : bool array, True = keep out (building footprints, town limits; grow it with
                      grow_mask for a margin). A carve whose path lowers a protected cell is
                      refused whole and recorded as {"refused": "protected", "protected_cells": n}.
+    `conn` (Runner 3.58.0) is the connectivity of the fill, census and flow it computes itself
+    (ones passed in are used as given): 4 by default, the way the carve path, D4 flow and the ACC
+    flood engine move water, so one fill serves all three. Before 3.58.0 it filled 8-way, flow
+    then had to fill a second time 4-way, and a depression that only drained across a corner
+    was not in the census at all.
+
     Limit refusals leave the ground as it was and are FLAGGED in the delta-log for review
     (delta_log.log_reconnect); limit_refusals(records) lists them. They do not stop an export the
     way a freeze refusal does: not carving is the conservative side."""
@@ -235,11 +241,11 @@ def reconnect_crossings(dem, min_accum_cells=20, cell_m=1.0, eps=1e-5, backend="
     a = np.asarray(dem, dtype=np.float64)
     valid = np.isfinite(a) & (a != NODATA)
     if filled is None:
-        filled, _ = F.fill_dem(a, eps=eps, backend=backend, log=log)
+        filled, _ = F.fill_dem(a, eps=eps, backend=backend, log=log, conn=conn)
     if labels is None or items is None:
         labels, items = A.depression_census(a, filled, cell_m=cell_m)
     if accum is None:
-        _dirn, accum, _ = FL.flow_accum(a, filled=filled, backend=backend)
+        _dirn, accum, _ = FL.flow_accum(a, filled=filled, backend=backend, conn=4, log=log)
     out = a.copy()
     records = []
     # Each depression's cells and peak drainage area from one pass over the grid (Runner 3.51.0),
