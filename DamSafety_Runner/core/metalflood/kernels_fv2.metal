@@ -8,9 +8,13 @@
 // Numerics (differences from FV1 noted):
 //   - conserved cell variables U = (h, hu, hv); bed z (relative to the lowest cell, float32 care);
 //   - MUSCL reconstruction (2nd order in space): per cell, minmod-limited slopes of the free
-//     surface eta = z + h and of the discharges qx = hu, qy = hv, and of the bed z, in x and y.
-//     At a face the + and - states are the cell-centre values extrapolated a half cell with the
-//     limited slope. Reconstructing eta (not h) is what keeps a lake at rest at 2nd order; the
+//     surface eta = z + h and of the VELOCITIES u = qx / h, v = qy / h (Runner 3.66.0; before it the
+//     discharges qx, qy were reconstructed and divided by the reconstructed depth eta_face - z,
+//     which on a steep bank can be a few mm under a full cell's discharge: face velocities of
+//     20-30 m/s, momentum spikes in 0.5-2 m of water, and answers that moved by 15 cm with the
+//     last bit of rounding), in x and y. At a face the + and - states are the cell-centre values
+//     extrapolated a half cell with the limited slope, so a face velocity lies between the cell's
+//     and its neighbours' velocities. Reconstructing eta (not h) is what keeps a lake at rest at 2nd order; the
 //     minmod limiter is TVD, so no new extrema and no spurious oscillation at the front;
 //   - Audusse et al. (2004) hydrostatic reconstruction at each face on the *reconstructed* states:
 //     face bed z_face = max(z_L+, z_R-); h*_L = max(0, eta_L+ - z_face), h*_R = max(0, eta_R- -
@@ -195,14 +199,31 @@ inline float mf_sle_d(device const float* z, uint i, uint lo, uint hi, float hc,
     return mf_minmod(dl, dh);
 }
 
-struct Slp { float e, u, v; };   // minmod slopes of (eta, hu, hv) in one direction
+// minmod-limited slope of the VELOCITY q / h across cell i (primitive variable): the face velocity
+// is then bounded by the cell's and its neighbours' velocities (TVD in u), however thin the
+// reconstructed depth at the face.
+inline float mf_slv(device const float* q, device const float* h, uint i, uint lo, uint hi,
+                    bool hlo, bool hhi) {
+    float c = mf_vel(q[i], h[i]);
+    float dl = hlo ? (c - mf_vel(q[lo], h[lo])) : 0.0f;
+    float dh = hhi ? (mf_vel(q[hi], h[hi]) - c) : 0.0f;
+    return mf_minmod(dl, dh);
+}
+
+struct Slp { float e, u, v; };
+
+// the reconstructed face velocity: the cell's velocity plus half its limited slope, or 0 where the
+// reconstructed depth at the face (eta_face - bed) leaves no water to carry it.
+inline float mf_fvel(float q, float hc, float half_slope, float hface) {
+    return (hface > MF_HVEL) ? mf_vel(q, hc) + half_slope : 0.0f;
+}   // minmod slopes of (eta, hu, hv) in one direction
 
 inline Slp mf_slopes(device const float* z, device const float* h, device const float* hu,
                      device const float* hv, uint i, uint lo, uint hi, bool hlo, bool hhi) {
     Slp s;
     s.e = mf_sle(z, h, i, lo, hi, hlo, hhi);
-    s.u = mf_sl(hu, i, lo, hi, hlo, hhi);
-    s.v = mf_sl(hv, i, lo, hi, hlo, hhi);
+    s.u = mf_slv(hu, h, i, lo, hi, hlo, hhi);
+    s.v = mf_slv(hv, h, i, lo, hi, hlo, hhi);
     return s;
 }
 
@@ -403,10 +424,10 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                 float zf = fmax(z[l], z[rr]);     // first-order face bed (eta-slope is 0 at rest)
                 float hLs = fmax(0.0f, etaL - zf);
                 float hRs = fmax(0.0f, etaR - zf);
-                float uL = mf_vel(hu[l] + 0.5f * sL.u, fmax(0.0f, etaL - z[l]));
-                float vL = mf_vel(hv[l] + 0.5f * sL.v, fmax(0.0f, etaL - z[l]));
-                float uR = mf_vel(hu[rr] - 0.5f * sR.u, fmax(0.0f, etaR - z[rr]));
-                float vR = mf_vel(hv[rr] - 0.5f * sR.v, fmax(0.0f, etaR - z[rr]));
+                float uL = mf_fvel(hu[l], h[l], 0.5f * sL.u, etaL - z[l]);
+                float vL = mf_fvel(hv[l], h[l], 0.5f * sL.v, etaL - z[l]);
+                float uR = mf_fvel(hu[rr], h[rr], -0.5f * sR.u, etaR - z[rr]);
+                float vR = mf_fvel(hv[rr], h[rr], -0.5f * sR.v, etaR - z[rr]);
                 fl = mf_hllc(hLs, uL, vL, hRs, uR, vR, g);
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
@@ -469,10 +490,10 @@ kernel void k_faces_fv2(MF_ARGS_FV2) {
                 float zf = fmax(z[u], z[d]);
                 float hUs = fmax(0.0f, etaU - zf);
                 float hDs = fmax(0.0f, etaD - zf);
-                float nU = mf_vel(hv[u] + 0.5f * sU.v, fmax(0.0f, etaU - z[u]));
-                float tU = mf_vel(hu[u] + 0.5f * sU.u, fmax(0.0f, etaU - z[u]));
-                float nD = mf_vel(hv[d] - 0.5f * sD.v, fmax(0.0f, etaD - z[d]));
-                float tD = mf_vel(hu[d] - 0.5f * sD.u, fmax(0.0f, etaD - z[d]));
+                float nU = mf_fvel(hv[u], h[u], 0.5f * sU.v, etaU - z[u]);
+                float tU = mf_fvel(hu[u], h[u], 0.5f * sU.u, etaU - z[u]);
+                float nD = mf_fvel(hv[d], h[d], -0.5f * sD.v, etaD - z[d]);
+                float tD = mf_fvel(hu[d], h[d], -0.5f * sD.u, etaD - z[d]);
                 fl = mf_hllc(hUs, nU, tU, hDs, nD, tD, g);
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side

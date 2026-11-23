@@ -843,6 +843,34 @@ def write_summary(path, rows):
     os.replace(tmp, path)
 
 
+def merge_batch_row(path, row):
+    """Put one dam's Runner summary row into a batch summary CSV (Batch_Breach_Runs.csv):
+    the dam's earlier row is replaced, every other dam's row is kept, a column the file
+    does not have yet is added at the end. Written through a temp file. 3.58.1 (batch 44,
+    2026-11-23): the chain ran the Runner one dam at a time into the batch folder, so each
+    dam overwrote the file and only the last dam was left in it."""
+    if not row or not norm_id(row.get("Dam")):
+        return path
+    fields, rows = list(row.keys()), []
+    if os.path.isfile(path):
+        with open(path, newline="", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            old = list(rd.fieldnames or [])
+            rows = [r for r in rd if norm_id(r.get("Dam")) != norm_id(row.get("Dam"))]
+        fields = old + [k for k in row.keys() if k not in old]
+    rows.append(row)
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore", restval="")
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(tmp, path)
+    return path
+
+
+RUNNER_ROW_NAME = "runner_summary.csv"          # 3.58.1: the Runner's row for this dam, in _chain
+
+
 def settings_used(dam, versions, files, settings_path=""):
     """The per-dam record of what the chain used."""
     vals = {"{}.{}.{}".format(*k): v for k, v in sorted(dam.values.items())}
