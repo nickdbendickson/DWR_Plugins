@@ -142,17 +142,39 @@ def storage_check(dem_m3, inventory_m3, tol=0.5):
 
 
 _SMOKE = {}
+_CORE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+
+
+def is_inprocess_engine(exe):
+    """True when `exe` is one of this plugin's in-process engines - a .py file under this core
+    folder (the built-in engine, or Boann's engine*.py), as core/lisflood.py names them. Needs no
+    import of lisflood.py, so the standalone tools/lisflood_smoke.py can load this file alone."""
+    exe = str(exe or "").strip()
+    if not exe.lower().endswith(".py"):
+        return False
+    try:
+        real = os.path.realpath(os.path.abspath(exe))
+        return os.path.commonpath([real, _CORE]) == _CORE
+    except ValueError:                     # another drive on Windows
+        return False
 
 
 def lisflood_smoke(exe, work=None):
     """Run LISFLOOD-FP for one second on a 5 by 5 grid. Proves the binary starts.
 
     A successful check is remembered for this process (same file, same mtime).
-    Set ND_DAM_PRE_RUN_SMOKE=0 to skip it. The built-in engine is never smoked.
+    Set ND_DAM_PRE_RUN_SMOKE=0 to skip it. The built-in engine and Boann are never smoked: they
+    run inside this process from a .py file in this plugin (core/builtin_lisflood.py,
+    core/metalflood/engine*.py), so there is no program to start (Runner 3.51.0: Boann's
+    engine.py was started as a program and the run stopped with PermissionError).
     """
     if str(os.environ.get("ND_DAM_PRE_RUN_SMOKE", "1")).strip().lower() in ("0", "false", "no", "off"):
         return check("ok", "LISFLOOD 1-second check", "skipped (ND_DAM_PRE_RUN_SMOKE=0)")
     exe = str(exe or "").strip()
+    if is_inprocess_engine(exe):
+        return check("ok", "LISFLOOD 1-second check",
+                     "skipped: {} runs inside this process (no program to start)".format(
+                         os.path.basename(exe)))
     if not exe or not os.path.isfile(exe):
         return check("fail", "LISFLOOD 1-second check", "executable not found: {}".format(exe or "(none)"),
                      "Give the real lisflood file, not a symlink the file picker will reject.")
