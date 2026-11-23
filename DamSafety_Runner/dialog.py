@@ -392,19 +392,9 @@ class NDBreachRunnerDialog(QDialog):
         lay.addWidget(self.body_scroll, 1)
         lay.addLayout(run_row)                     # the action bar stays in view under the tabs
 
-        self.settings_dialog = QDialog(self)
-        self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))
-        self.settings_dialog.setModal(False)
-        self.settings_dialog.resize(900, 620)
-        sd = QVBoxLayout()
-        sd.addWidget(self._build_settings_widget(), 1)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        done = QPushButton("Close")
-        done.clicked.connect(lambda _c=False: self.settings_dialog.close())
-        row.addWidget(done)
-        sd.addLayout(row)
-        self.settings_dialog.setLayout(sd)
+        # Core 1.6.0: the settings page is the Runner's tab of the one suite settings window
+        # (DamSafety_Core/ui/suite_settings_window); it was this window's own Settings window
+        self.settings_page = self._build_settings_widget()
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
@@ -504,13 +494,16 @@ class NDBreachRunnerDialog(QDialog):
             parts.append("elevations " + str(dm))
         self.adv_section.set_title("Advanced  ·  " + " · ".join(parts))
 
+    def settings_section(self):
+        """The Runner's tab of the one suite settings window (Core 1.6.0)."""
+        return {"page": self.settings_page, "owner": self, "grid": self.grid,
+                "file_edit": self.settings_file_edit, "apply_file": self._settings_file_edited,
+                "hide": list(getattr(self, "_settings_file_row", []))}
+
     def _open_settings(self):
-        self.settings_dialog.show()
-        try:
-            self.settings_dialog.raise_()
-            self.settings_dialog.activateWindow()
-        except Exception:                                        # noqa
-            pass
+        """The one suite settings window, on the Runner's tab (Core 1.6.0)."""
+        from . import suite_settings_window as SW
+        return SW.open_settings("ndbreach", self.settings_section, parent=self.parent() or self)
 
     def _update_gear(self):
         try:
@@ -732,7 +725,8 @@ class NDBreachRunnerDialog(QDialog):
         w = QWidget()
         lay = QVBoxLayout()
         row = QHBoxLayout()
-        row.addWidget(QLabel("Settings file:"))
+        file_label = QLabel("Settings file:")
+        row.addWidget(file_label)
         self.settings_file_edit = QLineEdit()
         self.settings_file_edit.setToolTip(
             "The suite settings workbook (damsuite_settings.xlsx, or .csv) shared by the three plugins: "
@@ -748,6 +742,7 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(b)
         row.addWidget(n)
         lay.addLayout(row)
+        self._settings_file_row = [file_label, self.settings_file_edit, b, n]   # the suite window has one
         try:
             from . import provider as prov
             catalog = ST.full_catalog(prov.ALGORITHMS, pl.PLUGIN_KEY, pl.settings_group, pl.TAB_ORDER)

@@ -92,6 +92,12 @@ class NDdamHazardHelperPlugin(QObject):
             suite_home.add_home_action(self, self.iface)
         except Exception:                                        # noqa - never block the plugin
             pass
+        try:                              # Core 1.6.0: one suite settings window, a tab per plugin
+            from . import suite_settings_window as SW
+            SW.register_section("ndhazard", self.settings_section)
+            SW.add_settings_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
 
         # Optional: Add to a custom toolbar (uncomment if you want a dedicated toolbar)
         # self.iface.addToolBarIcon(self.action)
@@ -151,14 +157,19 @@ class NDdamHazardHelperPlugin(QObject):
         except Exception:
             return False
 
+    def settings_section(self):
+        """Hazard's tab of the one suite settings window: the page of this plugin's window,
+        built hidden when the window is not open yet (Core 1.6.0)."""
+        if not self._dialog_alive():
+            from .dialog import NDDamHazardDialog
+            self.dialog = NDDamHazardDialog(parent=self.iface.mainWindow())
+        return self.dialog.settings_section()
+
     def run_settings(self, *args):
-        """Open the window and its Suite settings window (v2.13 a tab; 2.18.34 the gear
-        menu's non-modal window)."""
-        self.run_plugin()
-        try:
-            self.dialog._open_suite_settings()
-        except Exception:                                        # noqa
-            pass
+        """The one suite settings window on Hazard's tab (Core 1.6.0; was this plugin's own
+        Suite settings window)."""
+        from . import suite_settings_window as SW
+        return SW.open_settings("ndhazard", self.settings_section, parent=self.iface.mainWindow())
 
     def run_home(self, *args):
         """v2.12: the Dam suite home window (suite_home.py, the same in all three plugins)."""
@@ -191,6 +202,11 @@ class NDdamHazardHelperPlugin(QObject):
         try:
             self.iface.initializationCompleted.disconnect(self.check_versions)
         except Exception:
+            pass
+        try:                              # Core 1.6.0: its tab of the one suite settings window
+            from . import suite_settings_window as SW
+            SW.unregister_section("ndhazard")
+        except Exception:                                        # noqa
             pass
         try:                                                    # v2.13: the shared suite menu
             from . import suite_home

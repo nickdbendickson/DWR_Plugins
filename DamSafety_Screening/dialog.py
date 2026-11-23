@@ -406,22 +406,17 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         return w
 
     def _build_settings_window(self):
-        self.settings_window = QDialog(self)
-        self.settings_window.setWindowTitle(TITLE + " \u2014 Settings")
-        v = QVBoxLayout()
-        v.addWidget(self.settings_page)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        done = QPushButton("Close")
-        done.clicked.connect(self.settings_window.close)
-        row.addWidget(done)
-        v.addLayout(row)
-        self.settings_window.setLayout(v)
+        """Core 1.6.0: the settings page (the grid with Run options) is Screening's tab of the one
+        suite settings window (DamSafety_Core/ui/suite_settings_window); it was this window's own
+        Settings window. The Run options page is a long form: its combos shrink to the column
+        (sized to its longest item, 802 px, the page scrolled sideways and hid Browse)."""
         try:
-            # the Run options tab is a long form: it scrolls, so the window fits a 1080p screen
-            # (unscrolled it asked for 1147 px and put Save and Close below the screen)
-            # a combo sized to its longest item (802 px) made the page scroll sideways and hid
-            # the Browse buttons: combos shrink to the column and show the full text when open
+            # not a hidden child of this window: the suite window adopts it (its tables were
+            # measured as this window's, and a hidden child sat at this window's top left)
+            self.settings_page.setParent(None)
+        except Exception:                                        # noqa
+            pass
+        try:
             page = self.grid.tabs.widget(0)
             _adj = getattr(QComboBox, "SizeAdjustPolicy", QComboBox)
             for combo in page.findChildren(QComboBox):
@@ -429,9 +424,15 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
                 combo.setMinimumContentsLength(24)
                 combo.setMinimumWidth(200)      # Qt5 keeps the old minimum hint; this overrides it
             wrap_tabs(self.grid.tabs)
-            fit_window(self.settings_window, prefer=(1140, 720))   # Run options rows are wide
         except Exception:                                        # noqa
             pass
+
+    def settings_section(self):
+        """Screening's tab of the one suite settings window (Core 1.6.0). Its settings-file box
+        stays on this window's Run tab, beside the presets."""
+        return {"page": self.settings_page, "owner": self, "grid": self.grid,
+                "file_edit": self.settings_file_edit, "apply_file": self._settings_file_edited,
+                "hide": [], "on_show": self._update_settings_badge}
 
     def settings_changed_count(self):
         try:
@@ -1648,10 +1649,10 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         """Open the Settings window (the gear; also the suite menu's 'Suite settings...')."""
         try:
             self._update_settings_badge()
-            self.settings_window.show()
-            self.settings_window.raise_()
         except Exception:                                        # noqa
             pass
+        from . import suite_settings_window as SW
+        return SW.open_settings("nddam", self.settings_section, parent=self.parent() or self)
 
     def closeEvent(self, event):
         self._save_state()

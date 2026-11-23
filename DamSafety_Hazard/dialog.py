@@ -353,28 +353,25 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         return self.gear_btn
 
     def _build_settings_dialog(self):
-        """The suite settings grid in its own non-modal window (was a tab). Built once,
-        hidden; a grid that cannot be built never stops the window (v2.13 guard)."""
-        self.suite_settings_dialog = None
+        """The suite settings page: Hazard's tab of the one suite settings window (Core 1.6.0;
+        was this window's own "Suite settings" window, and before that a tab). Built once, hidden;
+        a grid that cannot be built never stops the window (v2.13 guard)."""
+        self.suite_settings_page = None
         try:
-            page = self._build_suite_settings_tab()
+            self.suite_settings_page = self._build_suite_settings_tab()
         except Exception as e:                                   # noqa - the grid must never stop the window
-            log_message("Suite settings window not built: {}".format(e))
+            log_message("Suite settings page not built: {}".format(e))
             self.suite_settings_error = str(e) or repr(e)
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("{} \u2014 Suite settings".format(PLUGIN_NAME))
-        dlg.setModal(False)
-        v = QVBoxLayout(dlg)
-        v.addWidget(page, 1)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        done = QPushButton("Close")
-        done.clicked.connect(dlg.close)
-        row.addWidget(done)
-        v.addLayout(row)
-        dlg.resize(940, 640)
-        self.suite_settings_dialog = dlg
+
+    def settings_section(self):
+        """Hazard's tab of the one suite settings window (DamSafety_Core/ui/suite_settings_window)."""
+        page = getattr(self, "suite_settings_page", None)
+        if page is None:
+            raise RuntimeError(getattr(self, "suite_settings_error", "") or "the grid was not built")
+        return {"page": page, "owner": self, "grid": self.suite_grid,
+                "file_edit": self.suite_settings_file_edit,
+                "apply_file": self._suite_settings_file_edited,
+                "hide": getattr(self, "_suite_file_row_widgets", [])}
 
     def _build_readme_dialog(self):
         """The README with the self-test and data-source buttons (was the Readme tab).
@@ -420,13 +417,13 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             pass
 
     def _open_suite_settings(self):
-        dlg = getattr(self, "suite_settings_dialog", None)
-        if dlg is None:
+        """The one suite settings window, on Hazard's tab (Core 1.6.0)."""
+        if getattr(self, "suite_settings_page", None) is None:
             QMessageBox.warning(self, "Suite settings", "The suite settings grid could not be "
                                 "built: {}".format(getattr(self, "suite_settings_error", "?")))
             return None
-        self._raise(dlg)
-        return dlg
+        from . import suite_settings_window as SW
+        return SW.open_settings("ndhazard", self.settings_section, parent=self.parent() or self)
 
     def _open_readme(self):
         self._raise(self.readme_dialog)

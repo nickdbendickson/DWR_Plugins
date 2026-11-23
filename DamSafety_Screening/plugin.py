@@ -116,14 +116,27 @@ class NDDamScreeningPlugin:
             suite_home.add_home_action(self, self.iface)
         except Exception as e:                                   # noqa
             self._log_failure("Suite menu not available: {}".format(e))
+        try:                              # Core 1.6.0: one suite settings window, a tab per plugin
+            from . import suite_settings_window as SW
+            SW.register_section("nddam", self.settings_section)
+            SW.add_settings_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
+
+    def settings_section(self):
+        """Screening's tab of the one suite settings window: the page of this plugin's window
+        (its grid and Run options), built hidden when the window is not open yet (Core 1.6.0)."""
+        if not self._dialog_alive():
+            from .dialog import NDDamScreeningDialog
+            parent = self.iface.mainWindow() if self.iface is not None else None
+            self.dialog = NDDamScreeningDialog(parent=parent, iface=self.iface)
+        return self.dialog.settings_section()
 
     def run_settings(self, *args):
-        """Open the window on its Settings tab (the suite settings grid)."""
-        self.run_plugin()
-        try:
-            self.dialog.show_settings()
-        except Exception:                                        # noqa
-            pass
+        """The one suite settings window on Screening's tab (Core 1.6.0; was its own window)."""
+        from . import suite_settings_window as SW
+        parent = self.iface.mainWindow() if self.iface is not None else None
+        return SW.open_settings("nddam", self.settings_section, parent=parent)
 
     def _log_failure(self, text):
         try:
@@ -230,6 +243,11 @@ class NDDamScreeningPlugin:
             except Exception:
                 pass
             self.home_dialog = None
+        try:                              # Core 1.6.0: its tab of the one suite settings window
+            from . import suite_settings_window as SW
+            SW.unregister_section("nddam")
+        except Exception:                                        # noqa
+            pass
         try:
             from . import suite_home
             suite_home.remove_suite_actions(self.iface, self.suite_actions)

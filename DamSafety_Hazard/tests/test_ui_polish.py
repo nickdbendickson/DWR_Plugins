@@ -175,7 +175,7 @@ def test_one_ellipsis_character_everywhere_in_the_window():
     d = _make()
     try:
         bad = []
-        for host in (d, d.readme_dialog, d.suite_settings_dialog):
+        for host in (d, d.readme_dialog, d.suite_settings_page):
             if host is None:
                 continue
             bad += [(k, t) for k, t in _texts(host) if "..." in (t or "")]

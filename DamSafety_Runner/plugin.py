@@ -88,6 +88,12 @@ class NDBreachRunnerPlugin:
             suite_home.add_home_action(self, self.iface)
         except Exception:                                        # noqa - never block the plugin
             pass
+        try:                              # Core 1.6.0: one suite settings window, a tab per plugin
+            from . import suite_settings_window as SW
+            SW.register_section("ndbreach", self.settings_section)
+            SW.add_settings_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
 
 
     def show_results_dock(self, folder=None, *args):
@@ -102,13 +108,19 @@ class NDBreachRunnerPlugin:
         self.results_dock.raise_()
 
 
+    def settings_section(self):
+        """The Runner's tab of the one suite settings window: the page of this plugin's window,
+        built hidden when the window is not open yet (Core 1.6.0)."""
+        if not self._dialog_alive():
+            from .dialog import NDBreachRunnerDialog
+            self.dialog = NDBreachRunnerDialog(parent=self.iface.mainWindow(), iface=self.iface)
+            self.dialog.open_results = self.show_results_dock
+        return self.dialog.settings_section()
+
     def run_settings(self, *args):
-        """Open the window and its Settings window (the suite settings grid)."""
-        self.run_plugin()
-        try:
-            self.dialog._open_settings()
-        except Exception:                                        # noqa
-            pass
+        """The one suite settings window on the Runner's tab (Core 1.6.0; was its own window)."""
+        from . import suite_settings_window as SW
+        return SW.open_settings("ndbreach", self.settings_section, parent=self.iface.mainWindow())
 
     def _schedule_version_check(self):
         """After QGIS has loaded every plugin (the event loop runs the timer), not now: ND
@@ -195,6 +207,11 @@ class NDBreachRunnerPlugin:
         for a in self.actions:
             self.iface.removePluginMenu(MENU, a)
         self.actions = []
+        try:                              # Core 1.6.0: its tab of the one suite settings window
+            from . import suite_settings_window as SW
+            SW.unregister_section("ndbreach")
+        except Exception:                                        # noqa
+            pass
         try:
             from . import suite_home
             suite_home.remove_suite_actions(self.iface, self.suite_actions)
