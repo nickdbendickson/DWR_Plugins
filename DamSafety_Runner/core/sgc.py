@@ -242,7 +242,8 @@ def build(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_MIN_AREA_
 def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_MIN_AREA_KM2,
                    curve=DEFAULT_CURVE, channel_n=DEFAULT_CHANNEL_N, start="auto",
                    flat_water=None, freeze_mask=None, backend="cpu", delta_log=None,
-                   min_accum_cells=20):
+                   min_accum_cells=20, protect_mask=None, crossing_mask=None,
+                   classes=None, max_carve_m=None):
     """SGC rasters from the BoannGrid conditioned network, not from raw-DEM D8 alone.
 
     Crossings are reconnected (burn.reconnect_crossings) unless a frozen embankment cell lies
@@ -251,6 +252,11 @@ def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_
     D8 stays available on flow.flow_accum(conn=8) for diagnostics only. Bank and bed are the
     conditioned DEM (the notch) minus the Bieger depth, so the channel honors the culvert
     instead of sitting on the road crest.
+
+    Runner 3.58.0: the reconnect carves crossing-class depressions only, never deeper than 5 m,
+    and never through `protect_mask` (buildings / towns); `crossing_mask` (road / rail cells)
+    limits it to real road / rail crossings. `classes="all"` and `max_carve_m="none"` restore the
+    3.51.0-3.57 sweep.
 
     Opt-in. build() is unchanged, so a study that has not asked for conditioning keeps the
     SGC result already compared to Lake Delhi. Pass `delta_log` to record the carve and any
@@ -265,9 +271,16 @@ def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_
     z0 = np.asarray(dem.data, dtype=np.float64)
     valid = np.isfinite(z0) & (z0 != dem.nodata)
     z = np.where(valid, z0, np.nan)
+    # Runner 3.58.0: the reconnect guards (crossings only, 5 m cap, protect / road-rail masks);
+    # classes / max_carve_m None here mean burn's defaults.
+    kw = {}
+    if classes is not None:
+        kw["classes"] = None if classes == "all" else classes
+    if max_carve_m is not None:
+        kw["max_carve_m"] = None if max_carve_m == "none" else max_carve_m
     cond, records = _burn.reconnect_crossings(
         z, min_accum_cells=min_accum_cells, cell_m=float(dem.dx), backend=backend,
-        freeze_mask=freeze_mask)
+        freeze_mask=freeze_mask, protect_mask=protect_mask, crossing_mask=crossing_mask, **kw)
     refused = _burn.freeze_refusals(records)
     if delta_log is not None:
         _dl.log_reconnect(delta_log, records, cell_m=float(dem.dx))
@@ -284,7 +297,8 @@ def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_
                      "source": "boanngrid-d4",
                      "conn": 4,
                      "freeze_refusals": len(refused),
-                     "crossings_carved": int(sum(1 for r in records if r.get("refused") != "freeze")),
+                     "crossings_carved": len(_burn.carved(records)),
+                     "carves_refused": _burn.refusals_by_reason(records),
                      "flow_converged": bool(finfo.get("converged")),
                  })
 

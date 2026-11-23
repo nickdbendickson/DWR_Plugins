@@ -121,8 +121,179 @@ def _topo_accum(direction, valid, conn):
     return acc, levels, drained == int(ok.sum())
 
 
+def _neighbours(idx, nx, ny, dr, dc):
+    """(target flat index or -1 when off the grid) of the cells `idx` moved by (dr, dc)."""
+    r, c = np.divmod(idx, nx)
+    r2, c2 = r + dr, c + dc
+    inb = (r2 >= 0) & (r2 < ny) & (c2 >= 0) & (c2 < nx)
+    t = np.full(idx.size, -1, dtype=np.int64)
+    t[inb] = r2[inb] * nx + c2[inb]
+    return t
+
+
+def _down(d, ok, nx, ny, conn):
+    down = np.full(d.size, -1, dtype=np.int64)
+    for code, (dr, dc) in drc(conn).items():
+        idx = np.nonzero(ok & (d == code))[0]
+        if idx.size:
+            down[idx] = _neighbours(idx, nx, ny, dr, dc)
+    bad = down >= 0
+    bad[bad] = ~ok[down[bad]]
+    down[bad] = -1
+    return down
+
+
+def _ranges(starts, stops):
+    """Concatenated arange(starts[k], stops[k]) for all k (vectorised)."""
+    lens = stops - starts
+    keep = lens > 0
+    starts, lens = starts[keep], lens[keep]
+    if not lens.size:
+        return np.zeros(0, dtype=np.int64)
+    off = np.repeat(np.cumsum(lens) - lens, lens)
+    return np.repeat(starts, lens) + (np.arange(int(lens.sum()), dtype=np.int64) - off)
+
+
+def dead_ends(direction, valid, conn=4):
+    """Bool grid of the valid cells with no downstream neighbour (direction NONE) that are NOT a
+    domain outlet. An outlet is a NONE cell on the grid edge or next to NoData (its water leaves
+    the model); any other NONE cell is a dead end, where a flow path stops inside the grid."""
+    direction = np.asarray(direction)
+    ny, nx = direction.shape
+    none_c = none_code(conn)
+    ok = np.asarray(valid, dtype=bool)
+    out = np.zeros_like(ok)
+    pad = np.pad(ok, 1, constant_values=False)
+    for dr, dc in drc(conn).values():
+        out |= ~pad[1 + dr:1 + dr + ny, 1 + dc:1 + dc + nx]
+    return ok & (direction == none_c) & ~out
+
+
+def resolve_dead_ends(direction, valid, w, conn=4):
+    """Give every dead end (see dead_ends) a downstream neighbour so each flow path reaches a
+    domain outlet. Returns (direction, info). Runner 3.58.0.
+
+    Why: the strictly-lower rule gives NONE to a cell with no lower D4 neighbour. On the filled
+    surface that happens on level flats (the float32 fill can lose its 1e-5 m drainage ramp) and,
+    for D4, wherever the 8-neighbour fill let a cell drain only diagonally. On Absaraka (DWR-2801, 30 m, 2001 x 2001) that left 180,730 dead
+    ends and a largest drainage area of 1,565 cells, so the "a channel drains here" test of
+    reconnect_crossings ran on a broken network.
+
+    How (only dead ends change; every cell that already had a downstream neighbour keeps it):
+      1. A breadth-first sweep outward from the cells that already drain to an outlet. A dead end
+         next to a draining cell points at its LOWEST draining neighbour (ties in the fixed order
+         N, E, S, W, then NE, SE, SW, NW for D8). On a filled flat that is a level neighbour, so a
+         flat drains to its own spill point along the shortest level path. The other common dead
+         end is a D4 one on the D8 fill (fill.py relaxes over 8 neighbours): a cell whose only
+         lower neighbour is diagonal; it steps over the lowest draining side neighbour, a breach of
+         at most that one cell. Level by level and vectorised, like the Kahn accumulation.
+      2. Anything still undrained (a true pit on a surface that was not filled) is drained by a
+         priority flood from the drained cells: each such cell points at the neighbour it was
+         reached from, lowest spill first. Those cells did not reach an outlet before, so no
+         continuous path changes.
+    Every new direction points at a cell that already drained, so the network stays acyclic."""
+    direction = np.array(direction, dtype=np.int16, copy=True)
+    ny, nx = direction.shape
+    n = ny * nx
+    none_c = none_code(conn)
+    ok = np.asarray(valid, dtype=bool).ravel()
+    wf = np.asarray(w, dtype=np.float64).ravel()
+    d = direction.ravel()
+    dead = dead_ends(direction, valid, conn).ravel()
+    info = {"dead_ends": int(dead.sum()), "flat_routed": 0, "pit_routed": 0, "bfs_levels": 0}
+    if not dead.any():
+        info["dead_ends_after"] = 0
+        return direction, info
+    down = _down(d, ok, nx, ny, conn)
+    # terminal of every cell (pointer jumping): itself for an outlet / dead end
+    term = np.where(down >= 0, down, np.arange(n, dtype=np.int64))
+    while True:
+        nxt = term[term]
+        if np.array_equal(nxt, term):
+            break
+        term = nxt
+    resolved = ok & (d == none_c) & ~dead          # domain outlets
+    # cells grouped by terminal, so "these terminals just resolved" -> "these cells now drain"
+    order = np.argsort(term, kind="stable")
+    sorted_term = term[order]
+    first = np.searchsorted(sorted_term, np.arange(n + 1, dtype=np.int64))
+    codes = list(drc(conn).items())
+
+    def cells_of(terms):
+        return order[_ranges(first[terms], first[terms + 1])]
+
+    drained = np.zeros(n, dtype=bool)
+    newly = np.nonzero(resolved)[0]
+    while newly.size:
+        cells = cells_of(newly)
+        cells = cells[ok[cells]]
+        drained[cells] = True
+        # dead ends next to a newly drained cell are this level's candidates
+        cand = []
+        for _code, (dr, dc) in codes:
+            t = _neighbours(cells, nx, ny, -dr, -dc)      # cells whose (dr, dc) neighbour is `cells`
+            t = t[t >= 0]
+            cand.append(t[dead[t] & ~resolved[t]])
+        cand = np.unique(np.concatenate(cand)) if cand else np.zeros(0, dtype=np.int64)
+        if not cand.size:
+            break
+        pick = np.full(cand.size, -1, dtype=np.int64)
+        pcode = np.full(cand.size, none_c, dtype=np.int16)
+        best = np.full(cand.size, np.inf)
+        for code, (dr, dc) in codes:
+            t = _neighbours(cand, nx, ny, dr, dc)
+            okk = t >= 0
+            tt = np.where(okk, t, 0)
+            okk &= ok[tt] & drained[tt] & (wf[tt] < best)    # lowest drained; ties: code order
+            pick[okk] = t[okk]
+            pcode[okk] = code
+            best[okk] = wf[tt][okk]
+        got = pick >= 0
+        u = cand[got]
+        d[u] = pcode[got]
+        down[u] = pick[got]
+        resolved[u] = True
+        info["flat_routed"] += int(u.size)
+        info["bfs_levels"] += 1
+        newly = u
+    # 2. leftovers: priority flood from the drained cells into the undrained ones
+    undrained = ok & ~drained
+    if undrained.any():
+        import heapq
+        heap = []
+        seq = 0
+        und_idx = np.nonzero(undrained)[0]
+        for _code, (dr, dc) in codes:
+            t = _neighbours(und_idx, nx, ny, dr, dc)
+            m = t >= 0
+            src = t[m]
+            src = src[drained[src]]
+            for j in np.unique(src).tolist():
+                heapq.heappush(heap, (wf[j], seq, j))
+                seq += 1
+        seen = drained.copy()
+        while heap:
+            lev, _s, j = heapq.heappop(heap)
+            for code, (dr, dc) in codes:
+                r, c = divmod(j, nx)
+                rr, cc = r - dr, c - dc                    # the cell whose `code` neighbour is j
+                if not (0 <= rr < ny and 0 <= cc < nx):
+                    continue
+                u = rr * nx + cc
+                if seen[u] or not ok[u]:
+                    continue
+                seen[u] = True
+                d[u] = code
+                info["pit_routed"] += 1
+                heapq.heappush(heap, (max(lev, wf[u]), seq, u))
+                seq += 1
+    direction = d.reshape(ny, nx)
+    info["dead_ends_after"] = int(dead_ends(direction, valid, conn).sum())
+    return direction, info
+
+
 def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, max_sweeps=0,
-               conn=4, log=None, method="topo"):
+               conn=4, log=None, method="topo", resolve_flats=True):
     """Flow direction and accumulation for `dem` (2-D; NaN or -9999 = NoData). Returns
     (direction, accum, info).
 
@@ -139,7 +310,15 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
           moves area one cell downstream, so it needs about as many sweeps as the longest flow path;
           a 2001 x 2001 prairie-pothole grid on the CPU build was still running after 12 minutes.
     Both give identical directions and identical drainage areas (tests/test_metalterrain_flow.py
-    pins that); "iterate" stays for that comparison."""
+    pins that); "iterate" stays for that comparison.
+
+    `resolve_flats` (default True, Runner 3.58.0 - CHANGES directions and drainage areas where
+    the kernels left dead ends): every valid NONE cell that is not a domain outlet (grid edge or
+    next to NoData) is given a downstream neighbour by resolve_dead_ends, so every flow path is
+    continuous to an outlet. Cells that already had a downstream neighbour keep it; where the
+    kernels left no dead end the output is unchanged. info gains "dead_ends" (before),
+    "dead_ends_after" (0), "flat_routed" and "pit_routed". resolve_flats=False is the pre-3.58.0
+    behaviour."""
     if conn not in (4, 8):
         raise ValueError("conn must be 4 or 8")
     if method not in ("topo", "iterate"):
@@ -176,12 +355,16 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
             # one sweep sets the directions (k_d*_dir); the area is then summed on the host
             bk.run_batch(p, 1)
             direction = arr["dir"].reshape(ny, nx).astype(np.int16)
+            rinfo = {}
+            if resolve_flats:
+                direction, rinfo = resolve_dead_ends(direction, valid, w32, conn)
             direction = np.where(valid, direction, -1).astype(np.int8)
             acc, levels, drained = _topo_accum(direction, valid, conn)
             accum = np.where(valid, acc.reshape(ny, nx).astype(np.float64), np.nan)
             info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": 1,
                     "converged": bool(drained), "valid": nvalid, "conn": conn,
-                    "method": "topo", "levels": levels}
+                    "method": "topo", "levels": levels, "resolve_flats": bool(resolve_flats)}
+            info.update(rinfo)
             if not drained:
                 info["note"] = "the direction field has a cycle; some cells were never drained"
             return direction, accum, info
@@ -194,11 +377,21 @@ def flow_accum(dem, eps=1e-5, backend="auto", filled=None, sweeps_per_batch=0, m
             changed = int(arr["st"][0])
             sweeps += k
         direction = arr["dir"].reshape(ny, nx).astype(np.int16)
-        direction = np.where(valid, direction, -1).astype(np.int8)
         accum = arr["a0"].reshape(ny, nx).astype(np.float64)
+        rinfo = {}
+        if resolve_flats:
+            direction, rinfo = resolve_dead_ends(direction, valid, w32, conn)
+            if rinfo.get("flat_routed") or rinfo.get("pit_routed"):
+                # the kernels' sums were for the old directions; sum again on the new ones
+                acc, _lv, _ok = _topo_accum(np.where(valid, direction, -1).astype(np.int8),
+                                            valid, conn)
+                accum = acc.reshape(ny, nx).astype(np.float64)
+        direction = np.where(valid, direction, -1).astype(np.int8)
         accum = np.where(valid, accum, np.nan)
         info = {"backend": bk.kind, "device": bk.device, "cells": nx * ny, "sweeps": sweeps,
-                "converged": changed == 0, "valid": nvalid, "conn": conn, "method": "iterate"}
+                "converged": changed == 0, "valid": nvalid, "conn": conn, "method": "iterate",
+                "resolve_flats": bool(resolve_flats)}
+        info.update(rinfo)
         if not info["converged"]:
             info["note"] = "accumulation did not converge in {} sweeps (raise max_sweeps)".format(
                 cap)

@@ -71,7 +71,8 @@ def flow_cpu_build_matches_oracle():
     serial oracle: same filled surface, same steepest-descent rule, same counts."""
     _need_cpu_build()
     z = cases.pitted_plane(ny=70, nx=100)
-    direction, accum, info = FL.flow_accum(z, backend="cpu")
+    # the kernels alone (no dead-end routing): the oracle reproduces their strictly-lower rule
+    direction, accum, info = FL.flow_accum(z, backend="cpu", resolve_flats=False)
     assert info["backend"] == "cpu" and info["converged"], info
     od, oa, valid = _oracle(z)
     assert np.array_equal(direction[valid], od[valid]), "D4 directions differ from the oracle"
@@ -120,7 +121,7 @@ def flow_accum_matches_kahn_oracle():
     twice."""
     _need_cpu_build()
     z = cases.pitted_plane(ny=66, nx=98, seed=4)
-    direction, accum, info = FL.flow_accum(z, backend="cpu")
+    direction, accum, info = FL.flow_accum(z, backend="cpu", resolve_flats=False)
     valid = np.isfinite(accum)
     kahn, no_cycles = _kahn_accum(direction, valid)
     assert no_cycles, "the D4 drainage network has a cycle (fill did not drain everywhere)"

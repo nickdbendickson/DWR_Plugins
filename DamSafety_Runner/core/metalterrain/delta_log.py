@@ -350,6 +350,17 @@ def log_reconnect(log, records, cell_m=1.0, algo_ref="CROSSING_RECONNECT_V1+PD20
                                "refused by the dam-safety invariant - resolve before use "
                                "(real culvert? mask wrong?)".format(len(cells)))
             refused += 1
+        elif r.get("refused"):
+            # Runner 3.58.0: a carve the guards skipped (protect mask, depth cap, no road / rail
+            # embankment). Nothing was lowered; recorded so the ledger shows why, not FLAGGED (it
+            # does not block an export - the ground was left as it was).
+            e = Edit(EditClass.CROSSING_STITCH, "REFUSE_" + str(r["refused"]).upper(),
+                     evidence="GEOMORPHIC_SIGNAL", n_cells=0,
+                     spill_before=r.get("spill_before_m"), algo_ref=algo_ref, evidence_ref=ev,
+                     params={"accum_cells": r.get("accum_cells"),
+                             "max_cut_m": r.get("max_cut_m"),
+                             "protected_cells": len(r.get("protected_cells", []))})
+            log.add(e)
         else:
             e = Edit(EditClass.CROSSING_STITCH, "STITCH", evidence="GEOMORPHIC_SIGNAL",
                      n_cells=int(r.get("barrier_cells", 0)), spill_before=r.get("spill_before_m"),

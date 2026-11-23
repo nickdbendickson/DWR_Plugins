@@ -31,6 +31,13 @@ and gives one row per finding, each PASS / WARN / FAIL with the reason:
              (compare_rasters: MATCH -> PASS, DIFFERENT / NOT IN MANIFEST -> WARN, a
              raster that is gone -> FAIL).
 
+  terrain    2.26.0: when raw_dem (the ground before terrain conditioning) and run_dem (the
+             DEM the model ran on) are given: the wet cells where the conditioning lowered the
+             ground by more than terrain_warn_ft. There the depth is water in a carve, not on
+             the ground (Absaraka, Nov 2026: 107 "high-danger" houses beside reconnect notches).
+             WARN with the count and the depth on the real ground; rawground.write_raw_ground
+             writes depth / velocity on the unconditioned ground to classify on. Never FAIL.
+
 A check that cannot be made (no velocity raster, no run report, no dam point ...) is a
 SKIP row: it never makes the gate PASS or FAIL. The gate's status is the worst row
 (FAIL > WARN > PASS; only SKIP rows -> SKIP).
@@ -74,6 +81,10 @@ DEFAULTS = {
     "breach_radius_ft": 1000.0,   # "near the breach": within this of the dam point
     "breach_vel_warn_fps": 30.0,  # max velocity there above this -> WARN
     "stop_on_fail": False,        # FAIL stops the classification (pipeline_step)
+    # 2.26.0: the model ran on a conditioned DEM - compare it with the ground before conditioning
+    "raw_dem": None,              # DEM before conditioning (empty: the terrain check is SKIP)
+    "run_dem": None,              # the DEM the model ran on (conditioned)
+    "terrain_warn_ft": 0.5,       # wet cells on ground lowered by more than this -> WARN
 }
 # the same settings as pipeline cfg keys (for the lead: DEFAULTS.update(CFG_DEFAULTS))
 CFG_PREFIX = "gate_"
@@ -331,6 +342,39 @@ def check_holes(item, p):
     return [row("holes", WARN, reason, n, "any", name)]
 
 
+def check_terrain(item, p):
+    """2.26.0: wet cells on ground the terrain conditioning lowered (see rawground.py)."""
+    name = item["name"]
+    raw, run = p.get("raw_dem"), p.get("run_dem")
+    if not raw and not run:
+        return [row("terrain", SKIP, "no DEM before conditioning given (raw_dem / run_dem)",
+                    scenario=name)]
+    for label, path in (("raw_dem", raw), ("run_dem", run), ("depth", item.get("depth"))):
+        if not path or not os.path.isfile(str(path)):
+            return [row("terrain", SKIP, "{} not found: {}".format(label, path or "(none)"),
+                        scenario=name)]
+    from . import rawground as RG
+    _dds, depth, low = RG.lowering_on_depth_grid(item["depth"], run, raw)
+    thr = _num(p.get("terrain_warn_ft"), RG.DEFAULT_MIN_LOWERING_FT)
+    low_ft = low * RG.FT_PER_M
+    hit = (low_ft > thr) & np.isfinite(depth) & (depth > 0)
+    n_low = int((low_ft > thr).sum())
+    if not hit.any():
+        return [row("terrain", PASS, "no wet cell on ground lowered by more than {} ft ({:,} "
+                    "lowered cells in all)".format(_fmt(thr), n_low), 0,
+                    "{} ft".format(_fmt(thr)), name)]
+    dr = depth[hit] - low_ft[hit]
+    dry = int((dr <= 0).sum())
+    reason = ("{:,} wet cell(s) sit where the terrain conditioning lowered the ground by more "
+              "than {} ft (up to {:.1f} ft): there the depth ({:.1f} ft at most) is water in a "
+              "carve, not on the ground; on the unconditioned ground {:,} of them are dry and "
+              "the deepest is {:.1f} ft. Classify on rawground.write_raw_ground's rasters, or "
+              "check the conditioning.".format(int(hit.sum()), _fmt(thr), float(low_ft[hit].max()),
+                                               float(depth[hit].max()), dry,
+                                               float(max(0.0, dr.max()))))
+    return [row("terrain", WARN, reason, int(hit.sum()), "{} ft".format(_fmt(thr)), name)]
+
+
 def find_run_report(dam_folder=None, depth=None):
     """The runner's run_report.json for these rasters: next to the depth raster
     (<raster folder>/_breach_model/), in the dam folder, or one level down; None."""
@@ -558,7 +602,8 @@ def gate(target, params=None, write=True, progress=None, log=None):
              ("mass", lambda it: check_run_report(find_run_report(dam, it.get("depth")), p,
                                                   it["name"])),
              ("breach", lambda it: check_breach_velocity(it, p, dam)),
-             ("manifest", lambda it: check_manifest(it, dam))]
+             ("manifest", lambda it: check_manifest(it, dam)),
+             ("terrain", lambda it: check_terrain(it, p))]
     n = max(1, len(items) * len(steps))
     k = 0
     for it in items:

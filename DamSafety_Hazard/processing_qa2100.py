@@ -135,7 +135,9 @@ class ModelGateAlgorithm(_Base):
                 "the model edge, no-data holes inside the wet area, mass balance and warnings "
                 "of an ND Dam Breach Runner run report, velocities near the breach (dam point "
                 "from dam.json), units (depth that looks like elevation, arrival in minutes "
-                "\u2026) and the runner's run manifest against the rasters. Each finding is "
+                "\u2026), the runner's run manifest against the rasters, and (given the "
+                "DEMs before and after terrain conditioning) wet cells on carved ground. "
+                "Each finding is "
                 "PASS / WARN / FAIL (SKIP: could not be checked) with the reason, in "
                 "outputs/QA/Model_Gate.csv. Every threshold is a screening value you choose - "
                 "the defaults are starting values, not requirements. 'Stop on FAIL' makes a "
@@ -182,6 +184,10 @@ class ModelGateAlgorithm(_Base):
         P(QgsProcessingParameterNumber("BREACH_VEL_FPS", "Near the breach: WARN above (ft/s)",
                                        type=NUM_DOUBLE, defaultValue=d["breach_vel_warn_fps"],
                                        minValue=0))
+        P(QgsProcessingParameterFile("RAW_DEM", "Terrain: DEM before conditioning (empty: "
+                                     "no terrain check)", optional=True))
+        P(QgsProcessingParameterFile("RUN_DEM", "Terrain: DEM the model ran on (conditioned)",
+                                     optional=True))
         P(QgsProcessingParameterBoolean("STOP_ON_FAIL", "Stop on FAIL (the algorithm ends "
                                         "with an error)", defaultValue=False))
         self.addOutput(QgsProcessingOutputFile("CSV", "Model_Gate.csv"))
@@ -213,7 +219,9 @@ class ModelGateAlgorithm(_Base):
                                             d["breach_radius_ft"]),
              "breach_vel_warn_fps": _opt_float(self, parameters, "BREACH_VEL_FPS", context,
                                                d["breach_vel_warn_fps"]),
-             "stop_on_fail": self.parameterAsBool(parameters, "STOP_ON_FAIL", context)}
+             "stop_on_fail": self.parameterAsBool(parameters, "STOP_ON_FAIL", context),
+             "raw_dem": self.parameterAsFile(parameters, "RAW_DEM", context) or None,
+             "run_dem": self.parameterAsFile(parameters, "RUN_DEM", context) or None}
         from .autodetect import find_rasters
         from .constants import OUTPUT_FOLDER_NAME
         found = find_rasters(dam)

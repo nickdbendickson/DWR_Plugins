@@ -239,9 +239,12 @@ def reconnect_is_identical_to_the_per_mask_loop():
                     fm = np.zeros(z.shape, dtype=bool)
                     fm[:, z.shape[1] // 2] = True
                 old_out, old_rec = _reconnect_legacy(z, labels, items, accum, mn, freeze_mask=fm)
+                # 3.58.0 guards off (every class, no depth cap): the 3.51 sweep, bit for bit
                 new_out, new_rec = B.reconnect_crossings(
                     z, min_accum_cells=mn, cell_m=cell, backend="cpu", filled=filled,
-                    labels=labels, items=items, accum=accum, freeze_mask=fm)
+                    labels=labels, items=items, accum=accum, freeze_mask=fm,
+                    classes=None, max_carve_m=None)
+                new_rec = [{k: v for k, v in r.items() if k != "max_cut_m"} for r in new_rec]
                 assert np.array_equal(old_out, new_out, equal_nan=True), (name, mn, freeze)
                 assert old_rec == new_rec, (name, mn, freeze)
                 carved += len(new_rec)
@@ -254,8 +257,10 @@ def flow_topo_accum_is_identical_to_the_kernel_iteration():
     _need_cpu_build()
     for name, z, _cell in _grids():
         for conn in (4, 8):
-            d_old, a_old, i_old = FL.flow_accum(z, backend="cpu", conn=conn, method="iterate")
-            d_new, a_new, i_new = FL.flow_accum(z, backend="cpu", conn=conn, method="topo")
+            d_old, a_old, i_old = FL.flow_accum(z, backend="cpu", conn=conn, method="iterate",
+                                                resolve_flats=False)
+            d_new, a_new, i_new = FL.flow_accum(z, backend="cpu", conn=conn, method="topo",
+                                                resolve_flats=False)
             assert i_old["converged"] and i_new["converged"], (name, conn, i_old, i_new)
             assert i_new["method"] == "topo" and i_old["method"] == "iterate"
             assert np.array_equal(d_old, d_new), (name, conn)
@@ -269,8 +274,9 @@ def flow_topo_accum_on_a_raw_unfilled_surface_matches_too():
     _need_cpu_build()
     z = _potholes(ny=40, nx=50, seed=11)
     filled = np.asarray(z, dtype=np.float64)       # pass the raw surface as 'filled'
-    d_old, a_old, _ = FL.flow_accum(z, backend="cpu", filled=filled, method="iterate")
-    d_new, a_new, info = FL.flow_accum(z, backend="cpu", filled=filled)
+    d_old, a_old, _ = FL.flow_accum(z, backend="cpu", filled=filled, method="iterate",
+                                    resolve_flats=False)
+    d_new, a_new, info = FL.flow_accum(z, backend="cpu", filled=filled, resolve_flats=False)
     assert info["converged"], info
     assert np.array_equal(d_old, d_new)
     assert np.array_equal(a_old, a_new, equal_nan=True)
