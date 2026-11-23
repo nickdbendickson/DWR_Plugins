@@ -268,10 +268,13 @@ def test_read_lock_reads_pid_and_age():
 @case
 def test_lock_decision_logic():
     assert core.lock_decision({})[0] == "free"
-    assert core.lock_decision({"pid": 4242, "age": 10.0}, alive=lambda p: False)[0] == "clear"
-    assert core.lock_decision({"pid": 4242, "age": 10.0}, alive=lambda p: True)[0] == "refuse"
+    # a pid that is never this process: a fixed one (4242) failed whenever the test itself ran as pid 4242
+    # (a CI container), because a lock with this process's own pid is a same-process lock (refused)
+    other = os.getpid() + 1
+    assert core.lock_decision({"pid": other, "age": 10.0}, alive=lambda p: False)[0] == "clear"
+    assert core.lock_decision({"pid": other, "age": 10.0}, alive=lambda p: True)[0] == "refuse"
     # a very old lock is cleared even if that pid now belongs to something else
-    assert core.lock_decision({"pid": 4242, "age": 7 * 3600.0}, alive=lambda p: True)[0] == "clear"
+    assert core.lock_decision({"pid": other, "age": 7 * 3600.0}, alive=lambda p: True)[0] == "clear"
     # a pid-less lock: refused while fresh, cleared once past the stale window
     assert core.lock_decision({"pid": None, "age": 5.0})[0] == "refuse"
     assert core.lock_decision({"pid": None, "age": 7 * 3600.0})[0] == "clear"
