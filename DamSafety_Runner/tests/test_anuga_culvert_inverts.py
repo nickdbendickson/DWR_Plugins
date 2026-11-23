@@ -283,8 +283,9 @@ def model_grid_runs_keep_the_model_dem_inverts():
 
 
 def _run_job(fine):
-    """AM.run up to the job file (sys.executable has no anuga, so the worker then fails)."""
+    """AM.run up to the job file (the worker then fails: anuga_no_worker)."""
     from nd_breach_runner.core.lisflood import ModelError
+    from nd_breach_runner.tests.anuga_no_worker import worker_fails
     from nd_breach_runner.tests.test_gmsh_mesher import _case
     dem, flooded, inflow, hy, st, roads = _case()
     x = dem.x0 + 1600.0
@@ -300,8 +301,9 @@ def _run_job(fine):
         return Grid(np.full((ny, nx), 290.0), xmin, ymax, cell)
     d = tempfile.mkdtemp(prefix="culvinv_")
     try:
-        AM.run(d, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads,
-               structures=[s], elevation_read=read, elevation_native_m=2.0)
+        with worker_fails():
+            AM.run(d, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads,
+                   structures=[s], elevation_read=read, elevation_native_m=2.0)
     except ModelError:
         pass
     with np.load(os.path.join(d, "anuga_job.npz")) as r:
