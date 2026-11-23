@@ -18,10 +18,12 @@ the model DEM alone, so it needs no download:
    report says so.
 2. Channel cells: every cell draining at least `min_area_km2`.
 3. Bankfull width and depth from drainage area by regional hydraulic geometry,
-   W = a A^b and D = c A^f (A in km2, W and D in m). Default: Bieger et al. (2015), the
-   conterminous-US equations (W = 2.70 A^0.352, D = 0.30 A^0.213; "Development and evaluation
-   of bankfull hydraulic geometry relationships for the physiographic regions of the United
-   States", JAWRA 51(4)). Replace a, b, c, f with a regional curve where one exists.
+   W = a A^b and D = c A^f (A in km2, W and D in m). Default (3.53.0): the North Dakota curve
+   fitted to 79 USGS gauges, W = 1.946 A^0.304, D = 0.221 A^0.256 (ND_USGS_2026;
+   tools/validation/nd_hydraulic_geometry/). Before 3.53.0 the default was Bieger et al. (2015),
+   the conterminous-US equations (W = 2.70 A^0.352, D = 0.30 A^0.213; "Development and
+   evaluation of bankfull hydraulic geometry relationships for the physiographic regions of the
+   United States", JAWRA 51(4)), kept as BIEGER_2015_US; ND channels are about half as wide.
 4. Bank = the DEM (the cell's ground, or the water surface of hydro-flattened LiDAR); bed = DEM
    - D. The width is capped at the cell size (a river wider than the cell is in the DEM already;
    only its missing bed is added).
@@ -45,7 +47,11 @@ from .terrain import priority_flood
 
 # Bieger, Rathjens, Allen & Arnold (2015), conterminous US: W = a A^b, D = c A^f (m, A km2)
 BIEGER_2015_US = (2.70, 0.352, 0.30, 0.213)
-DEFAULT_MIN_AREA_KM2 = 2.0      # about 0.8 sq mi: W ~ 3.4 m, D ~ 0.35 m
+# North Dakota, fitted 2026-11-23 to 79 USGS gauges (tools/validation/nd_hydraulic_geometry/; the
+# same curve as metalterrain.prism.ND_USGS_2026). The default since 3.53.0 (Nick, 2026-11-23).
+ND_USGS_2026 = (1.946, 0.304, 0.221, 0.256)
+DEFAULT_CURVE = ND_USGS_2026
+DEFAULT_MIN_AREA_KM2 = 2.0      # about 0.8 sq mi: W ~ 2.4 m, D ~ 0.26 m
 DEFAULT_CHANNEL_N = 0.035       # LISFLOOD-FP's own SGCn default (a clean natural channel)
 START_MODES = ("auto", "empty", "full")
 MIN_DEPTH_M = 0.05              # a channel shallower than this adds nothing (and LISFLOOD-FP
@@ -149,7 +155,7 @@ def flow_accumulation(dem, extra_cells=None):
     return np.asarray(acc_l).reshape(z.shape)
 
 
-def hydraulic_geometry(area_km2, curve=BIEGER_2015_US):
+def hydraulic_geometry(area_km2, curve=DEFAULT_CURVE):
     a, b, c, f = curve
     A = np.maximum(np.asarray(area_km2, dtype=float), 0.0)
     return a * A ** b, c * A ** f
@@ -217,7 +223,7 @@ def _pack(dem, area, min_area_km2, curve, channel_n, start, flat_water, inflow_r
 
 
 def build(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_MIN_AREA_KM2,
-          curve=BIEGER_2015_US, channel_n=DEFAULT_CHANNEL_N, start="auto", flat_water=None):
+          curve=DEFAULT_CURVE, channel_n=DEFAULT_CHANNEL_N, start="auto", flat_water=None):
     """Channels of `dem` (a grid.Grid in metres). `inflow_rc` = (row, col) of the breach inflow
     and `upstream_km2` the drainage area at the dam (added there); `flat_water` = a boolean
     mask of hydro-flattened water (computed with terrain.flat_water when None and start is
@@ -234,7 +240,7 @@ def build(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_MIN_AREA_
 
 
 def from_boanngrid(dem, inflow_rc=None, upstream_km2=None, min_area_km2=DEFAULT_MIN_AREA_KM2,
-                   curve=BIEGER_2015_US, channel_n=DEFAULT_CHANNEL_N, start="auto",
+                   curve=DEFAULT_CURVE, channel_n=DEFAULT_CHANNEL_N, start="auto",
                    flat_water=None, freeze_mask=None, backend="cpu", delta_log=None,
                    min_accum_cells=20):
     """SGC rasters from the BoannGrid conditioned network, not from raw-DEM D8 alone.
