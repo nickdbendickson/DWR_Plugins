@@ -445,7 +445,8 @@ def parse_record_date(v):
         return v
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         try:
-            return datetime.datetime.utcfromtimestamp(v / 1000.0 if v > 1e11 else v).date()
+            return datetime.datetime.fromtimestamp(v / 1000.0 if v > 1e11 else v,
+                                                   datetime.timezone.utc).date()
         except Exception:
             return None
     dates = dates_in_text(str(v))
