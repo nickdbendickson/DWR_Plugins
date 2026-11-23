@@ -414,6 +414,50 @@ def _fv_deck(folder, z, h0, dx=5.0, sim=100.0, n=0.0, free=""):
 
 
 @test
+def metalflood_clock_and_clip_total_survive_a_clipping_batch():
+    """The run's clock must be the time the engine really simulated, and clipped_m3 the sum of
+    every batch's clip. Both once broke on the same reused name: `clip` was the end-cut flag AND
+    the clipped-volume total, so a batch that clipped any water (a) threw away the time its last
+    step ran past the output time (the clock fell 112 s behind in 6 h of the real Lake Delhi
+    ACC run, so inflow and arrival times were read off a slow clock) and (b) reset the total, so
+    only the last batch's clip was reported. Every batch here reports a small clip; the clock and
+    the total must still add up, for ACC and for the shock-capturing (FV) engines."""
+    _need_cpu_build()
+    for mod, extra in ((mfe, ["acceleration"]), (fve, [])):
+        d = _tmp()
+        seen = {"t": 0.0, "clip": 0.0, "n": 0}
+        orig = mod.Engine.batch
+
+        def batch(self, t, t_event, nsteps, clip, _o=orig):
+            out = dict(_o(self, t, t_event, nsteps, clip))
+            if out["steps"]:
+                out["clip"] = out["clip"] + 0.25          # as if the depth >= 0 clip had acted
+            seen["t"] += out["t_local"]
+            seen["clip"] += out["clip"] if out["steps"] else 0.0
+            seen["n"] += 1
+            return out
+        mod.Engine.batch = batch
+        try:
+            z = np.tile(10.0 - 0.01 * (np.arange(40) + 0.5) * 5.0, (6, 1))
+            h0 = np.zeros_like(z); h0[:, :8] = 1.0
+            p = _fv_deck(os.path.join(d, "c"), z, h0, dx=5.0, sim=120.0, n=0.03, free="E")
+            txt = open(p).read().replace("massint 120.0", "massint 7.0")   # many output times
+            with open(p, "w") as f:
+                f.write(txt + "".join(x + "\n" for x in extra))
+            st = mod.run_par(p, backend="cpu")
+        finally:
+            mod.Engine.batch = orig
+            shutil.rmtree(d, True)
+        assert seen["n"] > 10, seen
+        assert abs(st["sim_time_s"] - seen["t"]) < 1e-6, (
+            "{}: the clock says {:.4f} s but the engine simulated {:.4f} s".format(
+                mod.__name__, st["sim_time_s"], seen["t"]))
+        assert abs(st["clipped_m3"] - seen["clip"]) < 1e-6, (
+            "{}: clipped_m3 {:.4f} but the batches clipped {:.4f}".format(
+                mod.__name__, st["clipped_m3"], seen["clip"]))
+
+
+@test
 def metalflood_fv_lake_at_rest_is_well_balanced():
     """The shock-capturing FV engine holds a lake at rest over a bumpy bed to float32 round-off:
     no spurious velocity (maxVc ~ 0) and the still-water depth is unchanged (max == initial)."""
@@ -1013,6 +1057,36 @@ def subfv_engine_is_a_runner_engine_choice():
 
 
 @test
+def subfv_coarsening_factor_is_a_cli_config_key():
+    """Runner 3.49.0: a headless run sets the sub-grid FV coarsening factor with model.subgrid_r
+    (1-8), as the run tool does with SUBGRID_R. It lands on the same run setting the tool writes
+    (user_subgrid_r), so workflow forwards it to the .par the same way. A config without the key
+    leaves the settings - and so the resume key of every existing run - exactly as they were."""
+    import importlib
+    from nd_breach_runner.core import workflow
+    cli = importlib.import_module("nd_breach_runner.scripts.ndbreach_cli")
+    assert cli.MODEL_KEYS["subgrid_r"] == ("user_subgrid_r", ("int", 1, 8))
+    opts = type("O", (), {"lisflood": sys.executable})()
+    st = cli.build_settings(cli.Config({"model": {"subgrid_r": 8}}, ""), opts, need_models=False)
+    assert st.user_subgrid_r == 8 and isinstance(st.user_subgrid_r, int)
+    assert workflow.key_settings(st)["user_subgrid_r"] == 8      # a different r is a different run
+    plain = cli.build_settings(cli.Config({"model": {}}, ""), opts, need_models=False)
+    assert plain.user_subgrid_r is None and workflow.RunSettings().user_subgrid_r is None
+    assert "user_subgrid_r" not in workflow.key_settings(plain)   # earlier checkpoints still resume
+    for bad in (0, 9, 2.5, "4"):
+        try:
+            cli._check_value("model.subgrid_r", bad, cli.MODEL_KEYS["subgrid_r"][1])
+        except cli.CliError:
+            continue
+        raise AssertionError("model.subgrid_r accepted {!r}".format(bad))
+    # the run tool writes the same attribute, and workflow reads it for the .par keyword
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert "st.user_subgrid_r = " in open(os.path.join(here, "algorithms.py"), encoding="utf-8").read()
+    assert 'kw["subgrid_r"] = int(st.user_subgrid_r)' in open(
+        os.path.join(here, "core", "workflow.py"), encoding="utf-8").read()
+
+
+@test
 def metalflood_sgc_params_layout_matches_kernels():
     """The SGC buffer layout and the kernel source agree: 30 data buffers, Params at index 30 (the
     31-slot Metal cap), and the CPU build's Params size equals Python's."""
@@ -1350,6 +1424,7 @@ if __name__ == "__main__":
                gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
                metalflood_diagnostic_cases_match_serial_oracle,
                metalflood_diagnostic_cases_run,
+               metalflood_clock_and_clip_total_survive_a_clipping_batch,
                metalflood_fv_lake_at_rest_is_well_balanced,
                metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
                metalflood_fv2_lake_at_rest_is_well_balanced,
@@ -1362,6 +1437,7 @@ if __name__ == "__main__":
                dg2_engine_is_a_runner_engine_choice,
                sgc_engine_is_a_runner_engine_choice,
                subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
+               subfv_coarsening_factor_is_a_cli_config_key,
                metalflood_sgc_params_layout_matches_kernels,
                metalflood_sgc_channel_at_rest_is_well_balanced,
                metalflood_sgc_matches_the_float64_reference,
