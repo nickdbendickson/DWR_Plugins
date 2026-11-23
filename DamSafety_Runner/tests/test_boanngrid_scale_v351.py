@@ -241,7 +241,8 @@ def reconnect_is_identical_to_the_per_mask_loop():
                 old_out, old_rec = _reconnect_legacy(z, labels, items, accum, mn, freeze_mask=fm)
                 new_out, new_rec = B.reconnect_crossings(
                     z, min_accum_cells=mn, cell_m=cell, backend="cpu", filled=filled,
-                    labels=labels, items=items, accum=accum, freeze_mask=fm)
+                    labels=labels, items=items, accum=accum, freeze_mask=fm,
+                    classes=None, max_cut_m=None)      # no limits: the pre-3.57.0 carve
                 assert np.array_equal(old_out, new_out, equal_nan=True), (name, mn, freeze)
                 assert old_rec == new_rec, (name, mn, freeze)
                 carved += len(new_rec)

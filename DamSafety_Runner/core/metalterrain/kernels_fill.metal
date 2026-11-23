@@ -28,7 +28,7 @@ struct TParams {
     uint nx, ny;      // grid columns, rows
     uint r0, c0;      // window origin (row, column); the fill uses the whole grid
     uint wr, wc;      // window rows, columns
-    uint pad;
+    uint conn;        // 4 = the four edge neighbours only (D4); anything else = all 8 (D8)
     float eps;        // minimal drainage increment so flats drain (m); matches the oracle's 1e-5
     float tol;        // a lowering smaller than this does not count as a change (m)
     float pad2;
@@ -58,11 +58,14 @@ kernel void k_pd_relax(TF_ARGS) {
     if (!(wi > zi)) {
         return;                       // already at the ground: a fixed outlet, or fully drained
     }
-    float m = wi;                     // lowest neighbour water level over the 8 valid neighbours
+    float m = wi;                     // lowest neighbour water level over the valid neighbours
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             if (dx == 0 && dy == 0) {
                 continue;
+            }
+            if (p.conn == 4u && dx != 0 && dy != 0) {
+                continue;             // D4: no draining across a corner
             }
             int xx = int(x) + dx;
             int yy = int(y) + dy;

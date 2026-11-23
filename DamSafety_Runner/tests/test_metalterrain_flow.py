@@ -33,7 +33,7 @@ def _oracle(dem):
     a = np.asarray(dem, dtype=np.float64)
     ny, nx = a.shape
     valid = np.isfinite(a) & (a != F.NODATA)
-    filled, _ = F.fill_dem(a, backend="cpu")
+    filled, _ = F.fill_dem(a, backend="cpu", conn=4)     # flow_accum's own fill is D4 (3.57.0)
     datum = float(filled[valid].min())
     w = np.where(valid, filled - datum, 1.0e18).astype(np.float32)
     direction = np.full((ny, nx), FL.NONE, dtype=np.int16)
@@ -209,12 +209,89 @@ def flow_gpu_matches_cpu_build():
     assert np.array_equal(a_cpu, a_gpu), "drainage areas differ CPU vs Metal"
 
 
+def _flat_basin(ny=30, nx=40):
+    """A level floor (a filled pond, as the float32 fill leaves it on a high-relief grid) inside a
+    rim, with one outlet channel falling to the east edge; the rim itself is a level plateau."""
+    z = np.full((ny, nx), 20.0)
+    z[5:25, 5:35] = 10.0
+    z[15, 35:] = [10.0, 9.0, 8.0, 7.0, 6.0][:nx - 35]
+    return z
+
+
+@test
+def flow_resolves_flats_so_no_interior_cell_is_a_dead_end():
+    """Runner 3.57.0: a level floor gives the kernels no strictly lower neighbour, so before the
+    fix every floor cell was a dead end and the drainage area stopped at the floor's edge (Absaraka
+    at 30 m: 180,730 dead ends, largest area 1,565 cells). Now every interior cell drains to the
+    model edge, the network stays acyclic, directions the kernels set are unchanged, and the outlet
+    carries the whole grid; topo and iterate still agree."""
+    _need_cpu_build()
+    z = _flat_basin()
+    for conn in (4, 8):
+        none_c = FL.none_code(conn)
+        d0, a0, i0 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn, resolve_flats=False)
+        assert i0["interior_sinks"] > 500 and i0["flats_resolved"] == 0, i0
+        d1, a1, i1 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn)
+        assert i1["interior_sinks"] == 0 and i1["converged"], i1
+        assert i1["flats_resolved"] == i0["interior_sinks"], (i0, i1)
+        kept = d0 != none_c
+        assert np.array_equal(d1[kept], d0[kept]), "a direction the kernels set was changed"
+        assert a1[15, -1] >= 20 * 30, a1[15, -1]           # the whole floor leaves by the outlet
+        assert np.nansum(a1[FL._real_outlets(d1, np.isfinite(z), conn)]) == z.size
+        d2, a2, i2 = FL.flow_accum(z, backend="cpu", filled=z, conn=conn, method="iterate")
+        assert np.array_equal(d1, d2) and np.array_equal(a1, a2, equal_nan=True), conn
+        assert i2["interior_sinks"] == 0
+
+
+@test
+def flow_d4_refills_a_surface_that_only_drains_across_corners():
+    """A D8 fill lets a cell drain across a corner, which D4 flow (and the 4-connected flood engine)
+    cannot: on such a surface every diagonal-only cell was a dead end (Absaraka: 180,730; here a
+    noisy tilted plain). flow_accum now fills it again with D4 connectivity, so every cell reaches
+    the model edge; resolve_flats=False keeps the old network, and a real pit on an unfilled surface
+    stays a sink there."""
+    _need_cpu_build()
+    rng = np.random.RandomState(5)
+    yy, xx = np.mgrid[0:60, 0:80].astype(np.float64)
+    z = 300.0 + 0.05 * xx + 0.02 * yy + 0.3 * rng.standard_normal(xx.shape)
+    f8, i8 = F.fill_dem(z, backend="cpu")
+    f4, i4 = F.fill_dem(z, backend="cpu", conn=4)
+    assert i8["conn"] == 8 and i4["conn"] == 4 and i4["converged"]
+    assert (f4 >= f8 - 1e-9).all() and (f4 > f8 + 1e-3).any(), "D4 fill is not the higher one"
+    valid = np.isfinite(z)
+    d0, a0, i0 = FL.flow_accum(z, backend="cpu", filled=f8, resolve_flats=False)
+    assert i0["interior_sinks"] > 100 and not i0["refilled_d4"], i0
+    for kw in (dict(filled=f8), dict(filled=f4), {}):
+        d, a, info = FL.flow_accum(z, backend="cpu", **kw)
+        assert info["interior_sinks"] == 0 and info["converged"], (kw.keys(), info)
+        assert info["refilled_d4"] == (kw.get("filled") is f8), info
+        assert np.nansum(a[FL._real_outlets(d, valid, 4)]) == z.size
+        assert np.nanmax(a) > 10 * np.nanmax(a0)
+    # D8 flow on the D8 fill needs no refill
+    d8, a8, j8 = FL.flow_accum(z, backend="cpu", filled=f8, conn=8)
+    assert not j8["refilled_d4"] and j8["interior_sinks"] == 0, j8
+    # an unfilled pit: a sink in the old network, drained (by the D4 refill) in the new one
+    p = np.fromfunction(lambda r, c: 10.0 + 0.1 * c, (12, 16))
+    p[6, 8] -= 1.0
+    d, a, info = FL.flow_accum(p, backend="cpu", filled=p, resolve_flats=False)
+    assert d[6, 8] == FL.NONE and info["interior_sinks"] == 1, info
+    d, a, info = FL.flow_accum(p, backend="cpu", filled=p)
+    assert d[6, 8] != FL.NONE and info["refilled_d4"] and info["interior_sinks"] == 0, info
+    try:
+        F.fill_dem(z, backend="cpu", conn=6)
+    except ValueError:
+        pass
+    else:
+        assert False, "fill accepted conn=6"
+
 if __name__ == "__main__":
     import sys
     fails = 0
     for fn in (flow_cpu_build_matches_oracle, flow_accum_matches_kahn_oracle,
                flow_accum_invariants, flow_is_deterministic, flow_nodata_drains_out,
-               flow_params_layout_matches_kernel, flow_gpu_matches_cpu_build):
+               flow_params_layout_matches_kernel, flow_gpu_matches_cpu_build,
+               flow_resolves_flats_so_no_interior_cell_is_a_dead_end,
+               flow_d4_refills_a_surface_that_only_drains_across_corners):
         try:
             fn()
             print("ok    ", fn.__name__)
