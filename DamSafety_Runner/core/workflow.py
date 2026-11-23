@@ -1098,7 +1098,7 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edi
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
-            if _p == dem_refill.HOLE_FILL:       # 3.58.2: enclosed holes from the ground around
+            if _p == dem_refill.HOLE_FILL:       # 3.63.0: enclosed holes from the ground around
                 g, _n = dem_refill.fill_interior_holes(g)
             else:
                 g = dem_refill.fill_grid(g, _p)
@@ -3205,7 +3205,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
     refilled = False
-    hole_filled = False                      # 3.58.2: enclosed holes filled from their rim
+    hole_filled = False                      # 3.63.0: enclosed holes filled from their rim
     hole_held = False
     stop_reason = None
     while it <= max_it:
@@ -3348,7 +3348,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             elif touch_n and refilled:
                 hole_held = True
                 stop_reason = "no-data after one refill"
-            # 3.58.2 (batch 44, DWR-2631: Low against a record of Significant, the flood held
+            # 3.63.0 (batch 44, DWR-2631: Low against a record of Significant, the flood held
             # back by 28 wet cells of a 1 m LiDAR gap the 3DEP refill did not close): before
             # calling the run held, fill the ENCLOSED holes the flood touches from the ground
             # around them (dem_refill.fill_interior_holes) and run the same domain run again,
