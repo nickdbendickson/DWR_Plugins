@@ -7,4 +7,4 @@ The Runner records it in the run manifest (software.boann) beside its own versio
 
 Each solver module still carries its own NAME / VERSION, written as the first line of the
 lisflood.log a run leaves; those are unchanged."""
-BOANN_VERSION = "2.1.1"
+BOANN_VERSION = "4.1.1"   # 4.1.1 (Runner 3.69.0): CPU build skips dry cells, OpenMP on a Mac (no result moves); 4.1.0 (Runner 3.68.0): rain on the grid (ACC; new input); 4.0.0 (Runner 3.67.0): sub-grid FV positivity limiter (sub-grid FV results move); 3.0.0 (Runner 3.66.0): FV2 face velocities (FV2 results move)
