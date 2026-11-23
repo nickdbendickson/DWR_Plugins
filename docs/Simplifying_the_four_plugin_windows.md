@@ -27,7 +27,7 @@ The ten changes:
 
 | # | Change | Status |
 |---|---|---|
-| 1 | One settings editor, not three | **Open.** Three windows still edit the same file, and the Runner grid has grown to 1,016 rows (Boann engine settings). |
+| 1 | One settings editor, not three | **Done** (Core 1.6.0, #482, Nick 2026-11-23). Plugins > Dam safety > Suite settings… opens one window with one settings-file row and a tab each for Hazard, the breach Runner and Screening; each plugin's own Settings button opens the same window on its tab. |
 | 2 | Start on YOUR values, runs out of the grid | Done (Core suite_settings, PER_RUN_KEYS) |
 | 3 | Hide the tools nobody runs by hand | Done: 7 hidden (checked in real QGIS) |
 | 4 | One Plugins menu | Done; Hazard Lite and PMP moved in 2026-11-23, and a fast check keeps it so |
@@ -41,8 +41,8 @@ The ten changes:
 Of the "broken" list, every item is fixed or was decided (the Screening tool defaults stay on
 LISFLOOD-FP, Nick 2026-11-09). The guide no longer names "Setup & Run", "Reports" or "Run all".
 
-The one change left is 1. It moves where every engineer edits settings, so it waits for the
-owner's go-ahead.
+All ten changes are done. Change 1 (one settings editor) landed in Core 1.6.0 on the owner's
+go-ahead (2026-11-23).
 
 ## What the suite asks of you today
 

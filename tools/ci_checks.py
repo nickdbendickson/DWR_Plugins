@@ -69,6 +69,7 @@ UI_SHIMS = {
     "suite_settings_tools.py": _HRS,
     "suite_styles.py": _HRS,
     "suite_home.py": _HRS,
+    "suite_settings_window.py": _HRS,
     "tool_dialog.py": _HRS,
 }
 # Setup's plugin-root copies of damsuite modules: the same three-line shim onto the Core's damsuite
