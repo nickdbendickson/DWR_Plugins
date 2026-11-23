@@ -1,4 +1,4 @@
-"""BoannGrid fine-DEM channel prism carve (core/metalterrain/prism.py): the Bieger regional
+"""BoannGrid fine-DEM channel prism carve (core/metalterrain/prism.py): the regional
 geometry matches a hand computation, the trapezoidal carve only ever lowers ground, the carved
 bed falls monotonically downstream, the cross-section is deepest on the centreline and rises to the
 bank, and a larger drainage area carves a wider, deeper channel. Pure numpy - no GPU, no compiler,
@@ -233,3 +233,23 @@ if __name__ == "__main__":
             print("FAIL  ", fn.__name__)
             traceback.print_exc()
     sys.exit(1 if fails else 0)
+
+
+@test
+def prism_default_curve_is_north_dakota():
+    """3.53.0 (Nick, 2026-11-23): carve_prism / carve_channels size the channel on the ND curve
+    from 79 USGS gauges by default; Bieger 2015 (US) stays available through `coeffs`."""
+    assert P.ND_USGS_2026 == {"a_w": 1.946, "b_w": 0.304, "a_d": 0.221, "b_d": 0.256}
+    z = _sloping_plane(ny=80, nx=40, drop=0.0)
+    line = [(40, c) for c in range(z.shape[1])]
+    da = np.full(z.shape[1], 300.0)
+    default, reaches = P.carve_prism(z, line, da, cell_m=1.0)
+    nd = P.carve_prism(z, line, da, cell_m=1.0, coeffs=P.ND_USGS_2026)[0]
+    us = P.carve_prism(z, line, da, cell_m=1.0, coeffs=P.BIEGER_2015_US)[0]
+    assert np.array_equal(default, nd)
+    assert not np.array_equal(default, us)
+    w_nd, d_nd = P.bieger_geometry(300.0, **P.ND_USGS_2026)
+    assert abs(w_nd - 1.946 * 300.0 ** 0.304) < 1e-9 and abs(d_nd - 0.221 * 300.0 ** 0.256) < 1e-9
+    # ND channels are narrower than the national curve at the same area
+    cm = z.shape[1] // 2
+    assert (default[:, cm] < z[:, cm] - 1e-6).sum() < (us[:, cm] < z[:, cm] - 1e-6).sum()
