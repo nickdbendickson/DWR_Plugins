@@ -214,8 +214,8 @@ export function defaultsFileText(yours: SharedValues, now = new Date()): string 
 
 // ---- shared values <-> a Crest record -------------------------------------------------------------------------
 
-const METHOD_FROM_SHARED: Record<string, BreachMethod | undefined> = { froehlich2008: "froehlich", mlm1984: "macdonald", tr60: "tr60", tr60_curvilinear: "tr60" };
-const METHOD_TO_SHARED: Record<BreachMethod, string> = { froehlich: "froehlich2008", macdonald: "mlm1984", tr60: "tr60" };
+const METHOD_FROM_SHARED: Record<string, BreachMethod | undefined> = { froehlich2008: "froehlich", mlm1984: "macdonald" };
+const METHOD_TO_SHARED: Record<BreachMethod, string> = { froehlich: "froehlich2008", macdonald: "mlm1984", tr60: "height_multiple_width" };
 const POOL_FROM_SHARED: Record<string, StartPool> = { max_pool: "top", normal_pool: "normal" };
 
 export type RecordDefaults = {
@@ -232,11 +232,16 @@ export function recordDefaults(values: Required<SharedValues>): RecordDefaults {
   const notes: string[] = [];
   const shared = String(values.breach_method);
   let method = METHOD_FROM_SHARED[shared];
-  if (!method) {
+  if (shared === "tr60" || shared === "tr60_curvilinear") {
+    // Absaraka audit: the suite's TR-60 is the NRCS peak (1,100·Br^1.35); the desk's height-multiple width is a
+    // different, screening opening, so a TR-60 default is not turned into it.
+    method = "froehlich";
+    notes.push(
+      "The shared defaults ask for an NRCS TR-60 hydrograph, which Crest does not have (its height-multiple width is a screening opening, not the NRCS peak). New records start on Froehlich (2008).",
+    );
+  } else if (!method) {
     method = "froehlich";
     notes.push(`The shared defaults ask for ${labelOf("breach_method", shared)}, which Crest does not have. New records start on Froehlich (2008).`);
-  } else if (shared === "tr60" || shared === "tr60_curvilinear") {
-    notes.push("The shared defaults ask for an NRCS TR-60 hydrograph. Crest's TR-60 is a breach width from the dam height, routed through the same weir as the other methods.");
   }
   return {
     startPool: POOL_FROM_SHARED[String(values.sunny_day_start_pool)] ?? "top",

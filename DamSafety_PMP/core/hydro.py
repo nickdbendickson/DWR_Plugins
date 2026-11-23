@@ -79,13 +79,15 @@ def init_const_excess(precip_incr, dt, initial_in, rate_in_hr):
 # SOURCE: Rawls, Brakensiek & Miller (1983), "Green-Ampt infiltration parameters from soils data",
 # J. Hydraulic Eng. 109(1):62-70, Table 1 (mean values), as reprinted in Chow, Maidment & Mays (1988)
 # Applied Hydrology, Table 4.3.1 (cm and cm/h there; converted here at 2.54 cm/in).
-# VERIFIED = False: typed from the published table, not yet checked against the printed page by a
-# person. A run that uses a texture preset is stamped PROVISIONAL in its outputs until someone checks
-# these rows against Table 4.3.1 and sets GA_TEXTURE_VERIFIED = True. Typed (custom) values are the
-# user's own and are not stamped.
+# VERIFIED = True (2026-11-22, PMP 0.7.2): all 44 values checked against two USACE reprints of the same
+# Rawls et al. (1983) means - the HEC-RAS 1D Technical Reference "Green-Ampt" table (total porosity and Ks,
+# exact to the printed digits) and the HEC-HMS guide "Applying the Green and Ampt Loss Method" (suction to
+# 0.1 in, effective porosity to 0.01, Ks in in/hr) - and they agree on every row. tests/test_green_ampt.py
+# pins both checks. A run that uses a texture preset is stamped PRODUCTION; with the flag False it would be
+# stamped PROVISIONAL. Typed (custom) values are the user's own and are not stamped.
 GA_TEXTURE_SOURCE = ("Rawls, Brakensiek & Miller (1983) Table 1, mean values; reprinted in Chow, Maidment & "
                      "Mays (1988) Applied Hydrology Table 4.3.1")
-GA_TEXTURE_VERIFIED = False
+GA_TEXTURE_VERIFIED = True
 _CM = 1.0 / 2.54
 GA_TEXTURES = {          # name: (suction_in, ks_in_hr, porosity, effective_porosity)
     "sand":            (4.95 * _CM, 11.78 * _CM, 0.437, 0.417),

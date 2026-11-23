@@ -233,6 +233,9 @@ MODEL_KEYS = {
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r, 1-8 (the run tool's SUBGRID_R).
+    # Left out = the engine's own default (4). Only that engine reads it.
+    "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
@@ -1121,6 +1124,11 @@ def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     # returns a real engine .py path for a word and the string unchanged for a path, so a true
     # executable path falls through to the file resolution below.
     resolved = lfmod.resolve_exe(raw) if raw else ""
+    if raw and lfmod.is_auto_word(raw):         # 3.44.0: "auto" / "recommended"
+        resolved, _why = lfmod.choose_auto(nd_data.detect_lisflood())
+        print(_why, file=sys.stderr)
+        if not resolved:
+            raise CliError(_why)
     if resolved and resolved != raw:
         exe = resolved
     else:

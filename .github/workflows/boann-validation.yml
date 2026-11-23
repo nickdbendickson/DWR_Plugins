@@ -1,0 +1,98 @@
+name: Boann real-dam gate
+
+# Boann's engines (ACC, sub-grid channels and sub-grid FV) on the Lake Delhi 2010 failure, on the CPU build of
+# the GPU kernels (the same arithmetic as the Apple GPU; GPU == CPU is metal-engine.yml's gate).
+# Unlike validation.yml (a report), this is a GATE: the job is red when a run's mean or largest
+# difference at the 8 USGS high-water marks below the dam grows past the recorded baseline by more
+# than the band, a mark comes out dry, or the breach peak moves (tools/validation/lake_delhi_2010/
+# boann_gate.py, boann_baseline.json). Runs on a pull request that changes Boann or the case, and
+# by hand. Downloads 21 MB of USGS 3DEP terrain; about 40 to 60 minutes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "DamSafety_Runner/core/metalflood/**"
+      - "DamSafety_Runner/core/lisflood.py"
+      - "DamSafety_Runner/core/breach.py"
+      - "DamSafety_Runner/core/flood.py"
+      - "tools/validation/lake_delhi_2010/**"
+      - ".github/workflows/boann-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boann-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lake-delhi-boann:
+    name: Lake Delhi Dam 2010 (Boann ACC + SGC + sub-grid FV, CPU build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      # the CPU kernel cache under the runner's temp folder (the runner context is not available
+      # in a job-level env, where it made the whole workflow invalid: no job ever started)
+      - name: Engine cache folder
+        run: echo "DAMSAFETY_MF_CACHE=$RUNNER_TEMP/mfcache" >> "$GITHUB_ENV"
+      - name: Provision QGIS + a scipy-compatible numpy (the runner image has g++ for the CPU build)
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: The gate's own tests and the case's
+        run: |
+          python -W error tools/validation/lake_delhi_2010/test_boann_gate.py
+          python -W error tools/validation/lake_delhi_2010/test_case.py
+      - name: Build the case (terrain from USGS 3DEP, inflow, gate rating)
+        run: |
+          python tools/validation/lake_delhi_2010/build_case.py --out "$RUNNER_TEMP/delhi" --cell 30 --threads 1
+          python tools/validation/lake_delhi_2010/boann_gate.py make "$RUNNER_TEMP/delhi"
+      # three runs side by side (sub-grid FV takes about 3 min); each Boann run uses the CPU build (OpenMP where the compiler has it)
+      - name: Run the observed breach with Boann ACC, SGC and sub-grid FV
+        run: |
+          cli="$GITHUB_WORKSPACE/DamSafety_Runner/scripts/ndbreach_cli.py"
+          cd "$RUNNER_TEMP/delhi"
+          export DAMSAFETY_MF_THREADS=2
+          for n in boann_acc boann_sgc boann_subfv; do
+            ( rc=0; python "$cli" run "$n.json" > "$n.log" 2>&1 || rc="$?"; echo "$rc" > "$n.rc" ) &
+          done
+          wait
+          bad=0
+          for n in boann_acc boann_sgc boann_subfv; do
+            echo "::group::$n (exit $(cat "$n.rc"))"
+            grep -v "^\[ *[0-9]*%\]" "$n.log" | tail -n 60
+            echo "::endgroup::"
+            [ "$(cat "$n.rc")" = "0" ] || bad=1
+          done
+          [ "$bad" = "0" ]
+      - name: Score against the surveyed high-water marks
+        if: always()
+        run: |
+          python tools/validation/lake_delhi_2010/score.py "$RUNNER_TEMP/delhi" --runs boann_acc,boann_sgc,boann_subfv
+          cat "$RUNNER_TEMP/delhi/Lake_Delhi_2010_Score.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Gate on the baseline
+        run: |
+          python tools/validation/lake_delhi_2010/boann_gate.py check "$RUNNER_TEMP/delhi" | tee gate.txt
+          rc="${PIPESTATUS[0]}"
+          { echo; echo '## Gate'; echo; echo '```'; cat gate.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" = "0" ]
+      - name: Keep the score and the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lake-delhi-2010-boann
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/delhi/Lake_Delhi_2010_Score.*
+            ${{ runner.temp }}/delhi/boann_*.json
+            ${{ runner.temp }}/delhi/*.log
+            ${{ runner.temp }}/delhi/runs/*/*/_breach_model/run_report.*

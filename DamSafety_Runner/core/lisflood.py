@@ -208,8 +208,8 @@ BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
 # 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
-# Apple GPU through Metal, or on other computers through the CPU build of the same kernels (one
-# core, needs a C++ compiler). Like the built-in engine it is chosen only by name, never as a
+# Apple GPU through Metal, or on other computers through the CPU build of the same kernels (every
+# core; shipped prebuilt, else compiled once). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
 GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
 GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
@@ -250,6 +250,39 @@ GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid
 GPU_SUBFV_EXE = os.path.join(HERE, "metalflood", "engine_subfv.py")
 GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid fv", "gpu subfv",
                    "subgrid finite volume")
+
+# 3.44.0: "Recommended (auto)": the engine is picked for this computer, by an explicit choice only
+# (never as a silent fallback for a named engine). A Mac with an Apple GPU runs Boann's ACC scheme
+# (the same scheme as LISFLOOD-FP 8.3, matched within millimetres, many times faster there); any
+# other computer runs LISFLOOD-FP when one is installed, else Boann ACC on its CPU build. The run
+# report names the engine that ran, so the choice is always on the record.
+AUTO_WORDS = ("auto", "recommended", "recommended (auto)", "automatic")
+
+
+def is_auto_word(v):
+    return str(v or "").strip().lower() in AUTO_WORDS
+
+
+def choose_auto(lisflood_exe=""):
+    """(engine exe, one line why) for "Recommended (auto)"; exe is "" when nothing can run.
+    lisflood_exe is the LISFLOOD-FP the caller found (setting or auto-detect), if any."""
+    try:
+        from .metalflood import backends as mfb
+        gpu, why = mfb.metal_available()
+        cpu = bool(mfb.prebuilt_available() or mfb.find_compiler())
+    except Exception as e:  # pragma: no cover - backend import trouble: LISFLOOD-FP only
+        gpu, why, cpu = False, str(e), False
+    if gpu:
+        return GPU_EXE, ("Recommended (auto): Boann ACC on this Mac's GPU, the same scheme as "
+                         "LISFLOOD-FP 8.3 and many times faster here")
+    if lisflood_exe and os.path.isfile(str(lisflood_exe)):
+        return str(lisflood_exe), ("Recommended (auto): LISFLOOD-FP (installed here; no Apple "
+                                   "GPU: {})".format(why))
+    if cpu:
+        return GPU_EXE, ("Recommended (auto): Boann ACC on the CPU (no LISFLOOD-FP found and no "
+                         "Apple GPU: {})".format(why))
+    return "", ("Recommended (auto) found no flood engine: no Apple GPU, no LISFLOOD-FP and no "
+                "Boann CPU build. Install LISFLOOD-FP with the suite installer.")
 
 
 def bundled_platform(system=None, machine=None):

@@ -254,10 +254,10 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                 snap_k += 1
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
-            clip = False
+            cut = False      # the clip_end flag; NOT the clipped-volume total `clip`
             want = int(math.ceil((t_event - t) / max(mean_dt, 1e-3))) + 1
             n = max(1, min(BATCH_STEPS, want))
-            out = eng.batch(t, t_event, n, clip)
+            out = eng.batch(t, t_event, n, cut)
             batches += 1
             if out["steps"]:
                 vin += out["vin"]
@@ -268,7 +268,7 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                 last_dt = out["dt"]
                 qin, qout = out["qin"], out["qout"]
                 mean_dt = out["t_local"] / out["steps"]
-            if clip and (t_event - t) - out["t_local"] <= 2e-3:
+            if cut and (t_event - t) - out["t_local"] <= 2e-3:
                 t = t_event
             else:
                 if not out["steps"] and out["t_local"] < (t_event - t) - 2e-3:
