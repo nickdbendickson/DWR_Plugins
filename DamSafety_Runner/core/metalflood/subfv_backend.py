@@ -20,7 +20,8 @@ from . import backends as be
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUBFV_KERNEL_SOURCE = os.path.join(HERE, "kernels_subfv.metal")
 SUBFV_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_subfv.cpp")
-SUBFV_KERNELS = ("k_begin_subfv", "k_eta_subfv", "k_faces_subfv", "k_cont_subfv", "k_end_subfv")
+SUBFV_KERNELS = ("k_begin_subfv", "k_eta_subfv", "k_faces_subfv", "k_limit_subfv", "k_cont_subfv",
+                 "k_end_subfv")
 
 
 class SubFVParams(ctypes.Structure):
@@ -33,12 +34,13 @@ class SubFVParams(ctypes.Structure):
 
 
 def subfv_buffer_layout(ny, nx, n_src, n_series, n_values, r):
-    """[(name, dtype, count)] in the order of kernels_subfv.metal's buffer indices 0..28. Each cell
+    """[(name, dtype, count)] in the order of kernels_subfv.metal's buffer indices 0..29. Each cell
     keeps its r*r sorted sub-elevations (s, stride m = r*r); the conserved state is volume V and the
     two momenta Px/Py (eta is inverted from V into its own buffer each step). The HLLC face fluxes are
     whole-face mass/normal/tangential (fxA/fxN/fxT, fyA/fyN/fyT). The sub-bed face profiles zfx/zfy
     (r sub-cells per face) carry the FREE-edge sub-bed in their boundary slots; nf2x/nf2y are the
-    per-face sub-grid Manning n^2 (reserved). 29 buffers + Params at 29 = 30 slots (<= Metal's 31)."""
+    per-face sub-grid Manning n^2 (reserved); lim is the per-cell positivity limit (Runner 3.59.0).
+    30 buffers + Params at 30 = 31 slots (Metal's 31)."""
     cells = ny * nx
     m = r * r
     xf, yf = ny * (nx + 1), (ny + 1) * nx
@@ -51,16 +53,18 @@ def subfv_buffer_layout(ny, nx, n_src, n_series, n_values, r):
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, be.S_WORDS), ("fxA", f, xf), ("fxN", f, xf), ("fxT", f, xf),
             ("fyA", f, yf), ("fyN", f, yf), ("fyT", f, yf),
-            ("zfx", f, xfp), ("nf2x", f, xfp), ("zfy", f, yfp), ("nf2y", f, yfp)]
+            ("zfx", f, xfp), ("nf2x", f, xfp), ("zfy", f, yfp), ("nf2y", f, yfp),
+            ("lim", f, cells)]
 
 
 def _subfv_plan(p):
     one = (1, 1, 1)
     faces = (p.wc + 1, p.wr + 1, 1)
     cells = (p.wc, p.wr, 1)
-    # eta from V (every cell), HLLC face fluxes, then the FV update + friction + close.
+    # eta from V (every cell), HLLC face fluxes, the positivity limit, then the FV update +
+    # friction + close.
     return [("k_begin_subfv", one), ("k_eta_subfv", cells), ("k_faces_subfv", faces),
-            ("k_cont_subfv", cells), ("k_end_subfv", one)]
+            ("k_limit_subfv", cells), ("k_cont_subfv", cells), ("k_end_subfv", one)]
 
 
 SUBFV_SPEC = be.Spec("subfv", SUBFV_KERNEL_SOURCE, be.SHIM, SUBFV_CPU_SOURCE, SUBFV_KERNELS,

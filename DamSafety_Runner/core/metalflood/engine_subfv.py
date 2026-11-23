@@ -29,7 +29,7 @@ from . import engine as mfe
 from . import engine_fv as mff
 
 NAME = "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells, on the GPU via Metal)"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 G = bl.G
 NODATA = bl.NODATA
 DRY_M = bl.DRY_M

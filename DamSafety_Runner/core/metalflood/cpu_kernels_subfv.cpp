@@ -4,12 +4,12 @@
 #include "mf_shim.h"
 #include "kernels_subfv.metal"
 
-// the sub-grid MF_ARGS_SUBFV signature: 29 buffers (0..28) then const Params& and uint2
+// the sub-grid MF_ARGS_SUBFV signature: 30 buffers (0..29) then const Params& and uint2
 template <void (*K)(const float*, const float*, float*, float*, float*, float*, float*, float*,
                     float*, float*, float*, const uchar*, const uint*, const uint*, const uint*,
                     const float*, const float*, uint*, uint*, float*, float*, float*, float*,
                     float*, float*, const float*, const float*, const float*, const float*,
-                    const Params&, uint2)>
+                    float*, const Params&, uint2)>
 static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
     MF_PAR_FOR
     for (uint y = 0; y < hgt; ++y) {
@@ -21,7 +21,7 @@ static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
               (const float*)b[15], (const float*)b[16], (uint*)b[17], (uint*)b[18], (float*)b[19],
               (float*)b[20], (float*)b[21], (float*)b[22], (float*)b[23], (float*)b[24],
               (const float*)b[25], (const float*)b[26], (const float*)b[27], (const float*)b[28],
-              p, g);
+              (float*)b[29], p, g);
         }
     }
 }
@@ -38,6 +38,7 @@ int mf_run_batch(void** b, const Params* pp, int nsteps) {
         mf_dispatch<k_begin_subfv>(b, p, 1, 1);
         mf_dispatch<k_eta_subfv>(b, p, p.wc, p.wr);
         mf_dispatch<k_faces_subfv>(b, p, p.wc + 1, p.wr + 1);
+        mf_dispatch<k_limit_subfv>(b, p, p.wc, p.wr);
         mf_dispatch<k_cont_subfv>(b, p, p.wc, p.wr);
         mf_dispatch<k_end_subfv>(b, p, 1, 1);
     }
