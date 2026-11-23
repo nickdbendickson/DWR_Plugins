@@ -1098,7 +1098,10 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edi
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
-            g = dem_refill.fill_grid(g, _p)
+            if _p == dem_refill.HOLE_FILL:       # 3.58.2: enclosed holes from the ground around
+                g, _n = dem_refill.fill_interior_holes(g)
+            else:
+                g = dem_refill.fill_grid(g, _p)
     cuts = structmod.structure_edits(structures or [], cell, model)
     counts = {}
     if cuts:
@@ -3202,6 +3205,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
     refilled = False
+    hole_filled = False                      # 3.58.2: enclosed holes filled from their rim
     hole_held = False
     stop_reason = None
     while it <= max_it:
@@ -3344,6 +3348,39 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             elif touch_n and refilled:
                 hole_held = True
                 stop_reason = "no-data after one refill"
+            # 3.58.2 (batch 44, DWR-2631: Low against a record of Significant, the flood held
+            # back by 28 wet cells of a 1 m LiDAR gap the 3DEP refill did not close): before
+            # calling the run held, fill the ENCLOSED holes the flood touches from the ground
+            # around them (dem_refill.fill_interior_holes) and run the same domain run again,
+            # once. A hole on the DEM's outer edge or over HOLE_FILL_MAX_AC acres is left: it
+            # still holds the run, with the warning below.
+            if hole_held and touch_n and not hole_filled and plan is None:
+                from . import dem_refill
+                from scipy.ndimage import binary_dilation as _bd
+                _fillable, _left = dem_refill.interior_holes(dem)
+                _wet = np.nan_to_num(lf_env.depth.data) > WET_M
+                _hit = _fillable & _bd(_wet, structure=np.ones((3, 3), bool))
+                if _hit.any():
+                    hole_filled = True
+                    hole_held = False
+                    refill_paths.append(dem_refill.HOLE_FILL)
+                    rec["followed_by_dem_refill"] = True
+                    msg = ("Wet cells sit on DEM no-data that {} did not fill ({:,} cells). The "
+                           "enclosed holes the flood reaches ({:,} no-data cells, each at most "
+                           "{:.0f} ac and inside surveyed ground) were filled from the ground "
+                           "around them, and the same domain run was run again. Check the "
+                           "filled cells (QA/DEM edits) if a channel or road runs through one."
+                           .format("the 3DEP refill" if refilled else "a 3DEP refill",
+                                   touch_n, int(_fillable.sum()),
+                                   dem_refill.HOLE_FILL_MAX_AC))
+                    log(msg)
+                    if msg not in warnings:
+                        warnings.append(msg)
+                    stop_reason = None
+                    state.save(iterations=iterations, next_bounds=list(bounds),
+                               next_sim_time=sim_time, warnings=warnings, lisflood_done=False,
+                               next_it=it)
+                    continue
         if hole_held and not any("held up by a hole" in w for w in warnings):
             warnings.append(
                 "Depth is held up by a hole in the terrain ({:,} wet cells still on no-data, {}). "
