@@ -1588,3 +1588,31 @@ if __name__ == "__main__":
             print("FAIL  ", fn.__name__)
             traceback.print_exc()
     sys.exit(1 if fails else 0)
+
+
+@test
+def metalflood_fv2_has_no_velocity_spikes():
+    """Runner 3.66.0: FV2 reconstructed the discharges and divided them by the reconstructed face
+    depth eta_face - z, a few mm on a steep bank under a full cell's discharge. On the valley deck
+    that made face velocities of 20-30 m/s and momentum spikes in 0.5-2 m of water (maxVc 30.4 m/s,
+    43 cells over 5 m/s, where FV1 has 7.8 m/s and 1 cell), and the answer moved by up to 15 cm when
+    only the last bit of rounding changed (FMA on, or the Apple GPU against the CPU build). FV2 now
+    reconstructs velocities, so a face velocity lies between its cells' velocities: its fastest
+    cell is within a quarter of FV1's and its depths stay close to FV1's."""
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        v, h = {}, {}
+        for order in (1, 2):
+            deck = valley_deck(os.path.join(d, "o{}".format(order)))
+            fve.run_par(deck, backend="cpu", order=order)
+            v[order] = _res(os.path.join(d, "o{}".format(order)), "maxVc")
+            h[order] = _res(os.path.join(d, "o{}".format(order)), "max")
+        m = (v[1] != bl.NODATA) & (v[2] != bl.NODATA)
+        assert v[2][m].max() <= 1.25 * v[1][m].max(), (v[2][m].max(), v[1][m].max())
+        assert (v[2][m] > 5.0).sum() <= (v[1][m] > 5.0).sum() + 2, ((v[2][m] > 5.0).sum(),
+                                                                     (v[1][m] > 5.0).sum())
+        wet = m & (h[1] > 0.01)
+        assert np.abs(h[2] - h[1])[wet].mean() < 0.05, np.abs(h[2] - h[1])[wet].mean()
+    finally:
+        shutil.rmtree(d, True)

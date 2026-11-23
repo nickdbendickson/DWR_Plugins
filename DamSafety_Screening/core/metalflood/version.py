@@ -7,4 +7,4 @@ The Runner records it in the run manifest (software.boann) beside its own versio
 
 Each solver module still carries its own NAME / VERSION, written as the first line of the
 lisflood.log a run leaves; those are unchanged."""
-BOANN_VERSION = "1.0.0"
+BOANN_VERSION = "3.0.0"   # 3.0.0 (Runner 3.66.0): FV2 face velocities (FV2 results move)
