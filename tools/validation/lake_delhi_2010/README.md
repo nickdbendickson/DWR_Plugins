@@ -232,3 +232,12 @@ checks, so a renamed Runner setting or a changed routing shows there.
   River at Manchester, IA (`manchester_05416900_iv.csv`).
 - Terrain: USGS 3D Elevation Program. Bridge points: U.S. Census Bureau TIGER roads crossing
   the USGS 3D Hydrography Program river line.
+
+## Boann's gate
+
+`boann_gate.py make CASE` writes `boann_acc.json`, `boann_sgc.json` and `boann_subfv.json` beside
+`as_observed.json` (the observed breach with Boann ACC; with Boann sub-grid channels: 347 sq mi upstream,
+channels from 2 km², channel n 0.035; and with Boann sub-grid FV at its default r = 4, so 120 m cells that
+keep their 30 m sub-cells). After `score.py CASE --runs boann_acc,boann_sgc,boann_subfv`, `boann_gate.py check CASE` compares
+each run with `boann_baseline.json` and exits 1 when it got worse by more than the band.
+`.github/workflows/boann-validation.yml` does all of it on every pull request that touches Boann.

@@ -178,6 +178,52 @@ def subgrid_hllc_kernel_matches_reference():
 
 
 @test
+def subgrid_hllc_peak_velocity_is_a_speed_the_cell_held():
+    """The peak-velocity grid (.maxVc) must hold a speed the cell really carried at the end of some
+    step - never the speed BEFORE that step's friction. In a film of water behind a wetting front the
+    pre-friction speed is momentum / (almost no volume): thousands of m/s for one step, which the
+    semi-implicit friction then takes away. It once went into the grid: 60,500 m/s in a cell of the
+    real Lake Delhi run at r = 8, and a few percent too fast everywhere else."""
+    t, V0, src_cell, Q, dt0, nsteps = _dam_break_case()
+    ny, nx, r, m = t.ny, t.nx, t.r, t.r * t.r
+    back = be.CpuBackend(sb.SUBFV_SPEC)
+    a = back.allocate(sb.subfv_buffer_layout(ny, nx, 1, 1, 1, r))
+    a["s"][:] = t.s.reshape(-1).astype(np.float32)
+    a["nc2"][:] = (t.ncell ** 2).reshape(-1).astype(np.float32)
+    a["V"][:] = V0.reshape(-1).astype(np.float32)
+    a["ok"][:] = 1
+    a["arr"][:] = -9999.0
+    zfx, nf2x, zfy, nf2y = sg.all_faces(t)
+    a["zfx"][:] = zfx.reshape(-1).astype(np.float32)
+    a["nf2x"][:] = nf2x.reshape(-1).astype(np.float32)
+    a["zfy"][:] = zfy.reshape(-1).astype(np.float32)
+    a["nf2y"][:] = nf2y.reshape(-1).astype(np.float32)
+    a["s_cell"][:] = src_cell[0] * nx + src_cell[1]
+    a["s_series"][:] = 0
+    a["ser_off"][:] = np.array([0, 1], np.uint32)
+    a["ser_t"][:] = 0.0
+    a["ser_q"][:] = Q
+    p = sb.SubFVParams(nx=nx, ny=ny, r0=0, c0=0, wr=ny, wc=nx, free_mask=0, n_src=1, n_series=1,
+                       r=r, m=m, clip_end=0, dx=t.dx, dt0=dt0, alpha=hv.CFL_CAP, g=sg.G, dry=1e-3,
+                       arr_depth=0.05, t0=0.0, t_end=1.0e9, wsub=t.wsub, pad=0.0)
+    vfloor = hv.HVEL * t.dx * t.dx
+    held = np.zeros(ny * nx)
+    for _ in range(nsteps):
+        back.run_batch(p, 1)
+        V = a["V"].astype(np.float64)
+        wet = V > vfloor
+        spd = np.where(wet, np.hypot(a["Px"], a["Py"]) / np.where(wet, V, 1.0), 0.0)
+        held = np.maximum(held, spd)
+    vmax = a["vmax"].astype(np.float64)
+    over = vmax - held
+    k = int(np.argmax(over))
+    assert over[k] <= 1e-4 * max(held[k], 1.0), \
+        "peak velocity {:.3f} m/s in a cell that never carried more than {:.3f} m/s".format(
+            vmax[k], held[k])
+    assert held.max() > 1.0, "the case made no flow to speak of ({:.3f} m/s)".format(held.max())
+
+
+@test
 def subgrid_hllc_gpu_matches_cpu():
     """The Apple-GPU (Metal) build matches the CPU build of the same kernel source, cell for cell.
     Runs only on a Mac with a Metal GPU (Nick's M2 Pro, the macOS CI job); skipped in the cloud."""
@@ -205,7 +251,8 @@ def subgrid_hllc_gpu_matches_cpu():
 def _main():
     import traceback
     fns = [subgrid_subfv_layout_matches_kernel, subgrid_hllc_kernel_matches_reference,
-           subgrid_hllc_free_edge_drains_and_matches_reference, subgrid_hllc_gpu_matches_cpu]
+           subgrid_hllc_free_edge_drains_and_matches_reference,
+           subgrid_hllc_peak_velocity_is_a_speed_the_cell_held, subgrid_hllc_gpu_matches_cpu]
     f = 0
     for fn in fns:
         try:

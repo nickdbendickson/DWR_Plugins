@@ -911,6 +911,11 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
             bits.append("incomplete: flood cut off ({})".format(reason))
         else:
             bits.append("incomplete: flood still advancing at the time cap")
+    emin = (extra or {}).get("extent_is_minimum")
+    if emin and not cut_off:
+        bits.append("flood extent is a minimum ({} of the breach volume left the model)".format(
+            "{:.0f}%".format(emin) if isinstance(emin, (int, float)) and emin is not True
+            else "a significant share"))
     # audit R2 (2026-11-07): a class with a layer not evaluated, or with structures whose
     # evaluation failed, never reads as a clean class on the headline line (the same list
     # the portfolio row and the run snapshot carry)

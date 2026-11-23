@@ -843,6 +843,15 @@ def make_opening(method, c, dam, ov, wse_start_m):
                      "Use the flood scenario (an inflow that raises the pool over the crest) for "
                      "an overtopping failure, or a piping method for a pool below the crest."
                      .format((c.top_m - wse_start_m) / FT))
+    # Absaraka audit: the mirror case - the pool already OVER the crest when the breach starts
+    # (a flood start) sized with a piping method's parameters. Overtopping forms give larger
+    # openings (11-29% higher peaks on a synthetic dam), so say so; nothing is switched.
+    if mode == "piping" and wse_start_m > c.top_m + 0.03:
+        notes.append("Piping breach parameters with the pool {:.1f} ft ABOVE the crest when the "
+                     "breach starts: the dam is overtopping, and an overtopping method (or the "
+                     "overtopping form of this one) usually gives a wider opening and a higher "
+                     "peak. Kept as chosen; consider the overtopping form for this scenario."
+                     .format((wse_start_m - c.top_m) / FT))
     pipe = None
     p = {}
     if method == METHOD_PIPING_ORIFICE:

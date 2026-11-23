@@ -454,9 +454,17 @@ kernel void k_cont_subfv(MF_ARGS_SUBFV) {
     float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
     float wcell = 0.0f, vmagn = 0.0f;
     if (h > MF_HVEL) {
+        // the CFL limit keeps the speed BEFORE friction (un, vn): it is the larger of the two, and
+        // the shorter step it gives is what holds the V >= 0 clip down on coarse cells (Lake Delhi
+        // at r = 8: 1.7 % of the water is clip with it, 6.8 % with the speed after friction).
         float cc = sqrt(g * fmax(hR, 0.0f));
         wcell = fmax(fabs(un), fabs(vn)) + cc;
-        vmagn = spd;
+        // the peak-velocity grid takes the speed the cell CARRIES into the next step, after
+        // friction and the near-dry reset (as kernels_fv.metal). The speed before friction is an
+        // intermediate: in a film of water it is momentum over almost no volume, thousands of m/s
+        // for one step.
+        float uc = mf_vel(Pxn, Vn, vfloor), vc = mf_vel(Pyn, Vn, vfloor);
+        vmagn = sqrt(uc * uc + vc * vc);
     }
     if (h > p.dry) {
         if (h > hmax[i]) { hmax[i] = h; tmax[i] = th; }

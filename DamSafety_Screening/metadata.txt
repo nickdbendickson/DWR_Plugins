@@ -5,11 +5,13 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.30.0
+version=0.32.0
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 category=Plugins
-changelog=0.30.0 (2026-11-22; the byte-identical copy of the Runner's GPU engine is refreshed for the FV/FV2/DG2 FREE-edge Manning normal-depth outflow floor (Runner 3.47.0), so water that reaches an open (FREE) model boundary leaves instead of coming to rest against it (kernels_fv.metal, kernels_fv2.metal, kernels_dg2.metal). Results of a gpu-fv / gpu-fv2 / gpu-dg2 run with a wet FREE edge can move, toward the ACC answer; no change to any default run.)
+changelog=0.32.0 (2026-11-22; the byte-identical copy of the Runner's GPU engine is refreshed for the FV/FV2/DG2 FREE-edge Manning normal-depth outflow floor (Runner 3.52.0), so water that reaches an open (FREE) model boundary leaves instead of coming to rest against it (kernels_fv.metal, kernels_fv2.metal, kernels_dg2.metal). Results of a gpu-fv / gpu-fv2 / gpu-dg2 run with a wet FREE edge can move, toward the ACC answer; no change to any default run.)
+    0.31.0 - (2026-11-22) tool 7's Boann engine files re-synced with DamSafety Runner 3.50.0: the engine's clock no longer falls behind the time it simulates when a batch clips water (engine.py / engine_fv.py used one name for the end-cut flag and the clipped-volume total). Tool 7's Boann results move slightly: arrival and peak times later by about 0.5 %% of the time since the breach, depths a little lower at the flood front.
+    0.29.0 - (2026-11-22) tool 7's Boann engine files re-synced with DamSafety Runner 3.43.0: the CPU build uses every core (OpenMP, same bits as one core) and a CPU library shipped in core/metalflood/prebuilt/<platform>/ is used before a compiler. No result change.
     0.28.0 (2026-11-21; a step stopped part-way is run again: the run-in-order chain (window and tool 15) marks each step it starts (<work>/_logs/step_<N>.running) and clears the mark only when the step ends well. A step killed by a time limit or a cancel, crashed or failed keeps the mark, so its output is not counted as done, and its half-written output file (e.g. an empty 7_simulations.gpkg) is removed before it runs again. Before, a one-dam chain killed in step 7 left an empty 7_simulations.gpkg, the next chain planned 8, 10 and step 8 failed reading it (Crest install test). Test tests/test_chain_interrupted.py.)
     0.27.0 (2026-11-20; the byte-identical copy of the Runner's GPU engine is refreshed so the SGC floodplain conveyance matches LISFLOOD-FP's SGC2: the above-bank floodplain area uses the full cell width with the channel share removed once, not twice (kernels_sgc.metal). Kept byte-identical to the Runner's copy.)
     0.26.0 (2026-11-20; the byte-identical copy of the Runner's GPU engine is refreshed to add its sub-grid-channel solver (engine_sgc.py, kernels_sgc.metal, cpu_kernels_sgc.cpp: the ACC local-inertial scheme with LISFLOOD-FP's sub-grid channels, Neal et al. 2012), kept byte-identical to the Runner's copy. The Runner's shared engine files (backends.py, mf_shim.h, __init__.py) are re-synced. The engine files stay a byte copy of the Runner's.)
@@ -43,7 +45,7 @@ changelog=0.30.0 (2026-11-22; the byte-identical copy of the Runner's GPU engine
     0.18.9 - Shared damsuite 1.18.6: the offline pack builder is one engine for both suites (damsuite/packengine.py); this plugin does not build packs and is unchanged otherwise.
 author=Nick Bendickson
 about=Screening-level tool. Output is for prioritization only; official hazard classification is determined by the ND Department of Water Resources.
-repository=https://github.com/nickdbendickson/dAmIt_Plugins
-tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
-homepage=https://github.com/nickdbendickson/dAmIt_Plugins
+repository=https://github.com/nickdbendickson/DWR_Plugins
+tracker=https://github.com/nickdbendickson/DWR_Plugins/issues
+homepage=https://github.com/nickdbendickson/DWR_Plugins
 experimental=True

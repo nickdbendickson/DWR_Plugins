@@ -30,8 +30,10 @@ from nd_breach_runner.tests.registry import Skip, model_test, test
 
 
 def _need_cpu_build():
+    if mfb.prebuilt_available():
+        return                                   # a release's shipped CPU build (any OS)
     if os.name == "nt":
-        raise Skip("the engine's CPU build is not made on Windows")
+        raise Skip("the engine's CPU build is not made on Windows (a release ships it prebuilt)")
     if not mfb.find_compiler():
         raise Skip("no C++ compiler for the engine's CPU build")
 
@@ -409,6 +411,50 @@ def _fv_deck(folder, z, h0, dx=5.0, sim=100.0, n=0.0, free=""):
     with open(os.path.join(folder, "run.par"), "w") as f:
         f.write("\n".join(lines) + "\n")
     return os.path.join(folder, "run.par")
+
+
+@test
+def metalflood_clock_and_clip_total_survive_a_clipping_batch():
+    """The run's clock must be the time the engine really simulated, and clipped_m3 the sum of
+    every batch's clip. Both once broke on the same reused name: `clip` was the end-cut flag AND
+    the clipped-volume total, so a batch that clipped any water (a) threw away the time its last
+    step ran past the output time (the clock fell 112 s behind in 6 h of the real Lake Delhi
+    ACC run, so inflow and arrival times were read off a slow clock) and (b) reset the total, so
+    only the last batch's clip was reported. Every batch here reports a small clip; the clock and
+    the total must still add up, for ACC and for the shock-capturing (FV) engines."""
+    _need_cpu_build()
+    for mod, extra in ((mfe, ["acceleration"]), (fve, [])):
+        d = _tmp()
+        seen = {"t": 0.0, "clip": 0.0, "n": 0}
+        orig = mod.Engine.batch
+
+        def batch(self, t, t_event, nsteps, clip, _o=orig):
+            out = dict(_o(self, t, t_event, nsteps, clip))
+            if out["steps"]:
+                out["clip"] = out["clip"] + 0.25          # as if the depth >= 0 clip had acted
+            seen["t"] += out["t_local"]
+            seen["clip"] += out["clip"] if out["steps"] else 0.0
+            seen["n"] += 1
+            return out
+        mod.Engine.batch = batch
+        try:
+            z = np.tile(10.0 - 0.01 * (np.arange(40) + 0.5) * 5.0, (6, 1))
+            h0 = np.zeros_like(z); h0[:, :8] = 1.0
+            p = _fv_deck(os.path.join(d, "c"), z, h0, dx=5.0, sim=120.0, n=0.03, free="E")
+            txt = open(p).read().replace("massint 120.0", "massint 7.0")   # many output times
+            with open(p, "w") as f:
+                f.write(txt + "".join(x + "\n" for x in extra))
+            st = mod.run_par(p, backend="cpu")
+        finally:
+            mod.Engine.batch = orig
+            shutil.rmtree(d, True)
+        assert seen["n"] > 10, seen
+        assert abs(st["sim_time_s"] - seen["t"]) < 1e-6, (
+            "{}: the clock says {:.4f} s but the engine simulated {:.4f} s".format(
+                mod.__name__, st["sim_time_s"], seen["t"]))
+        assert abs(st["clipped_m3"] - seen["clip"]) < 1e-6, (
+            "{}: clipped_m3 {:.4f} but the batches clipped {:.4f}".format(
+                mod.__name__, st["clipped_m3"], seen["clip"]))
 
 
 @test
@@ -935,9 +981,53 @@ def sgc_engine_is_a_runner_engine_choice():
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
                    "gpu-subfv": lf.GPU_SUBFV_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
+            if _w == "auto":                            # 3.44.0: picked per computer, tested below
+                continue
             assert lf.resolve_exe(_w) == exe_for[_w], _w
         assert lf.resolve_exe("lisflood") == "lisflood"  # not an engine word -> returned verbatim
 
+
+@test
+def recommended_auto_engine_choice():
+    """Runner 3.44.0: 'Recommended (auto)' is appended (no saved index moves), labels are plain (no
+    'Apple GPU' - the engine also runs on the CPU), and choose_auto picks Boann ACC on an Apple GPU,
+    else an installed LISFLOOD-FP, else Boann on the CPU, else nothing (with a reason)."""
+    import os
+    import tempfile
+    from unittest import mock
+    from nd_breach_runner.core import lisflood as lf
+    from nd_breach_runner.core.metalflood import backends as mfb
+    for w in ("auto", " Auto ", "recommended", "Recommended (auto)"):
+        assert lf.is_auto_word(w), w
+    assert not lf.is_auto_word("gpu") and not lf.is_auto_word("")
+    fake_lf = os.path.join(tempfile.mkdtemp(prefix="autolf_"), "lisflood")
+    open(fake_lf, "w").close()
+    with mock.patch.object(mfb, "metal_available", return_value=(True, "M2 Pro")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == lf.GPU_EXE and "GPU" in why, why
+    with mock.patch.object(mfb, "metal_available", return_value=(False, "not macOS")):
+        exe, why = lf.choose_auto(fake_lf)
+        assert exe == fake_lf and "LISFLOOD-FP" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=True):
+            exe, why = lf.choose_auto("")
+            assert exe == lf.GPU_EXE and "CPU" in why, why
+        with mock.patch.object(mfb, "prebuilt_available", return_value=False), \
+                mock.patch.object(mfb, "find_compiler", return_value=None):
+            exe, why = lf.choose_auto(os.path.join(os.path.dirname(fake_lf), "missing"))
+            assert exe == "" and "no flood engine" in why, why
+    try:
+        from nd_breach_runner import algorithms as algs
+    except ImportError:
+        algs = None
+    if algs is not None:
+        assert algs.FLOOD_ENGINES[:7] == ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2",
+                                          "gpu-sgc", "gpu-subfv")   # saved indices unchanged
+        assert algs.FLOOD_ENGINES[7] == "auto"
+        assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
+        assert not any("Apple GPU" in t for t in algs.FLOOD_ENGINES_TEXT)
+        assert algs.FLOOD_ENGINES_TEXT[7].startswith("Recommended (auto)")
+        for i in (3, 4, 6):
+            assert algs.FLOOD_ENGINES_TEXT[i].startswith("Advanced:"), i
 
 @test
 def subfv_engine_is_a_runner_engine_choice():
@@ -992,6 +1082,36 @@ def subfv_engine_is_a_runner_engine_choice():
     st2 = lf.LisfloodSettings(lf.GPU_FV_EXE, sim_time_s=60.0, subgrid_r=5)
     par2 = lf.write_inputs(tempfile.mkdtemp(prefix="subfvpar2_"), dem, (5.0, 40.0), hy, st2)
     assert "subgrid" not in open(par2, encoding="utf-8").read()
+
+
+@test
+def subfv_coarsening_factor_is_a_cli_config_key():
+    """Runner 3.49.0: a headless run sets the sub-grid FV coarsening factor with model.subgrid_r
+    (1-8), as the run tool does with SUBGRID_R. It lands on the same run setting the tool writes
+    (user_subgrid_r), so workflow forwards it to the .par the same way. A config without the key
+    leaves the settings - and so the resume key of every existing run - exactly as they were."""
+    import importlib
+    from nd_breach_runner.core import workflow
+    cli = importlib.import_module("nd_breach_runner.scripts.ndbreach_cli")
+    assert cli.MODEL_KEYS["subgrid_r"] == ("user_subgrid_r", ("int", 1, 8))
+    opts = type("O", (), {"lisflood": sys.executable})()
+    st = cli.build_settings(cli.Config({"model": {"subgrid_r": 8}}, ""), opts, need_models=False)
+    assert st.user_subgrid_r == 8 and isinstance(st.user_subgrid_r, int)
+    assert workflow.key_settings(st)["user_subgrid_r"] == 8      # a different r is a different run
+    plain = cli.build_settings(cli.Config({"model": {}}, ""), opts, need_models=False)
+    assert plain.user_subgrid_r is None and workflow.RunSettings().user_subgrid_r is None
+    assert "user_subgrid_r" not in workflow.key_settings(plain)   # earlier checkpoints still resume
+    for bad in (0, 9, 2.5, "4"):
+        try:
+            cli._check_value("model.subgrid_r", bad, cli.MODEL_KEYS["subgrid_r"][1])
+        except cli.CliError:
+            continue
+        raise AssertionError("model.subgrid_r accepted {!r}".format(bad))
+    # the run tool writes the same attribute, and workflow reads it for the .par keyword
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert "st.user_subgrid_r = " in open(os.path.join(here, "algorithms.py"), encoding="utf-8").read()
+    assert 'kw["subgrid_r"] = int(st.user_subgrid_r)' in open(
+        os.path.join(here, "core", "workflow.py"), encoding="utf-8").read()
 
 
 @test
@@ -1229,6 +1349,100 @@ def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
     return os.path.join(folder, "run.par")
 
 
+@test
+def metalflood_cpu_openmp_matches_one_core():
+    """The multi-core (OpenMP) CPU build gives the same bits as the one-core build for every Boann
+    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV): every reduction in the kernels is an integer
+    add / max / min, so the order the cores finish in cannot change the answer."""
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_fv2 as fv2e, engine_dg2 as dg2e
+    from nd_breach_runner.core.metalflood import engine_sgc as sgce, engine_subfv as sfve
+    from nd_breach_runner.core.metalflood import subfv_backend as sfb
+    keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_THREADS")}
+    try:
+        os.environ["DAMSAFETY_MF_OPENMP"] = "1"
+        if not mfb.build_cpu_library(mfb.FLOOD_SPEC).endswith("_omp" + mfb.library_ext()):
+            raise Skip("this C++ compiler has no OpenMP")
+        engines = (("acc", mf.run_par, mfb.FLOOD_SPEC), ("fv", fve.run_par, mfb.FV_SPEC),
+                   ("fv2", fv2e.run_par, mfb.FV2_SPEC), ("dg2", dg2e.run_par, mfb.DG2_SPEC),
+                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC))
+        d = _tmp()
+        try:
+            for name, run, spec in engines:
+                outs = []
+                for mode, threads in (("0", "1"), ("1", "4")):
+                    os.environ["DAMSAFETY_MF_OPENMP"] = mode
+                    os.environ["DAMSAFETY_MF_THREADS"] = threads
+                    lib = mfb.build_cpu_library(spec)
+                    assert ("_omp" in os.path.basename(lib)) == (mode == "1"), lib
+                    f = os.path.join(d, "{}_{}".format(name, mode))
+                    p = valley_deck(f, ny=72, nx=110, sim_s=1800.0, hole=False, pond=False,
+                                    gauge=False, free="E")
+                    st = run(p, backend="cpu")
+                    outs.append((st, {e: _res(f, e) for e in ("max", "maxVc", "inittm")}))
+                (s1, r1), (sn, rn) = outs
+                assert s1["steps"] == sn["steps"], (name, s1["steps"], sn["steps"])
+                for e in r1:
+                    assert np.array_equal(r1[e], rn[e]), (name, e, float(np.abs(r1[e] - rn[e]).max()))
+                assert s1["final_volume_m3"] == sn["final_volume_m3"], name
+        finally:
+            shutil.rmtree(d, True)
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@test
+def metalflood_cpu_prefers_a_prebuilt_library():
+    """A CPU build shipped in prebuilt/<platform>/ under these sources' name is used before the
+    cache or a compiler; a file there that does not open is skipped."""
+    _need_cpu_build()
+    keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_CACHE")}
+    lib_dir = os.path.join(mfb.PREBUILT_DIR, mfb.platform_tag())
+    made_root = not os.path.isdir(mfb.PREBUILT_DIR)
+    made_dir = not os.path.isdir(lib_dir)
+    d = _tmp()
+    made = []
+    try:
+        os.environ["DAMSAFETY_MF_CACHE"] = os.path.join(d, "cache")
+        os.environ["DAMSAFETY_MF_OPENMP"] = "0"
+        built = mfb.build_cpu_library(mfb.FLOOD_SPEC)            # one-core build, in the cache
+        os.makedirs(lib_dir, exist_ok=True)
+        serial = os.path.join(lib_dir, mfb.cpu_library_name(mfb.FLOOD_SPEC, mfb.library_ext(), False))
+        omp = os.path.join(lib_dir, mfb.cpu_library_name(mfb.FLOOD_SPEC, mfb.library_ext(), True))
+        for path in (serial, omp):
+            if os.path.exists(path):
+                raise Skip("a real prebuilt library is present")
+        shutil.copy(built, serial)
+        made.append(serial)
+        with open(omp, "wb") as f:                                # does not open: skipped
+            f.write(b"not a library")
+        made.append(omp)
+        os.environ["DAMSAFETY_MF_OPENMP"] = "1"
+        assert mfb.build_cpu_library(mfb.FLOOD_SPEC) == serial
+        assert mfb.prebuilt_available(mfb.FLOOD_SPEC)
+        bk = mfb.CpuBackend(mfb.FLOOD_SPEC)
+        assert bk.lib is not None
+        bk.close()
+    finally:
+        for path in made:
+            if os.path.exists(path):
+                os.remove(path)
+        if made_root:
+            shutil.rmtree(mfb.PREBUILT_DIR, True)
+        elif made_dir:
+            shutil.rmtree(lib_dir, True)
+        shutil.rmtree(d, True)
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 if __name__ == "__main__":
     fails = 0
     for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
@@ -1238,6 +1452,7 @@ if __name__ == "__main__":
                gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
                metalflood_diagnostic_cases_match_serial_oracle,
                metalflood_diagnostic_cases_run,
+               metalflood_clock_and_clip_total_survive_a_clipping_batch,
                metalflood_fv_lake_at_rest_is_well_balanced,
                metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
                metalflood_fv2_lake_at_rest_is_well_balanced,
@@ -1250,13 +1465,15 @@ if __name__ == "__main__":
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,
                sgc_engine_is_a_runner_engine_choice,
-               subfv_engine_is_a_runner_engine_choice,
+               subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
+               subfv_coarsening_factor_is_a_cli_config_key,
                metalflood_sgc_params_layout_matches_kernels,
                metalflood_sgc_channel_at_rest_is_well_balanced,
                metalflood_sgc_matches_the_float64_reference,
                metalflood_sgc_conveys_below_bank_then_spills_overbank,
                metalflood_sgc_free_edge_drains_and_matches_reference,
                metalflood_sgc_reduces_to_acc_without_channels,
+               metalflood_cpu_openmp_matches_one_core, metalflood_cpu_prefers_a_prebuilt_library,
                metalflood_sgc_floodplain_area_spans_the_full_cell_width):
         try:
             fn()
