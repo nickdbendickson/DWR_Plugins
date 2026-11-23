@@ -14,7 +14,9 @@
 //   - the Audusse bed source (0.5 g (h^2 - h*^2)) added per face so still water stays still;
 //   - forward Euler in time; dt = min(initial_tstep, cfl dx / max_cell(|u|+c, |v|+c)), cfl capped
 //     at 0.45 for the 2-D explicit stability limit, computed on the GPU every step;
-//   - FREE domain edges are transmissive (zero-gradient ghost); closed edges are reflective walls.
+//   - FREE domain edges are transmissive (zero-gradient ghost) for OUTFLOW only: an inward velocity
+//     is cut to 0, so no water enters from outside the model (as ACC / LISFLOOD-FP FREE edges);
+//     closed edges are reflective walls.
 //
 // Compiled two ways, exactly like kernels.metal: by Metal at run time on a Mac, and as C++ with
 // mf_shim.h (cpu_kernels_fv.cpp) everywhere else. So: plain functions, B(i)/GID for the Metal
@@ -305,6 +307,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                         float und = mf_free_und(z[i] + h[i], z[i + 1u] + h[i + 1u], h[i], n2[i], p.dx);
                         if (und > 0.0f) uo = fmin(ui, -und);          // at least und outward (-x)
                     }
+                    uo = fmin(uo, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[i], uo, vi, h[i], uo, vi, g);      // transmissive, normal-depth floor
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
@@ -322,6 +325,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                         float und = mf_free_und(z[i] + h[i], z[i - 1u] + h[i - 1u], h[i], n2[i], p.dx);
                         if (und > 0.0f) uo = fmax(ui, und);           // at least und outward (+x)
                     }
+                    uo = fmax(uo, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[i], uo, vi, h[i], uo, vi, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {
@@ -363,6 +367,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                         float und = mf_free_und(z[i] + h[i], z[i + nx] + h[i + nx], h[i], n2[i], p.dx);
                         if (und > 0.0f) no = fmin(ni, -und);          // at least und outward (-y)
                     }
+                    no = fmin(no, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[i], no, ti, h[i], no, ti, g);
                     outflow += fmax(-fl.h, 0.0f);
                 } else {
@@ -380,6 +385,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                         float und = mf_free_und(z[i] + h[i], z[i - nx] + h[i - nx], h[i], n2[i], p.dx);
                         if (und > 0.0f) no = fmax(ni, und);           // at least und outward (+y)
                     }
+                    no = fmax(no, 0.0f);                     // outflow only: nothing enters from outside
                     fl = mf_hllc(h[i], no, ti, h[i], no, ti, g);
                     outflow += fmax(fl.h, 0.0f);
                 } else {

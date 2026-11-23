@@ -140,11 +140,45 @@ def subfv_engine_open_edge_does_not_strand_a_pool():
         shutil.rmtree(d, True)
 
 
+@test
+def subfv_engine_open_edge_lets_no_water_in():
+    """An open (FREE) edge lets water OUT, never IN. A mound against the open east edge of a flat
+    basin spreads both ways, so the edge cell's velocity turns inward; the transmissive edge once
+    copied it to the outside and drew water in from nowhere (twice the start volume here; 3.5 % of
+    the inflow on the Lake Delhi gate deck, 3.9 M m3, one grid column wider than the baseline's).
+    The run must balance to round-off at native resolution and coarsened."""
+    for r in (1, 2):
+        d = tempfile.mkdtemp()
+        try:
+            ny, nx, dxf = 8, 24, 5.0
+            z = np.zeros((ny, nx))
+            h0 = np.full((ny, nx), 0.2)
+            h0[:, -3:] = 2.0
+            v0 = float(h0.sum() * dxf * dxf)
+            _write_asc(os.path.join(d, "run.dem.asc"), z, 0.0, 0.0, dxf)
+            _write_asc(os.path.join(d, "run.start"), h0, 0.0, 0.0, dxf)
+            with open(os.path.join(d, "run.bci"), "w") as f:
+                f.write("E 0.000 {:.3f} FREE\n".format(ny * dxf))
+            lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results", "startfile run.start",
+                     "bcifile run.bci", "sim_time 120.0", "initial_tstep 0.5", "massint 120.0",
+                     "saveint 130.0", "fpfric 0.03", "subgrid {}".format(r)]
+            with open(os.path.join(d, "run.par"), "w") as f:
+                f.write("\n".join(lines) + "\n")
+            stats = es.run_par(os.path.join(d, "run.par"), backend="cpu")
+            assert 0.0 < stats["outflow_m3"] < v0, (r, stats["outflow_m3"], v0)
+            assert abs(stats["mass_error_m3"]) < 1e-5 * v0, \
+                "r={}: {:+.3g} m3 of {:.0f} m3 came from outside the model".format(
+                    r, stats["mass_error_m3"], v0)
+        finally:
+            shutil.rmtree(d, True)
+
+
 def _main():
     import traceback
     fns = [subfv_engine_runs_deck_and_writes_fine_outputs,
            subfv_engine_open_edge_drains_when_grid_is_not_a_multiple_of_r,
-           subfv_engine_open_edge_does_not_strand_a_pool]
+           subfv_engine_open_edge_does_not_strand_a_pool,
+           subfv_engine_open_edge_lets_no_water_in]
     f = 0
     for fn in fns:
         try:

@@ -132,6 +132,19 @@ def solver_from_env(default=SOLVER_ACC):
 # again with them (workflow.run_dam); a run that balances is never changed.
 STABLE_THETA = 0.7
 STABLE_CFL = 0.5
+# Boann's shock-capturing engines (FV1 / FV2 / DG2 / sub-grid FV) clamp the Courant number to their
+# own ceiling (FV 0.45, DG2 1/3), so STABLE_CFL 0.5 re-ran them unchanged and theta means nothing
+# to them. Their mass is lost where a thin cell empties past zero in one step (the depth >= 0 clip
+# MAKES water); a smaller step cures it. Real Lake Delhi 2010, sub-grid FV at r = 8: default 2.3 M m3
+# clipped (2.1 % of the inflow), CFL 0.25 nothing clipped (volume error 2.5 m3), 50 % more steps.
+STABLE_CFL_SHOCK = 0.25
+
+
+def stable_cfl(exe):
+    """The Courant number the mass-balance re-run uses for this engine (see STABLE_CFL_SHOCK)."""
+    return STABLE_CFL_SHOCK if is_gpu_shock(exe) else STABLE_CFL
+
+
 STABILITY_RETRY_PCT = 1.0
 STABILITY_MARKER = "stable_settings.json"
 

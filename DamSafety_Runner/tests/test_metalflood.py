@@ -563,9 +563,38 @@ def metalflood_fv_free_edge_drains_a_sloping_basin():
             assert s["outflow_m3"] > 0.3 * vol0, \
                 "order {}: little drained off the FREE edge: {:.3g} of {:.3g}".format(
                     order, s["outflow_m3"], vol0)
-            # a one-sided outflow tally over a 2nd-order boundary draining almost the whole basin
-            # carries a sub-percent accounting truncation (0 at 1st order), so allow 0.5% here
-            assert abs(s["mass_error_m3"]) < 5e-3 * max(vol0, 1.0), (order, s["mass_error_m3"])
+            # the 2nd-order engines book the edge outflow over both RK2 stages (it once took only the
+            # corrector's, mis-booking up to ~1 % of the basin), so every order balances to round-off
+            assert abs(s["mass_error_m3"]) < 1e-4 * max(vol0, 1.0), (order, s["mass_error_m3"])
+        finally:
+            shutil.rmtree(d, True)
+
+
+@test
+def metalflood_fv_free_edge_lets_no_water_in():
+    """An open (FREE) edge lets water OUT, never IN. A mound of water against the open east edge
+    of a flat basin spreads both ways, so the edge cell's velocity turns inward. The transmissive
+    edge once copied that inward velocity to its outside ghost and so drew water in from outside
+    the model, uncounted: here twice the start volume appeared from nowhere, and on the real Lake
+    Delhi gate deck (one column wider than the deck the baseline was made on) the sub-grid FV run
+    made 3.5 % of its inflow this way. Every HLLC order must now balance to round-off, with less
+    water leaving than was there."""
+    _need_cpu_build()
+    for order in (1, 2, 3):
+        d = _tmp()
+        try:
+            ny, nx, dx = 8, 24, 5.0
+            z = np.zeros((ny, nx))
+            h0 = np.full((ny, nx), 0.2)
+            h0[:, -3:] = 2.0                                   # the mound against the open edge
+            vol0 = float(h0.sum()) * dx * dx
+            a = _fv_deck(os.path.join(d, "in"), z, h0, dx=dx, sim=120.0, n=0.03, free="E")
+            s = fve.run_par(a, backend="cpu", order=order)
+            assert 0.0 < s["outflow_m3"] < vol0, (order, s["outflow_m3"], vol0)
+            assert abs(s["mass_error_m3"]) < 1e-5 * vol0, \
+                "order {}: {:+.3g} m3 of {:.0f} m3 came from outside the model".format(
+                    order, s["mass_error_m3"], vol0)
+            assert s["final_volume_m3"] < vol0, (order, s["final_volume_m3"], vol0)
         finally:
             shutil.rmtree(d, True)
 
@@ -1030,6 +1059,43 @@ def recommended_auto_engine_choice():
             assert algs.FLOOD_ENGINES_TEXT[i].startswith("Advanced:"), i
 
 @test
+def boann_shock_engines_rerun_at_a_cfl_they_honour():
+    """The mass-balance re-run (workflow: volume error over STABILITY_RETRY_PCT) must change
+    something for Boann's shock-capturing engines. It used CFL 0.5, which FV1 / FV2 / DG2 / sub-grid
+    FV clamp to their own ceiling (0.45 or 1/3), and theta, which they ignore, so it re-ran them
+    unchanged (twice the time, the same 3.5 % error on the Lake Delhi gate). They now re-run at
+    STABLE_CFL_SHOCK, below every ceiling, and the engines really take more steps at it; the ACC /
+    LISFLOOD-FP re-run is unchanged."""
+    import re
+    from nd_breach_runner.core import lisflood as lf
+    for e in (lf.GPU_FV_EXE, lf.GPU_FV2_EXE, lf.GPU_DG2_EXE, lf.GPU_SUBFV_EXE):
+        assert lf.stable_cfl(e) == lf.STABLE_CFL_SHOCK, e
+    for e in (lf.GPU_EXE, lf.GPU_SGC_EXE, "/usr/local/bin/lisflood", ""):
+        assert lf.stable_cfl(e) == lf.STABLE_CFL, e
+    here = os.path.join(os.path.dirname(os.path.abspath(lf.__file__)), "metalflood")
+    for k in ("kernels_fv.metal", "kernels_fv2.metal", "kernels_dg2.metal", "kernels_subfv.metal"):
+        with open(os.path.join(here, k), encoding="utf-8") as f:
+            m = re.search(r"#define MF_(?:DG2_CFL|CFL_CAP) ([0-9.]+)f", f.read())
+        cap = float(m.group(1))
+        assert lf.STABLE_CFL_SHOCK < cap, (k, cap)
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        z = np.zeros((6, 30))
+        h0 = np.where(np.arange(30)[None, :] < 10, 2.0, 0.5) * np.ones((6, 1))
+        steps = []
+        for cfl in (None, lf.STABLE_CFL_SHOCK):
+            a = _fv_deck(os.path.join(d, str(cfl)), z, h0, dx=5.0, sim=30.0, n=0.03)
+            if cfl is not None:
+                with open(a, "a") as f:
+                    f.write("cfl {}\n".format(cfl))
+            steps.append(fve.run_par(a, backend="cpu", order=1)["steps"])
+        assert steps[1] > 1.5 * steps[0], steps
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
 def subfv_engine_is_a_runner_engine_choice():
     """Runner 3.42.0: 'subfv' (or 'gpu-subfv' / 'metal-subfv' / 'sub-grid fv') selects Boann's
     sub-grid finite-volume solver; it runs in-process, is shock-capturing family, is labelled as not
@@ -1460,7 +1526,8 @@ if __name__ == "__main__":
                metalflood_dg2_lake_at_rest_is_well_balanced,
                metalflood_dg2_reproduces_the_ritter_dam_break, metalflood_dg2_conserves_water,
                metalflood_dg2_limiter_is_a_deck_keyword,
-               metalflood_fv_free_edge_drains_a_sloping_basin,
+               metalflood_fv_free_edge_drains_a_sloping_basin, metalflood_fv_free_edge_lets_no_water_in,
+               boann_shock_engines_rerun_at_a_cfl_they_honour,
                fv_engine_is_a_runner_engine_choice,
                fv2_engine_is_a_runner_engine_choice,
                dg2_engine_is_a_runner_engine_choice,
