@@ -39,8 +39,10 @@ def _build_fixed_deck(wd):
     z = 100.0 - 0.002 * X + 0.02 * np.abs(Y - nr * dx / 2)
     dem = Grid(z[::-1], 0.0, nr * dx, dx)
     hy = Hydrograph(np.array([0.0, 600.0, 1200.0]), np.array([30.0, 30.0, 0.0]), "test")
+    # manning_n pinned to 0.06: this golden froze regulatory numbers on the pre-3.27.0
+    # uniform-n fallback; 3.74.1 moved the leftover constructor default to 0.05.
     st = lf.LisfloodSettings(lf.BUILTIN_EXE, arrival_depth_m=0.3, sim_time_s=1200.0,
-                             massint_s=60.0, initial_tstep_s=1.0)
+                             massint_s=60.0, initial_tstep_s=1.0, manning_n=0.06)
     par = lf.write_inputs(wd, dem, (30.0, nr * dx / 2 + 5), hy, st)
     return dem, par, st, hy
 

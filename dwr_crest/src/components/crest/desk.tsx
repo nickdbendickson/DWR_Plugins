@@ -35,8 +35,11 @@ import {
   type Nd911State,
 } from "@/lib/crest/nd911";
 import {
+  currentTerrain,
   DEM_ATTRIBUTION,
   DEM_ATTRIBUTION_SHORT,
+  labelWithTerrain,
+  layerLabel,
   lookupArea,
   OUTLINE_LABEL,
   outlineAcresNote,
@@ -49,6 +52,8 @@ import {
   fetchDem,
   outlineInputs,
   outlineState,
+  stampTerrain,
+  terrainInfo,
   type OutlineState,
 } from "@/lib/crest/outline";
 import { ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
@@ -372,7 +377,7 @@ export function Desk() {
             </ul>
           </details>
           <p className="mt-1">
-            Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}; {ND911_ATTRIBUTION.split(" Public data")[0]}; {DEM_ATTRIBUTION_SHORT}.
+            Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}; {ND911_ATTRIBUTION.split(" Public data")[0]}; {currentTerrain().local ? `${DEM_ATTRIBUTION_SHORT} or ${currentTerrain().label}` : DEM_ATTRIBUTION_SHORT}.
           </p>
         </div>
       </footer>
@@ -851,7 +856,7 @@ function OutlinePanel({
       setBusy("Preparing the terrain request…");
       const r = await buildInundationInWorker(dam, result, { yieldFn: breathe, onStatus: setBusy, signal: ctl.signal });
       if (useDesk.getState().activeId !== id) return;
-      if (r.ok) update({ outline: r.cache });
+      if (r.ok) update({ outline: stampTerrain(r.cache) });
       else setError(r.reason);
     } catch (e) {
       if ((e as Error).message !== CANCELLED) setError((e as Error).message);
@@ -917,7 +922,7 @@ function OutlinePanel({
         </div>
       </div>
       <p className="mt-1 text-sm font-medium" data-testid="outline-label">
-        {layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}.
+        {outline.state === "ready" ? layerLabel(dam.outline, ROUTED_LABEL) : labelWithTerrain(layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL, currentTerrain())}.
       </p>
       <p className={"mt-1 text-sm " + (rec.needsRunner ? "text-amber" : "text-muted")} role={rec.needsRunner ? "alert" : undefined} data-testid="inundation-primary-note">
         {rec.note}
@@ -995,7 +1000,7 @@ function OutlinePanel({
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m (NAVD88); depth from Muskingum-Cunge
             routing of the breach hydrograph on DEM cross-sections and {routed.method === "spread" ? "a volume spread" : "a terrain fill"}, not a full 2-D hydraulic model. Built{" "}
-            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
+            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {terrainInfo(dam.outline?.source).attribution}
           </p>
         </>
       ) : s ? (
@@ -1040,7 +1045,7 @@ function OutlinePanel({
             {s.dem.missing ? ` ${s.dem.missing} cells missing,` : ""} {s.rings} rings after smoothing; {s.droppedPatches}{" "}
             patches under the minimum dropped, {s.filledHoles} holes filled. Water surface = the traced channel bed (pits
             filled) + the desk depth at that distance downstream; ground must be under it and connected to the channel.
-            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
+            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {terrainInfo(dam.outline?.source).attribution}
           </p>
         </>
       ) : null}
@@ -1917,7 +1922,7 @@ function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType
       <p className="mt-1 text-xs text-muted" data-testid="outline-export-note">
         {outline.state === "ready" && outline.layer === "routed" ? "Routed terrain flood" : "Terrain outline"} (WGS 84):{" "}
         {ol
-          ? `${outline.state === "ready" && outline.layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}; ${num(ol.properties.outline_area_ac, 1)} ac, depth bands, with the PLSS and 911 lists against it. ${DEM_ATTRIBUTION_SHORT}.`
+          ? `${layerLabel(dam.outline, ROUTED_LABEL)}; ${num(ol.properties.outline_area_ac, 1)} ac, depth bands, with the PLSS and 911 lists against it. ${terrainInfo(dam.outline?.source).short}.`
           : outline.message}
       </p>
       <p className="mt-1 text-xs text-muted">
