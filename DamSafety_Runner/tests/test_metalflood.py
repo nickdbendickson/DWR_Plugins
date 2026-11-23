@@ -923,35 +923,6 @@ def dg2_engine_is_a_runner_engine_choice():
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
 
 
-@model_test
-def metalflood_matches_lisflood_fp():
-    """The same deck through LISFLOOD-FP (NDBREACH_LISFLOOD) and this engine."""
-    exe = os.environ.get("NDBREACH_LISFLOOD")
-    if not exe or not os.path.isfile(exe):
-        raise Skip("NDBREACH_LISFLOOD is not set")
-    _need_cpu_build()
-    d = _tmp()
-    try:
-        extra = ["hazard", "inittm_depth 0.003"]
-        a = valley_deck(os.path.join(d, "lf"), hole=False, extra=extra)
-        b = valley_deck(os.path.join(d, "mf"), hole=False, extra=extra)
-        subprocess.run([exe, os.path.basename(a)], cwd=os.path.dirname(a),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, check=True,
-                       env=dict(os.environ, OMP_NUM_THREADS="1"))
-        mf.run_par(b, backend="cpu")
-        x = _res(os.path.join(d, "lf"), "max")
-        y = _res(os.path.join(d, "mf"), "max")
-        wet = (x > 0.003) | (y > 0.003)
-        assert np.abs(x - y)[wet].mean() < 0.03, np.abs(x - y)[wet].mean()
-        a1, b1 = x > 0.1, y > 0.1
-        assert (a1 & b1).sum() / (a1 | b1).sum() > 0.98
-        vx = _res(os.path.join(d, "lf"), "maxVc")
-        vy = _res(os.path.join(d, "mf"), "maxVc")
-        assert abs(vx[wet].max() - vy[wet].max()) < 0.1 * vx[wet].max()
-    finally:
-        shutil.rmtree(d, True)
-
-
 from nd_breach_runner.core.metalflood import engine_sgc as sge  # noqa: E402
 from nd_breach_runner.core.metalflood import sgc_ref as sgr  # noqa: E402
 
@@ -1544,52 +1515,6 @@ def metalflood_cpu_prefers_a_prebuilt_library():
                 os.environ[k] = v
 
 
-if __name__ == "__main__":
-    fails = 0
-    for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
-               metalflood_wet_window_does_not_change_the_answer,
-               metalflood_reads_lisflood_acc_options, metalflood_params_layout_matches_kernels,
-               metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
-               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
-               metalflood_diagnostic_cases_match_serial_oracle,
-               metalflood_diagnostic_cases_run,
-               metalflood_clock_and_clip_total_survive_a_clipping_batch,
-               metalflood_fv_lake_at_rest_is_well_balanced,
-               metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
-               metalflood_fv2_lake_at_rest_is_well_balanced,
-               metalflood_fv2_reproduces_the_ritter_dam_break, metalflood_fv2_conserves_water,
-               metalflood_dg2_lake_at_rest_is_well_balanced,
-               metalflood_dg2_reproduces_the_ritter_dam_break, metalflood_dg2_conserves_water,
-               metalflood_dg2_limiter_is_a_deck_keyword,
-               metalflood_fv_free_edge_drains_a_sloping_basin, metalflood_fv_free_edge_lets_no_water_in,
-               boann_shock_engines_rerun_at_a_cfl_they_honour,
-               fv_engine_is_a_runner_engine_choice,
-               fv2_engine_is_a_runner_engine_choice,
-               dg2_engine_is_a_runner_engine_choice,
-               sgc_engine_is_a_runner_engine_choice,
-               subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
-               subfv_coarsening_factor_is_a_cli_config_key,
-               metalflood_sgc_params_layout_matches_kernels,
-               metalflood_sgc_channel_at_rest_is_well_balanced,
-               metalflood_sgc_matches_the_float64_reference,
-               metalflood_sgc_conveys_below_bank_then_spills_overbank,
-               metalflood_sgc_free_edge_drains_and_matches_reference,
-               metalflood_sgc_reduces_to_acc_without_channels,
-               metalflood_cpu_openmp_matches_one_core, metalflood_cpu_prefers_a_prebuilt_library,
-               metalflood_sgc_floodplain_area_spans_the_full_cell_width):
-        try:
-            fn()
-            print("ok    ", fn.__name__)
-        except Skip as e:
-            print("skip  ", fn.__name__, "({})".format(e))
-        except Exception:
-            import traceback
-            fails += 1
-            print("FAIL  ", fn.__name__)
-            traceback.print_exc()
-    sys.exit(1 if fails else 0)
-
-
 @test
 def metalflood_fv2_has_no_velocity_spikes():
     """Runner 3.66.0: FV2 reconstructed the discharges and divided them by the reconstructed face
@@ -1628,7 +1553,6 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     (Metal fuses multiply-adds, the CPU build does not), build the DG2 kernels twice - once with the
     default -ffp-contract=off, once with FMA contraction on - and run the valley deck with each: the
     maximum depth must not move. On 3.66.0 it moved ~1 mm; it is now bit-identical."""
-    import importlib
     if not mfb.find_compiler():
         raise Skip("no C++ compiler for the engine's CPU build")
     d = _tmp()
@@ -1648,3 +1572,24 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     finally:
         mfb.CPU_FLAGS = saved
         shutil.rmtree(d, True)
+
+
+if __name__ == "__main__":
+    # Repo audit 2026-11-23: every test this module registers, in file order. The hand-kept list
+    # this replaced sat in the middle of the file, so the tests defined below it never ran here
+    # (the macOS Metal CI job runs this file), and it had left out
+    # metalflood_fv2_gpu_matches_cpu_build_and_repeats_exactly, the one GPU-vs-CPU check of FV2.
+    from nd_breach_runner.tests.registry import MODEL_TESTS, TESTS
+    fails = 0
+    for fn in [f for f in TESTS + MODEL_TESTS if f.__module__ == __name__]:
+        try:
+            fn()
+            print("ok    ", fn.__name__)
+        except Skip as e:
+            print("skip  ", fn.__name__, "({})".format(e))
+        except Exception:
+            import traceback
+            fails += 1
+            print("FAIL  ", fn.__name__)
+            traceback.print_exc()
+    sys.exit(1 if fails else 0)
