@@ -717,6 +717,40 @@ def metalflood_fv2_gpu_matches_cpu_build_and_repeats_exactly():
 
 
 @test
+def metalflood_dg2_gpu_matches_cpu_build_and_repeats_exactly():
+    """DG2 on the Metal GPU against the CPU build, and two GPU runs against each other (repo audit
+    2026-11-23). Runner 3.67.0 made DG2 reconstruct velocities as primitives so it no longer swings
+    with the last bit of rounding; on Nick's M2 Pro the GPU then matched the CPU build. Same
+    tolerances as the FV2 test. Runs only on a Mac with a Metal GPU (the macOS CI job, Nick's Mac)."""
+    ok, why = mfb.metal_available()
+    if not ok:
+        raise Skip("no Metal GPU here ({})".format(why))
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        runs = {}
+        for tag, backend in (("cpu", "cpu"), ("gpu1", "metal"), ("gpu2", "metal")):
+            deck = valley_deck(os.path.join(d, tag))
+            s = fve.run_par(deck, backend=backend, order=3)
+            assert s["scheme"] == "dg2" and s["backend"] == backend, (tag, s)
+            runs[tag] = s
+        for ext in ("max", "maxVc", "inittm"):
+            g1 = _res(os.path.join(d, "gpu1"), ext)
+            g2 = _res(os.path.join(d, "gpu2"), ext)
+            assert np.array_equal(g1, g2), (ext, "GPU DG2 runs differ: a cell-order race is back")
+        assert runs["gpu1"]["steps"] == runs["gpu2"]["steps"], runs
+        sa, sb = runs["cpu"], runs["gpu1"]
+        assert abs(sa["steps"] - sb["steps"]) <= max(3, sa["steps"] // 200), (sa, sb)
+        for ext, tol in (("max", 0.01), ("maxVc", 0.1), ("inittm", 0.01)):
+            x = _res(os.path.join(d, "cpu"), ext)
+            y = _res(os.path.join(d, "gpu1"), ext)
+            m = (x != bl.NODATA) & (y != bl.NODATA)
+            assert np.abs(x - y)[m].max() <= tol, (ext, np.abs(x - y)[m].max())
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
 def metalflood_dg2_lake_at_rest_is_well_balanced():
     """The 2nd-order DG2 (RKDG2) engine holds a lake at rest over a bumpy bed: no spurious velocity
     and the still-water depth unchanged. DG2's slope limiter (on by default) collapses the evolved
@@ -1555,15 +1589,17 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     maximum depth must not move. On 3.66.0 it moved ~1 mm; it is now bit-identical."""
     if not mfb.find_compiler():
         raise Skip("no C++ compiler for the engine's CPU build")
+    # Repo audit 2026-11-23: an x86-64 proxy only. On the macOS arm64 runner (where this file first
+    # ran it) -mfma does not exist and clang's -ffp-contract=fast fusing moved one cell's written
+    # max depth by one 1 mm output step; there the real check is the Metal GPU against the CPU
+    # build, metalflood_dg2_gpu_matches_cpu_build_and_repeats_exactly.
+    if not mfb.platform_tag().endswith("-x64"):
+        raise Skip("the FMA proxy is for x86-64; on {} see the DG2 GPU-vs-CPU test".format(mfb.platform_tag()))
     d = _tmp()
     saved = mfb.CPU_FLAGS
     try:
         runs = {}
-        # -mfma is x86 only (clang refuses it for arm64, where FMA is always there and
-        # -ffp-contract=fast alone fuses; macOS Metal CI, repo audit 2026-11-23)
-        fma = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=fast")
-        if mfb.platform_tag().endswith("-x64"):
-            fma += ("-mfma",)
+        fma = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=fast", "-mfma")
         for tag, flags in (("off", saved), ("fma", fma)):
             mfb.CPU_FLAGS = flags
             deck = valley_deck(os.path.join(d, tag), sim_s=10800.0)
