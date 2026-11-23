@@ -73,6 +73,14 @@ def software_versions(exe="", anuga_python=""):
         pass
     if exe:
         v["lisflood_exe"] = dict(path=exe, **file_digest(exe))
+        # 3.62.0: a Boann run records Boann's own version and solver beside the Runner's version
+        try:
+            from . import lisflood as _lf
+            boann = _lf.boann_info(exe)
+        except Exception:
+            boann = None
+        if boann:
+            v["boann"] = boann
     if anuga_python:
         v["anuga_python"] = anuga_python
     return v
