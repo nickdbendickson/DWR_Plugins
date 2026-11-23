@@ -42,6 +42,7 @@ name them and say so. Confirm a final hazard classification with a LISFLOOD-FP r
 | `engine_fv.py` | FV driver: the same deck and result files, the HLLC scheme. `run_par()` is the same call. |
 | `cases.py` | Synthetic valley decks for the tests and the speed test. |
 | `bench.py` | The speed test (GPU, CPU build, LISFLOOD-FP if found). |
+| `cli.py`, `boann.py`, `version.py` | The standalone command line, its launcher, and Boann's own version number. |
 
 Nothing to install on a Mac: Metal compiles the kernel source at run time, and the framework is
 called with `ctypes` (no PyObjC, no Xcode). It needs a Mac with a Metal GPU (Apple silicon; no
@@ -50,6 +51,24 @@ float atomics are used, so the paravirtual GPU of a macOS virtual machine works 
 `~/.cache/DamSafety/metalflood`.
 
 ## Run it
+
+**As a program of its own (Runner 3.62.0, Boann 1.0.0)** - no QGIS, only Python 3 and numpy:
+
+```
+python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
+                              [--no-limiter] [--progress] [--quiet] [--stats-json stats.json]
+python3 boann.py check        # the device a run would use here
+python3 boann.py solvers      # the solvers and the Runner engine words that pick each
+python3 boann.py version      # Boann's version (version.py) and each solver's
+```
+
+`boann.py` loads this folder as a package named `boann`; nothing here imports from outside it
+(`cli.py`, `tests/test_boann_cli.py`), except that the `sgc` solver builds channels from the DEM
+with the host plugin's `core/sgc` when it is there. Standalone it needs the deck's SGC channel
+files and refuses without them. Boann's version is recorded in the Runner's `run_manifest.json`
+as `software.boann`.
+
+From inside a plugin (and the older ACC-only form):
 
 ```
 <python with numpy> -m nd_breach_runner.core.metalflood run.par [-backend metal|cpu] [-v]

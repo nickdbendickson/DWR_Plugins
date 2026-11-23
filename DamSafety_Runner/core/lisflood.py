@@ -390,6 +390,26 @@ def is_gpu_any(exe):
             or is_gpu_dg2(exe) or is_gpu_subfv(exe))
 
 
+def boann_info(exe):
+    """Boann's version and the solver an engine word / path picks, for the run manifest
+    (software.boann, beside the Runner's own version): {"version", "solver", "engine",
+    "engine_version"}; None when exe is not a Boann engine (LISFLOOD-FP, built-in)."""
+    if not is_gpu_any(exe):
+        return None
+    from .metalflood.version import BOANN_VERSION
+    from .metalflood import cli as _cli
+    key = ("dg2" if is_gpu_dg2(exe) else "sgc" if is_gpu_sgc(exe) else
+           "subfv" if is_gpu_subfv(exe) else "fv2" if is_gpu_fv2(exe) else
+           "fv" if is_gpu_fv(exe) else "acc")
+    info = {"version": BOANN_VERSION, "solver": key}
+    try:
+        mod = _cli.solver_module(key)
+        info.update(engine=mod.NAME, engine_version=mod.VERSION)
+    except Exception:
+        pass
+    return info
+
+
 def is_inprocess(exe):
     """True for the engines that run inside this process (built-in, GPU), not as a program."""
     return is_builtin(exe) or is_gpu_any(exe)

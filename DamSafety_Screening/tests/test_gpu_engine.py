@@ -14,7 +14,8 @@ FILES = ("__init__.py", "__main__.py", "backends.py", "deckio.py", "engine.py", 
          "cpu_kernels.cpp", "mf_shim.h", "engine_fv.py", "kernels_fv.metal", "cpu_kernels_fv.cpp",
          "engine_fv2.py", "kernels_fv2.metal", "cpu_kernels_fv2.cpp",
          "engine_dg2.py", "kernels_dg2.metal", "cpu_kernels_dg2.cpp",
-         "engine_sgc.py", "kernels_sgc.metal", "cpu_kernels_sgc.cpp")
+         "engine_sgc.py", "kernels_sgc.metal", "cpu_kernels_sgc.cpp",
+         "version.py", "cli.py", "boann.py")                # 0.38.0: Boann's standalone CLI
 
 # the engine list: appended, older indices unchanged
 assert rn.ENGINES[:4] == ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir")
