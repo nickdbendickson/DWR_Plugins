@@ -42,7 +42,7 @@ assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Run", "Review
 assert set(dlg.pipe_btn) == {"data", "dem", "screen", "report"}
 for name in ("work_edit", "work_browse", "suite_edit", "suite_browse", "inventory_county", "work_hint",
              "data_hint", "disclaimer", "run_all_btn", "one_dam_btn", "stop_btn", "override_box",
-             "inputs_page", "settings_btn", "settings_window", "settings_page", "log_edit", "log_line",
+             "inputs_page", "settings_btn", "settings_page", "log_edit", "log_line",
              "log_toggle", "close_btn", "status_line", "next_hint"):
     assert getattr(dlg, name, None) is not None, name
 assert dlg.settings_page is dlg.grid                     # the existing grid, moved behind the gear
@@ -86,16 +86,17 @@ dlg.pipe_btn["report"].click()
 assert dlg.tabs.currentIndex() == 2
 dlg.pipe_btn["dem"].click()
 assert dlg.tabs.currentIndex() == 0
-dlg.show_settings()
+sw = dlg.show_settings()                                 # Core 1.6.0: the one suite settings window
 assert not REAL or dlg.settings_btn.text() == "\u2699"
 dlg._log("hello\nlast line")
 assert dlg.log_line.text() == "Log: last line"
 if REAL:
-    assert dlg.settings_window.isVisible()
+    assert sw.isVisible() and sw.tabs.currentWidget() is sw.holders["nddam"]
+    assert dlg.settings_page.parent() is sw.holders["nddam"]
     assert not dlg.log_edit.isVisible()
     dlg._toggle_log()
     assert dlg.log_edit.isVisible() and dlg.log_section.is_expanded()
-    dlg.settings_window.close()
+    sw.close()
 print("test_ui_shell_01723: ok ({})".format("real Qt offscreen" if REAL else "qgis mock"))
 
 # --- 0.17.23 layout fixes (round 2)
