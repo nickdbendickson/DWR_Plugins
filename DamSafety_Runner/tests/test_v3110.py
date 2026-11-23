@@ -148,9 +148,13 @@ def suite_installer_lisflood_beats_path():
         os.chmod(p, 0o755)
         return p
     inst, wrapper, env = mk("suite", "bin", "lisflood"), mk("pathbin", "lisflood"), mk("env", "lisflood")
-    keys = ("DAMSUITE_PREFIX", "PATH", "NDBREACH_LISFLOOD")
+    # repo audit 2026-11-23: HOME too - the default ~/dam-suite/bin is searched after
+    # DAMSUITE_PREFIX, so a real suite install on the test box (Nick's Mac) came before PATH
+    keys = ("DAMSUITE_PREFIX", "PATH", "NDBREACH_LISFLOOD", "HOME", "USERPROFILE")
     old = {k: os.environ.get(k) for k in keys}
     try:
+        os.makedirs(os.path.join(d, "home"))
+        os.environ["HOME"] = os.environ["USERPROFILE"] = os.path.join(d, "home")
         os.environ["DAMSUITE_PREFIX"] = os.path.join(d, "suite")
         os.environ["PATH"] = os.path.join(d, "pathbin") + os.pathsep + (old["PATH"] or "")
         os.environ.pop("NDBREACH_LISFLOOD", None)

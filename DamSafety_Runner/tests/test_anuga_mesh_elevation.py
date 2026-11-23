@@ -26,6 +26,7 @@ from nd_breach_runner.core.grid import Grid  # noqa: E402
 from nd_breach_runner.core.lisflood import ModelError  # noqa: E402
 from nd_breach_runner.tests.registry import test  # noqa: E402
 from nd_breach_runner.tests.test_gmsh_mesher import _case  # noqa: E402
+from nd_breach_runner.tests.anuga_no_worker import worker_fails  # noqa: E402
 
 try:
     import gmsh  # noqa: F401
@@ -187,8 +188,9 @@ def _job(**kw):
     for k, v in kw.pop("st", {}).items():
         setattr(st, k, v)
     d = tempfile.mkdtemp(prefix="elevjob_")
-    try:   # sys.executable has no anuga: the worker fails after the job file is written
-        AM.run(d, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads, **kw)
+    try:   # the worker fails after the job file is written (anuga_no_worker)
+        with worker_fails():
+            AM.run(d, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads, **kw)
     except ModelError:
         pass
     return d

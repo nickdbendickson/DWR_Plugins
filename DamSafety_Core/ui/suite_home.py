@@ -612,7 +612,7 @@ def point_window_at(dialog, key, dams_folder, row):
                             before[name] = float(w.value())
                             w.setValue(float(value))
                         done.append(name)
-                    except Exception:                            # noqa: an older Runner window
+                    except Exception:                            # an older Runner window
                         before.pop(name, None)
                         missing.append(name)
                 row["first_try_before"], row["first_try_missing"] = before, missing
