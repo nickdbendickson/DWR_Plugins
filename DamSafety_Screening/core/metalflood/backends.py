@@ -373,6 +373,16 @@ class CpuBackend:
         self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(spec.params_cls),
                                           ctypes.c_int]
         self.lib.mf_run_batch.restype = ctypes.c_int
+        # the dry-cell skip (Runner 3.61.0; FLOOD_SPEC only, absent from an older prebuilt
+        # library): DAMSAFETY_MF_SKIP=0 turns it off, which changes the time and nothing else
+        self.skip = (hasattr(self.lib, "mf_run_batch_skip")
+                     and os.environ.get("DAMSAFETY_MF_SKIP", "1").strip() != "0")
+        if self.skip:
+            self.lib.mf_run_batch_skip.argtypes = [ctypes.c_void_p,
+                                                   ctypes.POINTER(spec.params_cls),
+                                                   ctypes.c_int, ctypes.c_int]
+            self.lib.mf_run_batch_skip.restype = ctypes.c_longlong
+        self.cells_run = 0
         if self.lib.mf_params_size() != ctypes.sizeof(spec.params_cls):
             raise BackendError("the CPU kernels' Params is {} bytes, Python's {}".format(
                 self.lib.mf_params_size(), ctypes.sizeof(spec.params_cls)))
@@ -399,8 +409,15 @@ class CpuBackend:
         self._ptrs = ptrs
         return self.arrays
 
-    def run_batch(self, params, nsteps):
+    def run_batch(self, params, nsteps, chunk=0):
+        """nsteps steps. chunk > 0 (the ACC engine's SKIP_CHUNK) lets the CPU build leave out the
+        cells that cannot get wet, redrawn every chunk steps; the results are the same bit for bit."""
+        if chunk > 0 and self.skip:
+            self.cells_run += int(self.lib.mf_run_batch_skip(
+                self._ptrs, ctypes.byref(params), int(nsteps), int(chunk)))
+            return
         self.lib.mf_run_batch(self._ptrs, ctypes.byref(params), int(nsteps))
+        self.cells_run += int(getattr(params, "wr", 0)) * int(getattr(params, "wc", 0)) * int(nsteps)
 
     def close(self):
         pass
@@ -581,7 +598,7 @@ class MetalBackend:
             self.arrays[name] = a
         return self.arrays
 
-    def run_batch(self, params, nsteps):
+    def run_batch(self, params, nsteps, chunk=0):
         o = self.o
         pool = o.lib.objc_autoreleasePoolPush()
         try:

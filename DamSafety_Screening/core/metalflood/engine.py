@@ -35,6 +35,9 @@ NODATA = bl.NODATA
 # margin larger than the batch keeps every wet cell inside the window the batch runs on.
 BATCH_STEPS = 64
 WINDOW_MARGIN = BATCH_STEPS + 4
+# CPU build: the cells it runs are redrawn every SKIP_CHUNK steps, as those within SKIP_CHUNK + 1
+# cells of water (cpu_kernels.cpp mf_rows); 0 runs the whole window every step
+SKIP_CHUNK = 8
 
 EngineError = bl.EngineError
 Cancelled = bl.Cancelled
@@ -245,7 +248,9 @@ class Engine:
         st[S_HMAX] = hm
         _setf(st, S_MINDT, 1e30)
         st[S_RMIN] = st[S_CMIN] = 0xFFFFFFFF
-        self.b.run_batch(p, nsteps)
+        # the CPU build leaves out the cells of the window that cannot get wet (redrawn every
+        # SKIP_CHUNK steps; the same numbers bit for bit; the GPU runs the whole window)
+        self.b.run_batch(p, nsteps, SKIP_CHUNK)
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
                "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
@@ -427,7 +432,9 @@ def _run(d, bk, progress, cancel, say):
              "steps": steps, "batches": batches, "sim_time_s": t, "wall_s": round(wall, 2),
              "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
              "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip,
-             "rain_m3": vrain}
+             "rain_m3": vrain,
+             # cell updates the CPU build ran (the dry-cell skip leaves out the rest of the window)
+             "cell_steps": getattr(bk, "cells_run", None)}
     say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))
