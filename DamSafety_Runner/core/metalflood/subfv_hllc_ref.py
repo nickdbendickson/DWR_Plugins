@@ -301,6 +301,24 @@ class SubFVHLLCRef:
         src = np.zeros((ny, nx)) if src is None else np.asarray(src, float)
         (FAx, FNx, FTx, FAy, FNy, FTy, I1xL, I1xR, I1yU, I1yD) = self._faces()
 
+        # positivity limiter (Runner 3.59.0, as k_limit_subfv): a cell may not send out more water
+        # in one step than it holds. lim = min(1, V / (dt * outflow)); every face flux is scaled by
+        # its donor cell's lim (1 where no water crosses), the same number on both sides.
+        out = (np.maximum(FAx[:, 1:], 0.0) + np.maximum(-FAx[:, :-1], 0.0)
+               + np.maximum(FAy[1:, :], 0.0) + np.maximum(-FAy[:-1, :], 0.0))
+        need = out * dt
+        have = np.maximum(self.V, 0.0)
+        lim = np.where(self.ok & (need > have), have / np.where(need > 0, need, 1.0), 1.0)
+        # donor of each x-face: the cell on the minus side when water flows +x, else the plus side
+        limL = np.concatenate([lim[:, :1], lim], axis=1)          # minus-side cell of face k (edge: col 0)
+        limR = np.concatenate([lim, lim[:, -1:]], axis=1)         # plus-side cell of face k (edge: col nx-1)
+        sx = np.where(FAx > 0, limL, np.where(FAx < 0, limR, 1.0))
+        limU = np.concatenate([lim[:1, :], lim], axis=0)
+        limD = np.concatenate([lim, lim[-1:, :]], axis=0)
+        sy = np.where(FAy > 0, limU, np.where(FAy < 0, limD, 1.0))
+        FAx, FNx, FTx = FAx * sx, FNx * sx, FTx * sx
+        FAy, FNy, FTy = FAy * sy, FNy * sy, FTy * sy
+
         # mass: dV = -dt * div(FA) + src dt
         dV = -dt * ((FAx[:, 1:] - FAx[:, :-1]) + (FAy[1:, :] - FAy[:-1, :])) + src * dt
         # well-balanced bed source: g * (I1 at the +face - I1 at the -face), from the cell's own eta
