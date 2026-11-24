@@ -442,7 +442,8 @@ def popup_window_shows_the_dam_and_opens_tools():
         dlg._open_tool("batch")
         assert q.proc.DIALOGS[-1] == ("ndbreach:batch", {"DAMS_FOLDER": dams, "DEM": "dem1"})
         saved = json.loads(q.project.entries[("NDBreachRunner", "state")])
-        assert saved == {"dams_folder": dams, "dam_id": "DWR-1", "dem": "dem1", "settings_file": "",
+        # security audit run-2: the settings workbook is this computer's, never the project's
+        assert saved == {"dams_folder": dams, "dam_id": "DWR-1", "dem": "dem1",
                          "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False}
         # the dam gets a folder: its contents are listed, the suggestion moves on
         f = make_dam(dams, "DWR-1")
