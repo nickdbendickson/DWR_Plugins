@@ -1,4 +1,4 @@
-"""Boann ACC's dry-tile skip on the GPU (Runner 3.83.0, Boann 5.5.0): before every SKIP_CHUNK steps
+"""Boann ACC's dry-tile skip on the GPU (Runner 3.90.0, Boann 5.5.0): before every SKIP_CHUNK steps
 the GPU marks the 16 x 16 tiles of the wet window that hold water, a face still carrying flow or a
 source, and turns on those tiles and their 8 neighbours; the grid kernels then leave the other
 tiles out. Water moves at most one cell per step, and a tile left out is at least 17 cells from

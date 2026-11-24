@@ -61,7 +61,7 @@ using namespace metal;
 // group's sum is rounded to 1e-4 (m3/s, m3) before it is added: unbiased, and 4.3e5 at most.
 #define MF_FIX 1.0e-4f
 
-// Dry-tile skip (Runner 3.83.0, Boann 5.5.0), the GPU twin of the CPU build's dry-cell skip
+// Dry-tile skip (Runner 3.90.0, Boann 5.5.0), the GPU twin of the CPU build's dry-cell skip
 // (cpu_kernels.cpp mf_rows). The window is cut into MF_TILE x MF_TILE cell tiles. Every few steps
 // (the engine's SKIP_CHUNK, 8) k_tclear / k_tseed / k_tgrow mark the tiles holding a seed - a wet
 // cell, a cell beside a face whose discharge or recorded velocity is not zero, or a source cell -

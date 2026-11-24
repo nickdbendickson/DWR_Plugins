@@ -52,7 +52,7 @@ SGC_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_sgc.cpp")
 S_WORDS = 32
 KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end",
            "k_tclear", "k_tseed", "k_tgrow")
-# The ACC kernels' dry-tile skip on the GPU (Runner 3.83.0, Boann 5.5.0; kernels.metal MF_TILE):
+# The ACC kernels' dry-tile skip on the GPU (Runner 3.90.0, Boann 5.5.0; kernels.metal MF_TILE):
 # tiles of TILE x TILE cells, the state word that turns it on, and the switch. DAMSAFETY_MF_TILES=0
 # runs the whole window, which changes the time and nothing else.
 TILE = 16

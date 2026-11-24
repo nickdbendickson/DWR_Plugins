@@ -114,7 +114,7 @@ are the two ends.
 memory, so the grids do not change; the outflow and clipped totals are summed per SIMD group
 before rounding, so the `.mass` file's totals can move by a rounding unit.
 
-## The GPU's dry-tile skip (Runner 3.83.0, Boann 5.5.0)
+## The GPU's dry-tile skip (Runner 3.90.0, Boann 5.5.0)
 
 The ACC engine on the Apple GPU leaves out the dry ground of its wet window, as the CPU build's
 dry-cell skip (Runner 3.76.0) does on the CPU. Before every `SKIP_CHUNK` = 8 steps three small
