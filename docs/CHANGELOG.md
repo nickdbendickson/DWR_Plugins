@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Runner 3.77.0: the sub-grid-channel bankfull curve is selectable, and the run-log line names it (NO result change — the default stays the North Dakota curve, so any run that does not pick another curve is unchanged).**
+  - **What.** A named-curve registry in `core/sgc.py` (`CURVES`, `CURVES_BY_KEY`, `CURVE_LABELS`, `resolve_curve()`, `curve_name()`, `curve_key()`): presets `nd` (North Dakota, 79 USGS gauges — the default, `W = 1.946 A^0.304`, `D = 0.221 A^0.256`) and `bieger-us` (Bieger 2015 conterminous-US national, roughly twice as wide), plus custom four-coefficient curves `a,b,c,f`. The run tool gains a "Sub-grid channels: bankfull width/depth curve" dropdown; the validation harness (`tools/validation` `reach.py` / `midland_reach.py`) gains `--sgc-curve` (a preset name or `a,b,c,f`) and `--tag-suffix`.
+  - **Log label.** The line that read `Sub-grid channels (LISFLOOD-FP SGC): ...` now reads `Sub-grid channels (<curve name>): ...` — the sizing curve is not LISFLOOD-FP's (LF supplies the channel scheme and a roughness default, not the width/depth-vs-drainage-area coefficients), and the solver (Boann or LISFLOOD-FP) is named separately in the run record.
+  - **Tests.** `sgc_curve_presets_resolver_and_name`.
 - **Runner 3.76.0 / Screening 0.49.0 / Boann 5.1.1: Boann skips dry cells on the CPU, as LISFLOOD-FP does. The same results bit for bit, faster.**
   - **What.** The ACC engine's CPU build (`cpu_kernels.cpp` `mf_run_batch_skip`; the cloud and any computer without an Apple GPU) runs, in each row of the wet window, only the columns within `SKIP_CHUNK + 1` = 9 cells of water, of a face still carrying flow, or of a source. The ranges are redrawn every 8 steps, by scanning only the cells run last time.
   - **Why it is exact.** A face carries flow only when a cell beside it is wet, so water moves at most one cell per step. The cells left out stay dry, and the faces between them carry exactly 0, which is what the whole window computes there. Every output (`.max`, `.maxVc`, `.inittm`, `.maxtm`, `.mass`) is byte-identical with the skip off (`DAMSAFETY_MF_SKIP=0`), on one core and on many.
