@@ -13,7 +13,7 @@
 template <void (*K)(const float*, const float*, float*, float*, float*, float*, float*, float*,
                     float*, float*, float*, const uchar*, const uint*, const uint*, const uint*,
                     const float*, const float*, uint*, uint*, float*, float*, float*, float*,
-                    const Params&, uint2)>
+                    uint*, uint*, const Params&, uint2)>
 static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
     MF_PAR_FOR
     for (uint y = 0; y < hgt; ++y) {
@@ -24,7 +24,7 @@ static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
               (float*)b[9], (float*)b[10], (const uchar*)b[11], (const uint*)b[12],
               (const uint*)b[13], (const uint*)b[14], (const float*)b[15],
               (const float*)b[16], (uint*)b[17], (uint*)b[18], (float*)b[19],
-              (float*)b[20], (float*)b[21], (float*)b[22], p, g);
+              (float*)b[20], (float*)b[21], (float*)b[22], (uint*)b[23], (uint*)b[24], p, g);
         }
     }
 }
@@ -34,7 +34,7 @@ static void mf_dispatch(void** b, const Params& p, uint w, uint hgt) {
 template <void (*K)(const float*, const float*, float*, float*, float*, float*, float*, float*,
                     float*, float*, float*, const uchar*, const uint*, const uint*, const uint*,
                     const float*, const float*, uint*, uint*, float*, float*, float*, float*,
-                    const Params&, uint2)>
+                    uint*, uint*, const Params&, uint2)>
 static void mf_dispatch_rows(void** b, const Params& p, uint nrows, const uint* lo, const uint* hi,
                              size_t work) {
 #if defined(_OPENMP)
@@ -48,7 +48,7 @@ static void mf_dispatch_rows(void** b, const Params& p, uint nrows, const uint* 
               (float*)b[9], (float*)b[10], (const uchar*)b[11], (const uint*)b[12],
               (const uint*)b[13], (const uint*)b[14], (const float*)b[15],
               (const float*)b[16], (uint*)b[17], (uint*)b[18], (float*)b[19],
-              (float*)b[20], (float*)b[21], (float*)b[22], p, g);
+              (float*)b[20], (float*)b[21], (float*)b[22], (uint*)b[23], (uint*)b[24], p, g);
         }
     }
 }
@@ -193,6 +193,46 @@ long long mf_run_batch_skip(void** b, const Params* pp, int nsteps, int chunk) {
             mf_dispatch<k_end>(b, p, 1, 1);
         }
         run += (long long)cells * k;
+    }
+    return run;
+}
+
+// mf_run_batch with the GPU's dry-tile skip (kernels.metal MF_TILE): the tiles are redrawn before
+// every `chunk` steps and the grid kernels leave out the unmarked ones, exactly as
+// backends.MetalBackend dispatches them. The CPU build's own skip is mf_run_batch_skip; this one
+// exists so the cloud tests can check the GPU's skip on the same kernel source. The host sets
+// st[S_TILES]. Returns the window cells the marked tiles held, summed over the steps.
+long long mf_run_batch_tiles(void** b, const Params* pp, int nsteps, int chunk) {
+    const Params& p = *pp;
+    const uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE, nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    const uint* ton = (const uint*)b[24];
+    long long run = 0;
+    size_t cells = (size_t)p.wr * p.wc;
+    if (chunk < 1) chunk = nsteps > 0 ? nsteps : 1;
+    for (int s = 0; s < nsteps; ++s) {
+        if (s % chunk == 0) {
+            mf_dispatch<k_tclear>(b, p, ntx, nty);
+            mf_dispatch<k_tseed>(b, p, p.wc, p.wr);
+            mf_dispatch<k_tgrow>(b, p, ntx, nty);
+            cells = 0;
+            for (uint ty = 0; ty < nty; ++ty) {
+                for (uint tx = 0; tx < ntx; ++tx) {
+                    if (ton[ty * ntx + tx] != 0u) {
+                        uint w = std::min(MF_TILE, p.wc - tx * MF_TILE);
+                        uint hh = std::min(MF_TILE, p.wr - ty * MF_TILE);
+                        cells += (size_t)w * hh;
+                    }
+                }
+            }
+        }
+        mf_dispatch<k_begin>(b, p, 1, 1);
+        mf_dispatch<k_faces>(b, p, p.wc + 1, p.wr + 1);
+        mf_dispatch<k_scale>(b, p, p.wc, p.wr);
+        mf_dispatch<k_limit>(b, p, p.wc + 1, p.wr + 1);
+        mf_dispatch<k_cont>(b, p, p.wc, p.wr);
+        mf_dispatch<k_speed>(b, p, p.wc, p.wr);
+        mf_dispatch<k_end>(b, p, 1, 1);
+        run += (long long)cells;
     }
     return run;
 }
