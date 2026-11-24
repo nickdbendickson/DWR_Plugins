@@ -847,6 +847,9 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
             # security audit 2026-11-18: the solver program is a per-computer choice, never saved
             # in the project (a shared .qgz could otherwise name the program the Runner launches).
             exe = s.pop("exe", "")
+            # security audit run-2: nor the settings workbook (it can set tool defaults); it is
+            # this computer's choice (QgsSettings, damsuite.settings.SETTINGS_KEY).
+            s.pop("settings_file", None)
             QgsProject.instance().writeEntry(SCOPE, ENTRY, json.dumps(s))
             self._save_exe(exe)
         except Exception:                                        # noqa
@@ -878,6 +881,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
                 if isinstance(loaded, dict):
                     self._saved_engine = "engine" in loaded
                     loaded.pop("exe", None)     # never from the project (see _save_state)
+                    loaded.pop("settings_file", None)   # nor the settings workbook
                     s.update(loaded)
         except Exception:                                        # noqa
             pass

@@ -78,6 +78,10 @@ jobs:
           python3 DamSafety_Core/tests/test_offline_pack_safety.py
           python3 DamSafety_Core/tests/test_pack_rows_safety.py
           python3 DamSafety_Hazard/tests/test_evalcache_size_cap.py
+      - name: A settings workbook or project cannot choose the solver program (security audit run-2, QGIS-free)
+        run: |
+          python3 DamSafety_Core/tests/test_settings_program_keys.py
+          python3 DamSafety_Core/tests/test_suite_config_exe_keys.py
       - name: Runner fast suite (stub Qt, numpy 2, no GDAL - its osgeo tests skip)
         # the same suite plugin-suites runs on a real QGIS; here the GDAL-backed tests raise the
         # harness's Skip (tests/registry.need_osgeo) and the numerics run on numpy 2
