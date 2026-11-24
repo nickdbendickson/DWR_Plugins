@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Runner 3.83.0: a mass-conservation regression for Boann FV2 at a wet/dry front (test only, NO result change; SWE (Grok Bot) for Nick, 2026-11-24).** This guards the 3.66.0 fix (#492) for the Absaraka DWR-2801 FV2 run, which ended at 3.14e6 m3 against 1.989e6 m3 injected (+58 %) with Qout 0.
+  - **The test.** `test_metalflood.metalflood_fv2_wet_dry_front_conserves_mass`: a closed 30 × 48, 10 m box; a dam break onto a dry, rough 1 % slope with ridges and a pit; n 0.03; 900 s. It asserts |volume change| < 1e-5, clip < 1e-6 of the volume, min dt > 0.05 s and speed < 15 m/s, all within 120 batches.
+  - **Evidence.**
+    - Pre-3.66.0 kernel: +4.4 %, clip 4.3e3 m3 (about the whole gain), min dt 7.6e-5 s, stuck at 217 s, so the test FAILS.
+    - 3.66.0 kernel: +8e-8, clip 5e-3 m3, min dt 0.30 s, so it passes in about 1 s.
+    - FV1 on the same case: −9e-9.
 - **Runner 3.80.0 / Screening 0.51.0 / Boann 5.4.0: Boann reports where a run's time goes. NO result changes (Nick "yes", 2026-11-23).**
   - **Why.** The next speed work on Boann (a dry-tile skip on the GPU, the dry-cell skip for the other CPU solvers, less command encoding from Python) each pays off only in some runs. This measures which, on the real decks, before any of it is written.
   - **Always kept.** Every Boann run's statistics carry `stats["profile"]` (`backends.Profile`): on the Apple GPU, the time Python spent encoding the GPU's commands and the time it waited for the GPU; on the CPU build, the time inside the kernels and the cell updates they really ran against the window's (what the dry-cell skip of 3.76.0 left out); the batches, steps and window cell updates dispatched.
