@@ -236,6 +236,11 @@ MODEL_KEYS = {
     # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r, 1-8 (the run tool's SUBGRID_R).
     # Left out = the engine's own default (4). Only that engine reads it.
     "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
+    # 3.81.0: the flood solver's Courant number and the ACC scheme's theta (the run tool's CFL and
+    # THETA). Left out = each engine's own (CFL 0.7 and theta 1 for ACC). A smaller CFL is a
+    # smaller time step: the cure for a run whose peak water surface checkerboards.
+    "cfl": ("user_cfl", ("num", 0.05, 1.0)),
+    "theta": ("user_theta", ("num", 0.05, 1.0)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
