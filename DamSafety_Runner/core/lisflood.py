@@ -148,7 +148,7 @@ def stable_cfl(exe):
 STABILITY_RETRY_PCT = 1.0
 STABILITY_MARKER = "stable_settings.json"
 
-# 3.84.0: an ACC run can go unstable WITHOUT losing its mass balance, so the volume test above
+# 3.88.0: an ACC run can go unstable WITHOUT losing its mass balance, so the volume test above
 # never sees it. Lake Delhi 2010 at 10 m (4.6 M cells, Boann ACC, theta 1 / cfl 0.7): at the breach
 # peak the water level checkerboards in the deep pool, the deepest water reads 38 m against
 # 13.5 m, the run is 8.1 ft high at the 8 USGS high-water marks, and the volume error is 703 m3
@@ -1414,7 +1414,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         # the DEM is float64: the sum is taken there and rounded once into float32
         wse = np.where(hmax > 0, dem.data + hmax64, np.nan).astype(f32)
     wse = np.where(hmax > 0, wse, f32(np.nan))
-    # 3.84.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
+    # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
     # measured from the bank and the level above was rebuilt from it)
     chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once

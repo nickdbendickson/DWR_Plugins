@@ -164,10 +164,10 @@ def _carve_default():
 
 
 class RunSettings:
-    # 3.39.0 / 3.84.0: the Courant number and ACC theta a user sets (the run tool's CFL / THETA,
+    # 3.39.0 / 3.88.0: the Courant number and ACC theta a user sets (the run tool's CFL / THETA,
     # the CLI's model.cfl / model.theta); None = each engine's own. Class attributes on purpose:
     # they reach the checkpoint key (as_dict) only for a run that sets them, exactly as before
-    # 3.84.0, so every earlier checkpoint still resumes.
+    # 3.88.0, so every earlier checkpoint still resumes.
     user_cfl = None
     user_theta = None
 
@@ -1381,9 +1381,9 @@ def spread_still_moving(arr_hr, hmax_m, sim_hr, cell_ac, prev_flooded_ac=None,
 
 
 def _stability_marker_kind(path):
-    """Which re-run left the stable-settings marker of a LISFLOOD-FP folder (3.84.0): the
+    """Which re-run left the stable-settings marker of a LISFLOOD-FP folder (3.88.0): the
     checkerboard one (CFL only) or the mass-balance one (theta and CFL; also every marker written
-    before 3.84.0, and one that cannot be read)."""
+    before 3.88.0, and one that cannot be read)."""
     try:
         with open(path) as f:
             kind = (json.load(f) or {}).get("kind")
@@ -2984,7 +2984,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     # 3.15.1: stable ACC settings once a run of this dam lost its mass balance (lfmod.STABLE_*).
     # A resumed run picks them up from the marker its LISFLOOD-FP folder was left with.
-    # 3.84.0: "kind" says which re-run engaged them: the mass balance (theta and CFL) or a
+    # 3.88.0: "kind" says which re-run engaged them: the mass balance (theta and CFL) or a
     # checkerboarded peak surface (lfmod.checkerboard: the CFL only).
     stability = {"on": False, "kind": None, "events": []}
     _marker0 = os.path.join(model_dir, "lisflood", lfmod.STABILITY_MARKER)
@@ -3002,7 +3002,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             kw["subgrid_upwind"] = True
         if stability["on"] and stability["kind"] == lfmod.STABILITY_KIND_CHECKER and \
                 getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
-            # 3.84.0: a checkerboarded run is cured by the smaller time step alone; theta stays
+            # 3.88.0: a checkerboarded run is cured by the smaller time step alone; theta stays
             # the user's (or the engine's own 1.0), so the flood is not damped
             if getattr(st, "user_theta", None) is not None:
                 kw["theta"] = float(st.user_theta)
@@ -3127,7 +3127,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             report["lisflood_unpatched"] = True
         env = lfmod.read_results(wd, dem, lst, hyd)
         err = env.stats.get("max_volume_error_pct")
-        # 3.84.0: the mass-balance re-run also takes over from the CFL-only settings of a
+        # 3.88.0: the mass-balance re-run also takes over from the CFL-only settings of a
         # checkerboard re-run (it is the stronger cure)
         if (stability["kind"] != lfmod.STABILITY_KIND_MASS
                 and getattr(st, "lisflood_stability_retry", True)
@@ -3160,7 +3160,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 "this dam uses them. The results come from the repeated run.".format(
                     eng_nm, err, lfmod.STABLE_THETA, lfmod.stable_cfl(st.lisflood_exe),
                     "?" if err2 is None else "{:.2f}".format(err2)))
-        # 3.84.0: a run can go unstable and KEEP its mass balance: its peak water surface is a
+        # 3.88.0: a run can go unstable and KEEP its mass balance: its peak water surface is a
         # checkerboard (lfmod.checkerboard). The plain ACC engines are run again with a smaller
         # time step (CFL only); the others, and a run already at that CFL, are flagged.
         _old = stability.setdefault("checker_msgs", {}).pop(tag, None)
