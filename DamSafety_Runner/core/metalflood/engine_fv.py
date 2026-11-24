@@ -17,6 +17,7 @@ import numpy as np
 
 from . import deckio as bl
 from . import backends as be
+from . import engine as mfe
 from .engine import Deck, _f, _setf
 
 NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
@@ -156,6 +157,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", orde
             log(msg)
 
     deck = Deck(par_path)
+    mfe.refuse_rain(deck, "FV1 / FV2 / DG2")
     spec = (be.DG2_SPEC if int(order) >= 3 else
             be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC)
     lim = getattr(deck, "dg2_limiter", True) if limiter is None else bool(limiter)

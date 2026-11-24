@@ -70,7 +70,9 @@ class Params(ctypes.Structure):
         "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
         "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
-            "theta", "pad4")]
+            "theta")] + [("rain", ctypes.c_uint32)]
+    # "rain" is kernels.metal's last word (ACC only, Runner 3.60.0); the FV / FV2 / DG2 / SGC
+    # kernels declare that word as an unused float pad4, and the engines leave it 0 (= 0.0f).
 
 
 def buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -324,8 +326,9 @@ def wet_shares(wet, tiles=PROFILE_TILES, row_margin=PROFILE_ROW_MARGIN):
                     neighbours covers T steps)
       row_ranges    cells in each row's column range under the CPU dry-cell skip's rule (the
                     span of the water within row_margin rows, widened by row_margin columns)
-    The rule the real skip uses also keeps faces still carrying flow and the sources; this
-    counts water only, so it is an estimate, a little low."""
+    The rule the real skip uses also keeps faces still carrying flow and the sources, and
+    redraws every 8 steps; this counts water only, after each batch, so it is an estimate (the
+    small diagonal valley of the speed test: 14.6% here, 13.5% run by the real skip)."""
     wet = np.asarray(wet, dtype=bool)
     ny, nx = wet.shape
     n = ny * nx
@@ -453,6 +456,12 @@ class Profile:
             out["host"] = {"run_s": r6(self.run_s)}
             if self.cell_steps and self.run_s > 0:
                 out["host"]["mcups_window"] = round(self.cell_steps / self.run_s / 1e6, 3)
+            run = getattr(self.b, "cells_run", None)
+            if run is not None and self.cell_steps:
+                # the cell updates the kernels really ran: fewer than the window's where the
+                # dry-cell skip is on (the ACC solver)
+                out["host"]["cell_updates_run"] = int(run)
+                out["host"]["run_share_of_window"] = round(run / float(self.cell_steps), 4)
         if self.full and self.b.kind == "metal":
             gpu = {"gpu_s": r6(self.gpu_s), "driver_s": r6(self.driver_s),
                    "steps": self.gpu_steps}
@@ -544,16 +553,45 @@ def cpu_library_name(spec, ext, openmp):
     return "{}_cpu_{}{}{}".format(spec.name, _source_hash(spec), "_omp" if openmp else "", ext)
 
 
-def cpu_build_command(spec, cxx, out, openmp=True, extra=()):
-    """The compiler command for the CPU build of spec (tools/build_boann_cpu.py uses it too)."""
+def mac_libomp_prefixes():
+    """Folders holding an LLVM OpenMP runtime (lib/libomp.dylib) for Apple clang,
+    which has no OpenMP of its own: $DAMSAFETY_MF_LIBOMP, this Python's own prefix (a conda
+    environment's llvm-openmp: the same runtime numpy may already have loaded, and two OpenMP
+    runtimes in one process abort it), then Homebrew's libomp."""
+    found = []
+    for d in (os.environ.get("DAMSAFETY_MF_LIBOMP"), sys.prefix, "/opt/homebrew/opt/libomp",
+              "/usr/local/opt/libomp"):
+        if d and os.path.isfile(os.path.join(d, "lib", "libomp.dylib")) and d not in found:
+            found.append(d)
+    return found
+
+
+def openmp_flag_sets():
+    """The ways to ask the compiler for OpenMP, in the order they are tried: (compile flags, link
+    flags). Plain -fopenmp (g++, LLVM clang); on a Mac also Apple clang's -Xpreprocessor -fopenmp
+    against each libomp found (Runner 3.61.0: before, a Mac built the one-core library)."""
+    sets = [(["-fopenmp"], [])]
+    if sys.platform == "darwin":
+        for d in mac_libomp_prefixes():
+            lib = os.path.join(d, "lib")
+            # no -I: mf_shim.h declares the two runtime calls itself (omp.h may not parse)
+            sets.append((["-Xpreprocessor", "-fopenmp"], ["-L", lib, "-lomp", "-Wl,-rpath," + lib]))
+    return sets
+
+
+def cpu_build_command(spec, cxx, out, openmp=True, extra=(), omp_flags=None):
+    """The compiler command for the CPU build of spec (tools/build_boann_cpu.py uses it too).
+    omp_flags: one (compile, link) pair of openmp_flag_sets(); default plain -fopenmp."""
     inc = []
     for d in dict.fromkeys(os.path.dirname(p) for p in
                            (spec.cpu_source, spec.shim, spec.kernel_source)):
         inc += ["-I", d]
     cmd = [cxx] + list(CPU_FLAGS) + ["-shared", "-fPIC"]
+    link = []
     if openmp:
-        cmd.append("-fopenmp")
-    return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + ["-o", out]
+        cflags, link = omp_flags or (["-fopenmp"], [])
+        cmd += list(cflags)
+    return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + list(link) + ["-o", out]
 
 
 def prebuilt_available(spec=FLOOD_SPEC):
@@ -595,29 +633,44 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
         out = os.path.join(_cache_dir(), cpu_library_name(spec, ext, omp))
         if os.path.isfile(out):
             return out
-        failed = out + ".failed"                # this compiler has no OpenMP: do not retry each run
-        if not cxx or (omp and os.path.isfile(failed)):
+        # this compiler has no OpenMP: do not retry each run, unless the ways to ask for it have
+        # changed since (a libomp installed later)
+        failed = out + ".failed"
+        variants = openmp_flag_sets() if omp else [None]
+        tried = "\n".join(" ".join(v[0] + v[1]) for v in variants) if omp else ""
+        if not cxx:
             continue
-        fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
-        os.close(fd)
-        cmd = cpu_build_command(spec, cxx, tmp, openmp=omp)
-        if log:
-            log("Building the engine's CPU kernels: " + " ".join(cmd))
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           universal_newlines=True)
-        if r.returncode == 0:
-            os.replace(tmp, out)
-            return out
-        os.remove(tmp)
-        err = r.stdout[-3000:]
+        if omp and os.path.isfile(failed):
+            try:
+                with open(failed) as f:
+                    same = f.read().split("\n--\n", 1)[0] == tried
+            except OSError:
+                same = True
+            if same:
+                continue
+        for v in variants:
+            fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
+            os.close(fd)
+            cmd = cpu_build_command(spec, cxx, tmp, openmp=omp, omp_flags=v)
+            if log:
+                log("Building the engine's CPU kernels: " + " ".join(cmd))
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               universal_newlines=True)
+            if r.returncode == 0:
+                os.replace(tmp, out)
+                return out
+            os.remove(tmp)
+            err = r.stdout[-3000:]
         if omp:
             try:
                 with open(failed, "w") as f:
-                    f.write(err)
+                    f.write(tried + "\n--\n" + err)
             except OSError:
                 pass
             if log:
-                log("This compiler has no OpenMP; building the one-core CPU kernels instead.")
+                log("This compiler has no OpenMP{}; building the one-core CPU kernels instead.".format(
+                    " (on a Mac: brew install libomp, or conda install llvm-openmp)"
+                    if sys.platform == "darwin" else ""))
     if not cxx:
         raise BackendError("no C++ compiler (c++, clang++ or g++) for the engine's CPU build, and no "
                            "prebuilt library for {} in this plugin (a release zip ships them)".format(
@@ -635,6 +688,16 @@ class CpuBackend:
         self.lib.mf_run_batch.argtypes = [ctypes.c_void_p, ctypes.POINTER(spec.params_cls),
                                           ctypes.c_int]
         self.lib.mf_run_batch.restype = ctypes.c_int
+        # the dry-cell skip (Runner 3.61.0; FLOOD_SPEC only, absent from an older prebuilt
+        # library): DAMSAFETY_MF_SKIP=0 turns it off, which changes the time and nothing else
+        self.skip = (hasattr(self.lib, "mf_run_batch_skip")
+                     and os.environ.get("DAMSAFETY_MF_SKIP", "1").strip() != "0")
+        if self.skip:
+            self.lib.mf_run_batch_skip.argtypes = [ctypes.c_void_p,
+                                                   ctypes.POINTER(spec.params_cls),
+                                                   ctypes.c_int, ctypes.c_int]
+            self.lib.mf_run_batch_skip.restype = ctypes.c_longlong
+        self.cells_run = 0
         if self.lib.mf_params_size() != ctypes.sizeof(spec.params_cls):
             raise BackendError("the CPU kernels' Params is {} bytes, Python's {}".format(
                 self.lib.mf_params_size(), ctypes.sizeof(spec.params_cls)))
@@ -665,9 +728,17 @@ class CpuBackend:
         self._ptrs = ptrs
         return self.arrays
 
-    def run_batch(self, params, nsteps):
+    def run_batch(self, params, nsteps, chunk=0):
+        """nsteps steps. chunk > 0 (the ACC engine's SKIP_CHUNK) lets the CPU build leave out the
+        cells that cannot get wet, redrawn every chunk steps; the results are the same bit for bit."""
         t0 = time.perf_counter()
-        self.lib.mf_run_batch(self._ptrs, ctypes.byref(params), int(nsteps))
+        if chunk > 0 and self.skip:
+            self.cells_run += int(self.lib.mf_run_batch_skip(
+                self._ptrs, ctypes.byref(params), int(nsteps), int(chunk)))
+        else:
+            self.lib.mf_run_batch(self._ptrs, ctypes.byref(params), int(nsteps))
+            self.cells_run += (int(getattr(params, "wr", 0)) * int(getattr(params, "wc", 0))
+                               * int(nsteps))
         self.prof.run_s += time.perf_counter() - t0
         self.prof.add_batch(params, nsteps)
         self.prof.look(params, nsteps)
@@ -909,7 +980,7 @@ class MetalBackend:
         drv = o(cb, "kernelEndTime", restype=d) - o(cb, "kernelStartTime", restype=d)
         return max(gpu, 0.0), max(drv, 0.0)
 
-    def run_batch(self, params, nsteps):
+    def run_batch(self, params, nsteps, chunk=0):
         o = self.o
         prof = self.prof
         nsteps = int(nsteps)

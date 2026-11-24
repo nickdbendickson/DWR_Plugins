@@ -181,6 +181,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", buil
             log(msg)
 
     deck = Deck(par_path, build_from_dem=build_from_dem)
+    mfe.refuse_rain(deck, "sub-grid channel (SGC)")
     try:
         bk = be.make_backend(backend, log=say, spec=be.SGC_SPEC)
     except be.BackendError as e:

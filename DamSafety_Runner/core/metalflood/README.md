@@ -99,7 +99,8 @@ python3 -m nd_breach_runner.core.metalflood.bench --size medium --case diagonal 
 | The window's share of the grid | The wet bounding box plus its margin, over the grid. | |
 | Wet share of the window | Cells holding water, of the cells the kernels run. | How much any dry skip could save at best. |
 | Tiles 16 / 32 / 64 | Cells in the tiles that hold water or touch a tile that does. | What a dry-tile skip on the GPU would still run, by tile size. |
-| Row ranges | Cells in each row's column range under the CPU dry-cell skip's rule (water only: a little low). | What the CPU dry-cell skip would still run, for the solvers that do not have it. |
+| Row ranges | Cells in each row's column range under the CPU dry-cell skip's rule (an estimate from the water alone: 14.6% against the 13.5% the real skip ran on the speed test's small diagonal valley). | What the CPU dry-cell skip would still run, for the solvers that do not have it. |
+| Dry-cell skip ran (CPU build, ACC) | The cell updates the kernels really ran, over the window's. | What the skip of Runner 3.76.0 saves on this deck. |
 
 The host's times are kept on every run (`stats["profile"]`, mode `basic`); the GPU's times and the
 wet shares only with the profile on (mode `full`), since they cost a little: the split steps add

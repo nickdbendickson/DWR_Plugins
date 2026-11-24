@@ -155,6 +155,9 @@ def profile_lines(stats):
         lines.append("  in the CPU kernels: {:.2f} s{}".format(
             host["run_s"], " ({:.1f} million window cell updates a second)".format(
                 host["mcups_window"]) if "mcups_window" in host else ""))
+        if host.get("run_share_of_window", 1.0) < 1.0:
+            lines.append("  the dry-cell skip ran {:.1f}% of the window's cell updates".format(
+                100.0 * host["run_share_of_window"]))
     gpu = pr.get("gpu") or {}
     if gpu.get("steps"):
         lines.append("  GPU's own time: {:.2f} s ({:.1f} us a step{})".format(
