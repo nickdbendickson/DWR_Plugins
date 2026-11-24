@@ -282,7 +282,7 @@ land beside it inside the same cell. No per-sub-segment velocity. Not in Screeni
 - Speed: one command buffer per batch, seven dispatches per step encoded from Python; an
   indirect command buffer or kernel fusion would cut the host cost on small grids.
 - The CPU build runs on several cores with OpenMP where the compiler has it (on a Mac, the
-  performance cores only by default, Runner 3.82.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
+  performance cores only by default, Runner 3.89.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
   core). The thread count never changes a result. It exists to run the kernels where there is no
   Apple GPU, not to replace LISFLOOD-FP.
 - Shock-capturing finite-volume scheme for steep dam-break fronts.
@@ -320,7 +320,7 @@ same wet-window batching, same fixed-point atomic reductions.
 - Speed: one command buffer per batch, dispatches per step encoded from Python; an indirect
   command buffer or kernel fusion would cut the host cost on small grids.
 - The CPU build runs on several cores with OpenMP where the compiler has it (on a Mac, the
-  performance cores only by default, Runner 3.82.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
+  performance cores only by default, Runner 3.89.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
   core). The thread count never changes a result. It exists to run the kernels where there is no
   Apple GPU, not to replace LISFLOOD-FP.
 - FV: second-order (MUSCL) reconstruction and an SSP-RK2 step; a head-to-head of the FV scheme

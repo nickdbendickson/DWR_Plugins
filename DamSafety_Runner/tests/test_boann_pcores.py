@@ -1,4 +1,4 @@
-"""Runner 3.82.0 / Boann 5.4.1: on Apple silicon the CPU build uses the performance cores only
+"""Runner 3.89.0 / Boann 5.4.1: on Apple silicon the CPU build uses the performance cores only
 unless DAMSAFETY_MF_THREADS says otherwise (backends.default_threads / threads_wanted).
 
 - boann_cpu_threads_default_to_the_performance_cores: the choice from the core counts, the

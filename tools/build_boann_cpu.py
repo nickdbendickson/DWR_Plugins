@@ -7,7 +7,8 @@ compiler (most Windows ones) can still run Boann, on every core.
     python3 tools/build_boann_cpu.py --out build/boann --platform windows-x64 \\
         --cxx x86_64-w64-mingw32-g++-posix --extra=-static                 (cross-compiled)
 
-For each engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV) it writes the OpenMP build
+For each engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV, sub-grid local inertial, and BoannGrid's
+fill and D4/D8 flow) it writes the OpenMP build
 <spec>_cpu_<source hash>_omp<ext> (unless --no-openmp or the compiler has none) and the one-core
 build <spec>_cpu_<source hash><ext>, with exactly the command backends.cpu_build_command gives the
 Runner at run time, so the names match what backends.build_cpu_library looks for. A library built
@@ -27,8 +28,15 @@ from metalflood import backends as be          # noqa: E402
 from metalflood import subfv_backend as sfb    # noqa: E402
 from metalflood import subli_backend as slb    # noqa: E402
 
+# BoannGrid's fill and flow use relative imports (from ..metalflood), so load them as the
+# plugin package. Their Spec objects are still plain source paths; the build below does not
+# care which copy of the Spec class built them.
+sys.path.insert(0, REPO)
+from nd_breach_runner.core.metalterrain import fill as mt_fill    # noqa: E402
+from nd_breach_runner.core.metalterrain import flow as mt_flow    # noqa: E402
+
 SPECS = (be.FLOOD_SPEC, be.FV_SPEC, be.FV2_SPEC, be.DG2_SPEC, be.SGC_SPEC, sfb.SUBFV_SPEC,
-         slb.SUBLI_SPEC)
+         slb.SUBLI_SPEC, mt_fill.SPEC, mt_flow.SPEC, mt_flow.SPEC8)
 
 
 def main(argv=None):

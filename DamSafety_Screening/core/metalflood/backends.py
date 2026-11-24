@@ -696,7 +696,7 @@ def _sysctl_int(name):
 
 
 def default_threads(perf_cores=None, all_cores=None):
-    """How many cores the CPU build uses when DAMSAFETY_MF_THREADS does not say (Runner 3.82.0).
+    """How many cores the CPU build uses when DAMSAFETY_MF_THREADS does not say (Runner 3.89.0).
 
     0 = the OpenMP runtime's own choice (every core): Linux, Windows, an Intel Mac. On Apple
     silicon, the performance cores only (hw.perflevel0.physicalcpu: 6 or 8 on an M2 Pro of 10 or
