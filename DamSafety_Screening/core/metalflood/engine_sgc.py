@@ -327,6 +327,8 @@ def _run(d, bk, progress, cancel, say):
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip,
              "sgc_source": d.sgc_source, "channel_cells": int((d.w > 0).sum())}
+    # where the time went (backends.Profile); timing only, no result depends on it
+    stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("SGC engine ({}, {}): {} steps, {:.2f} h in {:.1f} min; {} channel cells; volume error "
         "{:.3g} m3 of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0,
         wall / 60.0, stats["channel_cells"], stats["mass_error_m3"], vin))
