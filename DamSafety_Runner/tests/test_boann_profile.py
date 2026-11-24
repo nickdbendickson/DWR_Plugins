@@ -166,10 +166,11 @@ def boann_profile_changes_no_result_on_the_cpu_build():
             assert pn["batches"] == on["batches"], (solver, pn)
             assert pn["steps_dispatched"] >= on["steps"], (solver, pn)
             assert pn["window_cell_steps"] > 0, (solver, pn)
-            # the cell updates the kernels really ran: the window's, less what the ACC
-            # solver's dry-cell skip (Runner 3.76.0) left out
+            # the cell updates the kernels really ran: the window's, less what the dry-cell skip
+            # of the ACC solver (Runner 3.76.0) and the sub-grid local inertial (3.92.0) left out
             assert 0.0 < pn["host"]["run_share_of_window"] <= 1.0, (solver, pn)
-            assert pn["host"]["cell_updates_run"] == on["cell_steps"] if solver == "acc" \
+            skips = solver in ("acc", "subli")
+            assert pn["host"]["cell_updates_run"] == on["cell_steps"] if skips \
                 else pn["host"]["run_share_of_window"] == 1.0, (solver, pn)
             wet = pn["wet"]
             assert wet["looks"] >= 1, (solver, wet)
