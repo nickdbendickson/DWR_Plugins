@@ -147,3 +147,19 @@ def suite_default_manning_n_is_0_05():
     assert nd_data.nlcd_to_manning([999])[0] == 0.05              # unclassified cell -> the default
     assert cond.ConditionedTerrain(None, None).default_n == 0.05  # terrain "no roughness raster"
     assert nd_data.manning_lut(default=0.08)["default"] == 0.08   # an explicit value still wins
+    # 3.74.1: leftover engine-level fallbacks, missed when 3.27.0 moved the suite default to 0.05
+    import inspect
+    from nd_breach_runner.core import builtin_lisflood as bl
+    from nd_breach_runner.core import metalflood
+    from nd_breach_runner.core.anuga_model import AnugaSettings
+    from nd_breach_runner.core.hecras_model import Model
+    from nd_breach_runner.core.lisflood import LisfloodSettings
+    from nd_breach_runner.core.metalflood import cases as mf_cases
+    from nd_breach_runner.core.metalflood import engine as mf_engine
+    assert LisfloodSettings("x").manning_n == 0.05
+    assert AnugaSettings("x").manning_n == 0.05
+    assert Model().manning_n == 0.05
+    assert 'num("fpfric", 0.05)' in inspect.getsource(bl)
+    assert 'num("fpfric", 0.05)' in inspect.getsource(mf_engine)
+    assert '"fpfric 0.05"' in inspect.getsource(mf_cases)
+    assert "0.06" not in inspect.getsource(mf_cases)
