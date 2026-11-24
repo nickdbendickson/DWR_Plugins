@@ -93,9 +93,10 @@ def _run_alone(launcher, args, cwd):
 @test
 def boann_standalone_copy_runs_bit_for_bit():
     _need_cpu_build()
-    from nd_breach_runner.core.metalflood import engine_subfv
+    from nd_breach_runner.core.metalflood import engine_subfv, engine_subli
     runners = {"acc": mf.run_par, "fv": mf.run_par_fv, "fv2": mf.run_par_fv2,
-               "dg2": mf.run_par_dg2, "subfv": engine_subfv.run_par}
+               "dg2": mf.run_par_dg2, "subfv": engine_subfv.run_par,
+               "subli": engine_subli.run_par}
     tmp = tempfile.mkdtemp(prefix="boann_cli_")
     try:
         launcher = _standalone_copy(tmp)
@@ -127,7 +128,8 @@ def boann_standalone_copy_runs_bit_for_bit():
 @test
 def boann_cli_solver_words_and_sgc_guard():
     for word, key in (("gpu", "acc"), ("GPU-FV", "fv"), ("gpu-fv2", "fv2"), ("gpu-dg2", "dg2"),
-                      ("gpu-sgc", "sgc"), ("gpu-subfv", "subfv"), ("shock", "fv")):
+                      ("gpu-sgc", "sgc"), ("gpu-subfv", "subfv"), ("gpu-subli", "subli"),
+                      ("shock", "fv")):
         assert cli.solver_key(word) == key, (word, cli.solver_key(word))
     try:
         cli.solver_key("lisflood")
@@ -155,7 +157,7 @@ def boann_cli_solver_words_and_sgc_guard():
 def boann_version_is_in_the_run_manifest():
     for exe, key in ((lf.GPU_EXE, "acc"), (lf.GPU_FV_EXE, "fv"), (lf.GPU_FV2_EXE, "fv2"),
                      (lf.GPU_DG2_EXE, "dg2"), (lf.GPU_SGC_EXE, "sgc"),
-                     (lf.GPU_SUBFV_EXE, "subfv")):
+                     (lf.GPU_SUBFV_EXE, "subfv"), (lf.GPU_SUBLI_EXE, "subli")):
         b = provenance.software_versions(exe).get("boann")
         assert b and b["version"] == mf.BOANN_VERSION and b["solver"] == key, (exe, b)
         assert b["engine_version"], b

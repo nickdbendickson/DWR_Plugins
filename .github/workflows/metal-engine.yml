@@ -14,6 +14,8 @@ on:
       - "DamSafety_Runner/core/metalflood/**"
       - "DamSafety_Runner/tests/test_metalflood.py"
       - "DamSafety_Runner/tests/test_subgrid_kernel.py"
+      - "DamSafety_Runner/tests/test_subli.py"
+      - "DamSafety_Runner/tests/test_subli_kernel.py"
       - "DamSafety_Runner/tests/test_boann_dry_skip.py"
       - ".github/workflows/metal-engine.yml"
 
@@ -50,6 +52,8 @@ jobs:
         run: python -m nd_breach_runner.tests.test_boann_dry_skip
       - name: Sub-grid FV kernel tests (Metal and the CPU build)
         run: python -m nd_breach_runner.tests.test_subgrid_kernel
+      - name: Sub-grid local-inertial kernel and engine tests (Metal and the CPU build)
+        run: python -m nd_breach_runner.tests.test_subli_kernel
       - name: Speed test (small valley)
         run: python -m nd_breach_runner.core.metalflood.bench --size small --out "$RUNNER_TEMP"
       - name: Speed test (medium valley, GPU only)
