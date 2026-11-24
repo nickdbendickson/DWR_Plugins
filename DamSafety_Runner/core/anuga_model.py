@@ -123,7 +123,7 @@ def resolve_threads(threads, env=None, cpus=None):
 
 
 class AnugaSettings:
-    def __init__(self, python, threads=0, manning_n=0.06, manning_grid=None,
+    def __init__(self, python, threads=0, manning_n=0.05, manning_grid=None,
                  arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, yieldstep_s=300.0,
                  near_field_radius_m=1609.344, fine_area_m2=100.0, coarse_area_m2=1000.0,
                  buffer_m=500.0, algorithm="DE0", velocity_min_depth_m=0.03):

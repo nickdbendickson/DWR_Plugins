@@ -812,6 +812,48 @@ export function demSourceLabel(): string {
   return demOverride?.label ?? "3DEP";
 }
 
+/**
+ * The terrain a layer was built on, in words (Absaraka desk test 2026-11-21: with a local DEM chosen, the Flood panel,
+ * legend, map credit and inspector still said "3DEP"). `source` is an OutlineCache's source: DEM_SERVICE (3DEP) or a
+ * local DEM's label ("local DEM cass_10m_3dep.vrt", stampTerrain).
+ */
+export type TerrainInfo = { local: boolean; label: string; short: string; attribution: string; source: string };
+
+export function terrainInfo(source?: string | null): TerrainInfo {
+  if (source && source.startsWith("local DEM ")) {
+    return { local: true, label: source, short: `Terrain: ${source}`, attribution: `Terrain: ${source}, chosen in the desk (the file's own elevations and datum).`, source };
+  }
+  return { local: false, label: "3DEP terrain", short: DEM_ATTRIBUTION_SHORT, attribution: DEM_ATTRIBUTION, source: DEM_SERVICE };
+}
+
+/** The terrain the next layer will be built on: the local DEM in use, else 3DEP. */
+export function currentTerrain(): TerrainInfo {
+  return terrainInfo(demOverride?.label ?? null);
+}
+
+/** "…from 3DEP terrain…" in a layer label, with the terrain it was really built on. */
+export function labelWithTerrain(label: string, t: TerrainInfo): string {
+  return t.local ? label.replace("from 3DEP terrain", `from the ${t.label}`) : label;
+}
+
+/** A built layer stamped with the terrain it was built on (the builders, also in the worker, assume 3DEP). */
+export function stampTerrain(cache: OutlineCache, t: TerrainInfo = currentTerrain()): OutlineCache {
+  if (!t.local) return cache;
+  const props = cache.outline.properties;
+  return {
+    ...cache,
+    source: t.source,
+    attribution: t.attribution,
+    outline: { ...cache.outline, properties: { ...props, dem_source: t.source, disclaimer: labelWithTerrain(String(props.disclaimer ?? ""), t) } },
+  };
+}
+
+/** The label of a saved layer (routed flood or bathtub outline), naming the terrain it was built on. */
+export function layerLabel(cache: Pick<OutlineCache, "source" | "layer"> | null | undefined, routedLabel: string): string {
+  const t = terrainInfo(cache?.source);
+  return labelWithTerrain(cache?.layer === "routed" ? routedLabel : OUTLINE_LABEL, t);
+}
+
 export async function fetchDem(req: DemRequest, fetchFn?: Fetch, retryMs: number[] = DEM_RETRY_MS): Promise<DemGrid> {
   // A caller that passes its own fetch (tests, scripts) always gets 3DEP through it.
   if (!fetchFn && demOverride) return demOverride.fetch(req);
@@ -2152,7 +2194,7 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
     return online ? { state: "build", message: `${msg} Build it again.`, stale } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}`, stale };
   }
   return online
-    ? { state: "build", message: "The terrain outline is not built yet (one 3DEP terrain request)." }
+    ? { state: "build", message: `The terrain outline is not built yet (one ${currentTerrain().local ? `read of the ${currentTerrain().label}` : "3DEP terrain request"}).` }
     : { state: "offline", message: OUTLINE_OFFLINE };
 }
 
