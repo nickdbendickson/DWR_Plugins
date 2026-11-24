@@ -33,6 +33,7 @@ import csv
 import hashlib
 import os
 import zipfile
+import zlib
 
 from .constants import PLUGIN_VERSION, OUTPUT_FOLDER_NAME, SUBDIR_QA
 from .damsuite import dam_record as DR
@@ -44,6 +45,12 @@ LOG_NAME = "Review_Log.csv"
 LOG_FIELDS = ("When", "Reviewer", "Decision", "Open_Items", "Package", "Package_SHA256",
               "Classification_Date", "Classification_Class", "Plugin_Version", "Comments")
 MANIFEST_NAME = "MANIFEST.csv"                     # reviewpkg.MANIFEST_NAME / submittal
+# security audit run-2 (2026-11-24): the manifest inside a .zip was read whole into memory, so a
+# package of a few hundred KB whose MANIFEST.csv inflates to gigabytes stopped QGIS with a
+# MemoryError. It is now hashed in 1 MiB blocks and refused above this size (a real manifest is
+# a few KB: one line per package file).
+MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+_BLOCK = 1 << 20
 
 
 def normalize_decision(value):
@@ -82,16 +89,48 @@ def manifest_sha256(package):
                 h.update(block)
         return h.hexdigest(), mpath
     if os.path.isfile(package) and zipfile.is_zipfile(package):
-        with zipfile.ZipFile(package) as zf:
+        try:
+            zf = zipfile.ZipFile(package)
+        except (zipfile.BadZipFile, OSError) as e:
+            raise ValueError("{} cannot be read as a .zip: {}".format(package, e))
+        with zf:
             names = [n for n in zf.namelist()
                      if n.replace("\\", "/").split("/")[-1] == MANIFEST_NAME]
             # the top-level manifest, else the shallowest one
             names.sort(key=lambda n: n.replace("\\", "/").count("/"))
             if not names:
                 raise ValueError("{} holds no {}".format(package, MANIFEST_NAME))
-            data = zf.read(names[0])
-        return hashlib.sha256(data).hexdigest(), "{}!{}".format(package, names[0])
+            digest = _zip_entry_sha256(zf, names[0], package)
+        return digest, "{}!{}".format(package, names[0])
     raise ValueError("{} is neither a package folder nor a .zip".format(package))
+
+
+def _too_big(package, name):
+    return ValueError("{} in {} unpacks to more than {:g} MB; refused (a package manifest is a few "
+                      "KB)".format(name, package, MAX_MANIFEST_BYTES / (1024.0 * 1024.0)))
+
+
+def _zip_entry_sha256(zf, name, package):
+    """SHA-256 of one zip entry, read in blocks and never more than MAX_MANIFEST_BYTES (the
+    declared size is checked first; the bytes read are counted too, as a crafted zip can
+    under-state it). ValueError when it is larger or cannot be read."""
+    if zf.getinfo(name).file_size > MAX_MANIFEST_BYTES:
+        raise _too_big(package, name)
+    h, n = hashlib.sha256(), 0
+    try:
+        with zf.open(name) as fh:
+            while True:
+                block = fh.read(_BLOCK)
+                if not block:
+                    break
+                n += len(block)
+                if n > MAX_MANIFEST_BYTES:
+                    raise _too_big(package, name)
+                h.update(block)
+    except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError,
+            OSError) as e:
+        raise ValueError("{} in {} cannot be read: {}".format(name, package, e))
+    return h.hexdigest()
 
 
 def _latest_classification(rec):
