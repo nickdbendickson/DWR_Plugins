@@ -6,11 +6,16 @@ nd_counties.geojson beside this file: the 53 counties of the suite offline pack'
 (NDGISHub county boundaries), EPSG:4326, simplified to about 10 m, NAME only. Pure Python (no QGIS,
 no GDAL): a dam is in a county when its point is inside the county's outline. A point on a shared
 line goes to the first county by name.
+
+Screening 0.52.0: state_outline_5070() (Screening only; the Runner's copy does not have it) reads
+nd_outline_5070.json beside this file: the union of the same counties in EPSG:5070, simplified
+50 m (tools/make_nd_outline.py makes it), for tool 6's state-line rule.
 """
 import json
 import os
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nd_counties.geojson")
+OUTLINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nd_outline_5070.json")
 ALL = "(all of North Dakota)"           # the choice that keeps every county
 _cache = {}
 
@@ -126,3 +131,15 @@ def features(counties=None):
     want = set(counties) if counties else None
     return [f for f in gj.get("features", [])
             if want is None or (f.get("properties") or {}).get("NAME") in want]
+
+
+def state_outline_5070():
+    """The North Dakota outline as one closed (n, 2) numpy ring in EPSG:5070 metres (read once).
+    Tool 6's corridor sends a dam to 2D when its corridor nears the state line: the structure,
+    road and rail layers stop there."""
+    if "outline" not in _cache:
+        import numpy as np                  # only here: the county lookups stay pure Python
+        with open(OUTLINE, encoding="utf-8") as fh:
+            rings = json.load(fh)["rings"]
+        _cache["outline"] = np.asarray(max(rings, key=len), float)
+    return _cache["outline"]

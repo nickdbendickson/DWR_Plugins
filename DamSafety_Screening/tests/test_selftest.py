@@ -80,6 +80,12 @@ def broken_run(aid, params):
 layers = mock_layers(specs)
 w2 = os.path.join(work, "w2"); os.makedirs(w2)
 dem_folder, _p = st.write_dem(os.path.join(w2, "dem"))
+# 0.52.0: step 6 gets the waterbodies (without them its corridor sends every would-be clear to 2D)
+p6 = [mk for s, _a, mk, _c in st.steps(w2, layers, dem_folder) if s == "6"][0]({})
+assert p6["WATERBODIES"] is layers["waterbodies"]
+assert "WATERBODIES" not in [mk for s, _a, mk, _c in st.steps(w2, {k: v for k, v in layers.items()
+                                                                    if k != "waterbodies"}, dem_folder)
+                             if s == "6"][0]({})
 r = st.run_selftest(w2, layers, dem_folder, broken_run, log=lambda m: None, sim_h=0.5)
 assert r["ok"] is False and [x["status"] for x in r["rows"]] == ["PASS", "PASS", "FAIL"]
 assert "RuntimeError: GDAL could not open the DEM" in r["rows"][2]["problem"]

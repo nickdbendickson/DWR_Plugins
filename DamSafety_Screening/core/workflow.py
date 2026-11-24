@@ -415,7 +415,11 @@ def statuses(work, settings):
             continue
         if done:
             changed = changed_inputs(work, key)
-            if changed is not None:                              # 0.11: by content (manifest)
+            moved = results_moved(work, key)
+            if moved:
+                state = "stale"
+                notes.insert(0, moved)
+            elif changed is not None:                            # 0.11: by content (manifest)
                 if changed:
                     state = "stale"
                     notes.insert(0, "input(s) changed since this step ran: {}".format(
@@ -463,6 +467,51 @@ def changed_inputs(work, step):
         return mf.changed_inputs(m)
     except Exception:                                            # noqa
         return None
+
+
+# 0.52.0: step -> (the release that moved its results, a field that release added, what changed). Only
+# input digests were compared, so a triage made by 0.47 (DWR-2636 and DWR-10551, both DWR High, cleared on
+# the envelope alone) stayed 'done' after the upgrade and tool 7 skipped those dams.
+RESULTS_MOVED = {"6": ("0.52.0", "tri_corr", "the rating guard and the downstream corridor check")}
+
+
+def _version_tuple(text):
+    try:
+        return tuple(int(x) for x in str(text).strip().split("."))
+    except ValueError:
+        return None
+
+
+def _gpkg_columns(p):
+    """Lower-case column names of a GeoPackage's feature tables (sqlite, read only); None when unreadable."""
+    try:
+        con = sqlite3.connect("file:{}?mode=ro".format(p), uri=True)
+        try:
+            cols = set()
+            for (t,) in con.execute("SELECT table_name FROM gpkg_contents WHERE data_type = 'features'").fetchall():
+                cols |= {str(r[1]).lower() for r in con.execute('PRAGMA table_info("{}")'.format(t))}
+            return cols
+        finally:
+            con.close()
+    except Exception:                                            # noqa
+        return None
+
+
+def results_moved(work, step):
+    """Why `step`'s output is out of date although its inputs are not: it was made before the release that
+    moved its results (RESULTS_MOVED) - by the manifest's tool version, else (no manifest) by the field that
+    release added. '' when it is not, or when that cannot be told."""
+    rule = RESULTS_MOVED.get(step)
+    if not rule:
+        return ""
+    since, field, what = rule
+    made = _version_tuple(str((manifest_of(work, step) or {}).get("tool") or "").rsplit(" ", 1)[-1])
+    if made is not None:
+        old, by = made < _version_tuple(since), "Screening " + ".".join(map(str, made))
+    else:
+        cols = _gpkg_columns(path(work, step, DONE_MARK[step]))
+        old, by = bool(cols) and field not in cols, "a Screening release"
+    return "made by {}, before {} of {}: run it again".format(by, what, since) if old else ""
 
 
 def _flat_requirements(key):
@@ -515,6 +564,38 @@ def _one_proposed_dem(work):
 
 
 # --------------------------------------------------------------- defaults --
+def _layer_fields(uri):
+    """Field names of a GeoPackage layer ('path|layername=x'; no layer name: dwr_dams), read with sqlite;
+    [] when it cannot be read (a shapefile, a missing file)."""
+    if not uri:
+        return []
+    path, layer = uri, None
+    if "|layername=" in uri:
+        path, layer = uri.split("|layername=", 1)
+    try:
+        con = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+        rows = con.execute('PRAGMA table_info("{}")'.format(layer or "dwr_dams")).fetchall()
+        con.close()
+        return [r[1] for r in rows]
+    except Exception:
+        return []
+
+
+def _saved_field_map(work, S):
+    """Tool 1's field choices: the window's field map, updated from the work folder's 1_fields.json."""
+    saved = dict(S.get("field_map") or {})
+    fmap = os.path.join(work, "1_fields.json") if work else ""
+    if fmap and os.path.isfile(fmap):
+        try:
+            with open(fmap, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                saved.update(loaded)
+        except (OSError, ValueError):
+            pass
+    return saved
+
+
 def defaults(step, work, settings):
     """The parameters to fill in for tool `step` (only values that are known; a parameter
     left out keeps its own default)."""
@@ -539,6 +620,11 @@ def defaults(step, work, settings):
 
     def o(st, param="OUT"):
         return out(work, st, param)
+
+    def triage():
+        # 0.52.0: never a triage made before the rating guard and the corridor (tool 7 would skip its clears);
+        # tool 5's dams instead (every dam simulated) until step 6 is run again
+        return None if results_moved(work, "6") else o("6")
 
     def dugouts():
         """0.17.54: the DWR dugouts (points and polygons) of the suite folder for tools 1 and 16,
@@ -595,33 +681,10 @@ def defaults(step, work, settings):
         put("ONLY_IDS", S.get("only_ids"))
         dugouts()
         from .inventory import DWR_ALIASES, NID_ALIASES, match_fields, is_max_pool_area
-        def layer_fields(uri):
-            if not uri:
-                return []
-            path, layer = uri, None
-            if "|layername=" in uri:
-                path, layer = uri.split("|layername=", 1)
-            try:
-                import sqlite3
-                con = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
-                rows = con.execute('PRAGMA table_info("{}")'.format(layer or "dwr_dams")).fetchall()
-                con.close()
-                return [r[1] for r in rows]
-            except Exception:
-                return []
-        saved = dict(S.get("field_map") or {})
-        fmap = os.path.join(work, "1_fields.json")
-        if os.path.isfile(fmap):
-            try:
-                with open(fmap, encoding="utf-8") as fh:
-                    loaded = json.load(fh)
-                if isinstance(loaded, dict):
-                    saved.update(loaded)
-            except (OSError, ValueError):
-                pass
+        saved = _saved_field_map(work, S)
         for prefix, uri, aliases in (("DWR", dwr_uri, DWR_ALIASES),
                                      ("NID", nid_uri, NID_ALIASES)):
-            matched = match_fields(layer_fields(uri), aliases)
+            matched = match_fields(_layer_fields(uri), aliases)
             for role, field in matched.items():
                 key = "{}_{}".format(prefix, role)
                 keep = saved.get(key)
@@ -667,8 +730,21 @@ def defaults(step, work, settings):
         put("DAMLINES", damlines())
         put("PROTECT", src("finder_dams"))
         put("ONLY_IDS", S.get("only_ids"))
+        # 0.52.0 downstream corridor: waterbody shores, the DWR dams for the cascade rule, and the
+        # local DEM (when there is one) to prove a closed basin where the streams end
+        put("WATERBODIES", src("waterbodies"))
+        dwr_uri = src("dwr")
+        put("CORR_DAMS", dwr_uri)
+        if dwr_uri:                     # its class / id fields as step 1 reads them (a field map, else the aliases)
+            from .inventory import DWR_ALIASES, match_fields
+            saved, found = _saved_field_map(work, S), match_fields(_layer_fields(dwr_uri), DWR_ALIASES)
+            put("CORR_DAMS_CLS", saved.get("DWR_HZ") or found.get("HZ"))
+            put("CORR_DAMS_ID", saved.get("DWR_ID") or found.get("ID"))
+        put("CORR_TERRAIN", 2 if S.get("local_dem") else 0)
+        put("CORR_LOCAL", S.get("local_dem"))
+        fields("rail", {"RAIL_PAX": "passenger", "RAIL_TRAINS": "trains_day"})   # as step 8
     elif step == "7":
-        put("DAMS", o("6") or o("5"))
+        put("DAMS", triage() or o("5"))
         put("BPTS", bpts())
         put("DEMDIR", demdir())
         put("TSRC", S["larger_clips"])
@@ -791,7 +867,7 @@ def defaults(step, work, settings):
         put("REF_FOLDER", (S.get("ref_folder") or "").strip())
         put("REF_UNITS", int(S.get("ref_units") or 0))
     elif step == "12":
-        put("DAMS", o("6") or o("5"))
+        put("DAMS", triage() or o("5"))
         put("SCEN", S["scenario"])
         put("ENGINE", S["engine"])
         put("DEMDIR", demdir())
