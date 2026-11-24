@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Runner 3.91.0: "Recommended (auto)" runs Boann sub-grid local inertial (r = 4) on a model cell of 3 m or finer (Nick's choice, 2026-11-24). THIS MOVES RESULTS only of a run with the Recommended (auto) engine, Boann picked by it, and a model cell of 3 m or finer.**
+  - **Why.** DWR-2801 on 2 m LiDAR (88 M cells, 24 h, M2 Pro GPU), against the plain 2 m run (121 min): sub-grid r4 (8 m solver cells) within 0.08 ft in the median cell, 0.23 ft at the 90th percentile, CSI 0.93, in 7.8 min; plain ACC on 8 m cells 0.24 / 0.83 ft, CSI 0.75, in 1.2 min; sub-grid r8 0.36 / 1.17 ft, CSI 0.56.
+  - **What changes.** `lisflood.choose_auto(lisflood_exe, cell_m)`: where auto would run Boann ACC (Apple GPU, or the CPU build with no LISFLOOD-FP) and the cell is `AUTO_SUBLI_MAX_CELL_M` (3 m) or finer, it returns `gpu-subli`. The run tool passes CELL, the CLI `model.cell_size_m`. LISFLOOD-FP, engines named by word and coarser cells are unchanged.
+  - **Tests.** `tests/test_v3910_auto_subli.py` (4).
 - **Runner 3.90.0 / Screening 0.54.0 / Boann 5.5.0: Boann ACC skips dry ground on the Apple GPU. NO result changes (Nick "yes", 2026-11-24).**
   - **Why.** Nick's Lake Delhi 30 m profile on an M2 Pro (2026-11-24): 443 us a step on the GPU, 97% of it in the five grid kernels, and Python's encoding only 2.2% of the run. The wet window was 86.5% of the grid, but only 3.6% of the window was water and the 16-cell tiles that hold water or touch a tile that does were 19.9% of it. So the GPU spent most of its time on dry ground, which the CPU build has skipped since 3.76.0.
   - **What.** Before every `SKIP_CHUNK` = 8 steps, three small kernels (`k_tclear`, `k_tseed`, `k_tgrow`) redraw the window's 16 x 16 tiles. A tile that holds water, a face still carrying flow, or a source is marked, and it and its 8 neighbours run. `k_faces`, `k_scale`, `k_limit`, `k_cont` and `k_speed` return at once in every other tile (a face belongs to the tile of the cell east or south of it).
