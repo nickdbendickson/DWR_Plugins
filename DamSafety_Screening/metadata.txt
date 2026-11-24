@@ -10,6 +10,8 @@ plugin_dependencies=DamSafety Core
 icon=damit.svg
 category=Plugins
 changelog=0.53.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.82.0: on a Mac the CPU build runs on the performance cores only; the same results bit for bit)
+    0.51.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.80.0: Boann keeps a profile of where a run's time went (Boann 5.4.0; the host's times always, the GPU's time per step and per kernel and the wet share of the window with DAMSAFETY_MF_PROFILE=1 or the command line's --profile). NO result changes.)
+    0.50.0 - (2026-11-23) NO change to Screening's results: Boann's command line and version number (core/metalflood/cli.py, boann.py and version.py, kept byte-identical with the Runner's copies) now name the Runner's new sub-grid local-inertial solver (Runner 3.79.0, Boann 5.3.0). Screening does not carry that solver: 'boann solvers' lists it as not in this copy.
     0.49.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.76.0: the ACC engine's CPU build skips the cells far from water, as LISFLOOD-FP skips its dry cells; the same results bit for bit, faster; on a Mac the CPU build also uses every core when an LLVM libomp is present)
     0.48.0 - (2026-11-23; tool 7's Boann engine files re-synced with DamSafety Runner 3.75.0: the ACC engine reads LISFLOOD-FP's "rainfall" keyword (rain on the grid); the other Boann engines refuse a deck with rainfall. NO change for tool 7's decks, which have no rainfall.)
     0.47.1 - (2026-11-23) tool 7's Boann engine copy re-synced with Runner 3.74.1: the .par fpfric fallback is 0.05 (the suite default; no result change for a deck that sets fpfric).

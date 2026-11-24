@@ -435,6 +435,8 @@ def _run(d, bk, progress, cancel, say):
              "rain_m3": vrain,
              # cell updates the CPU build ran (the dry-cell skip leaves out the rest of the window)
              "cell_steps": getattr(bk, "cells_run", None)}
+    # where the time went (backends.Profile); timing only, no result depends on it
+    stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))

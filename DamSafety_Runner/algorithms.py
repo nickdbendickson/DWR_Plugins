@@ -73,7 +73,7 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
 FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc", "gpu-subfv",
-                 "auto")
+                 "auto", "gpu-subli")
 # 3.44.0: plain labels (the engine runs on a Mac's GPU or any computer's CPU, so no label says
 # "Apple GPU"), research solvers marked Advanced, and "Recommended (auto)" APPENDED so saved
 # models and scripts keep their indices. LISFLOOD-FP stays index 0 and the default.
@@ -85,7 +85,9 @@ FLOOD_ENGINES_TEXT = [
     "Advanced: Boann, discontinuous Galerkin 2nd order (RKDG2)",
     "Boann, sub-grid channels (narrow rivers the grid cannot resolve)",
     "Advanced: Boann, sub-grid finite volume (coarse grid; research, can over-pond narrow channels)",
-    "Recommended (auto): picks for this computer"]
+    "Recommended (auto): picks for this computer",
+    # 3.79.0, appended (indices 0-7 unchanged)
+    "Advanced: Boann, sub-grid local inertial (coarse cells that keep the DEM's detail; new)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -1117,9 +1119,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # DEM sub-cells as stage tables, so the run is r*r cheaper but still writes a full-resolution
         # map. Empty = 4. Ignored by every other engine.
         self._num("SUBGRID_R", "Sub-grid coarsening factor r (the 'Boann, sub-grid finite volume' "
-                  "engine only): the run uses cells r x the DEM resolution, keeping each cell's "
-                  "r x r DEM sub-cells, so it is r*r cheaper and still writes a full-resolution "
-                  "map. Empty = 4; 1 to 8. Ignored by the other engines.", optional=True,
+                  "and 'Boann, sub-grid local inertial' engines only): the run uses cells r x the "
+                  "DEM resolution, keeping each cell's r x r DEM sub-cells, so it is r*r cheaper "
+                  "and still writes a full-resolution map. Empty = 4; 1 to 8. Ignored by the "
+                  "other engines.", optional=True,
                   minimum=1, maximum=8, advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",

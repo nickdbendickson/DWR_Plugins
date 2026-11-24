@@ -25,8 +25,10 @@ sys.path.insert(0, os.path.join(REPO, "DamSafety_Runner", "core"))
 
 from metalflood import backends as be          # noqa: E402
 from metalflood import subfv_backend as sfb    # noqa: E402
+from metalflood import subli_backend as slb    # noqa: E402
 
-SPECS = (be.FLOOD_SPEC, be.FV_SPEC, be.FV2_SPEC, be.DG2_SPEC, be.SGC_SPEC, sfb.SUBFV_SPEC)
+SPECS = (be.FLOOD_SPEC, be.FV_SPEC, be.FV2_SPEC, be.DG2_SPEC, be.SGC_SPEC, sfb.SUBFV_SPEC,
+         slb.SUBLI_SPEC)
 
 
 def main(argv=None):

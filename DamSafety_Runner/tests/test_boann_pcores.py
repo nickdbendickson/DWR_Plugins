@@ -93,7 +93,7 @@ def boann_cpu_build_gives_the_same_answer_on_any_core_count():
     _need_omp_build()
     d = tempfile.mkdtemp(prefix="boann_pcores_")
     try:
-        for solver in ("fv", "fv2", "dg2", "subfv", "sgc"):
+        for solver in ("fv", "fv2", "dg2", "subfv", "subli", "sgc"):
             runs = []
             for threads in ("1", "3", "4"):
                 f = os.path.join(d, solver, threads)

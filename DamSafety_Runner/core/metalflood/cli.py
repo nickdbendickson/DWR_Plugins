@@ -1,7 +1,7 @@
 """Boann's command line: run a LISFLOOD-FP-style deck with any Boann solver, no QGIS needed.
 
-    boann run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
-                       [--no-limiter] [--progress] [--quiet] [--stats-json PATH]
+    boann run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv|subli] [--backend auto|metal|cpu]
+                       [--no-limiter] [--progress] [--quiet] [--stats-json PATH] [--profile]
     boann check          which device a run would use here (Apple GPU, shipped CPU build, compiler)
     boann solvers        the solvers and the Runner engine words that pick each
     boann version        Boann's version and each solver's
@@ -16,6 +16,11 @@ The deck is the one the Runner writes for LISFLOOD-FP (.par, .dem.asc, .bci, .bd
 time), .mxe (maximum water-surface elevation), .maxtm, .mass, .discharge and -NNNN.wd snapshots.
 The Runner turns those into Depth / Velocity / Arrival Time / WSE GeoTIFFs exactly as it does
 LISFLOOD-FP's.
+
+--profile (Boann 5.2.0) reports where the run's time went: the GPU's own time per step and per
+kernel, the time Python spent encoding the GPU's commands, and how much of the window the
+kernels ran was wet (what a dry-cell or dry-tile skip would save). It changes no result; the
+numbers go to the screen and into --stats-json under "profile".
 
 The older form `python -m ...metalflood run.par [-backend cpu] [-v] [-version]` (the ACC solver)
 still works unchanged.
@@ -44,6 +49,9 @@ SOLVERS = (
      ("gpu-dg2", "dg2")),
     ("subfv", "engine_subfv", "sub-grid finite volume (coarse HLLC with fine sub-cells; "
      "'subgrid <r>' in the .par, default 4)", ("gpu-subfv", "subfv")),
+    ("subli", "engine_subli", "sub-grid local inertial (coarse ACC with fine sub-cells, after "
+     "Devi & Kuiry 2024; 'subgrid <r>' in the .par, default 4; 'upwind' for the paper's flux "
+     "weighting)", ("gpu-subli", "subli")),
 )
 _KEYS = {k: k for k, _m, _d, _w in SOLVERS}
 for _k, _m, _d, _words in SOLVERS:
@@ -72,7 +80,7 @@ def solver_key(word):
 
 def solver_module(key):
     """The solver's module. CliError when this copy of Boann does not carry it (Screening's copy
-    has no sub-grid FV)."""
+    has no sub-grid FV or sub-grid local inertial)."""
     mod = dict((k, m) for k, m, _d, _w in SOLVERS)[solver_key(key)]
     try:
         return importlib.import_module("." + mod, __package__)
@@ -121,9 +129,75 @@ def _sgc_check(par_path):
                    "DEM. Add them, or run the deck from the Runner.")
 
 
+def profile_lines(stats):
+    """The profile in a run's stats as lines of text (empty when the run kept none)."""
+    pr = (stats or {}).get("profile") or {}
+    if not pr:
+        return []
+    wall = float(stats.get("wall_s") or 0.0)
+    steps = int(stats.get("steps") or 0)
+    cells = int(stats.get("cells") or stats.get("coarse_cells") or pr.get("grid_cells") or 0)
+    lines = ["profile ({}): {} steps in {} batches; {:,} window cell updates dispatched".format(
+        pr.get("mode"), steps, pr.get("batches"), int(pr.get("window_cell_steps") or 0))]
+    if wall > 0 and steps and cells:
+        lines.append("  whole grid: {:.1f} million cell updates a second of wall time".format(
+            cells * steps / wall / 1e6))
+    host = pr.get("host") or {}
+    if "encode_s" in host:
+        lines.append("  Python encoding the GPU's commands: {:.2f} s ({:.1f} us a step); waiting "
+                     "for the GPU: {:.2f} s; encoding is {:.1f}% of the two".format(
+                         host["encode_s"], host.get("encode_us_per_step", 0.0), host["wait_s"],
+                         100.0 * host.get("encode_share", 0.0)))
+        if wall > 0:
+            lines.append("  the rest of the host's time (reading the deck, looking in between "
+                         "batches, writing results): {:.2f} s".format(
+                             max(wall - host["encode_s"] - host["wait_s"]
+                                 - (pr.get("split") or {}).get("host_s", 0.0)
+                                 - (pr.get("wet") or {}).get("host_s", 0.0), 0.0)))
+    elif "run_s" in host:
+        lines.append("  in the CPU kernels: {:.2f} s{}".format(
+            host["run_s"], " ({:.1f} million window cell updates a second)".format(
+                host["mcups_window"]) if "mcups_window" in host else ""))
+        if host.get("run_share_of_window", 1.0) < 1.0:
+            lines.append("  the dry-cell skip ran {:.1f}% of the window's cell updates".format(
+                100.0 * host["run_share_of_window"]))
+    gpu = pr.get("gpu") or {}
+    if gpu.get("steps"):
+        lines.append("  GPU's own time: {:.2f} s ({:.1f} us a step{})".format(
+            gpu["gpu_s"], gpu.get("gpu_us_per_step", 0.0),
+            ", {:.1f} million window cell updates a second".format(gpu["mcups_window"])
+            if "mcups_window" in gpu else ""))
+    kern = pr.get("kernels") or []
+    if kern:
+        lines.append("  GPU time by kernel (from the first {} steps of each batch, one kernel "
+                     "per command buffer):".format((pr.get("split") or {}).get("steps_per_batch", 0)))
+        lines.append("    {:<18s} {:>10s} {:>8s}   {:>10s} {:>6s} {:>12s}".format(
+            "", "us a call", "share", "net us", "share", "threads"))
+        for k in kern:
+            lines.append("    {:<18s} {:10.1f} {:7.1f}%   {:10.1f} {:5.1f}% {:>12,}".format(
+                k["name"], 1e6 * k["gpu_s"] / max(k["calls"], 1), 100.0 * k["share"],
+                k.get("net_us_per_call", 0.0), 100.0 * k.get("net_share", 0.0),
+                k["threads_per_call"]))
+        lines.append("    net: above the {:.1f} us a command buffer costs the GPU whatever it "
+                     "holds (the cheapest one-thread kernel); its share is among the grid "
+                     "kernels, the nearer guide to their shares of a real step".format(
+                         pr.get("kernel_floor_us", 0.0)))
+    wet = pr.get("wet") or {}
+    if "wet" in wet:
+        lines.append("  the window is {:.1f}% of the grid; of the window's cells, on average:"
+                     .format(100.0 * wet.get("window_share_of_grid", 0.0)))
+        lines.append("    wet {:.1f}%   in wet 16/32/64-cell tiles and their neighbours "
+                     "{:.1f}% / {:.1f}% / {:.1f}%   in the CPU dry skip's row ranges {:.1f}%"
+                     .format(100.0 * wet["wet"], 100.0 * wet.get("tiles_16", 0.0),
+                             100.0 * wet.get("tiles_32", 0.0), 100.0 * wet.get("tiles_64", 0.0),
+                             100.0 * wet.get("row_ranges", 0.0)))
+    return lines
+
+
 def run(par_path, solver="acc", backend="auto", limiter=None, progress=False, quiet=False,
-        stats_json=None, out=print):
-    """Run one deck. Returns the engine's stats dict (with 'boann_version' and 'solver' added)."""
+        stats_json=None, out=print, profile=False):
+    """Run one deck. Returns the engine's stats dict (with 'boann_version' and 'solver' added).
+    profile: keep the full profile (backends.Profile) for this run; no result changes."""
     key = solver_key(solver)
     mod = solver_module(key)
     if not os.path.isfile(par_path):
@@ -138,7 +212,18 @@ def run(par_path, solver="acc", backend="auto", limiter=None, progress=False, qu
         kw["limiter"] = limiter
     if not quiet:
         out("Boann {} - {} {}".format(BOANN_VERSION, mod.NAME, mod.VERSION))
-    stats = mod.run_par(par_path, **kw)
+    from . import backends
+    was = os.environ.get(backends.PROFILE_ENV)
+    if profile:
+        os.environ[backends.PROFILE_ENV] = "1"
+    try:
+        stats = mod.run_par(par_path, **kw)
+    finally:
+        if profile:
+            if was is None:
+                os.environ.pop(backends.PROFILE_ENV, None)
+            else:
+                os.environ[backends.PROFILE_ENV] = was
     stats = dict(stats or {})
     stats["boann_version"] = BOANN_VERSION
     stats["solver"] = key
@@ -153,6 +238,9 @@ def run(par_path, solver="acc", backend="auto", limiter=None, progress=False, qu
         if "mass_error_m3" in stats:
             out("wall {:.1f} s; volume error {:.3g} m3".format(float(stats.get("wall_s") or 0.0),
                                                               float(stats["mass_error_m3"])))
+        if profile:
+            for line in profile_lines(stats):
+                out(line)
     return stats
 
 
@@ -166,8 +254,8 @@ def _parser():
     r = sub.add_parser("run", help="run a .par deck")
     r.add_argument("par", help="the LISFLOOD-FP .par file (paths in it are relative to its folder)")
     r.add_argument("--solver", "-s", default="acc",
-                   help="acc (default), sgc, fv, fv2, dg2 or subfv; the Runner's words (gpu, "
-                        "gpu-fv, gpu-fv2, gpu-dg2, gpu-sgc, gpu-subfv) work too")
+                   help="acc (default), sgc, fv, fv2, dg2, subfv or subli; the Runner's words "
+                        "(gpu, gpu-fv, gpu-fv2, gpu-dg2, gpu-sgc, gpu-subfv, gpu-subli) work too")
     r.add_argument("--backend", "-b", default=os.environ.get("DAMSAFETY_MF_BACKEND") or "auto",
                    choices=("auto", "metal", "cpu"),
                    help="auto (Apple GPU when there is one, else the CPU build), metal or cpu")
@@ -176,6 +264,9 @@ def _parser():
     r.add_argument("--progress", "-v", action="store_true", help="print the simulated time")
     r.add_argument("--quiet", "-q", action="store_true", help="print nothing but errors")
     r.add_argument("--stats-json", metavar="PATH", help="write the run's statistics as JSON")
+    r.add_argument("--profile", action="store_true",
+                   help="report where the time went: GPU time per step and per kernel, Python's "
+                        "encoding time, and the wet share of the window (changes no result)")
     sub.add_parser("check", help="which device a run would use here")
     sub.add_parser("solvers", help="list the solvers")
     sub.add_parser("version", help="Boann's version and each solver's")
@@ -215,7 +306,7 @@ def main(argv=None):
     try:
         run(args.par, solver=args.solver, backend=args.backend,
             limiter=False if args.no_limiter else None, progress=args.progress,
-            quiet=args.quiet, stats_json=args.stats_json)
+            quiet=args.quiet, stats_json=args.stats_json, profile=args.profile)
     except (CliError, EngineError, BackendError, OSError, ValueError) as e:
         print("ERROR: {}".format(e), file=sys.stderr)
         return 1

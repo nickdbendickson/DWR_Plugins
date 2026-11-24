@@ -148,13 +148,14 @@ def boann_rain_runs_off_a_slope_and_balances():
 
 @test
 def boann_rain_other_engines_refuse_it():
-    """The FV / FV2 / DG2 / SGC / sub-grid FV engines do not add rain yet: they stop with a message
-    rather than run a deck without its rain."""
-    from nd_breach_runner.core.metalflood import engine_fv, engine_sgc, engine_subfv
+    """The FV / FV2 / DG2 / SGC / sub-grid FV / sub-grid local-inertial engines do not add rain yet:
+    they stop with a message rather than run a deck without its rain."""
+    from nd_breach_runner.core.metalflood import engine_fv, engine_sgc, engine_subfv, engine_subli
     d = tempfile.mkdtemp()
     try:
         par = _deck(d, _slope(12, 16), free="E")
-        for run in (engine_fv.run_par, engine_sgc.run_par, engine_subfv.run_par):
+        for run in (engine_fv.run_par, engine_sgc.run_par, engine_subfv.run_par,
+                    engine_subli.run_par):
             try:
                 run(par, backend="cpu")
                 raise AssertionError("{} ran a deck with rainfall".format(run.__module__))
