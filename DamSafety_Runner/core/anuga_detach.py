@@ -182,26 +182,81 @@ def is_worker(status):
     return True
 
 
+# Security audit run-2 (2026-11-24): the names a process's command line must hold before a
+# status file's pid is signalled. A constant of this module - NOT the status file's "script"
+# field: the status file sits in the run folder (often a shared drive), so whoever can write it
+# could name any program (script "sleep", "python3") and have a cancel kill that process.
+WORKER_SCRIPTS = ("anuga_worker.py",)
+
+
+def _cmdline_for_signal(pid):
+    """The command line of `pid` for signalable(): /proc on Linux, `ps` on other POSIX systems
+    (macOS), PowerShell's Win32_Process on Windows. None when it cannot be read (then nothing
+    is signalled). Not used by is_worker(), which polls often and only decides waiting."""
+    cmd = _cmdline(pid)
+    if cmd is not None:
+        return cmd
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    try:
+        if os.name == "nt":
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_Process -Filter 'ProcessId={}').CommandLine".format(pid)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=30, creationflags=CREATE_NO_WINDOW)
+        else:
+            r = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if r.returncode != 0:
+        return None
+    text = r.stdout.decode("utf-8", "replace").strip()
+    return text or None
+
+
+def runs_worker_script(cmd):
+    """True when command line `cmd` runs one of WORKER_SCRIPTS (a whole file name: at the start
+    or after a separator / quote, followed by the end, a space or a quote)."""
+    if not cmd:
+        return False
+    cmd = str(cmd).replace("\x00", " ")
+    for name in WORKER_SCRIPTS:
+        start = 0
+        while True:
+            i = cmd.find(name, start)
+            if i < 0:
+                break
+            before = cmd[i - 1] if i > 0 else " "
+            j = i + len(name)
+            after = cmd[j] if j < len(cmd) else " "
+            if before in " \t/\\\"'" and after in " \t\"'":
+                return True
+            start = i + 1
+    return False
+
+
 def signalable(status):
     """Strict form of is_worker() for the moment BEFORE sending a signal (not merely waiting on a
-    worker): the pid must be alive, on THIS host, and - where /proc is available - positively
-    confirmed to still run the worker script. A pid from another host (a shared/network workdir)
-    shares no pid space with us, and a pid /proc cannot confirm may have been recycled since the
-    status file was written; neither is ever signalled, so a stale status file can never make us
-    SIGTERM/SIGKILL an unrelated local process."""
+    worker): the pid must be alive, the status must name THIS host, and the pid's command line
+    must be readable and run the worker script (WORKER_SCRIPTS - never the status file's own
+    "script" field). A pid from another host - or a status that names no host - shares no
+    known pid space with us, and a pid whose command line cannot be confirmed may have been
+    recycled or never have been ours; neither is ever signalled, so a stale or planted status
+    file can never make us SIGTERM/SIGKILL an unrelated local process."""
     if not status:
         return False
     pid = status.get("pid")
     if not pid_alive(pid):
         return False
     host = status.get("host")
-    if host and host != socket.gethostname():
-        return False                 # another computer's pid: never signal it locally
-    cmd = _cmdline(pid)
-    script = os.path.basename(str(status.get("script") or ""))
-    if cmd is not None and script:
-        return script in cmd         # /proc confirms (or denies) it is still our worker
-    return True                      # no /proc (e.g. Windows): alive + host-matched is as far as we can verify
+    if not host or host != socket.gethostname():
+        return False                 # no host, or another computer's pid: never signal it locally
+    return runs_worker_script(_cmdline_for_signal(pid))
 
 
 def worker_state(workdir, result=None):

@@ -458,21 +458,40 @@ def _script_token_in_our_cmdline():
 
 @test
 def anuga_detach_signalable_gates_cross_host_and_recycled_pid():
-    # Security: the strict pre-signal check. A pid from another host, a dead pid, or (where /proc
-    # can tell) a pid no longer running the worker script is never signalable - so a stale status
-    # file can never make a cancel SIGTERM/SIGKILL an unrelated local process.
+    # Security: the strict pre-signal check. A pid from another host, a status with no host, a
+    # dead pid, or a pid whose command line does not run the worker script (WORKER_SCRIPTS, never
+    # the status file's own "script") is never signalable - so a stale or planted status file
+    # can never make a cancel SIGTERM/SIGKILL an unrelated local process.
     import socket as _socket
+    me = _socket.gethostname()
     assert D.signalable(None) is False
-    assert D.signalable({"pid": 2 ** 31 - 1}) is False               # a pid that is not alive
+    assert D.signalable({"pid": 2 ** 31 - 1, "host": me}) is False   # a pid that is not alive
     assert D.signalable({"pid": os.getpid(), "host": "some-other-host"}) is False  # another machine
-    assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname()}) is True  # alive, our host
-    if D._cmdline(os.getpid()) is not None:                          # /proc available (Linux)
-        assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
-                             "script": "no_such_worker_xyz.py"}) is False   # recycled pid: /proc denies
-        here = _script_token_in_our_cmdline()
-        if here:
-            assert D.signalable({"pid": os.getpid(), "host": _socket.gethostname(),
-                                 "script": here}) is True              # /proc confirms it is us
+    assert D.signalable({"pid": os.getpid()}) is False               # audit run-2: no host = refused
+    assert D.signalable({"pid": os.getpid(), "host": ""}) is False
+    # audit run-2: alive on our host is not enough - this process is not the worker script ...
+    assert D.signalable({"pid": os.getpid(), "host": me}) is False
+    here = _script_token_in_our_cmdline()
+    if here:
+        # ... and the status file's "script" cannot vouch for it (it used to: script="python3")
+        assert D.signalable({"pid": os.getpid(), "host": me, "script": here}) is False
+        old = D.WORKER_SCRIPTS
+        D.WORKER_SCRIPTS = old + (here,)
+        try:                                                         # a confirmed worker still is
+            assert D.signalable({"pid": os.getpid(), "host": me}) is True
+            assert D.signalable({"pid": os.getpid(), "host": me, "script": "x.py"}) is True
+        finally:
+            D.WORKER_SCRIPTS = old
+
+
+@test
+def anuga_detach_runs_worker_script_matches_whole_names():
+    assert D.runs_worker_script("/usr/bin/python3 -u /a/core/anuga_worker.py job.npz out.npz")
+    assert D.runs_worker_script('"C:\\Py\\python.exe" -u "C:\\a b\\anuga_worker.py" j.npz r.npz')
+    assert D.runs_worker_script("python3\x00-u\x00anuga_worker.py\x00j\x00r")
+    for cmd in ("sleep 100", "python3", "vim not_anuga_worker.py", "python3 anuga_worker.pyc",
+                "python3 anuga_worker.py.bak", "", None):
+        assert not D.runs_worker_script(cmd), cmd
 
 
 @test
@@ -494,13 +513,55 @@ def anuga_detach_signal_refuses_a_pid_it_cannot_confirm():
         cross.terminate()
         assert signals == [], "a cross-host pid must not be signalled: {}".format(signals)
         here = _script_token_in_our_cmdline()
-        if here:   # /proc confirms this process runs `here`
-            ours = D.Attached({"pid": os.getpid(), "host": _socket.gethostname(),
-                               "script": here, "state": D.RUNNING}, no_status)
-            ours.terminate()
-            assert signals == [(os.getpid(), signal.SIGTERM)], signals   # genuine cancel still fires
+        if here:
+            # audit run-2: the status file naming a program this process runs is not enough
+            planted = D.Attached({"pid": os.getpid(), "host": _socket.gethostname(),
+                                  "script": here, "state": D.RUNNING}, no_status)
+            planted.terminate()
+            planted.kill()
+            assert signals == [], "a planted 'script' must not be trusted: {}".format(signals)
+            old = D.WORKER_SCRIPTS
+            D.WORKER_SCRIPTS = old + (here,)
+            try:        # the command line runs a worker script: a genuine cancel still fires
+                ours = D.Attached({"pid": os.getpid(), "host": _socket.gethostname(),
+                                   "state": D.RUNNING}, no_status)
+                ours.terminate()
+                assert signals == [(os.getpid(), signal.SIGTERM)], signals
+            finally:
+                D.WORKER_SCRIPTS = old
     finally:
         os.kill = real_kill
+
+
+@test
+def anuga_detach_planted_status_never_kills_an_unrelated_process():
+    # Security audit run-2 (L3): run-1's F4 fix still killed an unrelated local process when the
+    # status file named no host, or named the victim's own program in "script". A real `sleep`
+    # child stands in for the victim; the Attached handle of a planted status must leave it alone.
+    if not POSIX:
+        print("skip: POSIX signals")
+        return
+    import socket as _socket
+    d = tempfile.mkdtemp(prefix="anudet_planted_")
+    victim = subprocess.Popen(["sleep", "30"])
+    try:
+        spath = D.status_path(d)
+        for st in ({"pid": victim.pid, "state": D.RUNNING},                         # no host
+                   {"pid": victim.pid, "state": D.RUNNING, "script": "sleep"},      # no host
+                   {"pid": victim.pid, "state": D.RUNNING, "script": "sleep",
+                    "host": _socket.gethostname()},                                 # our host
+                   {"pid": victim.pid, "state": D.RUNNING, "script": "python3",
+                    "host": _socket.gethostname()}):
+            D.write_json_atomic(spath, st)
+            h = D.Attached(dict(st), spath)
+            h.terminate()
+            h.kill()
+            time.sleep(0.2)
+            assert victim.poll() is None, "the planted status {} killed pid {}".format(st, victim.pid)
+    finally:
+        victim.kill()
+        victim.wait(10)
+        shutil.rmtree(d)
 
 
 if __name__ == "__main__":
