@@ -51,7 +51,7 @@ def valley_deck(folder, ny=60, nx=90, dx=20.0, peak_cms=400.0, sim_s=3 * 3600.0,
     lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results",
              "sim_time {:.1f}".format(sim_s), "initial_tstep {:.1f}".format(initial_tstep),
              "massint 300.0", "saveint {:.1f}".format(saveint or sim_s + 10.0),
-             "fpfric 0.06", "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
+             "fpfric 0.05", "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
     if nfile:
         n = np.where(across < 40.0, 0.035, 0.08)
         write_asc(os.path.join(folder, "run.n.asc"), n, xll, yll, dx)
@@ -192,7 +192,7 @@ def breach_inflow_cell(folder, n=21, dx=10.0, bed=100.0, peak_cms=200.0,
     lines = ["DEMfile run.dem.asc", "resroot run", "dirroot results",
              "sim_time {:.1f}".format(sim_s), "initial_tstep 2.0",
              "massint 60.0", "saveint {:.1f}".format(sim_s + 10.0),
-             "fpfric 0.06", "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
+             "fpfric 0.05", "bcifile run.bci", "bdyfile run.bdy", "acceleration"] + list(extra)
     with open(os.path.join(folder, "run.par"), "w") as f:
         f.write("\n".join(lines) + "\n")
     r_src, c_src = n // 2, 2          # near the west edge

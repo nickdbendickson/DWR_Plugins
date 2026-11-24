@@ -419,7 +419,7 @@ def run_par(par_path, progress=None, cancel=None, log=None):
     massint = num("massint", 300.0)
     saveint = num("saveint", sim + 10.0)
     arr_depth = num("inittm_depth", 0.0)
-    n_def = num("fpfric", 0.06)
+    n_def = num("fpfric", 0.05)
     n = np.full(z.shape, n_def)
     if "manningfile" in par:
         ng, _, _, _, nn = _load("Manning's n file", _read_asc, path("manningfile"), z.shape)

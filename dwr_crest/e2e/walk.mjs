@@ -52,8 +52,23 @@ export async function walkDesk(page, url, { ownOrigin = new URL(url).origin } = 
   await page.getByText("Swan Buffalo Detention 12").first().waitFor();
 
   // Settings: the shared defaults open from the header, a changed value saves (0.045: the suite default is 0.05), and the panel closes.
-  await page.getByTestId("settings-toggle").click();
-  await page.getByTestId("settings-panel").waitFor();
+  // The web app's page arrives rendered by the server (the step buttons and sample dam name are already in the HTML).
+  // A press before its script has started is lost, so wait until the desk has hydrated ("Opening the desk…" is
+  // removed) and then press Settings until the panel opens — the same idea as walkBatch's Batch button.
+  await page.getByText("Opening the desk…").waitFor({ state: "hidden", timeout: 30_000 });
+  {
+    const toggle = page.getByTestId("settings-toggle");
+    const panel = page.getByTestId("settings-panel");
+    for (let i = 0; ; i++) {
+      await toggle.click();
+      const shown = await panel
+        .waitFor({ timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (shown) break;
+      assert.ok(i < 15, "the Settings panel did not open");
+    }
+  }
   assert.equal(await page.getByTestId("setting-sunny_day_start_pool").inputValue(), "max_pool");
   assert.equal(await page.getByTestId("setting-failure_mode").inputValue(), "piping");
   await page.getByTestId("setting-manning_n").fill("0.045");
