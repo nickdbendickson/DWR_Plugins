@@ -41,12 +41,21 @@ if QGIS4 or _FLAVOR == "3.40":
     Qgis.ProcessingParameterFlag = _enum.IntFlag("ProcessingParameterFlag", {"Advanced": 2, "Optional": 8, "Hidden": 16})
     Qgis.GeometryType = _enum.IntEnum("GeometryType", {"Point": 0, "Line": 1, "Polygon": 2})
     Qgis.WkbType = _enum.IntEnum("WkbType", {"Point": 1, "LineString": 2, "Polygon": 3, "MultiLineString": 5})
+    Qgis.ProcessingFeatureSourceFlag = _enum.IntFlag("ProcessingFeatureSourceFlag", {"SkipGeometryValidityChecks": 2})
 if not QGIS4:
     Qgis.Info, Qgis.Warning, Qgis.Critical, Qgis.Success = 0, 1, 2, 3
 
 
 class QgsProcessing:
     TEMPORARY_OUTPUT = "TEMPORARY_OUTPUT"
+
+
+class QgsProcessingFeatureSource:
+    """Only its getFeatures flags (the sources here are FakeSource)."""
+
+
+if not QGIS4:
+    QgsProcessingFeatureSource.FlagSkipGeometryValidityChecks = 2
 
 
 class QgsWkbTypes:
@@ -274,7 +283,7 @@ class FakeSource:
     def sourceCrs(self): return QgsCoordinateReferenceSystem()
     def selectedFeatureIds(self): return list(getattr(self, "_selected", []))
     def selectByIds(self, ids): self._selected = list(ids)
-    def getFeatures(self, req=None):
+    def getFeatures(self, req=None, flags=None):          # flags: QgsProcessingFeatureSource's (ignored)
         for f in self._feats:
             if req is not None and req.rect is not None and not f.geometry().isEmpty() \
                     and not f.geometry().boundingBox().intersects(req.rect):
