@@ -37,7 +37,13 @@ typedef uint atomic_uint;
 enum mf_memory_order { memory_order_relaxed };
 
 #if defined(_OPENMP)
-#include <omp.h>
+// the two OpenMP runtime calls used, declared here instead of #include <omp.h>: a newer omp.h
+// (Homebrew's libomp) uses OpenMP 5.1 pragmas that Apple clang cannot parse, so with
+// -Xpreprocessor -fopenmp the header itself failed to compile (Runner 3.61.0)
+extern "C" {
+void omp_set_num_threads(int);
+int omp_get_max_threads(void);
+}
 #define MF_PRAGMA(x) _Pragma(#x)
 // rows of one dispatch across the cores; small dispatches (k_begin / k_end, tiny windows) stay serial
 #define MF_PAR_FOR_IF(cond) \
