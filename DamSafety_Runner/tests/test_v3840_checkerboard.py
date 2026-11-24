@@ -1,4 +1,4 @@
-"""3.81.0: an ACC run that goes unstable WITHOUT losing its mass balance is caught and run again.
+"""3.84.0: an ACC run that goes unstable WITHOUT losing its mass balance is caught and run again.
 
 Lake Delhi 2010 at 10 m (4.6 M cells, Boann ACC with LISFLOOD-FP's defaults, theta 1 / cfl 0.7):
 at the breach peak the water level checkerboards in the deep pool, the deepest water reads 38 m
@@ -22,7 +22,7 @@ from nd_breach_runner.tests.test_v320 import _dam, _settings
 
 
 def _tmp():
-    return tempfile.mkdtemp(prefix="ndbr_v3810_")
+    return tempfile.mkdtemp(prefix="ndbr_v3840_")
 
 
 def _pool(ny=60, nx=80, depth=5.0):
@@ -34,7 +34,7 @@ def _pool(ny=60, nx=80, depth=5.0):
 
 
 @test
-def v3810_a_smooth_peak_surface_has_no_rough_cell():
+def v3840_a_smooth_peak_surface_has_no_rough_cell():
     from nd_breach_runner.core import lisflood as lf
     w, d = _pool()
     pct, n, rough = lf.checkerboard(w, d)
@@ -50,7 +50,7 @@ def v3810_a_smooth_peak_surface_has_no_rough_cell():
 
 
 @test
-def v3810_a_checkerboarded_pool_is_seen():
+def v3840_a_checkerboarded_pool_is_seen():
     from nd_breach_runner.core import lisflood as lf
     w, d = _pool()
     yy, xx = np.indices(w.shape)
@@ -71,7 +71,7 @@ def v3810_a_checkerboarded_pool_is_seen():
 
 
 @test
-def v3810_a_few_cells_shallow_water_or_a_small_flood_do_not_count():
+def v3840_a_few_cells_shallow_water_or_a_small_flood_do_not_count():
     from nd_breach_runner.core import lisflood as lf
     # the mound on an inflow cell: a handful of cells, under CHECKER_MIN_ROUGH
     w, d = _pool(ny=40, nx=40)
@@ -95,7 +95,7 @@ def v3810_a_few_cells_shallow_water_or_a_small_flood_do_not_count():
 
 
 @test
-def v3810_the_rerun_courant_number():
+def v3840_the_rerun_courant_number():
     from nd_breach_runner.core import lisflood as lf
     assert (lf.CHECKER_CFL, lf.DEFAULT_CFL, lf.CHECKER_RETRY_PCT) == (0.5, 0.7, 0.05)
     assert lf.checker_cfl() == 0.5 and lf.checker_cfl(None) == 0.5
@@ -103,7 +103,7 @@ def v3810_the_rerun_courant_number():
 
 
 @test
-def v3810_read_results_measures_the_peak_surface():
+def v3840_read_results_measures_the_peak_surface():
     from nd_breach_runner.core import lisflood as lf
     from nd_breach_runner.core.breach import Hydrograph
     from nd_breach_runner.core.grid import Grid
@@ -189,7 +189,7 @@ def _marker(folder):
 
 
 @test
-def v3810_a_sound_run_is_not_changed():
+def v3840_a_sound_run_is_not_changed():
     d = _tmp()
     try:
         r, calls = _run(d, _settings(max_iterations=2), rough_pct=0.0)
@@ -202,7 +202,7 @@ def v3810_a_sound_run_is_not_changed():
 
 
 @test
-def v3810_a_checkerboarded_run_is_run_again_with_cfl_only():
+def v3840_a_checkerboarded_run_is_run_again_with_cfl_only():
     from nd_breach_runner.core import lisflood as lf
     d = _tmp()
     try:
@@ -231,7 +231,7 @@ def v3810_a_checkerboarded_run_is_run_again_with_cfl_only():
 
 
 @test
-def v3810_the_users_theta_is_kept_and_a_small_cfl_is_not_raised():
+def v3840_the_users_theta_is_kept_and_a_small_cfl_is_not_raised():
     d = _tmp()
     try:
         st = _settings(max_iterations=1, user_theta=0.9)
@@ -249,7 +249,7 @@ def v3810_the_users_theta_is_kept_and_a_small_cfl_is_not_raised():
 
 
 @test
-def v3810_no_rerun_where_it_cannot_help_but_the_run_is_flagged():
+def v3840_no_rerun_where_it_cannot_help_but_the_run_is_flagged():
     from nd_breach_runner.core import lisflood as lf
     # the retry switched off
     d = _tmp()
@@ -284,7 +284,7 @@ def v3810_no_rerun_where_it_cannot_help_but_the_run_is_flagged():
 
 
 @test
-def v3810_still_rough_after_the_rerun_is_reported_not_hidden_and_never_loops():
+def v3840_still_rough_after_the_rerun_is_reported_not_hidden_and_never_loops():
     from nd_breach_runner.core import lisflood as lf
     d = _tmp()
     try:
@@ -311,7 +311,7 @@ def v3810_still_rough_after_the_rerun_is_reported_not_hidden_and_never_loops():
 
 
 @test
-def v3810_a_lost_mass_balance_still_gets_the_full_stable_settings():
+def v3840_a_lost_mass_balance_still_gets_the_full_stable_settings():
     from nd_breach_runner.core import lisflood as lf
     # the first run both makes water and checkerboards: the 3.15.1 re-run (theta and CFL) wins,
     # and one re-run is all it takes
@@ -344,13 +344,13 @@ def v3810_a_lost_mass_balance_still_gets_the_full_stable_settings():
 
 
 @test
-def v3810_the_marker_says_which_rerun_left_it():
+def v3840_the_marker_says_which_rerun_left_it():
     from nd_breach_runner.core import lisflood as lf
     from nd_breach_runner.core import workflow as wf
     d = _tmp()
     try:
         p = os.path.join(d, "stable_settings.json")
-        with open(p, "w") as f:                      # written before 3.81.0: no "kind"
+        with open(p, "w") as f:                      # written before 3.84.0: no "kind"
             json.dump({"theta": 0.7, "cfl": 0.5}, f)
         assert wf._stability_marker_kind(p) == lf.STABILITY_KIND_MASS
         with open(p, "w") as f:
@@ -365,7 +365,7 @@ def v3810_the_marker_says_which_rerun_left_it():
 
 
 @test
-def v3810_a_resumed_dam_keeps_the_cfl_only_settings():
+def v3840_a_resumed_dam_keeps_the_cfl_only_settings():
     d = _tmp()
     try:
         # the first domain checkerboards and is cured; the run of the extended domain dies
@@ -387,7 +387,7 @@ def v3810_a_resumed_dam_keeps_the_cfl_only_settings():
 
 
 @test
-def v3810_cli_keys_cfl_and_theta_and_the_checkpoint_key():
+def v3840_cli_keys_cfl_and_theta_and_the_checkpoint_key():
     from nd_breach_runner.core import workflow as wf
     # the settings exist (the CLI refuses a key whose run setting is missing) but stay out of the
     # checkpoint key until a run sets them, so every earlier checkpoint resumes
