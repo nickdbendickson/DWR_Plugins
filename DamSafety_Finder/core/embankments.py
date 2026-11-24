@@ -154,7 +154,12 @@ K_ROAD_POND = "road fill (ponding)"
 K_ROAD = "road fill"
 K_LONG = "long fill (road, rail, canal or levee)"
 K_EDGE = "at the edge of the terrain data"      # kept, but not a candidate (step 13)
-KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD, K_LONG, K_EDGE)
+K_RIVER_LEVEE = "river levee / dike"            # a dam-shaped fill beside a NAMED river: a levee
+                                                # or channel dike, not a stock-pond dam (finder.py
+                                                # step 14 reclassifies a K_DAM within levee_river_m
+                                                # of a named flowline); kept and reported, but not
+                                                # handed to Screening as a dam to protect
+KINDS = (K_DAM, K_DRY, K_ROAD_POND, K_ROAD, K_LONG, K_EDGE, K_RIVER_LEVEE)
 
 
 @dataclass
