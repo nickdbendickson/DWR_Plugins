@@ -118,6 +118,10 @@ def decide(st, final_model, receptors, structures, breach_xy):
                               "which already resolves hydraulic jumps across the whole grid, so a "
                               "separate near-dam FV1 refinement is not needed; confirm a final "
                               "classification with a LISFLOOD-FP run".format(_ord))
+        elif lfmod.is_gpu_subli(getattr(st, "lisflood_exe", "")):
+            info["reason"] = ("the run used Boann, sub-grid local inertial, which has no FV1 "
+                              "shock-capturing solver, so the near-dam velocities cannot be "
+                              "refined; install LISFLOOD-FP for a near-dam FV1 velocity check")
         elif lfmod.is_gpu(getattr(st, "lisflood_exe", "")):
             info["reason"] = ("the run used Boann (ACC / local inertial), which has no FV1 "
                               "shock-capturing solver, so the near-dam velocities cannot be "

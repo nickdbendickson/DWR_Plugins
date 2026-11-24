@@ -67,11 +67,13 @@ def build(out, say=print):
 
 
 def run(folder, n=None, nlcd=False, exe=None, threads=1, sim_hr=None, say=print,
-        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto"):
+        sgc=False, sgc_min_area_km2=None, sgc_channel_n=None, sgc_start="auto", sgc_curve=None,
+        tag_suffix=""):
     _use_crs()
     return reach.run(folder, n, nlcd, exe, threads, sim_hr, say,
                      sgc=sgc, sgc_min_area_km2=sgc_min_area_km2,
-                     sgc_channel_n=sgc_channel_n, sgc_start=sgc_start)
+                     sgc_channel_n=sgc_channel_n, sgc_start=sgc_start, sgc_curve=sgc_curve,
+                     tag_suffix=tag_suffix)
 
 
 def score(root, say=print):
@@ -130,6 +132,12 @@ def main(argv=None):
     r.add_argument("--sgc-min-area-km2", type=float, default=None)
     r.add_argument("--sgc-channel-n", type=float, default=None)
     r.add_argument("--sgc-start", default="auto", choices=["auto", "empty", "full"])
+    r.add_argument("--sgc-curve", default=None,
+                   help="sub-grid-channel hydraulic-geometry curve: a preset name (nd [default], "
+                        "bieger-us) or four numbers a,b,c,f for W=a*A^b, D=c*A^f (A in km2, W/D m)")
+    r.add_argument("--tag-suffix", default="",
+                   help="append this to the run folder name, to park a variant run (e.g. a "
+                        "gpu-subfv terrain-sampling run) in its own column without overwriting")
     s = sub.add_parser("score")
     s.add_argument("root")
     a = ap.parse_args(argv)
@@ -138,9 +146,16 @@ def main(argv=None):
     elif a.cmd == "run":
         if not a.nlcd and not a.n:
             ap.error("give --n or --nlcd")
+        curve = a.sgc_curve
+        if curve and "," in curve:
+            try:
+                curve = tuple(float(x) for x in curve.split(","))
+            except ValueError:
+                ap.error("--sgc-curve must be a preset name or four numbers a,b,c,f")
         run(a.folder, a.n, a.nlcd, a.lisflood, a.threads, a.hours,
             sgc=a.sgc, sgc_min_area_km2=a.sgc_min_area_km2,
-            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start)
+            sgc_channel_n=a.sgc_channel_n, sgc_start=a.sgc_start, sgc_curve=curve,
+            tag_suffix=a.tag_suffix)
     else:
         score(a.root)
     return 0

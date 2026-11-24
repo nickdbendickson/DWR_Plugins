@@ -43,7 +43,7 @@ def test_make_and_baseline_file():
                    "_run": "observed"}, f)
     paths = G.make(d)
     assert [os.path.basename(p) for p in paths] == ["boann_acc.json", "boann_sgc.json",
-                                                    "boann_subfv.json"]
+                                                    "boann_subfv.json", "boann_subli.json"]
     with open(paths[1]) as f:
         c = json.load(f)
     assert c["model"]["lisflood_exe"] == "gpu-sgc" and c["model"]["lisflood_sgc"] is True
@@ -52,6 +52,10 @@ def test_make_and_baseline_file():
         c = json.load(f)
     assert c["model"]["lisflood_exe"] == "gpu-subfv" and "lisflood_sgc" not in c["model"]
     assert c["output"]["folder"] == "runs/boann_subfv" and c["model"]["cell_size_m"] == 30.0
+    with open(paths[3]) as f:
+        c = json.load(f)
+    assert c["model"]["lisflood_exe"] == "gpu-subli" and "subgrid_upwind" not in c["model"]
+    assert c["output"]["folder"] == "runs/boann_subli"
     with open(G.BASELINE) as f:
         b = json.load(f)
     assert set(b["runs"]) == set(G.RUNS), b["runs"].keys()

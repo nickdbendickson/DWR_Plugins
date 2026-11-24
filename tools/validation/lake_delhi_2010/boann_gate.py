@@ -2,7 +2,8 @@
 the GPU kernels) must stay within a band of the recorded baseline at the USGS high-water marks.
 
     <QGIS python> tools/validation/lake_delhi_2010/boann_gate.py make CASE_FOLDER
-        writes boann_acc.json, boann_sgc.json and boann_subfv.json beside the case's as_observed.json
+        writes boann_acc.json, boann_sgc.json, boann_subfv.json and boann_subli.json beside the
+        case's as_observed.json
     <QGIS python> tools/validation/lake_delhi_2010/boann_gate.py check CASE_FOLDER
         reads CASE_FOLDER/Lake_Delhi_2010_Score.json (score.py) and boann_baseline.json here
 
@@ -25,6 +26,8 @@ RUNS = {
                   "sgc_min_area_km2": 2.0, "sgc_channel_n": 0.035},
     # sub-grid FV at its default coarsening factor (r = 4: 120 m cells over the 30 m case)
     "boann_subfv": {"lisflood_exe": "gpu-subfv"},
+    # sub-grid local inertial at its default r = 4 as well (flux weighting off, its default)
+    "boann_subli": {"lisflood_exe": "gpu-subli"},
 }
 
 

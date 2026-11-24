@@ -17,6 +17,7 @@ import numpy as np
 
 from . import deckio as bl
 from . import backends as be
+from . import engine as mfe
 from .engine import Deck, _f, _setf
 
 NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
@@ -156,6 +157,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", orde
             log(msg)
 
     deck = Deck(par_path)
+    mfe.refuse_rain(deck, "FV1 / FV2 / DG2")
     spec = (be.DG2_SPEC if int(order) >= 3 else
             be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC)
     lim = getattr(deck, "dg2_limiter", True) if limiter is None else bool(limiter)
@@ -312,6 +314,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout),
              "clipped_m3": clip}
+    # where the time went (backends.Profile); timing only, no result depends on it
+    stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("Boann, shock-capturing ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                         stats["mass_error_m3"], vin))

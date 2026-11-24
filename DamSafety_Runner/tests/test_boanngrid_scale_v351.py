@@ -65,7 +65,7 @@ def smoke_skips_every_in_process_engine_without_starting_a_program():
     subprocess.run = _no_run
     try:
         engines = [lf.BUILTIN_EXE, lf.GPU_EXE, lf.GPU_FV_EXE, lf.GPU_FV2_EXE, lf.GPU_DG2_EXE,
-                   lf.GPU_SGC_EXE, lf.GPU_SUBFV_EXE]
+                   lf.GPU_SGC_EXE, lf.GPU_SUBFV_EXE, lf.GPU_SUBLI_EXE]
         for exe in engines:
             assert lf.is_inprocess(exe), exe
             assert sg.is_inprocess_engine(exe), exe

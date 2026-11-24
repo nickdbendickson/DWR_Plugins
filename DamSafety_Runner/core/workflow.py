@@ -377,6 +377,9 @@ class RunSettings:
         # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
         # own default (4). The QGIS run tool sets it from SUBGRID_R, the CLI from model.subgrid_r.
         self.user_subgrid_r = None
+        # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
+        # (off by default). The CLI sets it from model.subgrid_upwind.
+        self.user_subgrid_upwind = False
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
         # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
         # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
@@ -671,6 +674,9 @@ def key_settings(st):
     # a different flood); left at the engine's default it stays out, so earlier checkpoints resume
     if getattr(st, "user_subgrid_r", None) is None:
         d.pop("user_subgrid_r", None)
+    # 3.79.0: likewise the sub-grid local-inertial flux weighting, off unless asked for
+    if not getattr(st, "user_subgrid_upwind", False):
+        d.pop("user_subgrid_upwind", None)
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
@@ -2992,6 +2998,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         kw = {}
         if getattr(st, "user_subgrid_r", None) is not None:
             kw["subgrid_r"] = int(st.user_subgrid_r)
+        if getattr(st, "user_subgrid_upwind", False):
+            kw["subgrid_upwind"] = True
         if stability["on"] and stability["kind"] == lfmod.STABILITY_KIND_CHECKER and \
                 getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
             # 3.81.0: a checkerboarded run is cured by the smaller time step alone; theta stays
@@ -3274,6 +3282,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if gmsg not in warnings:
             warnings.append(gmsg)
             log(gmsg)
+    if lfmod.is_gpu_subli(st.lisflood_exe):
+        lmsg = ("This run uses Boann, sub-grid local inertial (on {}), not LISFLOOD-FP itself: the "
+                "ACC scheme on cells {} times the DEM cell, each keeping its DEM sub-cells as "
+                "stage tables (after Nithila Devi & Kuiry 2024, with exact stage curves and "
+                "compound-channel friction). Depth and water-surface rasters are written at the "
+                "DEM cell; arrival time and velocity are those of the coarse cell a DEM cell lies "
+                "in. On flat sub-cells it is the Boann ACC engine exactly, and on the meandering "
+                "test valley it matched the fine run within centimetres, but it is new and has "
+                "not been checked against surveyed marks: confirm a final hazard classification "
+                "with a LISFLOOD-FP run.".format(
+                    lfmod.gpu_backend_note(), getattr(st, "user_subgrid_r", None) or 4))
+        if lmsg not in warnings:
+            warnings.append(lmsg)
+            log(lmsg)
     if lfmod.is_gpu_shock(st.lisflood_exe):
         if lfmod.is_gpu_dg2(st.lisflood_exe):
             _scheme = "discontinuous Galerkin 2nd order (an RKDG2 solver of"
@@ -4172,6 +4194,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                               "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; "
                               "NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_subfv(st.lisflood_exe) else
+                              "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells; "
+                              "NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu_subli(st.lisflood_exe) else
                               "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_dg2(st.lisflood_exe) else
                               "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; "

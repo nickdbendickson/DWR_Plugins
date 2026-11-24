@@ -236,6 +236,9 @@ MODEL_KEYS = {
     # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r, 1-8 (the run tool's SUBGRID_R).
     # Left out = the engine's own default (4). Only that engine reads it.
     "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
+    # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
+    # (Devi & Kuiry 2024 Eq. 7-8). Off unless set; it reads deep on reaches that cross the grid.
+    "subgrid_upwind": ("user_subgrid_upwind", ("bool",)),
     # 3.81.0: the flood solver's Courant number and the ACC scheme's theta (the run tool's CFL and
     # THETA). Left out = each engine's own (CFL 0.7 and theta 1 for ACC). A smaller CFL is a
     # smaller time step: the cure for a run whose peak water surface checkerboards.

@@ -171,6 +171,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
             log(msg)
 
     deck = Deck(par_path)
+    mfe.refuse_rain(deck, "sub-grid FV")
     try:
         bk = be.make_backend(backend, spec=sb.SUBFV_SPEC, log=say)
     except be.BackendError as e:
@@ -290,6 +291,8 @@ def _run(d, bk, progress, cancel, say):
              "fine_cells": nyf * nxf, "steps": steps, "batches": batches, "sim_time_s": t,
              "wall_s": round(wall, 2), "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip}
+    # where the time went (backends.Profile); timing only, no result depends on it
+    stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("Boann, sub-grid FV ({}, {}): r={}, {} coarse cells ({}x fewer), {} steps, {:.2f} h in "
         "{:.1f} min; volume error {:.3g} m3 of {:.4g} m3 injected.".format(
             bk.kind, bk.device, r, eng.nyc * eng.nxc, r * r, steps, t / 3600.0, wall / 60.0,
