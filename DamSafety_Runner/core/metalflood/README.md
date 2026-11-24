@@ -209,6 +209,25 @@ meandering test valley (0.9 km, slope 0.004, 250 m3/s peak), where that run is o
   this reach, not the method getting more accurate with bigger cells: r = 2 is the honest "same
   flood, 8 times sooner" case, r = 4 trades half a foot for another factor of two. Volume error
   5 to 10 m3 of 1.11e8 m3 at every r. The weighting reads 1.1 ft higher than without it.
+- Lake Delhi 2010 at 10 m, the DEM's own cell, on an Apple M2 Pro GPU (Nick's MacBook, 2026-11-23;
+  whole 48 h event, 4.6 million DEM cells). The reference is plain ACC at 10 m with `cfl 0.5`;
+  feet, coarse minus reference over every cell wet in either run:
+
+  | Run | Solve | Marks, mean / mean size | Median cell | 90% within | 99% within | Same flooded area |
+  |---|---|---|---|---|---|---|
+  | plain ACC, 10 m cells, `cfl 0.5` | 9.5 min | +0.34 / 0.95 | | | | |
+  | sub-grid, 20 m cells (r = 2) | 5.0 min | +0.30 / 0.95 | 0.036 | 0.085 | 0.200 | 99.8 % |
+  | sub-grid, 40 m cells (r = 4) | 2.5 min | +0.08 / 0.97 | 0.157 | 0.410 | 0.823 | 97.5 % |
+  | plain ACC, 10 m cells, default `cfl` 0.7 | 18.1 min | +8.11 / 10.61 | 3.022 | 20.9 | 43.2 | 84.9 % |
+
+  So on a real dam break the coarse run gives the fine run's flood: 1 cm in the median cell at
+  r = 2 in half the time, 5 cm at r = 4 in a quarter. The Metal kernels equal their CPU build on
+  that GPU to the last printed digit (largest depth difference 0.00000 m on the 30 m deck).
+  The last row is NOT this engine: plain ACC at LISFLOOD-FP's default Courant number goes unstable
+  at the breach peak on this 10 m deck (a checkerboard peak surface, 126 ft of water at its
+  deepest, 8 ft high at the marks) and keeps its volume while it does, so the Runner's re-run of a
+  run that lost its balance does not fire. `cfl 0.5` alone steadies it and `cfl 0.35` gives the
+  same flood. The sub-grid runs above use the default `cfl` and are smooth.
 
 **What a fine cell is given.** Depth and water surface: the coarse cell's highest level less the
 DEM cell's own ground, for water over 1 mm. Arrival time, time of maximum and maximum velocity:
