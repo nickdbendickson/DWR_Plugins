@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { analyze } from "@/lib/crest/engine";
 import { DEPTH_BANDS, floodStrip } from "@/lib/crest/floodstrip";
 import { ROUTED_LABEL } from "@/lib/crest/inundation";
-import { OUTLINE_LABEL, outlineState } from "@/lib/crest/outline";
+import { layerLabel, OUTLINE_LABEL, outlineState } from "@/lib/crest/outline";
 import { isLargeFlood, RUNNER_SOURCE, runnerNeededText, runnerWorklist, worklistCsv } from "@/lib/crest/layer-of-record";
 import { CRS_DEFS, DIFF_BINS } from "@/lib/crest/raster-meta";
 import { results } from "@/lib/crest/results-client";
@@ -411,7 +411,7 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
                 {mode === "desk"
                   ? "Desk strip: the schematic valley, not a mapped extent."
                   : mode === "terrain"
-                    ? `${terrain.state === "ready" && terrain.layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}. The layer saved with this dam on the Flood step${terrain.state === "ready" ? `, built ${new Date(terrain.builtAt).toLocaleDateString()}` : ""}.`
+                    ? `${terrain.state === "ready" ? layerLabel(dam.outline, ROUTED_LABEL) : OUTLINE_LABEL}. The layer saved with this dam on the Flood step${terrain.state === "ready" ? `, built ${new Date(terrain.builtAt).toLocaleDateString()}` : ""}.`
                     : `${SOURCE_LABEL[mode as ResultSource] ?? ""} max depth, reprojected to the map for display (numbers use the full grid). Datum shifts NAD83→WGS84 (about 1 m) are not applied.`}
               </p>
             </>

@@ -86,7 +86,7 @@ class Deck:
         self.saveint = num("saveint", self.sim + 10.0)
         self.arr_depth = num("inittm_depth", 0.0)
         self.dt0 = float(par.get("initial_tstep", 10.0))
-        n_def = num("fpfric", 0.06)
+        n_def = num("fpfric", 0.05)
         n = np.full(z.shape, n_def)
         if "manningfile" in par:
             ng, _, _, _, nn = bl._load("Manning's n file", bl._read_asc, path("manningfile"),

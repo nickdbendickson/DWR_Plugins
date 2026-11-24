@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-23 (local DEM named in labels)
+
+- **A local DEM chosen in the desk is named on the Flood panel, legend, map credit and inspector (was always "3DEP").**
+  Layers built on a local DEM are stamped with its label (`stampTerrain`); 3DEP is unchanged. Ported from damit-desk
+  (Absaraka desk test 2026-11-21). Test: `src/lib/crest/outline.test.ts`.
+
+
 ## 2026-11-22 (desk TR-60 is not handed off as NRCS TR-60)
 
 - **The desk's "TR-60 width" is now "Height-multiple width (2H piping, 3H overtopping; screening)", and the flood-model

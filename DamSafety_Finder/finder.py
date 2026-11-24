@@ -333,6 +333,8 @@ def check_dem_unit(dem, z_feet, log=print):
         med = float(np.nanmedian(a)) * (FT if z_feet else 1.0)
     except Exception:                                                   # noqa - a check only
         return z_feet
+    finally:
+        ds = None            # audit 2026-11-20: guaranteed release (Windows file locking)
     if np.isfinite(med) and not (ND_GROUND_M[0] - 50 <= med <= ND_GROUND_M[1] + 50):
         log("WARNING: read in {} the DEM's typical ground is {:.0f} m ({:.0f} ft), outside North Dakota's "
             "{:.0f}-{:.0f} m: check 'DEM elevation unit' (outside ND this check does not apply)".format(
@@ -430,11 +432,14 @@ def warp_dem(dem, ext, cell, z_feet=None):
         opts["srcNodata"] = nod
     wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
     out = _checked(gdal.Warp("", ds, **opts), "warping the DEM")
+    ds = None                                  # audit 2026-11-20: release the source DEM
     a = out.GetRasterBand(1).ReadAsArray().astype("float64")
+    gt = out.GetGeoTransform()
+    out = None                                 # audit 2026-11-20: release the MEM warp
     a[(a <= -9998.0) | ~np.isfinite(a)] = np.nan
     if z_feet:
         a *= FT
-    return a, out.GetGeoTransform()
+    return a, gt
 
 
 def write_hillshade(dem, ext, cell, path, z_feet=None, max_cells=400e6):
@@ -455,6 +460,7 @@ def write_hillshade(dem, ext, cell, path, z_feet=None, max_cells=400e6):
     wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
     vrt = path + ".src.vrt"
     _checked(gdal.Warp(vrt, src, **opts), "warping the DEM for the hillshade")
+    src = None                                 # audit 2026-11-20: release the source DEM
     try:
         hs = gdal.DEMProcessing(path, vrt, "hillshade", multiDirectional=True,
                                 zFactor=FT if z_feet else 1.0, computeEdges=True,
