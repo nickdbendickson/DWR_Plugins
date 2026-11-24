@@ -432,6 +432,14 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float uR = mf_pvel(Uhu[3u * rr], h0r, mf_sx(Uhu, rr, h0r), ser, -MF_SQ3);
                 float vR = mf_pvel(Uhv[3u * rr], h0r, mf_sx(Uhv, rr, h0r), ser, -MF_SQ3);
                 fl = mf_hllc(hLs, uL, vL, hRs, uR, vR, g);
+            } else if (ok[l] != 0 && Uh[3u * l] > MF_HVEL) {  // NoData on the right: a wall, as at the domain edge
+                float wn = mf_vel(Uhu[3u * l], Uh[3u * l]);
+                float wt = mf_vel(Uhv[3u * l], Uh[3u * l]);
+                fl = mf_hllc(Uh[3u * l], wn, wt, Uh[3u * l], -wn, wt, g);
+            } else if (ok[rr] != 0 && Uh[3u * rr] > MF_HVEL) {  // NoData on the left: a wall
+                float wn = mf_vel(Uhu[3u * rr], Uh[3u * rr]);
+                float wt = mf_vel(Uhv[3u * rr], Uh[3u * rr]);
+                fl = mf_hllc(Uh[3u * rr], -wn, wt, Uh[3u * rr], wn, wt, g);
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
             uint ii = r * nx;
@@ -497,6 +505,14 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
                 float nD = mf_pvel(Uhv[3u * d], h0d, mf_sy(Uhv, d, h0d), sed, -MF_SQ3);
                 float tD = mf_pvel(Uhu[3u * d], h0d, mf_sy(Uhu, d, h0d), sed, -MF_SQ3);
                 fl = mf_hllc(hUs, nU, tU, hDs, nD, tD, g);
+            } else if (ok[u] != 0 && Uh[3u * u] > MF_HVEL) {  // NoData on the south: a wall, as at the domain edge
+                float wn = mf_vel(Uhv[3u * u], Uh[3u * u]);
+                float wt = mf_vel(Uhu[3u * u], Uh[3u * u]);
+                fl = mf_hllc(Uh[3u * u], wn, wt, Uh[3u * u], -wn, wt, g);
+            } else if (ok[d] != 0 && Uh[3u * d] > MF_HVEL) {  // NoData on the north: a wall
+                float wn = mf_vel(Uhv[3u * d], Uh[3u * d]);
+                float wt = mf_vel(Uhu[3u * d], Uh[3u * d]);
+                fl = mf_hllc(Uh[3u * d], -wn, wt, Uh[3u * d], wn, wt, g);
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side
             uint ii = c;

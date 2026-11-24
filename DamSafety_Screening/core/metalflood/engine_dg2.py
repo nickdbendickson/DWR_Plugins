@@ -18,7 +18,7 @@ from .engine_fv import Deck, Engine, EngineError, Cancelled  # noqa: F401
 from .engine_fv import run_par as _run_par_fv
 
 NAME = "Boann, discontinuous Galerkin 2nd order (RKDG2, on the GPU via Metal)"
-VERSION = "0.2.0"     # 0.2.0 (Runner 3.67.0): edge/Gauss velocities reconstructed as primitives
+VERSION = "0.3.0"     # 0.3.0 (Runner 3.93.0): a face against NoData is a reflecting wall; 0.2.0 (Runner 3.67.0): edge/Gauss velocities reconstructed as primitives
 
 
 def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", limiter=None):
