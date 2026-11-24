@@ -15,6 +15,7 @@ on:
       - "DamSafety_Runner/tests/test_metalflood.py"
       - "DamSafety_Runner/tests/test_subgrid_kernel.py"
       - "DamSafety_Runner/tests/test_boann_dry_skip.py"
+      - "DamSafety_Runner/tests/test_boann_pcores.py"
       - ".github/workflows/metal-engine.yml"
 
 permissions:
@@ -48,6 +49,9 @@ jobs:
         run: python -m nd_breach_runner.tests.test_metalflood
       - name: Dry-cell skip and the Mac OpenMP CPU build
         run: python -m nd_breach_runner.tests.test_boann_dry_skip
+      # the Mac thread default (performance cores) reads real sysctl keys here
+      - name: Performance-core default and any-core-count answers
+        run: python -m nd_breach_runner.tests.test_boann_pcores
       - name: Sub-grid FV kernel tests (Metal and the CPU build)
         run: python -m nd_breach_runner.tests.test_subgrid_kernel
       - name: Speed test (small valley)
