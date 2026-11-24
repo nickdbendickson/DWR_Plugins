@@ -3,9 +3,13 @@
 The depression-fill is **Priority-Flood+ε** (Barnes, Lehman and Mulla 2014), one pass, in C++,
 on one CPU core. That is the default for `fill_dem` on every platform, including a Mac with an
 Apple GPU: a priority queue does not get faster on the GPU. On a 3.5 M-cell 10 m DEM the old
-relaxation took about 205 s and this takes under a second. The filled surface is bit-identical
-to `core/terrain.priority_flood` (the float64 oracle, D8). It is not that function; that
-function is still the reference and is not on this path.
+relaxation took about 205 s and this takes under a second. It copies the relaxation's float32
+arithmetic (the same datum-shifted float32 ground, `w = max(z, float32(lowest neighbour + ε))`),
+so it lands on the relaxation's own fixed point: within a float32 step or two on every cell (the
+relaxation's 1e-6 m dead band), with the same census, flow network and carves downstream. It is
+deliberately NOT float64: a float64 surface (the arithmetic of `core/terrain.priority_flood`, the
+oracle) rounds differently when the flow step takes it back to float32, makes flats the
+relaxation does not have and moves flow directions and carve IDs.
 
 ```python
 from nd_breach_runner.core.metalterrain import fill
@@ -14,12 +18,11 @@ filled, info = fill.fill_dem(dem, eps=1e-5)   # priority-flood; NaN / -9999 = No
 
 The previous fill, a Planchon & Darboux relaxation written as a Metal kernel (and the same
 source built as C++), is still there. Pass `method="relax"` (or `--fill-method relax`). It runs
-in float32, so it can differ from the priority-flood by a fraction of a millimetre. It is the
-cross-check, not the default. `backend` (`auto` / `metal` / `cpu`) applies only to that path.
+in float32 like the priority-flood and is the cross-check, not the default. `backend` (`auto` / `metal` / `cpu`) applies only to that path.
 
 If the C++ library cannot be built or loaded, `method="auto"` uses the Metal relaxation when a
-Metal GPU is present, otherwise the pure-Python oracle (D8) or a D4 twin of it. `method="priority-flood"`
-raises instead of falling back.
+Metal GPU is present, otherwise a pure-Python twin of the C++ fill (same numbers, slow).
+`method="priority-flood"` raises instead of falling back.
 
 ## What it computes
 
@@ -70,7 +73,7 @@ __main__.py             verify / bench / fill CLI
 ## Check it
 
 ```bash
-python -m nd_breach_runner.core.metalterrain verify            # both fills vs priority_flood
+python -m nd_breach_runner.core.metalterrain verify            # both fills vs priority_flood and each other
 python -m nd_breach_runner.core.metalterrain verify -backend metal   # relaxation also on the Apple GPU
 python -m nd_breach_runner.core.metalterrain bench -size medium      # priority-flood and relax, with times
 python -m nd_breach_runner.core.metalterrain fill in.asc out.asc --fill-method relax
