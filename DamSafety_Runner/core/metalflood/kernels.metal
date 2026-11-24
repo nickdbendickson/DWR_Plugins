@@ -54,11 +54,24 @@ using namespace metal;
 #define S_LASTDT 15    // float: dt of the last step taken
 #define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell
 #define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
+#define S_TILES 18     // uint: 1 = the grid kernels leave out the tiles ton marks off (set by the host)
 #define S_WORDS 32
 // The two sums over many threads (edge outflow, clipped volume) are added as fixed-point uints:
 // not every Apple GPU has float atomics (the CI runner's paravirtual GPU has none). Each SIMD
 // group's sum is rounded to 1e-4 (m3/s, m3) before it is added: unbiased, and 4.3e5 at most.
 #define MF_FIX 1.0e-4f
+
+// Dry-tile skip (Runner 3.83.0, Boann 5.5.0), the GPU twin of the CPU build's dry-cell skip
+// (cpu_kernels.cpp mf_rows). The window is cut into MF_TILE x MF_TILE cell tiles. Every few steps
+// (the engine's SKIP_CHUNK, 8) k_tclear / k_tseed / k_tgrow mark the tiles holding a seed - a wet
+// cell, a cell beside a face whose discharge or recorded velocity is not zero, or a source cell -
+// and the 8 tiles around each. Water moves at most one cell per step, so a cell in an unmarked
+// tile is more than MF_TILE > SKIP_CHUNK + 1 cells from every seed: it stays dry for the chunk,
+// the faces beside it keep exactly 0, and its maxima do not move, which is what the full window
+// computes there. The grid kernels skip those cells (k_limit and k_cont still take part in their
+// SIMD-group reductions with the values a dry cell gives, so the groups and sums are unchanged).
+// Same numbers bit for bit, as test_boann_gpu_tiles checks. Rain wets every cell: no skip.
+#define MF_TILE 16u
 
 struct Params {
     uint nx, ny;          // grid columns, rows
@@ -115,7 +128,9 @@ struct Params {
     device float* qyo B(20), \
     device float* vxf B(21), \
     device float* vyf B(22), \
-    constant Params& p B(23), \
+    device uint* tseed B(23), \
+    device uint* ton B(24), \
+    constant Params& p B(25), \
     uint2 gid GID
 
 // -- helpers ------------------------------------------------------------------------------
@@ -197,6 +212,20 @@ inline float mf_series(uint k, float tm, device const uint* ser_off,
     return ser_q[j] + f * (ser_q[j + 1] - ser_q[j]);
 }
 
+// whether the grid kernels' thread (gx, gy) of the window runs: always unless the host turned the
+// dry-tile skip on for this batch; then only in a marked tile. A face thread goes with the cell
+// east of its x-face / south of its y-face (the window's last cell for the closing faces).
+inline bool mf_on(device const uint* st, device const uint* ton, uint gx, uint gy,
+                  constant Params& p) {
+    if (st[S_TILES] == 0u) {
+        return true;
+    }
+    uint tx = (gx < p.wc ? gx : p.wc - 1u) / MF_TILE;
+    uint ty = (gy < p.wr ? gy : p.wr - 1u) / MF_TILE;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    return ton[ty * ntx + tx] != 0u;
+}
+
 // -- kernels --------------------------------------------------------------------------------
 
 // one thread: the step's dt (CFL from the deepest water; no step starts at or past the batch
@@ -248,7 +277,7 @@ kernel void k_begin(MF_ARGS) {
 kernel void k_faces(MF_ARGS) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -335,7 +364,7 @@ kernel void k_faces(MF_ARGS) {
 kernel void k_scale(MF_ARGS) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -365,7 +394,9 @@ kernel void k_limit(MF_ARGS) {
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
     float out = 0.0f;
-    if (gid.y < p.wr) {
+    // a skipped face is far from water: it carries 0 and sends 0 out (see MF_TILE)
+    bool on = mf_on(st, ton, gid.x, gid.y, p);
+    if (on && gid.y < p.wr) {
         uint f = r * (nx + 1u) + c;
         float q = qx[f];
         if (q > 0.0f && c > 0u) {
@@ -381,7 +412,7 @@ kernel void k_limit(MF_ARGS) {
             out += q;
         }
     }
-    if (gid.x < p.wc) {
+    if (on && gid.x < p.wc) {
         uint f = r * nx + c;
         float q = qy[f];
         if (q > 0.0f && r > 0u) {
@@ -414,30 +445,35 @@ kernel void k_cont(MF_ARGS) {
     uint nx = p.nx;
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
-    uint i = r * nx + c;
-    uint fx = r * (nx + 1u) + c;
-    float dx = p.dx;
-    float hn = h[i] + dt / dx * (qx[fx] - qx[fx + 1u] + qy[i] - qy[i + nx])
-        + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
+    // a skipped cell is far from water: it stays dry (depth 0, nothing clipped, no maximum), and
+    // takes part in the SIMD-group reductions below with exactly those values (see MF_TILE)
+    float hn = 0.0f;
     float clip = 0.0f;
-    if (hn < 0.0f) {
-        clip = -hn * dx * dx;
-        hn = 0.0f;
-    }
-    if (ok[i] == 0) {
-        hn = 0.0f;
-    }
-    h[i] = hn;
-    // maxima as LISFLOOD-FP keeps them: only water deeper than 1 mm counts, from the first step
-    // on (a start-depth pond's first depth is not a maximum, its arrival is the first step)
-    float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
-    if (hn > p.dry) {
-        if (hn > hmax[i]) {
-            hmax[i] = hn;
-            tmax[i] = th;
+    if (mf_on(st, ton, gid.x, gid.y, p)) {
+        uint i = r * nx + c;
+        uint fx = r * (nx + 1u) + c;
+        float dx = p.dx;
+        hn = h[i] + dt / dx * (qx[fx] - qx[fx + 1u] + qy[i] - qy[i + nx])
+            + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
+        if (hn < 0.0f) {
+            clip = -hn * dx * dx;
+            hn = 0.0f;
         }
-        if (hn > p.arr_depth && arr[i] == MF_NODATA) {
-            arr[i] = th;
+        if (ok[i] == 0) {
+            hn = 0.0f;
+        }
+        h[i] = hn;
+        // maxima as LISFLOOD-FP keeps them: only water deeper than 1 mm counts, from the first
+        // step on (a start-depth pond's first depth is not a maximum, its arrival is the first step)
+        float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
+        if (hn > p.dry) {
+            if (hn > hmax[i]) {
+                hmax[i] = hn;
+                tmax[i] = th;
+            }
+            if (hn > p.arr_depth && arr[i] == MF_NODATA) {
+                arr[i] = th;
+            }
         }
     }
     bool wet = hn > 0.0f;
@@ -473,7 +509,7 @@ kernel void k_cont(MF_ARGS) {
 kernel void k_speed(MF_ARGS) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -502,4 +538,71 @@ kernel void k_end(MF_ARGS) {
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
     st[S_HMAX] = st[S_HNEXT];
+}
+
+// -- dry-tile skip (see MF_TILE) ---------------------------------------------------------------
+// The host runs these three, in this order, before the first step of every chunk of steps when it
+// turns the skip on (st[S_TILES] = 1). Grid: k_tclear / k_tgrow one thread per tile of the window
+// ((wc + MF_TILE - 1) / MF_TILE x (wr + MF_TILE - 1) / MF_TILE), k_tseed one per window cell.
+
+kernel void k_tclear(MF_ARGS) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x < ntx && gid.y < nty) {
+        tseed[gid.y * ntx + gid.x] = 0u;
+    }
+}
+
+// a window cell is a seed when it holds water or a face beside it carried flow or recorded a
+// velocity in the last step (as the CPU skip's mf_rows); thread (0, 0) also marks the sources
+kernel void k_tseed(MF_ARGS) {
+    if (gid.x >= p.wc || gid.y >= p.wr) {
+        return;
+    }
+    uint nx = p.nx;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint r = p.r0 + gid.y;
+    uint c = p.c0 + gid.x;
+    uint i = r * nx + c;
+    uint fx = r * (nx + 1u) + c;
+    if (h[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f || qxo[fx + 1u] != 0.0f ||
+        vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f || qyo[i + nx] != 0.0f ||
+        vyf[i + nx] != 0.0f) {
+        atomic_fetch_max_explicit((device atomic_uint*)(tseed + (gid.y / MF_TILE) * ntx
+                                                        + gid.x / MF_TILE),
+                                  1u, memory_order_relaxed);
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        for (uint k = 0; k < p.n_src; ++k) {
+            uint sr = s_cell[k] / nx;
+            uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+    }
+}
+
+// a tile runs when it or one of its 8 neighbours holds a seed (or it rains: every cell runs)
+kernel void k_tgrow(MF_ARGS) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x >= ntx || gid.y >= nty) {
+        return;
+    }
+    uint on = p.rain != 0u ? 1u : 0u;
+    uint y0 = gid.y > 0u ? gid.y - 1u : 0u;
+    uint y1 = gid.y + 1u < nty ? gid.y + 1u : nty - 1u;
+    uint x0 = gid.x > 0u ? gid.x - 1u : 0u;
+    uint x1 = gid.x + 1u < ntx ? gid.x + 1u : ntx - 1u;
+    for (uint y = y0; y <= y1; ++y) {
+        for (uint x = x0; x <= x1; ++x) {
+            if (tseed[y * ntx + x] != 0u) {
+                on = 1u;
+            }
+        }
+    }
+    ton[gid.y * ntx + gid.x] = on;
 }

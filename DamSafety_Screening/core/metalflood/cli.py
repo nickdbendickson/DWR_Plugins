@@ -154,6 +154,9 @@ def profile_lines(stats):
                              max(wall - host["encode_s"] - host["wait_s"]
                                  - (pr.get("split") or {}).get("host_s", 0.0)
                                  - (pr.get("wet") or {}).get("host_s", 0.0), 0.0)))
+        if host.get("run_share_of_window", 1.0) < 1.0:
+            lines.append("  the GPU's dry-tile skip ran about {:.1f}% of the window's cell "
+                         "updates".format(100.0 * host["run_share_of_window"]))
     elif "run_s" in host:
         lines.append("  in the CPU kernels: {:.2f} s{}".format(
             host["run_s"], " ({:.1f} million window cell updates a second)".format(
