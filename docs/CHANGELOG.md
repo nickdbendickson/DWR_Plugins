@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Runner 3.75.0 / Screening 0.48.0 / Boann 5.1.0: Boann rain on the grid. The ACC engine reads LISFLOOD-FP's `rainfall` keyword (NO change for a deck without it; the Runner does not write it yet).**
+  - **Input.** LISFLOOD-FP 8.3's `.rain` file: a comment line, `<count> <units>`, then `<mm/hr> <time>` lines. One rate over the whole grid, linear between its times, read at each step's start (`deckio.read_rain`). A negative rate (the old evaporation trick) is refused.
+  - **Kernels.** `k_begin` evaluates the rate; the rain series rides after the inflow series, and Params' spare last word is now the `rain` flag. `k_cont` adds `rate x dt` to every valid cell; NoData stays dry. With rain the wet window is the whole grid.
+  - **Water balance.** Rain is booked as inflow, so the volume error still closes. The `.mass` file's last column carries the cumulative rain volume, as LISFLOOD-FP's does, and `stats['rain_m3']` reports it.
+  - **Against LISFLOOD-FP 8.3** (40 x 60 sloping plane with a pond and an open edge, 36 mm/hr for 1 h, 3 h run): the same 3,820 steps, rain 8,686.55 m3 in both, final volume 2,443.25 vs 2,443.30 m3, max depths within 1 mm.
+  - **Other engines.** FV1 / FV2 / DG2 / SGC / sub-grid FV stop with a message on a deck with rainfall instead of running it dry. Screening's engine files re-synced byte for byte.
+  - **Versions.** Boann's own version goes to 5.1.0 (a new input; existing results do not move) and the ACC solver's to 0.2.0.
+  - **Tests.** `tests/test_boann_rain.py`: the reader; a closed box fills to exactly rate x time; a slope balances to 1e-4; the other engines refuse; GPU == CPU (Mac); against LISFLOOD-FP (`--models`).
 - **Runner 3.74.0: enclosed DEM no-data holes the flood reaches are filled from the ground around them (THIS MOVES RESULTS of runs whose flood reached an enclosed hole the 3DEP refill did not close, or when the refill failed; other runs unchanged; Nick "go", 2026-11-23).**
   - **Why.** Batch 44 run1118: DWR-2631 (38 ft, 2,765 ac-ft, Significant of record) came out Low / Low. 28 wet cells sat on a 1 m LiDAR gap the one 3DEP refill did not close, and LISFLOOD-FP treats no-data as high ground, so the gap dammed the valley.
   - **What.** Before a run is called "held up by a hole", `dem_refill.interior_holes` picks the no-data patches (8-connected) that do not touch the model grid's border and are at most `HOLE_FILL_MAX_AC` (100 ac); if the flood touches one, `fill_interior_holes` fills them once (nearest ground, then 400 Laplace sweeps with the rim fixed, as GDAL FillNodata) through the `HOLE_FILL` marker in the refill list `model_dem` applies, and the same domain run is run again (marked `followed_by_dem_refill`). A warning says how many cells were filled. Border-touching or larger holes still hold the run with the old warning.

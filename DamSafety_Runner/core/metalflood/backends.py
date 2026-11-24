@@ -59,7 +59,9 @@ class Params(ctypes.Structure):
         "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
         "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
-            "theta", "pad4")]
+            "theta")] + [("rain", ctypes.c_uint32)]
+    # "rain" is kernels.metal's last word (ACC only, Runner 3.60.0); the FV / FV2 / DG2 / SGC
+    # kernels declare that word as an unused float pad4, and the engines leave it 0 (= 0.0f).
 
 
 def buffer_layout(ny, nx, n_src, n_series, n_values):
