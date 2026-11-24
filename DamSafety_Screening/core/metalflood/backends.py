@@ -8,7 +8,8 @@ CpuBackend     the same kernel source built as C++ (mf_shim.h + cpu_kernels.cpp)
                tools/build_boann_cpu.py) when one matches the source's hash, else compiled with
                the computer's C++ compiler at first use and cached by that hash. Built with
                OpenMP when the compiler has it (every core, bit-identical to one core; set
-               DAMSAFETY_MF_THREADS to cap it, DAMSAFETY_MF_OPENMP=0 for the one-core build),
+               DAMSAFETY_MF_THREADS to cap it, DAMSAFETY_MF_OPENMP=0 for the one-core build;
+               on a Mac, its performance cores only unless DAMSAFETY_MF_THREADS says otherwise),
                else one core. It is how Boann runs on Windows and Linux, and how the engine is
                tested where there is no Apple GPU (Linux CI, the cloud).
 
@@ -678,6 +679,60 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
     raise BackendError("the CPU kernels did not compile:\n" + err)
 
 
+def _sysctl_int(name):
+    """An integer sysctl on macOS (sysctlbyname), or None when there is no such key here."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc = ctypes.CDLL("/usr/lib/libc.dylib")
+        v = ctypes.c_int(0)
+        n = ctypes.c_size_t(ctypes.sizeof(v))
+        if libc.sysctlbyname(name.encode(), ctypes.byref(v), ctypes.byref(n), None,
+                             ctypes.c_size_t(0)) != 0:
+            return None
+        return int(v.value)
+    except (OSError, AttributeError):
+        return None
+
+
+def default_threads(perf_cores=None, all_cores=None):
+    """How many cores the CPU build uses when DAMSAFETY_MF_THREADS does not say (Runner 3.89.0).
+
+    0 = the OpenMP runtime's own choice (every core): Linux, Windows, an Intel Mac. On Apple
+    silicon, the performance cores only (hw.perflevel0.physicalcpu: 6 or 8 on an M2 Pro of 10 or
+    12). The kernels hand each core an equal share of rows, so with the efficiency cores in the
+    team every step waits for them (an efficiency core runs at about a third the speed). The
+    results do not depend on it: the CPU build is bit-identical on any number of cores (test).
+    perf_cores / all_cores stand in for the sysctl values in tests."""
+    if perf_cores is None and all_cores is None:
+        perf_cores = _sysctl_int("hw.perflevel0.physicalcpu")
+        all_cores = _sysctl_int("hw.physicalcpu")
+    if not perf_cores or perf_cores < 1:
+        return 0                       # not Apple silicon, or a macOS without the key
+    if all_cores and perf_cores >= all_cores:
+        return 0                       # every core is a performance core (a VM, an Mx Ultra..)
+    return int(perf_cores)
+
+
+def threads_wanted():
+    """DAMSAFETY_MF_THREADS when set to a number (0 = every core), else default_threads().
+    On a Mac, "every core" is passed as hw.ncpu rather than 0: the OpenMP runtime keeps the
+    last count it was given for the life of the process, so 0 (leave it alone) after an earlier
+    performance-core run in the same QGIS would stay on the performance cores."""
+    v = os.environ.get("DAMSAFETY_MF_THREADS", "").strip()
+    want = None
+    if v:
+        try:
+            want = max(0, int(v))
+        except ValueError:
+            want = None
+    if want is None:
+        want = default_threads()
+    if want == 0 and sys.platform == "darwin":
+        want = _sysctl_int("hw.ncpu") or 0
+    return want
+
+
 class CpuBackend:
     kind = "cpu"
 
@@ -705,11 +760,7 @@ class CpuBackend:
         if hasattr(self.lib, "mf_threads"):
             self.lib.mf_threads.argtypes = [ctypes.c_int]
             self.lib.mf_threads.restype = ctypes.c_int
-            try:
-                want = int(os.environ.get("DAMSAFETY_MF_THREADS", "0") or 0)
-            except ValueError:
-                want = 0
-            self.threads = max(1, int(self.lib.mf_threads(max(0, want))))
+            self.threads = max(1, int(self.lib.mf_threads(threads_wanted())))
         self.device = ("CPU ({} cores, C++ build of the Metal kernels)".format(self.threads)
                        if self.threads > 1 else "CPU (one core, C++ build of the Metal kernels)")
         self.arrays = {}
