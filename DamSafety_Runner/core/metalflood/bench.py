@@ -3,10 +3,19 @@ on the CPU build of the same kernels (one core), and through LISFLOOD-FP when on
 found, with the floods compared. Prints a table and writes metalflood_bench.json.
 
     <QGIS python> -m nd_breach_runner.core.metalflood.bench [--size small|medium|large]
+        [--case valley|diagonal|compact] [--solver acc|sgc|fv|fv2|dg2|subfv] [--profile]
         [--lisflood PATH] [--threads N] [--no-cpu] [--out DIR]
 
 small: 300 x 500 cells (10 m), 2 h.   medium: 800 x 1400 (5 m), 2 h.   large: 1600 x 2800
-(2.5 m), 1 h (4.5 M cells; the CPU build is skipped there unless --cpu)."""
+(2.5 m), 1 h (4.5 M cells; the CPU build is skipped there unless --cpu).
+
+--case (Boann 5.2.0): valley, the meandering west-to-east valley (the default, as before);
+diagonal, a narrow corner-to-corner valley whose wet window is mostly dry ground; compact, a
+breach onto a flat closed plain whose window is mostly water. --solver runs another Boann
+solver on the same deck (LISFLOOD-FP is compared for acc only). --profile prints where each
+Boann run's time went (cli.profile_lines: GPU time per step and per kernel, Python's encoding
+time, the wet share of the window) and writes it into the JSON; it changes no result. For a real
+deck (Lake Delhi), use `boann.py run DECK.par --profile --stats-json stats.json` instead."""
 import argparse
 import glob
 import json
@@ -21,18 +30,27 @@ import time
 import numpy as np
 
 from . import backends as be
-from . import engine as eng
+from . import cli
 
 SIZES = {"small": dict(ny=300, nx=500, dx=10.0, peak_cms=800.0, sim_s=7200.0),
          "medium": dict(ny=800, nx=1400, dx=5.0, peak_cms=1200.0, sim_s=7200.0),
          "large": dict(ny=1600, nx=2800, dx=2.5, peak_cms=1200.0, sim_s=3600.0)}
 
 
-def _deck(folder, size):
-    from .cases import valley_deck
+CASES = ("valley", "diagonal", "compact")
+
+
+def _deck(folder, size, case="valley"):
+    from . import cases
     s = SIZES[size]
-    return valley_deck(folder, ny=s["ny"], nx=s["nx"], dx=s["dx"], peak_cms=s["peak_cms"],
-                       sim_s=s["sim_s"], hole=False, extra=["hazard", "inittm_depth 0.003"])
+    extra = ["hazard", "inittm_depth 0.003"]
+    if case == "valley":
+        return cases.valley_deck(folder, ny=s["ny"], nx=s["nx"], dx=s["dx"],
+                                 peak_cms=s["peak_cms"], sim_s=s["sim_s"], hole=False,
+                                 extra=extra)
+    make = cases.diagonal_valley_deck if case == "diagonal" else cases.compact_deck
+    return make(folder, ny=s["ny"], nx=s["nx"], dx=s["dx"], peak_cms=s["peak_cms"],
+                sim_s=s["sim_s"], extra=extra)
 
 
 def _find_lisflood():
@@ -76,6 +94,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--size", choices=sorted(SIZES), default="medium")
+    ap.add_argument("--case", choices=CASES, default="valley",
+                    help="valley (default), diagonal (mostly dry window) or compact (mostly wet)")
+    ap.add_argument("--solver", default="acc", help="acc (default), sgc, fv, fv2, dg2 or subfv")
+    ap.add_argument("--profile", action="store_true",
+                    help="print and save where each Boann run's time went (no result changes)")
     ap.add_argument("--lisflood", default=None, help="a LISFLOOD-FP executable to compare with")
     ap.add_argument("--threads", type=int, default=0, help="LISFLOOD-FP threads (0 = all)")
     ap.add_argument("--no-cpu", action="store_true", help="skip the one-core CPU build")
@@ -85,14 +108,20 @@ def main(argv=None):
 
     work = tempfile.mkdtemp(prefix="metalflood_bench_")
     s = SIZES[args.size]
-    info = {"size": args.size, "cells": s["ny"] * s["nx"], "cell_m": s["dx"],
+    try:
+        solver = cli.solver_key(args.solver)
+        mod = cli.solver_module(solver)
+    except cli.CliError as e:
+        ap.error(str(e))
+    info = {"size": args.size, "case": args.case, "solver": solver,
+            "boann": cli.BOANN_VERSION, "cells": s["ny"] * s["nx"], "cell_m": s["dx"],
             "sim_h": s["sim_s"] / 3600.0, "machine": platform.machine(),
             "system": platform.platform(), "python": sys.version.split()[0],
-            "engine": eng.VERSION, "runs": {}}
+            "engine": mod.VERSION, "runs": {}}
     ok, why = be.metal_available()
     info["metal"] = why
-    print("GPU flood engine speed test: {} ({:,} cells of {:g} m, {:g} h of flood)".format(
-        args.size, info["cells"], s["dx"], info["sim_h"]))
+    print("GPU flood engine speed test: {} {} ({:,} cells of {:g} m, {:g} h of flood), solver {}"
+          .format(args.size, args.case, info["cells"], s["dx"], info["sim_h"], solver))
     print("Metal: " + (why if ok else "not available ({})".format(why)))
 
     runs = []
@@ -101,12 +130,12 @@ def main(argv=None):
     if not args.no_cpu and (args.size != "large" or args.cpu) and be.find_compiler():
         runs.append("cpu")
     lf = args.lisflood or os.environ.get("NDBREACH_LISFLOOD") or _find_lisflood()
-    if lf:
+    if lf and solver == "acc":
         runs.append("lisflood")
     try:
         for name in runs:
             d = os.path.join(work, name)
-            par = _deck(d, args.size)
+            par = _deck(d, args.size, args.case)
             print("running {} ...".format(name), flush=True)
             t0 = time.time()
             if name == "lisflood":
@@ -120,12 +149,17 @@ def main(argv=None):
                                       "threads": args.threads or os.cpu_count(),
                                       "exit": r.returncode}
             else:
-                st = eng.run_par(par, backend=name)
+                st = cli.run(par, solver=solver, backend=name, quiet=True, profile=args.profile)
                 wall = time.time() - t0
                 info["runs"][name] = {"wall_s": round(wall, 2), "device": st["device"],
                                       "steps": st["steps"],
                                       "mass_error_pct": round(100.0 * st["mass_error_m3"]
                                                               / max(st["injected_m3"], 1.0), 6)}
+                if st.get("profile"):
+                    info["runs"][name]["profile"] = st["profile"]
+                    if args.profile:
+                        for line in cli.profile_lines(st):
+                            print("  " + line)
             print("  {}: {:.1f} s".format(name, wall), flush=True)
         ref = "lisflood" if "lisflood" in runs else ("cpu" if "cpu" in runs else None)
         for name in runs:
@@ -141,7 +175,7 @@ def main(argv=None):
         sp = base["wall_s"] / r["wall_s"] if base and r["wall_s"] > 0 else float("nan")
         note = r.get("device") or "LISFLOOD-FP, {} threads".format(r.get("threads"))
         print("{:<10} {:>10.1f} {:>8.1f}x   {}".format(name, r["wall_s"], sp, note))
-        for k, v in r.items():
+        for k, v in sorted(r.items()):
             if k.startswith("vs_"):
                 print("{:<10} {} {}".format("", k, json.dumps(v)))
     out = os.path.join(os.path.abspath(args.out), "metalflood_bench.json")
