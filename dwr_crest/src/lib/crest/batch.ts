@@ -39,7 +39,7 @@ import {
   storageFor,
   type NdData,
 } from "./nd-dams.ts";
-import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, traceChannel, type DemGrid, type DemRequest } from "./outline.ts";
+import { currentTerrain, demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, stampTerrain, traceChannel, type DemGrid, type DemRequest, type TerrainInfo } from "./outline.ts";
 import { withoutOutline } from "./outline-store.ts";
 import { blankDam } from "./samples.ts";
 import { applyDefaults } from "./settings.ts";
@@ -581,7 +581,9 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
     const built = deps.build
       ? await deps.build(dam, result, { onStatus })
       : await buildInundationReach(dam, result, { fetch: dem, yieldFn: deps.yieldFn, onStatus, ...(deps.flowlines !== undefined ? { flowlines: deps.flowlines } : {}) });
-    if (built.ok) dam = { ...dam, outline: built.cache };
+    // Stamped with the local DEM when one is in use (labels and credits name it), not with 3DEP.
+    if (built.ok) dam = { ...dam, outline: deps.fetchDem ? built.cache : stampTerrain(built.cache) };
+
 
     // 911 points inside the layer (or the strip when no layer could be built), added as receptors like a picked dam.
     const strip = floodStrip(dam, result).strip;
@@ -763,6 +765,12 @@ export function insertRow(sorted: BatchRow[], row: BatchRow): BatchRow[] {
 }
 
 export const BATCH_DISCLAIMER = "Screening estimate — not an ND Dam Safety or ACER classification. Batch records are auto-derived from the inventories and 3DEP.";
+
+/** BATCH_DISCLAIMER naming the terrain in use (a local DEM chosen in the desk, else 3DEP). */
+export function batchDisclaimer(t: TerrainInfo = currentTerrain()): string {
+  return t.local ? BATCH_DISCLAIMER.replace("and 3DEP.", `and the ${t.label}.`) : BATCH_DISCLAIMER;
+}
+
 
 export const BATCH_CSV_HEAD = [
   "id",

@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  BATCH_DISCLAIMER,
+  batchDisclaimer,
   BROWSER_BATCH_WARN,
   DEFAULT_STATUSES,
   KIND_LABEL,
@@ -764,7 +764,7 @@ export function BatchScreen({ onOpen }: { onOpen: (note?: string) => void }) {
       {sorted.length ? (
         <div className={pane}>
           <h3 className="text-lg">Results: Runner worklist first</h3>
-          <p className="mt-1 text-xs text-muted">{BATCH_DISCLAIMER}</p>
+          <p className="mt-1 text-xs text-muted">{batchDisclaimer()}</p>
           {opening ? (
             <p className="mt-1 text-sm text-muted" role="status">
               Rebuilding the record for {opening} from the inventories and the terrain…

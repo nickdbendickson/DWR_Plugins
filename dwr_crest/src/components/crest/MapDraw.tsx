@@ -13,7 +13,7 @@ import { basemaps } from "@/lib/crest/basemap";
 import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
 import { ND911_ATTRIBUTION_SHORT, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
-import { DEM_ATTRIBUTION_SHORT, OUTLINE_LABEL, type TerrainOutline } from "@/lib/crest/outline";
+import { OUTLINE_LABEL, terrainInfo, type TerrainOutline } from "@/lib/crest/outline";
 import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
@@ -270,7 +270,8 @@ function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefi
     const extent = fc.extent;
     const mounted = mountFloodLayer(map, fc, {
       pane: OUTLINE_PANE,
-      attribution: DEM_ATTRIBUTION_SHORT,
+      // The terrain the layer was built on (a local DEM or 3DEP; stampTerrain), not always 3DEP.
+      attribution: terrainInfo(fc.properties?.dem_source).short,
       style: (f) => {
         const color = (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf";
         return { stroke: !extent, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
