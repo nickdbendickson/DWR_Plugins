@@ -114,6 +114,35 @@ are the two ends.
 memory, so the grids do not change; the outflow and clipped totals are summed per SIMD group
 before rounding, so the `.mass` file's totals can move by a rounding unit.
 
+## The GPU's dry-tile skip (Runner 3.90.0, Boann 5.5.0)
+
+The ACC engine on the Apple GPU leaves out the dry ground of its wet window, as the CPU build's
+dry-cell skip (Runner 3.76.0) does on the CPU. Before every `SKIP_CHUNK` = 8 steps three small
+kernels redraw the window's 16 x 16 tiles: `k_tclear` clears them, `k_tseed` marks each tile that
+holds water, a face still carrying flow (`qxo` / `qyo` / `vxf` / `vyf` not 0) or a source, and
+`k_tgrow` turns on every marked tile and its 8 neighbours. The grid kernels then return at once
+in a tile that is off (a face is in the tile of the cell east or south of it).
+
+Why the answer is the same bit for bit: water moves at most one cell a step, so in a chunk it
+reaches at most `SKIP_CHUNK + 1` = 9 cells from where it was. A tile that is off is at least 17
+cells from anything marked, so its cells stay dry and its faces carry exactly 0, which is what
+the whole window computes there. The outflow (`k_limit`) and clip (`k_cont`) sums are added per
+SIMD group before rounding; the left-out cells stay in their groups with 0, so the groups add the
+same numbers in the same order. Rain wets every cell, so a deck with rain runs the whole window.
+
+`DAMSAFETY_MF_TILES=0` turns it off (the time changes, nothing else). The profile reports the
+cell updates the skip ran (from each batch's last tiles: an estimate). On Lake Delhi at 30 m
+(M2 Pro, Nick's profile 2026-11-24) the 16-cell tiles keep 19.9% of the window, and the five grid
+kernels are about 97% of the GPU's time a step, so the GPU step should take about half as long.
+
+`DAMSAFETY_MF_CPU_TILES=1` runs the same tile kernels on the CPU build in place of its own skip,
+so the cloud can check the rule without a GPU. `tests/test_boann_gpu_tiles.py`: the CPU build
+with the tiles against the whole window, every result file (the `.mass` log too) byte for byte, on
+the diagonal valley of the CPU skip's test (open edges, a NoData hole, a far pond, a draining
+film) and a 300 x 450 valley (the tiles ran under 60% of the window's cell updates); rain turns
+the tiles off; on a Mac (the Metal CI job) the GPU with the skip on against off byte for byte,
+and the GPU against the CPU build.
+
 ## The scheme, and how it follows LISFLOOD-FP 8.3
 
 Per step: `dt = min(initial_tstep, cfl dx / sqrt(g h_max))`; every face
@@ -281,8 +310,10 @@ land beside it inside the same cell. No per-sub-segment velocity. Not in Screeni
 
 - Speed: one command buffer per batch, seven dispatches per step encoded from Python; an
   indirect command buffer or kernel fusion would cut the host cost on small grids.
-- The CPU build is one core and slower than LISFLOOD-FP on one core; it exists to test the
-  kernels where there is no Apple GPU, not to replace LISFLOOD-FP.
+- The CPU build runs on several cores with OpenMP where the compiler has it (on a Mac, the
+  performance cores only by default, Runner 3.89.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
+  core). The thread count never changes a result. It exists to run the kernels where there is no
+  Apple GPU, not to replace LISFLOOD-FP.
 - Shock-capturing finite-volume scheme for steep dam-break fronts.
 
 ## The shock-capturing FV scheme
@@ -317,7 +348,9 @@ same wet-window batching, same fixed-point atomic reductions.
 
 - Speed: one command buffer per batch, dispatches per step encoded from Python; an indirect
   command buffer or kernel fusion would cut the host cost on small grids.
-- The CPU build is one core and slower than LISFLOOD-FP on one core; it exists to test the
-  kernels where there is no Apple GPU, not to replace LISFLOOD-FP.
+- The CPU build runs on several cores with OpenMP where the compiler has it (on a Mac, the
+  performance cores only by default, Runner 3.89.0; `DAMSAFETY_MF_THREADS=N` picks N, 0 = every
+  core). The thread count never changes a result. It exists to run the kernels where there is no
+  Apple GPU, not to replace LISFLOOD-FP.
 - FV: second-order (MUSCL) reconstruction and an SSP-RK2 step; a head-to-head of the FV scheme
   against LISFLOOD-FP's own FV1 solver on a steep ND dam-break.

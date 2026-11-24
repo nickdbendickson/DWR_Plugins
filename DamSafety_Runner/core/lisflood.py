@@ -148,6 +148,68 @@ def stable_cfl(exe):
 STABILITY_RETRY_PCT = 1.0
 STABILITY_MARKER = "stable_settings.json"
 
+# 3.88.0: an ACC run can go unstable WITHOUT losing its mass balance, so the volume test above
+# never sees it. Lake Delhi 2010 at 10 m (4.6 M cells, Boann ACC, theta 1 / cfl 0.7): at the breach
+# peak the water level checkerboards in the deep pool, the deepest water reads 38 m against
+# 13.5 m, the run is 8.1 ft high at the 8 USGS high-water marks, and the volume error is 703 m3
+# of 1.1e8. A Courant number of 0.5 alone cures it (+0.34 ft at the marks; 0.35 gives the same
+# flood, so the step is converged); theta 0.7 alone does not, and theta 0.7 with cfl 0.5 damps the
+# flood and slows its front. The test: among the cells at least CHECKER_MIN_DEPTH_M deep whose
+# four neighbours are too, the share whose PEAK water level stands above, or below, ALL FOUR
+# neighbours by more than CHECKER_JUMP_M. A sound peak surface has no such cell (0.00 % on every
+# sound run tried, one stray cell at most: plain ACC, sub-grid runs at r = 2, 4 and 8); the
+# unstable ones have 0.08 to 2.7 % (18 to 2,300 cells). A run over CHECKER_RETRY_PCT is run again with CHECKER_CFL (workflow.run_dam) and theta
+# is left alone. CHECKER_MIN_ROUGH keeps a handful of cells (the mound on an inflow cell) from
+# counting, and CHECKER_MIN_CELLS a flood too small to judge.
+CHECKER_MIN_DEPTH_M = 0.3
+CHECKER_JUMP_M = 0.1
+CHECKER_RETRY_PCT = 0.05
+CHECKER_MIN_CELLS = 200
+CHECKER_MIN_ROUGH = 10
+CHECKER_CFL = STABLE_CFL
+DEFAULT_CFL = 0.7           # LISFLOOD-FP's own (and Boann ACC's) when the .par names none
+STABILITY_KIND_MASS = "mass_balance"
+STABILITY_KIND_CHECKER = "checkerboard"
+
+
+def checkerboard(wse, depth, min_depth=CHECKER_MIN_DEPTH_M, jump=CHECKER_JUMP_M):
+    """How checkerboarded a run's peak water surface is: (share %, cells judged, rough cells).
+    `wse` and `depth` are the peak water level and the peak depth (m, same shape; NaN = dry). A
+    cell is judged when it and its four neighbours are deeper than `min_depth`; it is rough when
+    its level is above all four neighbours, or below all four, by more than `jump`. The share is
+    None when fewer than CHECKER_MIN_CELLS cells can be judged."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return None, 0, 0
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        n = int(ok.sum())
+        if n < CHECKER_MIN_CELLS:
+            return None, n, 0
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        rough = int((ok & ((c - hi > jump) | (lo - c > jump))).sum())
+    return round(100.0 * rough / n, 3), n, rough
+
+
+def is_checkerboard(stats):
+    """True when a run's stats (read_results) say its peak water surface is checkerboarded."""
+    pct = (stats or {}).get("checkerboard_pct")
+    return (pct is not None and pct > CHECKER_RETRY_PCT
+            and int((stats or {}).get("checkerboard_rough_cells") or 0) >= CHECKER_MIN_ROUGH)
+
+
+def checker_cfl(user_cfl=None):
+    """The Courant number of the re-run of a checkerboarded ACC run: CHECKER_CFL, or the user's own
+    when that is already smaller."""
+    return min(float(user_cfl), CHECKER_CFL) if user_cfl else CHECKER_CFL
+
 # Audit P2 (2026-11-07): the LISFLOOD-FP child had no wall-clock limit, so a solver that hung or
 # collapsed its time step held QGIS's run for ever. Every run now has one: the setting
 # (LISFLOOD_MAX_WALL_S / model.max_wall_s; 0 = automatic) as given, else WALL_ESTIMATE_FACTOR x
@@ -1383,6 +1445,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         # the DEM is float64: the sum is taken there and rounded once into float32
         wse = np.where(hmax > 0, dem.data + hmax64, np.nan).astype(f32)
     wse = np.where(hmax > 0, wse, f32(np.nan))
+    # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
+    # measured from the bank and the level above was rebuilt from it)
+    chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
     injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
@@ -1409,6 +1474,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
+        "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
+        "checkerboard_rough_cells": chk_rough,
     }
     if st.initial_depth is not None:
         init_d = st.initial_depth.data

@@ -8,7 +8,8 @@ CpuBackend     the same kernel source built as C++ (mf_shim.h + cpu_kernels.cpp)
                tools/build_boann_cpu.py) when one matches the source's hash, else compiled with
                the computer's C++ compiler at first use and cached by that hash. Built with
                OpenMP when the compiler has it (every core, bit-identical to one core; set
-               DAMSAFETY_MF_THREADS to cap it, DAMSAFETY_MF_OPENMP=0 for the one-core build),
+               DAMSAFETY_MF_THREADS to cap it, DAMSAFETY_MF_OPENMP=0 for the one-core build;
+               on a Mac, its performance cores only unless DAMSAFETY_MF_THREADS says otherwise),
                else one core. It is how Boann runs on Windows and Linux, and how the engine is
                tested where there is no Apple GPU (Linux CI, the cloud).
 
@@ -50,7 +51,23 @@ SGC_KERNEL_SOURCE = os.path.join(HERE, "kernels_sgc.metal")
 SGC_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_sgc.cpp")
 
 S_WORDS = 32
-KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end")
+KERNELS = ("k_begin", "k_faces", "k_scale", "k_limit", "k_cont", "k_speed", "k_end",
+           "k_tclear", "k_tseed", "k_tgrow")
+# The ACC kernels' dry-tile skip on the GPU (Runner 3.90.0, Boann 5.5.0; kernels.metal MF_TILE):
+# tiles of TILE x TILE cells, the state word that turns it on, and the switch. DAMSAFETY_MF_TILES=0
+# runs the whole window, which changes the time and nothing else.
+TILE = 16
+S_TILES = 18
+TILES_ENV = "DAMSAFETY_MF_TILES"
+
+
+def tiles_wanted():
+    return os.environ.get(TILES_ENV, "1").strip().lower() not in ("0", "no", "false", "off")
+
+
+def tile_count(ny, nx):
+    """Tiles of the largest window (the whole grid): the length of the tseed / ton buffers."""
+    return (-(-int(ny) // TILE)) * (-(-int(nx) // TILE))
 FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
 FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
                "k_stage_c_fv2", "k_end_fv2")
@@ -76,7 +93,7 @@ class Params(ctypes.Structure):
 
 
 def buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of the kernels' buffer indices 0..22."""
+    """[(name, dtype, count)] in the order of the kernels' buffer indices 0..24."""
     cells = ny * nx
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("qx", f, ny * (nx + 1)),
@@ -85,7 +102,8 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("qxo", f, ny * (nx + 1)), ("qyo", f, (ny + 1) * nx),
-            ("vxf", f, ny * (nx + 1)), ("vyf", f, (ny + 1) * nx)]
+            ("vxf", f, ny * (nx + 1)), ("vyf", f, (ny + 1) * nx),
+            ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
 def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -158,8 +176,12 @@ class Spec:
     grid size of one step. core/metalterrain (BoannGrid) reuses this backend with its own
     Spec; the default is this flood engine, so existing callers are unchanged."""
 
-    def __init__(self, name, kernel_source, shim, cpu_source, kernels, params_cls, plan):
+    def __init__(self, name, kernel_source, shim, cpu_source, kernels, params_cls, plan,
+                 tile_plan=None):
         self.name = name
+        # tile_plan(params) -> the dispatches that redraw the dry-tile skip's tiles, run before
+        # the first step of every chunk (the ACC engine only; None = no skip on the GPU)
+        self.tile_plan = tile_plan
         self.kernel_source = kernel_source
         self.shim = shim
         self.cpu_source = cpu_source
@@ -176,7 +198,22 @@ def _flood_plan(p):
             ("k_cont", cells), ("k_speed", cells), ("k_end", one)]
 
 
-FLOOD_SPEC = Spec("mf", KERNEL_SOURCE, SHIM, CPU_SOURCE, KERNELS, Params, _flood_plan)
+def _flood_tile_plan(p):
+    tiles = (-(-int(p.wc) // TILE), -(-int(p.wr) // TILE), 1)
+    return [("k_tclear", tiles), ("k_tseed", (p.wc, p.wr, 1)), ("k_tgrow", tiles)]
+
+
+FLOOD_SPEC = Spec("mf", KERNEL_SOURCE, SHIM, CPU_SOURCE, KERNELS, Params, _flood_plan,
+                  tile_plan=_flood_tile_plan)
+
+
+def _tiles_on(spec, params, chunk):
+    """Whether a batch runs with the GPU's dry-tile skip: the engine asked for chunks, the spec
+    has the tile kernels, it does not rain, the window is not empty, and DAMSAFETY_MF_TILES is
+    not 0."""
+    return (int(chunk) > 0 and spec.tile_plan is not None and tiles_wanted()
+            and int(getattr(params, "rain", 0)) == 0 and int(getattr(params, "wr", 0)) > 0
+            and int(getattr(params, "wc", 0)) > 0)
 
 
 def _fv_plan(p):
@@ -450,6 +487,12 @@ class Profile:
             if self.encode_s + self.wait_s > 0:
                 host["encode_share"] = round(self.encode_s / (self.encode_s + self.wait_s), 4)
             out["host"] = host
+            run = getattr(self.b, "cells_run", None)
+            if run is not None and self.cell_steps:
+                # the GPU's dry-tile skip (ACC): the cells of the tiles it ran, from the tiles of
+                # each batch's last chunk (an estimate; the whole window without the skip)
+                out["host"]["cell_updates_run"] = int(run)
+                out["host"]["run_share_of_window"] = round(run / float(self.cell_steps), 4)
             tg = getattr(self.b, "tg", {})
             out["threadgroup"] = {k: [int(v.width), int(v.height)] for k, v in tg.items()}
         else:
@@ -678,6 +721,60 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
     raise BackendError("the CPU kernels did not compile:\n" + err)
 
 
+def _sysctl_int(name):
+    """An integer sysctl on macOS (sysctlbyname), or None when there is no such key here."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc = ctypes.CDLL("/usr/lib/libc.dylib")
+        v = ctypes.c_int(0)
+        n = ctypes.c_size_t(ctypes.sizeof(v))
+        if libc.sysctlbyname(name.encode(), ctypes.byref(v), ctypes.byref(n), None,
+                             ctypes.c_size_t(0)) != 0:
+            return None
+        return int(v.value)
+    except (OSError, AttributeError):
+        return None
+
+
+def default_threads(perf_cores=None, all_cores=None):
+    """How many cores the CPU build uses when DAMSAFETY_MF_THREADS does not say (Runner 3.89.0).
+
+    0 = the OpenMP runtime's own choice (every core): Linux, Windows, an Intel Mac. On Apple
+    silicon, the performance cores only (hw.perflevel0.physicalcpu: 6 or 8 on an M2 Pro of 10 or
+    12). The kernels hand each core an equal share of rows, so with the efficiency cores in the
+    team every step waits for them (an efficiency core runs at about a third the speed). The
+    results do not depend on it: the CPU build is bit-identical on any number of cores (test).
+    perf_cores / all_cores stand in for the sysctl values in tests."""
+    if perf_cores is None and all_cores is None:
+        perf_cores = _sysctl_int("hw.perflevel0.physicalcpu")
+        all_cores = _sysctl_int("hw.physicalcpu")
+    if not perf_cores or perf_cores < 1:
+        return 0                       # not Apple silicon, or a macOS without the key
+    if all_cores and perf_cores >= all_cores:
+        return 0                       # every core is a performance core (a VM, an Mx Ultra..)
+    return int(perf_cores)
+
+
+def threads_wanted():
+    """DAMSAFETY_MF_THREADS when set to a number (0 = every core), else default_threads().
+    On a Mac, "every core" is passed as hw.ncpu rather than 0: the OpenMP runtime keeps the
+    last count it was given for the life of the process, so 0 (leave it alone) after an earlier
+    performance-core run in the same QGIS would stay on the performance cores."""
+    v = os.environ.get("DAMSAFETY_MF_THREADS", "").strip()
+    want = None
+    if v:
+        try:
+            want = max(0, int(v))
+        except ValueError:
+            want = None
+    if want is None:
+        want = default_threads()
+    if want == 0 and sys.platform == "darwin":
+        want = _sysctl_int("hw.ncpu") or 0
+    return want
+
+
 class CpuBackend:
     kind = "cpu"
 
@@ -697,6 +794,15 @@ class CpuBackend:
                                                    ctypes.POINTER(spec.params_cls),
                                                    ctypes.c_int, ctypes.c_int]
             self.lib.mf_run_batch_skip.restype = ctypes.c_longlong
+        # the GPU's dry-tile skip run on the CPU build (DAMSAFETY_MF_CPU_TILES=1, for the cloud
+        # tests of the GPU's skip): in place of the CPU's own skip
+        self.tiles = (spec.tile_plan is not None and hasattr(self.lib, "mf_run_batch_tiles")
+                      and os.environ.get("DAMSAFETY_MF_CPU_TILES", "").strip() == "1")
+        if self.tiles:
+            self.lib.mf_run_batch_tiles.argtypes = [ctypes.c_void_p,
+                                                    ctypes.POINTER(spec.params_cls),
+                                                    ctypes.c_int, ctypes.c_int]
+            self.lib.mf_run_batch_tiles.restype = ctypes.c_longlong
         self.cells_run = 0
         if self.lib.mf_params_size() != ctypes.sizeof(spec.params_cls):
             raise BackendError("the CPU kernels' Params is {} bytes, Python's {}".format(
@@ -705,11 +811,7 @@ class CpuBackend:
         if hasattr(self.lib, "mf_threads"):
             self.lib.mf_threads.argtypes = [ctypes.c_int]
             self.lib.mf_threads.restype = ctypes.c_int
-            try:
-                want = int(os.environ.get("DAMSAFETY_MF_THREADS", "0") or 0)
-            except ValueError:
-                want = 0
-            self.threads = max(1, int(self.lib.mf_threads(max(0, want))))
+            self.threads = max(1, int(self.lib.mf_threads(threads_wanted())))
         self.device = ("CPU ({} cores, C++ build of the Metal kernels)".format(self.threads)
                        if self.threads > 1 else "CPU (one core, C++ build of the Metal kernels)")
         self.arrays = {}
@@ -732,7 +834,14 @@ class CpuBackend:
         """nsteps steps. chunk > 0 (the ACC engine's SKIP_CHUNK) lets the CPU build leave out the
         cells that cannot get wet, redrawn every chunk steps; the results are the same bit for bit."""
         t0 = time.perf_counter()
-        if chunk > 0 and self.skip:
+        st = self.arrays.get("st")
+        tiles = self.tiles and _tiles_on(self.spec, params, chunk)
+        if st is not None and self.spec.tile_plan is not None:
+            st[S_TILES] = 1 if tiles else 0
+        if tiles:
+            self.cells_run += int(self.lib.mf_run_batch_tiles(
+                self._ptrs, ctypes.byref(params), int(nsteps), int(chunk)))
+        elif chunk > 0 and self.skip:
             self.cells_run += int(self.lib.mf_run_batch_skip(
                 self._ptrs, ctypes.byref(params), int(nsteps), int(chunk)))
         else:
@@ -902,6 +1011,7 @@ class MetalBackend:
             o.lib.objc_autoreleasePoolPop(pool)
         self.buffers = []
         self.arrays = {}
+        self.cells_run = 0
         self.prof = Profile(self)
         self._gpu_clock = None      # whether command buffers report GPUStartTime (asked once)
         if log:
@@ -938,6 +1048,10 @@ class MetalBackend:
     def _commit(self, params, plan, nsteps):
         """One command buffer holding nsteps steps of plan [(kernel, MTLSize)], committed.
         Returns the command buffer (autoreleased: use it inside the caller's pool)."""
+        return self._commit_list(params, list(plan) * int(nsteps))
+
+    def _commit_list(self, params, entries):
+        """One command buffer holding the dispatches [(kernel, MTLSize)] in order, committed."""
         o = self.o
         cb = o(self.queue, "commandBuffer")
         enc = o(cb, "computeCommandEncoder")
@@ -950,12 +1064,11 @@ class MetalBackend:
         one = _MTLSize(1, 1, 1)
         set_pso = ("setComputePipelineState:", [ctypes.c_void_p])
         disp_args = [_MTLSize, _MTLSize]
-        for _ in range(int(nsteps)):
-            for name, grid in plan:
-                o(enc, set_pso[0], self.pso[name], restype=None, argtypes=set_pso[1])
-                tg = self.tg[name] if (grid.width * grid.height * grid.depth) > 1 else one
-                o(enc, "dispatchThreads:threadsPerThreadgroup:", grid, tg, restype=None,
-                  argtypes=disp_args)
+        for name, grid in entries:
+            o(enc, set_pso[0], self.pso[name], restype=None, argtypes=set_pso[1])
+            tg = self.tg[name] if (grid.width * grid.height * grid.depth) > 1 else one
+            o(enc, "dispatchThreads:threadsPerThreadgroup:", grid, tg, restype=None,
+              argtypes=disp_args)
         o(enc, "endEncoding", restype=None)
         o(cb, "commit", restype=None)
         return cb
@@ -984,21 +1097,33 @@ class MetalBackend:
         o = self.o
         prof = self.prof
         nsteps = int(nsteps)
+        tiles = _tiles_on(self.spec, params, chunk)
+        st = self.arrays.get("st")
+        if st is not None and self.spec.tile_plan is not None:
+            st[S_TILES] = 1 if tiles else 0     # read by the kernels (shared memory)
         pool = o.lib.objc_autoreleasePoolPush()
         try:
-            plan = [(name, _MTLSize(w, h, d)) for name, (w, h, d) in self.spec.plan(params)]
+            mk = lambda pl: [(name, _MTLSize(w, h, d)) for name, (w, h, d) in pl]  # noqa: E731
+            plan = mk(self.spec.plan(params))
+            tplan = mk(self.spec.tile_plan(params)) if tiles else []
+
+            def step(s):
+                # the dispatches of step s of the batch: the tiles redrawn before every chunk
+                return (tplan if tiles and s % int(chunk) == 0 else []) + plan
+
             # full profile: the first steps one kernel per command buffer (the same dispatches
             # in the same order; command buffers of one queue run in the order committed)
             nsplit = min(nsteps, PROFILE_SPLIT_STEPS) if prof.full else 0
             t0 = time.perf_counter()
             split = []
-            for _ in range(nsplit):
-                for name, grid in plan:
+            for s in range(nsplit):
+                for name, grid in step(s):
                     split.append((name, grid, self._commit(params, [(name, grid)], 1)))
             t1 = time.perf_counter()
             main = None
             if nsteps > nsplit or not split:
-                main = self._commit(params, plan, nsteps - nsplit)
+                main = self._commit_list(params, [e for s in range(nsplit, nsteps)
+                                                  for e in step(s)])
             t2 = time.perf_counter()
             o(main if main else split[-1][2], "waitUntilCompleted", restype=None)
             t3 = time.perf_counter()
@@ -1023,8 +1148,22 @@ class MetalBackend:
                     prof.gpu_steps += nsteps - nsplit
         finally:
             o.lib.objc_autoreleasePoolPop(pool)
+        self.cells_run += self._cells_marked(params, tiles) * nsteps
         prof.add_batch(params, nsteps)
         prof.look(params, nsteps)
+
+    def _cells_marked(self, params, tiles):
+        """The window cells the skip ran in the batch's last chunk (all of them without it): the
+        estimate of the cell updates run that the profile reports."""
+        wr, wc = int(getattr(params, "wr", 0)), int(getattr(params, "wc", 0))
+        ton = self.arrays.get("ton")
+        if not tiles or ton is None:
+            return wr * wc
+        ntx, nty = -(-wc // TILE), -(-wr // TILE)
+        on = ton[:ntx * nty].reshape(nty, ntx) != 0
+        w = np.minimum(TILE, wc - TILE * np.arange(ntx))
+        h = np.minimum(TILE, wr - TILE * np.arange(nty))
+        return int((on * np.outer(h, w)).sum())
 
     def close(self):
         o = self.o
