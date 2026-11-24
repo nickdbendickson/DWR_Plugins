@@ -116,6 +116,36 @@ def read_bdy(path):
     return out
 
 
+def read_rain(path):
+    """(t_s, rate m/s) from a LISFLOOD-FP .rain file (the "rainfall" keyword): line 1 a comment,
+    then "<count> <units>" (seconds / minutes / hours / days), then <count> lines "<mm/hr> <time>",
+    as LISFLOOD-FP 8.3's LoadRain / LoadTimeSeries. One rate over the whole grid, linear between
+    the times. A negative rate (LISFLOOD-FP's old evaporation trick) is refused."""
+    with open(path) as f:
+        lines = [ln.strip() for ln in f]
+    i = 1                                               # line 1 is a comment
+    while i < len(lines) and not lines[i]:
+        i += 1
+    p = lines[i].split()
+    n, unit = int(float(p[0])), (p[1].lower() if len(p) > 1 else "seconds")
+    scale = {"minutes": 60.0, "hours": 3600.0, "days": 86400.0}.get(unit, 1.0)
+    vals, ts = [], []
+    for ln in lines[i + 1:]:
+        if len(vals) == n:
+            break
+        if not ln:
+            continue
+        v, t = ln.split()[:2]
+        vals.append(float(v))
+        ts.append(float(t) * scale)
+    if len(vals) < n or not vals:
+        raise ValueError("the rainfall file has {} of the {} values it announces".format(len(vals), n))
+    rate = np.asarray(vals) / (1000.0 * 3600.0)        # mm/hr -> m/s
+    if (rate < 0).any():
+        raise ValueError("negative rainfall rates (evaporation) are not supported")
+    return np.asarray(ts), rate
+
+
 def read_bci(path):
     """(point sources [(x, y, name)], free edges {'N','S','E','W'})."""
     pts, free = [], set()
