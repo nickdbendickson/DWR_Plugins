@@ -26,6 +26,7 @@ E911 / address points, and city / town / municipal limits.
 import json
 import os
 import re
+import time
 
 import numpy as np
 
@@ -136,15 +137,22 @@ def keepout_mask(shape, geotransform, wkt, layers, buffer_m=DEFAULT_BUFFER_M):
 
 def condition(dem, cell_m, keepout=None, freeze_mask=None, min_accum_cells=20,
               classes=B.DEFAULT_CLASSES, max_cut_m=B.DEFAULT_MAX_CUT_M, eps=1e-5,
-              backend="auto", log=None, refuse_freeze="record"):
+              backend="auto", log=None, refuse_freeze="record", method="auto"):
     """Condition `dem` (2-D, NaN / -9999 = NoData) for crossings, 4-connected throughout from one
     fill. `keepout` is the protect mask (True = never lower), `freeze_mask` the dam-safety freeze
-    (embankments / dam crests). Returns (conditioned, records, info); records are
-    burn.reconnect_crossings records, info has the step counts."""
+    (embankments / dam crests). `method` is fill.fill_dem's method ('auto' = priority-flood).
+    Returns (conditioned, records, info); records are burn.reconnect_crossings records, info has
+    the step counts."""
     z = np.asarray(dem, dtype=np.float64)
     say = log or (lambda _m: None)
-    filled, fi = F.fill_dem(z, eps=eps, backend=backend, log=log, conn=4)
-    say("[boanngrid] fill (4-way): {} sweeps, converged {}".format(fi["sweeps"], fi["converged"]))
+    t0 = time.time()
+    filled, fi = F.fill_dem(z, eps=eps, backend=backend, log=log, conn=4, method=method)
+    dt = time.time() - t0
+    if fi.get("method") == "relax":
+        say("[boanngrid] fill (4-way, relax): {} sweeps, converged {}".format(
+            fi["sweeps"], fi["converged"]))
+    else:
+        say("[boanngrid] fill (4-way, {}): {:.1f} s".format(fi.get("method", "priority-flood"), dt))
     labels, items = A.depression_census(z, filled, cell_m=cell_m)
     kinds = {}
     for it in items:
@@ -162,6 +170,7 @@ def condition(dem, cell_m, keepout=None, freeze_mask=None, min_accum_cells=20,
     lim = B.limit_refusals(records)
     info = {
         "fill_sweeps": fi["sweeps"], "fill_converged": bool(fi["converged"]),
+        "fill_method": fi.get("method", "priority-flood"),
         "depressions": len(items), "classes": kinds,
         "flow_dead_ends": int(finfo["interior_sinks"]),
         "flow_refilled_d4": bool(finfo.get("refilled_d4")),
@@ -214,7 +223,7 @@ def _write_geotiff(path, a, gt, wkt, nodata=-9999.0):
 def condition_file(dem_path, out_path, keepout_layers=(), dam_folder=None,
                    buffer_m=DEFAULT_BUFFER_M, freeze_path=None, min_accum_cells=20,
                    classes=B.DEFAULT_CLASSES, max_cut_m=B.DEFAULT_MAX_CUT_M, backend="auto",
-                   acknowledge=None, log=None):
+                   acknowledge=None, log=None, method="auto"):
     """Condition the GeoTIFF `dem_path` and write `out_path` (GeoTIFF), plus beside it
     <out>.deltalog.sqlite (every carve and refusal) and <out>.json (the counts, the keep-out
     layers used). Keep-out layers are `keepout_layers` plus, when `dam_folder` is given, what
@@ -248,7 +257,7 @@ def condition_file(dem_path, out_path, keepout_layers=(), dam_folder=None,
         freeze = np.isfinite(fz) & (fz != 0)
     out, records, info = condition(z, cell, keepout=keep, freeze_mask=freeze,
                                    min_accum_cells=min_accum_cells, classes=classes,
-                                   max_cut_m=max_cut_m, backend=backend, log=log)
+                                   max_cut_m=max_cut_m, backend=backend, log=log, method=method)
     run_id = "boanngrid:" + os.path.basename(dem_path)
     db = out_path + ".deltalog.sqlite"
     if os.path.exists(db):

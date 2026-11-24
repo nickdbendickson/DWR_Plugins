@@ -2,7 +2,9 @@
 """Check Boann's prebuilt CPU libraries for this computer (the release workflow runs it on Windows,
 Linux and macOS before the libraries ship): each engine's library under <dir>/<platform>/ opens,
 agrees with Python on the Params layout, reports its cores, and runs a short valley flood that
-conserves water. The libraries are copied into core/metalflood/prebuilt/<platform>/ for the run,
+conserves water. BoannGrid's libraries are checked too: the priority-flood fill opens and gives
+the same numbers as its pure-Python twin and the relaxation kernel, and the D4 and D8 flow
+libraries open and route that filled surface with no dead ends. The libraries are copied into core/metalflood/prebuilt/<platform>/ for the run,
 exactly where a release zip puts them, and removed afterwards.
 
     python tools/boann_cpu_smoke.py build/boann"""
@@ -22,10 +24,52 @@ from metalflood import engine_subfv as sfve, subfv_backend as sfb         # noqa
 from metalflood import engine_subli as slie, subli_backend as slb         # noqa: E402
 from metalflood.cases import valley_deck                                # noqa: E402
 
+# BoannGrid (fill, flow) imports metalflood relatively, so load it as the plugin package
+sys.path.insert(0, REPO)
+from nd_breach_runner.core.metalterrain import cases as mt_cases       # noqa: E402
+from nd_breach_runner.core.metalterrain import fill as mt_fill         # noqa: E402
+from nd_breach_runner.core.metalterrain import flow as mt_flow         # noqa: E402
+
 ENGINES = (("acc", mfe.run_par, be.FLOOD_SPEC), ("fv", fve.run_par, be.FV_SPEC),
            ("fv2", fv2e.run_par, be.FV2_SPEC), ("dg2", dg2e.run_par, be.DG2_SPEC),
            ("sgc", sgce.run_par, be.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC),
            ("subli", slie.run_par, slb.SUBLI_SPEC))
+
+
+def _boanngrid_checks(dest):
+    """(name, function) pairs; each raises on a failure. Everything must load from `dest`."""
+    import numpy as np
+    mbe = mt_fill.be                                     # metalflood.backends as the plugin sees it
+
+    def fill():
+        mt_fill._PF_LIB = None
+        lib = mt_fill._pf_library()
+        assert os.path.dirname(lib._name) == dest, lib._name
+        z = mt_cases.pitted_plane(ny=40, nx=60)
+        valid = np.isfinite(z) & (z != mt_fill.NODATA)
+        for conn in (4, 8):
+            f, info = mt_fill.fill_dem(z, method="priority-flood", conn=conn)
+            assert info["backend"] == "cpu" and info["unreached"] == 0, info
+            py, _ = mt_fill._fill_pf_python(z, valid, mt_fill._outlets(valid, conn), 1e-5, conn)
+            assert np.array_equal(f, py, equal_nan=True), "C++ and Python fills differ"
+            old, iold = mt_fill.fill_dem(z, method="relax", backend="cpu", conn=conn)
+            assert iold["converged"], iold
+            assert float(np.nanmax(np.abs(f - old))) < 1e-4, "fill moved off the relaxation"
+        return "priority-flood + relax kernel"
+
+    def flow(conn):
+        def run():
+            bk = mbe.CpuBackend(mt_flow._SPEC_FOR[conn])
+            assert os.path.dirname(bk.path) == dest, bk.path
+            bk.close()
+            z = mt_cases.pitted_plane(ny=40, nx=60)
+            _d, acc, info = mt_flow.flow_accum(z, backend="cpu", conn=conn)
+            assert info["interior_sinks"] == 0, info
+            assert int(np.nanmax(acc)) > 1
+            return "{} cells drain to the largest outlet".format(int(np.nanmax(acc)))
+        return run
+
+    return (("fill", fill), ("flow4", flow(4)), ("flow8", flow(8)))
 
 
 def main(argv=None):
@@ -60,13 +104,19 @@ def main(argv=None):
             except Exception as e:                          # report every engine, then fail
                 bad += 1
                 print("FAIL {:6s} {}: {}".format(name, type(e).__name__, e))
+        for name, check in _boanngrid_checks(dest):
+            try:
+                print("ok   {:6s} BoannGrid {}".format(name, check()))
+            except Exception as e:
+                bad += 1
+                print("FAIL {:6s} BoannGrid {}: {}".format(name, type(e).__name__, e))
     finally:
         shutil.rmtree(dest, True)
         if not os.listdir(be.PREBUILT_DIR):
             shutil.rmtree(be.PREBUILT_DIR, True)
         shutil.rmtree(tmp, True)
     if bad:
-        raise SystemExit("{} of {} engines failed".format(bad, len(ENGINES)))
+        raise SystemExit("{} of {} libraries failed".format(bad, len(ENGINES) + 3))
 
 
 if __name__ == "__main__":
