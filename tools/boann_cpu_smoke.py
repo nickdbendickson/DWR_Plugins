@@ -19,11 +19,13 @@ from metalflood import backends as be                                   # noqa: 
 from metalflood import engine as mfe, engine_fv as fve, engine_fv2 as fv2e  # noqa: E402
 from metalflood import engine_dg2 as dg2e, engine_sgc as sgce             # noqa: E402
 from metalflood import engine_subfv as sfve, subfv_backend as sfb         # noqa: E402
+from metalflood import engine_subli as slie, subli_backend as slb         # noqa: E402
 from metalflood.cases import valley_deck                                # noqa: E402
 
 ENGINES = (("acc", mfe.run_par, be.FLOOD_SPEC), ("fv", fve.run_par, be.FV_SPEC),
            ("fv2", fv2e.run_par, be.FV2_SPEC), ("dg2", dg2e.run_par, be.DG2_SPEC),
-           ("sgc", sgce.run_par, be.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC))
+           ("sgc", sgce.run_par, be.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC),
+           ("subli", slie.run_par, slb.SUBLI_SPEC))
 
 
 def main(argv=None):

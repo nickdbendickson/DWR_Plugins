@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boann's standalone launcher: run this file with any Python 3 that has numpy, no QGIS.
 
-    python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
+    python3 boann.py run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv|subli] [--backend auto|metal|cpu]
     python3 boann.py check | solvers | version | --help
 
 It loads this folder as a package named `boann` (nothing outside the folder is imported) and hands

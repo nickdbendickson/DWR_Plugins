@@ -25,14 +25,16 @@ import numpy as np
 from nd_breach_runner.core.metalflood import backends as mfb
 from nd_breach_runner.core.metalflood import cli
 from nd_breach_runner.core.metalflood import subfv_backend as sfb
+from nd_breach_runner.core.metalflood import subli_backend as slb
 from nd_breach_runner.core.metalflood.cases import (
     compact_deck, diagonal_valley_deck, valley_deck)
 from nd_breach_runner.tests.registry import Skip, test
 
 RESULTS = ("max", "maxVc", "inittm", "maxtm", "mxe", "mass")
-SOLVERS = ("acc", "sgc", "fv", "fv2", "dg2", "subfv")
+SOLVERS = ("acc", "sgc", "fv", "fv2", "dg2", "subfv", "subli")
 SPECS = {"acc": mfb.FLOOD_SPEC, "sgc": mfb.SGC_SPEC, "fv": mfb.FV_SPEC, "fv2": mfb.FV2_SPEC,
-         "dg2": mfb.DG2_SPEC, "subfv": sfb.SUBFV_SPEC}
+         "dg2": mfb.DG2_SPEC, "subfv": sfb.SUBFV_SPEC,
+         "subli": slb.SUBLI_SPEC}
 
 
 def _need_cpu_build():

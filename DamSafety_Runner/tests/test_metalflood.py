@@ -1048,7 +1048,7 @@ def sgc_engine_is_a_runner_engine_choice():
         # that drift for every entry, not just sgc.
         exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
-                   "gpu-subfv": lf.GPU_SUBFV_EXE}
+                   "gpu-subfv": lf.GPU_SUBFV_EXE, "gpu-subli": lf.GPU_SUBLI_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
             if _w == "auto":                            # 3.44.0: picked per computer, tested below
                 continue
@@ -1092,6 +1092,7 @@ def recommended_auto_engine_choice():
         assert algs.FLOOD_ENGINES[:7] == ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2",
                                           "gpu-sgc", "gpu-subfv")   # saved indices unchanged
         assert algs.FLOOD_ENGINES[7] == "auto"
+        assert algs.FLOOD_ENGINES[8] == "gpu-subli"                 # 3.79.0, appended
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
         assert not any("Apple GPU" in t for t in algs.FLOOD_ENGINES_TEXT)
         assert algs.FLOOD_ENGINES_TEXT[7].startswith("Recommended (auto)")
@@ -1458,12 +1459,13 @@ def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
 @test
 def metalflood_cpu_openmp_matches_one_core():
     """The multi-core (OpenMP) CPU build gives the same bits as the one-core build for every Boann
-    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV): every reduction in the kernels is an integer
+    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV, sub-grid local inertial): every reduction in the kernels is an integer
     add / max / min, so the order the cores finish in cannot change the answer."""
     _need_cpu_build()
     from nd_breach_runner.core.metalflood import engine_fv2 as fv2e, engine_dg2 as dg2e
     from nd_breach_runner.core.metalflood import engine_sgc as sgce, engine_subfv as sfve
     from nd_breach_runner.core.metalflood import subfv_backend as sfb
+    from nd_breach_runner.core.metalflood import engine_subli as slie, subli_backend as slb
     keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_THREADS")}
     try:
         os.environ["DAMSAFETY_MF_OPENMP"] = "1"
@@ -1471,7 +1473,8 @@ def metalflood_cpu_openmp_matches_one_core():
             raise Skip("this C++ compiler has no OpenMP")
         engines = (("acc", mf.run_par, mfb.FLOOD_SPEC), ("fv", fve.run_par, mfb.FV_SPEC),
                    ("fv2", fv2e.run_par, mfb.FV2_SPEC), ("dg2", dg2e.run_par, mfb.DG2_SPEC),
-                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC))
+                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC),
+                   ("subli", slie.run_par, slb.SUBLI_SPEC))
         d = _tmp()
         try:
             for name, run, spec in engines:

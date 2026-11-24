@@ -7,7 +7,8 @@ fine (LiDAR) grid resolves inside it. Here each coarse cell keeps its r x r sub-
   - per face : wetted cross-sectional AREA A(eta), conveyance K(eta) and wet width W(eta).
 
 Each is an integral over the sub-cells, built ONCE from the fine grid; the solver then reads the
-curves and never touches the fine grid again (subfv_ref.py). The reductions the tests pin:
+curves and never touches the fine grid again (subli_ref.py, subfv_hllc_ref.py). The reductions the
+tests pin:
 
   - FLAT cell  -> V = dx^2 (eta - z), A = dx * hflow, Manning K -> identical to the plain engine;
   - a single rectangular channel -> the sub-grid-channel (SGC) closed forms, below bank exactly.
@@ -95,14 +96,15 @@ def build_from_fine(dem_fine, n_fine, dx, r, fine_shape=None):
     zfx = np.maximum(left_e, right_w).reshape(ny, R, nx - 1).transpose(0, 2, 1)   # (ny, nx-1, r)
     nle = nn[:, R - 1::R][:, :-1]
     nrw = nn[:, 0::R][:, 1:]
-    nf2x = (0.5 * (nle + nrw)).reshape(ny, R, nx - 1).transpose(0, 2, 1) ** 2
+    # face roughness = the mean of the two sides' n^2 (as the plain engine's 0.5 (n2_l + n2_r))
+    nf2x = (0.5 * (nle ** 2 + nrw ** 2)).reshape(ny, R, nx - 1).transpose(0, 2, 1)
     # y-face between coarse rows i and i+1: shared horizontal edge, r sub-cols wide.
     top_s = dem[R - 1::R, :][:-1, :]             # (ny-1, nx*R) south edge of each upper cell
     bot_n = dem[0::R, :][1:, :]                  # (ny-1, nx*R) north edge of each lower cell
     zfy = np.maximum(top_s, bot_n).reshape(ny - 1, nx, R)                          # (ny-1, nx, r)
     nts = nn[R - 1::R, :][:-1, :]
     nbn = nn[0::R, :][1:, :]
-    nf2y = (0.5 * (nts + nbn)).reshape(ny - 1, nx, R) ** 2
+    nf2y = (0.5 * (nts ** 2 + nbn ** 2)).reshape(ny - 1, nx, R)
     # domain-boundary edge sub-profiles (one cell only; no max with a neighbour). The east / south
     # profiles are the last TRUE fine column / row (fine_shape), so padding never walls an edge.
     ce, rs = true_cols - 1, true_rows - 1

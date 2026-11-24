@@ -1,6 +1,6 @@
 """Boann's command line: run a LISFLOOD-FP-style deck with any Boann solver, no QGIS needed.
 
-    boann run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv] [--backend auto|metal|cpu]
+    boann run DECK.par [--solver acc|sgc|fv|fv2|dg2|subfv|subli] [--backend auto|metal|cpu]
                        [--no-limiter] [--progress] [--quiet] [--stats-json PATH] [--profile]
     boann check          which device a run would use here (Apple GPU, shipped CPU build, compiler)
     boann solvers        the solvers and the Runner engine words that pick each
@@ -49,6 +49,9 @@ SOLVERS = (
      ("gpu-dg2", "dg2")),
     ("subfv", "engine_subfv", "sub-grid finite volume (coarse HLLC with fine sub-cells; "
      "'subgrid <r>' in the .par, default 4)", ("gpu-subfv", "subfv")),
+    ("subli", "engine_subli", "sub-grid local inertial (coarse ACC with fine sub-cells, after "
+     "Devi & Kuiry 2024; 'subgrid <r>' in the .par, default 4; 'upwind' for the paper's flux "
+     "weighting)", ("gpu-subli", "subli")),
 )
 _KEYS = {k: k for k, _m, _d, _w in SOLVERS}
 for _k, _m, _d, _words in SOLVERS:
@@ -77,7 +80,7 @@ def solver_key(word):
 
 def solver_module(key):
     """The solver's module. CliError when this copy of Boann does not carry it (Screening's copy
-    has no sub-grid FV)."""
+    has no sub-grid FV or sub-grid local inertial)."""
     mod = dict((k, m) for k, m, _d, _w in SOLVERS)[solver_key(key)]
     try:
         return importlib.import_module("." + mod, __package__)
@@ -251,8 +254,8 @@ def _parser():
     r = sub.add_parser("run", help="run a .par deck")
     r.add_argument("par", help="the LISFLOOD-FP .par file (paths in it are relative to its folder)")
     r.add_argument("--solver", "-s", default="acc",
-                   help="acc (default), sgc, fv, fv2, dg2 or subfv; the Runner's words (gpu, "
-                        "gpu-fv, gpu-fv2, gpu-dg2, gpu-sgc, gpu-subfv) work too")
+                   help="acc (default), sgc, fv, fv2, dg2, subfv or subli; the Runner's words "
+                        "(gpu, gpu-fv, gpu-fv2, gpu-dg2, gpu-sgc, gpu-subfv, gpu-subli) work too")
     r.add_argument("--backend", "-b", default=os.environ.get("DAMSAFETY_MF_BACKEND") or "auto",
                    choices=("auto", "metal", "cpu"),
                    help="auto (Apple GPU when there is one, else the CPU build), metal or cpu")
