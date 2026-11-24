@@ -43,6 +43,43 @@ def sgc_hydraulic_geometry_is_the_nd_curve_by_default():
 
 
 @test
+def sgc_curve_presets_resolver_and_name():
+    """3.72.0: the curve is selectable - named presets (ND default, Bieger national), a project's
+    own four coefficients, and the run log names whichever is used (no 'LISFLOOD-FP SGC')."""
+    from nd_breach_runner.core import sgc
+    keys = [k for k, _lab, _c in sgc.CURVES]
+    assert keys[0] == "nd" and "bieger-us" in keys
+    assert sgc.CURVES_BY_KEY["nd"] == sgc.ND_USGS_2026
+    assert sgc.CURVES_BY_KEY["bieger-us"] == sgc.BIEGER_2015_US
+    assert len(sgc.CURVE_LABELS) == len(sgc.CURVES) and sgc.CURVE_LABELS[0].startswith("North Dakota")
+    # resolve: a preset name (case-insensitive), four numbers, or None (the default)
+    assert sgc.resolve_curve("nd") == sgc.ND_USGS_2026
+    assert sgc.resolve_curve("BIEGER-US") == sgc.BIEGER_2015_US
+    assert sgc.resolve_curve(None) == sgc.DEFAULT_CURVE
+    assert sgc.resolve_curve((2.0, 0.3, 0.2, 0.25)) == (2.0, 0.3, 0.2, 0.25)
+    for bad in ("nope", (1, 2, 3), (1.0, -0.3, 0.2, 0.25)):
+        try:
+            sgc.resolve_curve(bad)
+            raise AssertionError("resolve_curve accepted " + repr(bad))
+        except sgc.SGCError:
+            pass
+    # name (run log) and key (run-folder tag)
+    assert sgc.curve_name(sgc.ND_USGS_2026) == "North Dakota, 79 USGS gauges"
+    assert sgc.curve_name((2.0, 0.3, 0.2, 0.25)) == "custom curve"
+    assert sgc.curve_key("nd") == "nd" and sgc.curve_key(sgc.BIEGER_2015_US) == "bieger-us"
+    assert sgc.curve_key((2.0, 0.3, 0.2, 0.25)) == "custom" and sgc.curve_key(None) is None
+    # build() accepts a preset name, and describe() names the curve, not the solver
+    dem = _valley()
+    ch = sgc.build(dem, inflow_rc=dem.rc(30.0, 405.0), upstream_km2=50.0, start="empty",
+                   curve="bieger-us")
+    assert tuple(ch.info["curve"]) == sgc.BIEGER_2015_US
+    line = sgc.describe(ch.info)
+    assert "Bieger 2015" in line and "LISFLOOD-FP SGC" not in line
+    nd = sgc.build(dem, inflow_rc=dem.rc(30.0, 405.0), upstream_km2=50.0, start="empty")
+    assert "North Dakota" in sgc.describe(nd.info)
+
+
+@test
 def sgc_flow_accumulation_counts_the_cells_above_and_the_area_outside():
     from nd_breach_runner.core import sgc
     from nd_breach_runner.core.grid import Grid
