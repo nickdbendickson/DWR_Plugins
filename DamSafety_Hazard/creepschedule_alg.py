@@ -59,8 +59,9 @@ class CreepScheduleAlgorithm(_Base):
                 "macOS, a systemd timer on Linux, a task in the Task Scheduler on Windows. "
                 "The computer has to be on (macOS runs a missed watch when it wakes, Linux at "
                 "the next start). The watch opens the QGIS profile this tool was run from, so "
-                "run it from the profile that has the suite. A small script and the log of "
-                "every run are kept in <folder>/_creep_watch/.\n\n"
+                "run it from the profile that has the suite. The log of every run is kept "
+                "in <folder>/_creep_watch/; the small script the scheduler starts is kept in "
+                "your own user folder, never in the (possibly shared) dams folder.\n\n"
                 "Run the tool again to change the schedule, or choose 'Remove the schedule'. "
                 "'Only write the script' schedules nothing and shows the command, for an "
                 "administrator to register. One schedule per folder.")
