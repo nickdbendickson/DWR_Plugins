@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Runner 3.93.0 / Screening 0.55.0 / Boann 6.0.0: Boann's shock-capturing solvers (FV1, FV2, DG2) make a face against NoData a reflecting wall. THIS MOVES FV1 / FV2 / DG2 RESULTS wherever water reaches a NoData cell; ACC, SGC, sub-grid FV, sub-grid local inertial and LISFLOOD-FP are unchanged.**
+  - **Why.** A face between a wet cell and a NoData cell carried no flux at all, so no wall pressure, while the cell's other faces and the Audusse bed source still pushed: water resting against NoData was driven into it without end. Found running the EA 2D benchmark test 5 at 10 m (Bristol's own LISFLOOD-FP deck, NoData around the valley) on Nick's M2 Pro: Boann FV1 took 9.0 M steps of 0.008 s (104 min), the cells beside the NoData edge reached 375-523 m/s, and the run gained 1.05e6 m3 (11 %) after the inflow had ended. LISFLOOD-FP and Boann ACC treat the face as a wall.
+  - **What.** `k_faces_fv` / `k_faces_fv2` / the DG2 face kernel: where exactly one side is NoData, the face flux is the HLLC flux against the cell's mirror state, the same formula the closed domain edge uses. Sub-grid FV already walled NoData (checked: a lake beside NoData stays at rest at r = 1 and 2).
+  - **Measured.** A 1 m lake at rest, 20 x 20 cells of 10 m, a NoData column and block inside it, 10 min: before, FV1 / FV2 / DG2 reached 5.4 / 5.0 / 4.8 m/s and depths of 0.5 to 3.4 m; now all three stay at 1.000 m and 0 m/s.
+  - **Tests.** `metalflood_shock_solvers_hold_a_lake_against_nodata` (fails on 3.91.0: FV1 depth 3.449 m).
 - **Runner 3.92.0: Boann sub-grid local inertial runs faster with the same results (NO result change: every result file byte-identical; Nick "both", 2026-11-24). Sub-grid solver 0.1.1.**
   - **Why.** On the DWR-2801 2 m LiDAR test, sub-grid r4 took 7.8 min on the M2 Pro against 1.2 min for plain ACC on 8 m cells. A profile showed the solver was a small part of it: the mass file's wet area was counted by downscaling all 88 M fine cells every massint (288 times in 24 h).
   - **Mass-file wet area on the wet block.** `Engine.wet_fine_count`: the block of coarse cells holding water is downscaled; every other coarse cell has volume exactly 0, so the same surface as at the start, and adds what it counted then (`dry_fine_counts`). The same integer as the whole-grid count.

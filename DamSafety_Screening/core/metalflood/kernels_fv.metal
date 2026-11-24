@@ -295,6 +295,14 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float uR = mf_vel(hu[rr], h[rr]);
                 float vR = mf_vel(hv[rr], h[rr]);
                 fl = mf_hllc(hLs, uL, vL, hRs, uR, vR, g);
+            } else if (ok[l] != 0 && h[l] > MF_HVEL) {  // NoData on the right: a wall, as at the domain edge
+                float wn = mf_vel(hu[l], h[l]);
+                float wt = mf_vel(hv[l], h[l]);
+                fl = mf_hllc(h[l], wn, wt, h[l], -wn, wt, g);
+            } else if (ok[rr] != 0 && h[rr] > MF_HVEL) {  // NoData on the left: a wall
+                float wn = mf_vel(hu[rr], h[rr]);
+                float wt = mf_vel(hv[rr], h[rr]);
+                fl = mf_hllc(h[rr], -wn, wt, h[rr], wn, wt, g);
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
             uint i = r * nx;
@@ -355,6 +363,14 @@ kernel void k_faces_fv(MF_ARGS_FV) {
                 float nD = mf_vel(hv[d], h[d]);
                 float tD = mf_vel(hu[d], h[d]);
                 fl = mf_hllc(hUs, nU, tU, hDs, nD, tD, g);
+            } else if (ok[u] != 0 && h[u] > MF_HVEL) {  // NoData on the south: a wall, as at the domain edge
+                float wn = mf_vel(hv[u], h[u]);
+                float wt = mf_vel(hu[u], h[u]);
+                fl = mf_hllc(h[u], wn, wt, h[u], -wn, wt, g);
+            } else if (ok[d] != 0 && h[d] > MF_HVEL) {  // NoData on the north: a wall
+                float wn = mf_vel(hv[d], h[d]);
+                float wt = mf_vel(hu[d], h[d]);
+                fl = mf_hllc(h[d], -wn, wt, h[d], wn, wt, g);
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side
             uint i = c;

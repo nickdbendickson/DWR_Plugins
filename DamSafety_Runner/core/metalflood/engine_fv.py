@@ -21,7 +21,7 @@ from . import engine as mfe
 from .engine import Deck, _f, _setf
 
 NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
-VERSION = "0.1.0"
+VERSION = "0.2.0"     # 0.2.0 (Runner 3.93.0): a face against NoData is a reflecting wall
 G = bl.G
 DRY_M = bl.DRY_M
 NODATA = bl.NODATA
