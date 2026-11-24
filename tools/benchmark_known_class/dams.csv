@@ -1,0 +1,65 @@
+dam_id,structure_id,name,county,height_ft,max_storage_acft,tier,dwr_hazard_class,dwr_hazard_review_date,nid_id,nid_hazard_potential,nid_agrees,expected_nd_class,source
+DWR-6122,6122,Mirror Lake Dam,Adams,19.0,894.6,cloud,High,2024/07/15,ND00137,Significant,no,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2642,2642,Clausen Springs Dam,Barnes,48.0,1274.6,cloud,High,2024/10/04,ND00029,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-5728,5728,Jackman Coulee Dam 2,Burleigh,23.0,92.1,cloud,High,2024/10/04,ND00933,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3048,3048,Maple River Dam (T-180),Cass,52.0,5240.0,cloud,High,2024/10/04,ND00472,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2641,2641,Hunter Dam,Cass,21.0,711.3,cloud,High,2024/10/04,ND00028,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2668,2668,Senator Young Dam,Cavalier,84.5,5971.0,cloud,High,2024/10/04,ND00055,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2692,2692,Mott Watershed Dam,Hettinger,39.0,2811.0,cloud,High,2024/10/04,ND00080,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3061,3061,Beulah Flood Control Dam,Mercer,52.0,1388.0,cloud,High,2024/10/04,ND00493,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-6001,6001,Crown Butte Dam,Morton,48.4,1230.0,cloud,High,2023/08/02,ND00190,Significant,no,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2636,2636,Queen City Dam,Stark,16.2,360.0,cloud,High,2015/04/10,ND00023,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2639,2639,Tioga Dam,Williams,38.5,1630.0,cloud,High,2024/10/04,ND00026,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-4980,4980,McGregor Dam,Williams,43.0,1490.3,cloud,High,2024/10/04,ND00003,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-10551,10551,Prairie Dam 1,Sioux,22.0,133.0,cloud,High,2024/10/04,ND01097,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2669,2669,Olson Dam,Pembina,67.0,1077.0,cloud,High,2024/10/04,ND00056,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2649,2649,Bylin Dam,Walsh,58.2,5850.0,cloud,High,2024/10/04,ND00036,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2656,2656,Matejcek Dam,Walsh,76.0,9000.0,cloud,High,2024/10/04,ND00043,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2904,2904,Homme Dam,Walsh,56.0,6700.0,cloud,High,2024/10/04,ND00310,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2973,2973,Fordville Dam,Grand Forks,54.1,10703.4,cloud,High,2024/10/04,ND00386,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2978,2978,Upper Turtle River Flood Ret. Dam 9,Grand Forks,67.6,10410.0,cloud,High,2024/10/04,ND00391,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-4575,4575,Upper Turtle River Flood Ret. Dam 4,Grand Forks,52.0,2700.0,cloud,High,2015/04/16,ND00746,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2975,2975,Upper Turtle River Flood Ret. Dam 5,Grand Forks,70.0,1810.0,cloud,High,2024/10/04,ND00388,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2979,2979,Square Butte Creek Dam 5,Oliver,65.0,5800.0,cloud,High,2024/10/04,ND00393,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2647,2647,White Earth Dam,Mountrail,38.0,4239.0,cloud,High,2024/10/04,ND00034,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2633,2633,Elm River Detention Dam 3,Cass,20.0,1253.0,cloud,Significant,2024/10/04,ND00020,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2663,2663,Hanks Corner Dam,Cavalier,58.0,281.8,cloud,Significant,2024/10/04,ND00050,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2695,2695,Bourbanis Dam,Cavalier,73.3,1340.6,cloud,Significant,2022/09/23,ND00083,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2722,2722,Nieuwsma Dam,Emmons,29.0,800.0,cloud,Significant,2007/06/07,ND00111,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-6111,6111,Upper Turtle River Flood Ret. Dam 8,Grand Forks,34.8,1190.0,cloud,Significant,2007/03/15,ND00390,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2983,2983,Indian Creek Dam,Hettinger,42.5,5648.0,cloud,Significant,2024/10/04,ND00397,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-4441,4441,Square Butte Creek Dam 6,Morton,76.2,8297.0,cloud,Significant,2004/04/28,ND00794,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2640,2640,Tolna Dam 1,Nelson,30.0,3080.0,cloud,Significant,2024/10/04,ND00027,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3037,3037,Belfield Railroad Dam,Stark,20.0,127.0,cloud,Significant,2023/09/11,ND00459,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2621,2621,Armourdale Dam,Towner,45.5,2162.0,cloud,Significant,2024/10/04,ND00008,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-10727,10727,30th Street Detention Basin Dam,Ward,24.5,284.9,cloud,Significant,2024/10/04,ND01157,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3007,3007,Iverson Dam; Marvin,Williams,35.0,169.3,cloud,Significant,2014/12/05,ND00424,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2665,2665,Tewaukon WS-T-1-A Dam,Sargent,40.3,2638.8,cloud,Significant,2015/10/21,ND00052,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-10633,10633,Upper Maple River Dam,Steele,35.0,9953.0,cloud,Significant,2014/06/05,ND01122,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2654,2654,Elm River Detention Dam 1,Steele,21.5,7886.0,cloud,Significant,2024/10/04,ND00041,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2655,2655,Elm River Detention Dam 2,Traill,35.9,7164.0,cloud,Significant,2024/10/04,ND00042,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2791,2791,Harvey Dam,Wells,30.8,7646.0,cloud,Significant,2011/07/18,ND00189,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2801,2801,Swan Buffalo Detention Dam 12,Cass,27.5,1615.5,cloud,Significant,,ND00199,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2662,2662,Swan Buffalo Detention Dam 8,Cass,31.5,3936.9,cloud,Significant,,ND00049,Significant,yes,Medium,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2629,2629,Balta Dam,Pierce,22.2,161.0,cloud,Low,2024/10/04,ND00016,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-4620,4620,Kuntz Dam; James L 2,Kidder,27.0,68.0,cloud,Low,2024/10/04,ND00778,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-5668,5668,ND No Name Dam 247,Rolette,25.0,300.0,cloud,Low,2024/10/04,ND00169,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-4628,4628,Kuntz Dam; James 2,Wells,25.0,74.0,cloud,Low,2024/10/04,ND00772,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2898,2898,Limesand-Seefeldt Dam,LaMoure,41.0,250.0,cloud,Low,2026/06/04,ND00303,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3122,3122,Nelson Dam; Selmar,Williams,24.0,68.0,cloud,Low,2024/10/04,ND00556,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2870,2870,Moores Dam,Dickey,20.8,495.8,cloud,Low,2024/10/04,ND00271,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3033,3033,Bowman Dam; David & Richard,Slope,20.5,145.0,cloud,Low,2024/10/04,ND00455,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2794,2794,Stanley Dam,Mountrail,20.5,3720.0,cloud,Low,2024/10/04,ND00192,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-11409,11409,Pease Dam; Bernard,McLean,23.0,50.6,cloud,Low,2024/10/04,ND01155,Undetermined,,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3000,3000,Baukol-Noonan Dam 1,Divide,23.0,1100.0,cloud,Low,2021/05/17,ND00416,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2724,2724,Schlenker Dam,McIntosh,27.5,50.0,cloud,Low,2024/10/04,ND00113,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2617,2617,Vanberkom Dam,Burke,20.0,226.5,cloud,Low,2024/10/04,ND00853,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-5765,5765,151-050-35 Dam,Grand Forks,21.4,200.0,cloud,Low,2024/10/04,ND01156,Undetermined,,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3034,3034,Wachter Ranch Dam 11,Oliver,30.7,71.6,cloud,Low,,ND00456,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2865,2865,Van Osting Dam; William,Oliver,43.0,167.0,cloud,Low,,ND00266,Low,yes,Low,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2756,2756,Dickinson Dam,Stark,48.6,38770.0,mac,High,2024/10/04,ND00148,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2914,2914,Lake Ilo Dam,Dunn,38.3,31326.0,mac,High,2024/10/04,ND00321,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-3008,3008,English Coulee Dam,Grand Forks,27.0,29200.0,mac,High,2024/10/04,ND00425,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2667,2667,Renwick Dam,Pembina,49.4,11658.0,mac,High,2024/10/04,ND00054,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2651,2651,Sweetbriar Creek Dam,Morton,54.7,10400.0,mac,High,2024/10/04,ND00038,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg
+DWR-2708,2708,Nelson Lake Dam,Oliver,66.0,20122.0,mac,High,2024/10/04,ND00096,High,yes,High,ND DWR dam database (DWR_dams.gpkg); NID NID_dams.gpkg

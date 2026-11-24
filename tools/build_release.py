@@ -91,8 +91,8 @@ def runner_binaries(folder):
 
 def boann_libraries(folder, plugin):
     """{zip path: (bytes, False)} for Boann's prebuilt CPU libraries under folder/<platform>/, laid
-    out as <plugin>/core/metalflood/prebuilt/<platform>/<name>. Screening has no sub-grid FV engine,
-    so its zip leaves the subfv_* libraries out."""
+    out as <plugin>/core/metalflood/prebuilt/<platform>/<name>. Screening has no sub-grid FV or
+    sub-grid local-inertial engine, so its zip leaves the subfv_* and subli_* libraries out."""
     out = {}
     if not folder:
         return out
@@ -103,7 +103,7 @@ def boann_libraries(folder, plugin):
         for name in sorted(os.listdir(sub)):
             if name.startswith(".") or not name.endswith((".so", ".dll", ".dylib")):
                 continue
-            if plugin != "DamSafety_Runner" and name.startswith("subfv_"):
+            if plugin != "DamSafety_Runner" and name.startswith(("subfv_", "subli_")):
                 continue
             with open(os.path.join(sub, name), "rb") as fh:
                 out["{}/core/metalflood/prebuilt/{}/{}".format(plugin, plat, name)] = (fh.read(), False)

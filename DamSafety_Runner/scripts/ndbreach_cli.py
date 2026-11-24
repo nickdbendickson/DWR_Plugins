@@ -236,6 +236,9 @@ MODEL_KEYS = {
     # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r, 1-8 (the run tool's SUBGRID_R).
     # Left out = the engine's own default (4). Only that engine reads it.
     "subgrid_r": ("user_subgrid_r", ("int", 1, 8)),
+    # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
+    # (Devi & Kuiry 2024 Eq. 7-8). Off unless set; it reads deep on reaches that cross the grid.
+    "subgrid_upwind": ("user_subgrid_upwind", ("bool",)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
@@ -2176,6 +2179,12 @@ def _dwr_sources(cfg, headers=()):
             cache["f"] = dwr_lines.nid_lookup_for(dwr_lines.dams_source())
         return cache["f"](v) if cache["f"] else ""
     out["nid"] = nid
+
+    def record(sid):                           # 3.73.0: the DWR record's x_coord / y_coord
+        if "r" not in cache:
+            cache["r"] = dwr_lines.record_lookup_for(dwr_lines.dams_source())
+        return cache["r"](sid) if cache["r"] else None
+    out["record"] = record
     return out
 
 
@@ -2259,12 +2268,15 @@ def _dwr_line_cli(cfg, p, row, dam_id, dwr, layers):
         say("{}: {}; the dam point is used as given".format(dam_id, why))
         return
     new, info, warn = dwr_lines.resolve(dam, p.dam_xy, ids, dwr["index"], to_work, layer,
-                                        dwr["why"])
+                                        dwr["why"], record=dwr.get("record"))
     if info and info.get("used"):
         p.dam_xy = (float(new[0]), float(new[1]))
         say("{}: {}".format(dam_id, info.get("text")))
-    elif warn:
-        say("{}: {}".format(dam_id, warn))
+    else:
+        if warn:
+            say("{}: {}".format(dam_id, warn))
+        if getattr(dam, "_record_point", None):           # 3.73.0: moved to the DWR record x/y
+            p.dam_xy = (float(new[0]), float(new[1]))
 
 
 def _batch_point_to_dem(cfg, cache, crs_text, x, y):

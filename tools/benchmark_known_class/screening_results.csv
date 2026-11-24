@@ -1,0 +1,10 @@
+dam_id,hz_class,hz_vs_existing,hz_reason,n_bldg_wet,n_bldg_lethal,n_road_wet,n_rail_wet,hz_conf,hz_border,sim_status,tri_result,edge_flag,work
+DWR-10551,Low,,"triage: nothing inside the envelope (volume limit, 3,436 m)",,,,,triage,,triage,clear,,batch_07
+DWR-11409,Low,agree,nothing listed in ND 5.2 reached,0,0,0,0,medium,no,ok,needs 2D,no,batch_02
+DWR-2636,Low,,"triage: nothing inside the envelope (volume limit, 510 m)",,,,,triage,,triage,clear,,batch_08
+DWR-2663,Medium,agree,"3 roads, e.g. US / State highway overtopped, AADT unknown (assumed Medium) [5.2.1.2(b)] (1.5 ft) (5.2.1.2)",0,0,5,0,medium,yes,ok,needs 2D,no,batch_09
+DWR-2724,Low,,"triage: nothing inside the envelope (volume limit, 1,287 m)",,,,,triage,,triage,clear,,batch_01
+DWR-3007,Medium,agree,"12 structures, e.g. habitable structure inundated, low danger zone (0.1 ft at 0.3 ft/s): economic loss (5.2.2); (+2 more)",16,0,10,0,medium,no,ok,needs 2D,no,batch_05
+DWR-3037,High,higher than existing,"7 structures, e.g. habitable structure in the high danger zone (7.3 ft at 1.0 ft/s) (5.2.1.1 Fig. 5.1)",63,7,49,1,medium,no,ok,needs 2D,no,batch_04
+DWR-4620,Low,,"triage: nothing inside the envelope (volume limit, 507 m)",,,,,triage,,triage,clear,,batch_03
+DWR-5728,High,agree,"5 structures, e.g. habitable structure in the high danger zone (7.5 ft at 1.8 ft/s) (5.2.1.1 Fig. 5.1); 2 roads, e.g. road with AADT 4,657 (> 2,000) overtopped (7.5 ft) (5.2.1.2)",19,5,16,0,medium,no,ok,needs 2D,no,batch_06

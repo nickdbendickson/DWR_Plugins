@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from ..damsuite import gdalsafe as GS
+from . import atomicio
 from . import gdal_io
 from . import structures as structmod
 from .units import FT
@@ -655,6 +656,5 @@ def main(argv=None):
                                         summ["culverts_skipped_by_runner"], paths["md"]))
     if len(jobs) > 1:
         os.makedirs(out, exist_ok=True)
-        with open(os.path.join(out, "culvert_precheck_index.json"), "w") as f:
-            json.dump(index, f, indent=1)
+        atomicio.write_text(os.path.join(out, "culvert_precheck_index.json"), json.dumps(index, indent=1))
     return status

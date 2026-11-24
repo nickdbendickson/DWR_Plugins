@@ -263,6 +263,14 @@ GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid
 GPU_SUBFV_EXE = os.path.join(HERE, "metalflood", "engine_subfv.py")
 GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid fv", "gpu subfv",
                    "subgrid finite volume")
+# 3.79.0: Boann's sub-grid LOCAL-INERTIAL solver (core/metalflood/engine_subli): the ACC scheme run
+# on a COARSE grid whose cells each keep their r x r fine (LiDAR) sub-cells as stage tables, after
+# Devi & Kuiry (2024) with exact stage curves and the face's compound Manning conveyance. The deck
+# DEM is the fine grid; 'subgrid <r>' sets the coarsening factor (as for sub-grid FV) and 'upwind'
+# turns the paper's flux weighting on (off by default). ACC family, not shock-capturing. By name only.
+GPU_SUBLI_EXE = os.path.join(HERE, "metalflood", "engine_subli.py")
+GPU_SUBLI_WORDS = ("gpu-subli", "metal-subli", "subli", "subgrid-li", "sub-grid li", "gpu subli",
+                   "subgrid local inertial", "sub-grid local inertial")
 
 # 3.44.0: "Recommended (auto)": the engine is picked for this computer, by an explicit choice only
 # (never as a silent fallback for a named engine). A Mac with an Apple GPU runs Boann's ACC scheme
@@ -371,6 +379,10 @@ def is_gpu_subfv(exe):
     return bool(exe) and os.path.abspath(str(exe)) == GPU_SUBFV_EXE
 
 
+def is_gpu_subli(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == GPU_SUBLI_EXE
+
+
 def is_gpu_fv_any(exe):
     """Either shock-capturing finite-volume scheme (FV1 1st order or FV2 2nd order)."""
     return is_gpu_fv(exe) or is_gpu_fv2(exe)
@@ -384,10 +396,10 @@ def is_gpu_shock(exe):
 
 
 def is_gpu_any(exe):
-    """Any GPU engine: the ACC scheme, the sub-grid-channel ACC scheme, or any shock-capturing
-    scheme (FV1, FV2, DG2 or sub-grid FV)."""
+    """Any GPU engine: the ACC scheme, the sub-grid-channel ACC scheme, the sub-grid local-inertial
+    scheme, or any shock-capturing scheme (FV1, FV2, DG2 or sub-grid FV)."""
     return (is_gpu(exe) or is_gpu_sgc(exe) or is_gpu_fv(exe) or is_gpu_fv2(exe)
-            or is_gpu_dg2(exe) or is_gpu_subfv(exe))
+            or is_gpu_dg2(exe) or is_gpu_subfv(exe) or is_gpu_subli(exe))
 
 
 def boann_info(exe):
@@ -399,7 +411,8 @@ def boann_info(exe):
     from .metalflood.version import BOANN_VERSION
     from .metalflood import cli as _cli
     key = ("dg2" if is_gpu_dg2(exe) else "sgc" if is_gpu_sgc(exe) else
-           "subfv" if is_gpu_subfv(exe) else "fv2" if is_gpu_fv2(exe) else
+           "subfv" if is_gpu_subfv(exe) else "subli" if is_gpu_subli(exe) else
+           "fv2" if is_gpu_fv2(exe) else
            "fv" if is_gpu_fv(exe) else "acc")
     info = {"version": BOANN_VERSION, "solver": key}
     try:
@@ -442,6 +455,8 @@ def resolve_exe(exe):
         return GPU_DG2_EXE
     if v.lower() in GPU_SUBFV_WORDS:
         return GPU_SUBFV_EXE
+    if v.lower() in GPU_SUBLI_WORDS:
+        return GPU_SUBLI_EXE
     if v.lower() in GPU_SGC_WORDS:
         return GPU_SGC_EXE
     if v.lower() in GPU_FV2_WORDS:
@@ -464,6 +479,9 @@ def describe_exe(exe):
                 "GPU; NOT LISFLOOD-FP)")
     if is_gpu_subfv(exe):
         return ("Boann, sub-grid finite volume (coarse HLLC with per-cell LiDAR sub-cells on the "
+                "GPU; NOT LISFLOOD-FP)")
+    if is_gpu_subli(exe):
+        return ("Boann, sub-grid local inertial (coarse ACC with per-cell LiDAR sub-cells on the "
                 "GPU; NOT LISFLOOD-FP)")
     if is_gpu_dg2(exe):
         return ("Boann, discontinuous Galerkin 2nd order (RKDG2 shallow water on the GPU; "
@@ -491,6 +509,8 @@ def engine_label(exe):
         return "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels; NOT LISFLOOD-FP)"
     if is_gpu_subfv(exe):
         return "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; NOT LISFLOOD-FP)"
+    if is_gpu_subli(exe):
+        return "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells; NOT LISFLOOD-FP)"
     if is_gpu_dg2(exe):
         return "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
     if is_gpu_fv2(exe):
@@ -510,6 +530,8 @@ def engine_name(exe):
         return "Boann (shock-capturing)"
     if is_gpu_subfv(exe):
         return "Boann (sub-grid finite volume)"
+    if is_gpu_subli(exe):
+        return "Boann (sub-grid local inertial)"
     if is_gpu_sgc(exe):
         return "Boann (sub-grid channels)"
     if is_gpu(exe):
@@ -535,12 +557,13 @@ class Cancelled(RuntimeError):
 
 
 class LisfloodSettings:
-    def __init__(self, exe, threads=0, manning_n=0.06, manning_grid=None,
+    def __init__(self, exe, threads=0, manning_n=0.05, manning_grid=None,
                  arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, massint_s=300.0,
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None):
+                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None,
+                 subgrid_upwind=False):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -562,11 +585,15 @@ class LisfloodSettings:
         self.cfl = None if cfl is None else float(cfl)
         if self.cfl is not None and not 0.0 < self.cfl <= 1.0:
             raise ModelError("ACC cfl must be in (0, 1], got {}".format(self.cfl))
-        # 3.42.0: the sub-grid finite-volume coarsening factor r (the Boann sub-grid FV engine only;
-        # None = its own default of 4). Written to the .par as 'subgrid r' only for that engine.
+        # 3.42.0: the sub-grid coarsening factor r (Boann's sub-grid FV and, 3.79.0, sub-grid
+        # local-inertial engines only; None = their own default of 4). Written to the .par as
+        # 'subgrid r' only for those engines.
         self.subgrid_r = None if subgrid_r is None else int(subgrid_r)
         if self.subgrid_r is not None and not 1 <= self.subgrid_r <= 8:
             raise ModelError("subgrid r must be 1..8, got {}".format(self.subgrid_r))
+        # 3.79.0: the sub-grid local-inertial engine's upwind flux weighting (Devi & Kuiry 2024
+        # Eq. 7-8), off by default; written to the .par as 'upwind' for that engine only.
+        self.subgrid_upwind = bool(subgrid_upwind)
         # v3.11.0: domain edges written as closed walls ("N", "S", "E", "W") instead of free
         # outflow. The near-dam FV1 run closes the edges that face the reservoir: with FV1 a
         # free edge across ponded water brings water INTO the model (see core/refine.py).
@@ -835,11 +862,13 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         cfl = getattr(st, "cfl", None)
         if cfl is not None:
             lines.append("cfl {:.3f}".format(float(cfl)))
-    # the sub-grid finite-volume coarsening factor r (Boann sub-grid FV engine only; empty = its
-    # own default). Harmless to any other engine, which does not read it.
+    # the sub-grid coarsening factor r (Boann's sub-grid FV and sub-grid local-inertial engines
+    # only; empty = their own default). No other engine gets the keyword.
     sub_r = getattr(st, "subgrid_r", None)
-    if sub_r is not None and is_gpu_subfv(st.exe):
+    if sub_r is not None and (is_gpu_subfv(st.exe) or is_gpu_subli(st.exe)):
         lines.append("subgrid {}".format(int(sub_r)))
+    if getattr(st, "subgrid_upwind", False) and is_gpu_subli(st.exe):
+        lines.append("upwind")
     if st.manning_grid is not None:
         st.manning_grid.write_asc(os.path.join(workdir, name + ".n.asc"), fmt="%.4f")
         lines.append("manningfile {}.n.asc".format(name))
@@ -1093,6 +1122,11 @@ def _run_gpu(workdir, par, st, progress=None, cancel=None, log=None):
         from .metalflood import engine_subfv as _subfv
         runner, name, version = _subfv.run_par, _subfv.NAME, _subfv.VERSION
         tag = "Boann (sub-grid finite volume)"
+    elif is_gpu_subli(exe):
+        # Runner-only as well (see sub-grid FV above), so imported direct
+        from .metalflood import engine_subli as _subli
+        runner, name, version = _subli.run_par, _subli.NAME, _subli.VERSION
+        tag = "Boann (sub-grid local inertial)"
     elif is_gpu_fv2(exe):
         runner, name, version = mf.run_par_fv2, mf.FV2_NAME, mf.FV2_VERSION
         tag = "Boann (shock-capturing, 2nd order)"
@@ -1500,6 +1534,7 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
     who = ("The built-in engine" if is_builtin(exe)
            else "Boann (discontinuous Galerkin, 2nd order)" if is_gpu_dg2(exe)
            else "Boann (sub-grid finite volume)" if is_gpu_subfv(exe)
+           else "Boann (sub-grid local inertial)" if is_gpu_subli(exe)
            else "Boann (shock-capturing, 2nd order)" if is_gpu_fv2(exe)
            else "Boann (shock-capturing)" if is_gpu_fv(exe)
            else "Boann" if is_gpu(exe) else "LISFLOOD-FP")
@@ -1521,6 +1556,9 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC, sgc=False):
                 "{}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if is_gpu_subfv(exe):
         msg += (" This is Boann, sub-grid finite volume (coarse HLLC with per-cell LiDAR sub-cells "
+                "on {}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
+    if is_gpu_subli(exe):
+        msg += (" This is Boann, sub-grid local inertial (coarse ACC with per-cell LiDAR sub-cells "
                 "on {}), NOT LISFLOOD-FP itself.".format(gpu_backend_note()))
     if not patched and not is_inprocess(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "

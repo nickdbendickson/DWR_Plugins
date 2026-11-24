@@ -73,7 +73,7 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
                                 "needs HEC-RAS 6.6, see help)")]
 # 3.22.0: the run tools' flood engine choice (LISFLOOD-FP stays index 0 and the default)
 FLOOD_ENGINES = ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2", "gpu-sgc", "gpu-subfv",
-                 "auto")
+                 "auto", "gpu-subli")
 # 3.44.0: plain labels (the engine runs on a Mac's GPU or any computer's CPU, so no label says
 # "Apple GPU"), research solvers marked Advanced, and "Recommended (auto)" APPENDED so saved
 # models and scripts keep their indices. LISFLOOD-FP stays index 0 and the default.
@@ -85,7 +85,9 @@ FLOOD_ENGINES_TEXT = [
     "Advanced: Boann, discontinuous Galerkin 2nd order (RKDG2)",
     "Boann, sub-grid channels (narrow rivers the grid cannot resolve)",
     "Advanced: Boann, sub-grid finite volume (coarse grid; research, can over-pond narrow channels)",
-    "Recommended (auto): picks for this computer"]
+    "Recommended (auto): picks for this computer",
+    # 3.79.0, appended (indices 0-7 unchanged)
+    "Advanced: Boann, sub-grid local inertial (coarse cells that keep the DEM's detail; new)"]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters"),
@@ -975,7 +977,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    help="Put the creeks and rivers the grid cannot resolve into the model as "
                    "LISFLOOD-FP sub-grid channels: every cell draining at least the smallest "
                    "channel area gets a rectangular channel inside the cell, with bankfull width "
-                   "and depth from drainage area (the North Dakota curve from 79 USGS gauges). The "
+                   "and depth from drainage area (the North Dakota curve from 79 USGS gauges by "
+                   "default; see the bankfull width/depth curve option below). The "
                    "channel carries "
                    "water the grid cannot, so depths are reported ABOVE THE BANK and a flood "
                    "that stays in the channel is not flooded ground. Channels on hydro-flattened "
@@ -996,6 +999,16 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         _set_help(p, "Auto: channels on hydro-flattened water (LiDAR shows a water surface there) "
                   "start full to the bank, every other channel starts empty. Empty: all start "
                   "empty (the breach water fills them first). Full: all start full.")
+        self.addParameter(set_advanced(p))
+        # 3.72.0: the regional hydraulic-geometry curve that sizes the sub-grid channels
+        p = QgsProcessingParameterEnum(
+            "SGC_CURVE", "Sub-grid channels: bankfull width/depth curve",
+            list(sgc_defaults.CURVE_LABELS), defaultValue=0, optional=True)
+        _set_help(p, "The regional curve that sizes each sub-grid channel (bankfull width and "
+                  "depth from drainage area). North Dakota (79 USGS gauges) is the default; "
+                  "Bieger 2015 is the conterminous-US national curve (about twice as wide). A "
+                  "project with its own regional curve can set its four coefficients a,b,c,f on "
+                  "the command line (model.sgc_curve).")
         self.addParameter(set_advanced(p))
         self._num("POTHOLE_START_FILL", "Potholes: share of each closed depression already full "
                   "at the start (0 = dry, 1 = full)", 0.0, minimum=0.0, maximum=1.0, advanced=True,
@@ -1106,9 +1119,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # DEM sub-cells as stage tables, so the run is r*r cheaper but still writes a full-resolution
         # map. Empty = 4. Ignored by every other engine.
         self._num("SUBGRID_R", "Sub-grid coarsening factor r (the 'Boann, sub-grid finite volume' "
-                  "engine only): the run uses cells r x the DEM resolution, keeping each cell's "
-                  "r x r DEM sub-cells, so it is r*r cheaper and still writes a full-resolution "
-                  "map. Empty = 4; 1 to 8. Ignored by the other engines.", optional=True,
+                  "and 'Boann, sub-grid local inertial' engines only): the run uses cells r x the "
+                  "DEM resolution, keeping each cell's r x r DEM sub-cells, so it is r*r cheaper "
+                  "and still writes a full-resolution map. Empty = 4; 1 to 8. Ignored by the "
+                  "other engines.", optional=True,
                   minimum=1, maximum=8, advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
@@ -1387,6 +1401,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             if parameters.get("SGC_START") not in (None, ""):
                 st.sgc_start = sgc_defaults.START_MODES[min(2, max(0, self.parameterAsEnum(
                     parameters, "SGC_START", context)))]
+            if self.parameterDefinition("SGC_CURVE") is not None and \
+                    parameters.get("SGC_CURVE") not in (None, ""):      # 3.72.0
+                st.sgc_curve = list(sgc_defaults.CURVES[min(len(sgc_defaults.CURVES) - 1, max(0,
+                    self.parameterAsEnum(parameters, "SGC_CURVE", context)))][2])
         if self.parameterDefinition("POTHOLE_START_FILL") is not None:  # 3.35.0
             st.pothole_start_fill = min(1.0, max(0.0, float(g("POTHOLE_START_FILL") or 0.0)))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
@@ -2910,6 +2928,12 @@ class BatchAlgorithm(_Base):
                 cache["f"] = dwr_lines.nid_lookup_for(dwr_lines.dams_source())
             return cache["f"](v) if cache["f"] else ""
         out["nid"] = nid
+
+        def record(sid):                       # 3.73.0: the DWR record's x_coord / y_coord
+            if "r" not in cache:
+                cache["r"] = dwr_lines.record_lookup_for(dwr_lines.dams_source())
+            return cache["r"](sid) if cache["r"] else None
+        out["record"] = record
         return out
 
     def _dwr_line(self, dam, st, dwr, attrs, ids, work, xy, context, dam_id, feedback):
@@ -2951,12 +2975,14 @@ class BatchAlgorithm(_Base):
                     out.append((q.x(), q.y()))
                 return out
         new, info, warn = dwr_lines.resolve(dam, xy, ids, dwr["index"], to_work, layer,
-                                            dwr["why"])
+                                            dwr["why"], record=dwr.get("record"))
         if info and info.get("used"):
             feedback.pushInfo("{}: {}".format(dam_id, info.get("text")))
             return new
         if warn:
             feedback.pushInfo("{}: {}".format(dam_id, warn))
+        if getattr(dam, "_record_point", None):           # 3.73.0: moved to the DWR record x/y
+            return new
         return None
 
     def processAlgorithm(self, parameters, context, feedback):

@@ -29,7 +29,7 @@ from . import engine as mfe
 from . import engine_fv as mff
 
 NAME = "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells, on the GPU via Metal)"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 G = bl.G
 NODATA = bl.NODATA
 DRY_M = bl.DRY_M
@@ -171,6 +171,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
             log(msg)
 
     deck = Deck(par_path)
+    mfe.refuse_rain(deck, "sub-grid FV")
     try:
         bk = be.make_backend(backend, spec=sb.SUBFV_SPEC, log=say)
     except be.BackendError as e:

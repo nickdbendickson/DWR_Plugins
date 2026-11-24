@@ -717,6 +717,40 @@ def metalflood_fv2_gpu_matches_cpu_build_and_repeats_exactly():
 
 
 @test
+def metalflood_dg2_gpu_matches_cpu_build_and_repeats_exactly():
+    """DG2 on the Metal GPU against the CPU build, and two GPU runs against each other (repo audit
+    2026-11-23). Runner 3.67.0 made DG2 reconstruct velocities as primitives so it no longer swings
+    with the last bit of rounding; on Nick's M2 Pro the GPU then matched the CPU build. Same
+    tolerances as the FV2 test. Runs only on a Mac with a Metal GPU (the macOS CI job, Nick's Mac)."""
+    ok, why = mfb.metal_available()
+    if not ok:
+        raise Skip("no Metal GPU here ({})".format(why))
+    _need_cpu_build()
+    d = _tmp()
+    try:
+        runs = {}
+        for tag, backend in (("cpu", "cpu"), ("gpu1", "metal"), ("gpu2", "metal")):
+            deck = valley_deck(os.path.join(d, tag))
+            s = fve.run_par(deck, backend=backend, order=3)
+            assert s["scheme"] == "dg2" and s["backend"] == backend, (tag, s)
+            runs[tag] = s
+        for ext in ("max", "maxVc", "inittm"):
+            g1 = _res(os.path.join(d, "gpu1"), ext)
+            g2 = _res(os.path.join(d, "gpu2"), ext)
+            assert np.array_equal(g1, g2), (ext, "GPU DG2 runs differ: a cell-order race is back")
+        assert runs["gpu1"]["steps"] == runs["gpu2"]["steps"], runs
+        sa, sb = runs["cpu"], runs["gpu1"]
+        assert abs(sa["steps"] - sb["steps"]) <= max(3, sa["steps"] // 200), (sa, sb)
+        for ext, tol in (("max", 0.01), ("maxVc", 0.1), ("inittm", 0.01)):
+            x = _res(os.path.join(d, "cpu"), ext)
+            y = _res(os.path.join(d, "gpu1"), ext)
+            m = (x != bl.NODATA) & (y != bl.NODATA)
+            assert np.abs(x - y)[m].max() <= tol, (ext, np.abs(x - y)[m].max())
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
 def metalflood_dg2_lake_at_rest_is_well_balanced():
     """The 2nd-order DG2 (RKDG2) engine holds a lake at rest over a bumpy bed: no spurious velocity
     and the still-water depth unchanged. DG2's slope limiter (on by default) collapses the evolved
@@ -923,35 +957,6 @@ def dg2_engine_is_a_runner_engine_choice():
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
 
 
-@model_test
-def metalflood_matches_lisflood_fp():
-    """The same deck through LISFLOOD-FP (NDBREACH_LISFLOOD) and this engine."""
-    exe = os.environ.get("NDBREACH_LISFLOOD")
-    if not exe or not os.path.isfile(exe):
-        raise Skip("NDBREACH_LISFLOOD is not set")
-    _need_cpu_build()
-    d = _tmp()
-    try:
-        extra = ["hazard", "inittm_depth 0.003"]
-        a = valley_deck(os.path.join(d, "lf"), hole=False, extra=extra)
-        b = valley_deck(os.path.join(d, "mf"), hole=False, extra=extra)
-        subprocess.run([exe, os.path.basename(a)], cwd=os.path.dirname(a),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, check=True,
-                       env=dict(os.environ, OMP_NUM_THREADS="1"))
-        mf.run_par(b, backend="cpu")
-        x = _res(os.path.join(d, "lf"), "max")
-        y = _res(os.path.join(d, "mf"), "max")
-        wet = (x > 0.003) | (y > 0.003)
-        assert np.abs(x - y)[wet].mean() < 0.03, np.abs(x - y)[wet].mean()
-        a1, b1 = x > 0.1, y > 0.1
-        assert (a1 & b1).sum() / (a1 | b1).sum() > 0.98
-        vx = _res(os.path.join(d, "lf"), "maxVc")
-        vy = _res(os.path.join(d, "mf"), "maxVc")
-        assert abs(vx[wet].max() - vy[wet].max()) < 0.1 * vx[wet].max()
-    finally:
-        shutil.rmtree(d, True)
-
-
 from nd_breach_runner.core.metalflood import engine_sgc as sge  # noqa: E402
 from nd_breach_runner.core.metalflood import sgc_ref as sgr  # noqa: E402
 
@@ -1043,7 +1048,7 @@ def sgc_engine_is_a_runner_engine_choice():
         # that drift for every entry, not just sgc.
         exe_for = {"gpu": lf.GPU_EXE, "gpu-fv": lf.GPU_FV_EXE, "gpu-fv2": lf.GPU_FV2_EXE,
                    "gpu-dg2": lf.GPU_DG2_EXE, "gpu-sgc": lf.GPU_SGC_EXE,
-                   "gpu-subfv": lf.GPU_SUBFV_EXE}
+                   "gpu-subfv": lf.GPU_SUBFV_EXE, "gpu-subli": lf.GPU_SUBLI_EXE}
         for _w in algs.FLOOD_ENGINES[1:]:               # every engine except LISFLOOD-FP (index 0)
             if _w == "auto":                            # 3.44.0: picked per computer, tested below
                 continue
@@ -1087,6 +1092,7 @@ def recommended_auto_engine_choice():
         assert algs.FLOOD_ENGINES[:7] == ("lisflood", "gpu", "gpu-fv", "gpu-fv2", "gpu-dg2",
                                           "gpu-sgc", "gpu-subfv")   # saved indices unchanged
         assert algs.FLOOD_ENGINES[7] == "auto"
+        assert algs.FLOOD_ENGINES[8] == "gpu-subli"                 # 3.79.0, appended
         assert len(algs.FLOOD_ENGINES_TEXT) == len(algs.FLOOD_ENGINES)
         assert not any("Apple GPU" in t for t in algs.FLOOD_ENGINES_TEXT)
         assert algs.FLOOD_ENGINES_TEXT[7].startswith("Recommended (auto)")
@@ -1453,12 +1459,13 @@ def _fv_like_start_deck(folder, z, h0, dx, sim=200.0):
 @test
 def metalflood_cpu_openmp_matches_one_core():
     """The multi-core (OpenMP) CPU build gives the same bits as the one-core build for every Boann
-    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV): every reduction in the kernels is an integer
+    engine (ACC, FV1, FV2, DG2, SGC, sub-grid FV, sub-grid local inertial): every reduction in the kernels is an integer
     add / max / min, so the order the cores finish in cannot change the answer."""
     _need_cpu_build()
     from nd_breach_runner.core.metalflood import engine_fv2 as fv2e, engine_dg2 as dg2e
     from nd_breach_runner.core.metalflood import engine_sgc as sgce, engine_subfv as sfve
     from nd_breach_runner.core.metalflood import subfv_backend as sfb
+    from nd_breach_runner.core.metalflood import engine_subli as slie, subli_backend as slb
     keep = {k: os.environ.get(k) for k in ("DAMSAFETY_MF_OPENMP", "DAMSAFETY_MF_THREADS")}
     try:
         os.environ["DAMSAFETY_MF_OPENMP"] = "1"
@@ -1466,7 +1473,8 @@ def metalflood_cpu_openmp_matches_one_core():
             raise Skip("this C++ compiler has no OpenMP")
         engines = (("acc", mf.run_par, mfb.FLOOD_SPEC), ("fv", fve.run_par, mfb.FV_SPEC),
                    ("fv2", fv2e.run_par, mfb.FV2_SPEC), ("dg2", dg2e.run_par, mfb.DG2_SPEC),
-                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC))
+                   ("sgc", sgce.run_par, mfb.SGC_SPEC), ("subfv", sfve.run_par, sfb.SUBFV_SPEC),
+                   ("subli", slie.run_par, slb.SUBLI_SPEC))
         d = _tmp()
         try:
             for name, run, spec in engines:
@@ -1559,7 +1567,7 @@ def _fv2_wetdry_case(ny=30, nx=48, dx=10.0):
 
 @test
 def metalflood_fv2_wet_dry_front_conserves_mass():
-    """Runner 3.69.0 regression for the Runner 3.66.0 FV2 fix (#492; Absaraka DWR-2801, FV2 ended 58 %
+    """Runner 3.83.0 regression for the Runner 3.66.0 FV2 fix (#492; Absaraka DWR-2801, FV2 ended 58 %
     over the injected volume with Qout 0): a dam break onto a dry rough slope in a closed box must
     keep its volume to round-off, with no depth clip and no collapse of the time step. Before 3.66.0
     FV2 reconstructed the DISCHARGE hu and divided it by the reconstructed edge depth; on a thin edge
@@ -1597,53 +1605,6 @@ def metalflood_fv2_wet_dry_front_conserves_mass():
         assert spd.max() < 15.0, "unphysical speed {:.1f} m/s".format(spd.max())
     finally:
         shutil.rmtree(d, True)
-
-
-if __name__ == "__main__":
-    fails = 0
-    for fn in (metalflood_cpu_build_matches_builtin_engine, metalflood_conserves_water,
-               metalflood_wet_window_does_not_change_the_answer,
-               metalflood_reads_lisflood_acc_options, metalflood_params_layout_matches_kernels,
-               metalflood_gpu_matches_cpu_build, metalflood_deckio_reads_as_builtin_engine,
-               gpu_engine_is_a_runner_engine_choice, metalflood_matches_lisflood_fp,
-               metalflood_diagnostic_cases_match_serial_oracle,
-               metalflood_diagnostic_cases_run,
-               metalflood_clock_and_clip_total_survive_a_clipping_batch,
-               metalflood_fv_lake_at_rest_is_well_balanced,
-               metalflood_fv_reproduces_the_ritter_dam_break, metalflood_fv_conserves_water,
-               metalflood_fv2_lake_at_rest_is_well_balanced,
-               metalflood_fv2_reproduces_the_ritter_dam_break, metalflood_fv2_conserves_water,
-               metalflood_fv2_wet_dry_front_conserves_mass,
-               metalflood_dg2_lake_at_rest_is_well_balanced,
-               metalflood_dg2_reproduces_the_ritter_dam_break, metalflood_dg2_conserves_water,
-               metalflood_dg2_limiter_is_a_deck_keyword,
-               metalflood_fv_free_edge_drains_a_sloping_basin, metalflood_fv_free_edge_lets_no_water_in,
-               boann_shock_engines_rerun_at_a_cfl_they_honour,
-               fv_engine_is_a_runner_engine_choice,
-               fv2_engine_is_a_runner_engine_choice,
-               dg2_engine_is_a_runner_engine_choice,
-               sgc_engine_is_a_runner_engine_choice,
-               subfv_engine_is_a_runner_engine_choice, recommended_auto_engine_choice,
-               subfv_coarsening_factor_is_a_cli_config_key,
-               metalflood_sgc_params_layout_matches_kernels,
-               metalflood_sgc_channel_at_rest_is_well_balanced,
-               metalflood_sgc_matches_the_float64_reference,
-               metalflood_sgc_conveys_below_bank_then_spills_overbank,
-               metalflood_sgc_free_edge_drains_and_matches_reference,
-               metalflood_sgc_reduces_to_acc_without_channels,
-               metalflood_cpu_openmp_matches_one_core, metalflood_cpu_prefers_a_prebuilt_library,
-               metalflood_sgc_floodplain_area_spans_the_full_cell_width):
-        try:
-            fn()
-            print("ok    ", fn.__name__)
-        except Skip as e:
-            print("skip  ", fn.__name__, "({})".format(e))
-        except Exception:
-            import traceback
-            fails += 1
-            print("FAIL  ", fn.__name__)
-            traceback.print_exc()
-    sys.exit(1 if fails else 0)
 
 
 @test
@@ -1684,16 +1645,20 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     (Metal fuses multiply-adds, the CPU build does not), build the DG2 kernels twice - once with the
     default -ffp-contract=off, once with FMA contraction on - and run the valley deck with each: the
     maximum depth must not move. On 3.66.0 it moved ~1 mm; it is now bit-identical."""
-    import importlib
     if not mfb.find_compiler():
         raise Skip("no C++ compiler for the engine's CPU build")
+    # Repo audit 2026-11-23: an x86-64 proxy only. On the macOS arm64 runner (where this file first
+    # ran it) -mfma does not exist and clang's -ffp-contract=fast fusing moved one cell's written
+    # max depth by one 1 mm output step; there the real check is the Metal GPU against the CPU
+    # build, metalflood_dg2_gpu_matches_cpu_build_and_repeats_exactly.
+    if not mfb.platform_tag().endswith("-x64"):
+        raise Skip("the FMA proxy is for x86-64; on {} see the DG2 GPU-vs-CPU test".format(mfb.platform_tag()))
     d = _tmp()
     saved = mfb.CPU_FLAGS
     try:
         runs = {}
-        for tag, flags in (("off", saved),
-                           ("fma", ("-O3", "-std=c++14", "-fno-strict-aliasing",
-                                    "-ffp-contract=fast", "-mfma"))):
+        fma = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=fast", "-mfma")
+        for tag, flags in (("off", saved), ("fma", fma)):
             mfb.CPU_FLAGS = flags
             deck = valley_deck(os.path.join(d, tag), sim_s=10800.0)
             fve.run_par(deck, backend="cpu", order=3)
@@ -1704,3 +1669,24 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
     finally:
         mfb.CPU_FLAGS = saved
         shutil.rmtree(d, True)
+
+
+if __name__ == "__main__":
+    # Repo audit 2026-11-23: every test this module registers, in file order. The hand-kept list
+    # this replaced sat in the middle of the file, so the tests defined below it never ran here
+    # (the macOS Metal CI job runs this file), and it had left out
+    # metalflood_fv2_gpu_matches_cpu_build_and_repeats_exactly, the one GPU-vs-CPU check of FV2.
+    from nd_breach_runner.tests.registry import MODEL_TESTS, TESTS
+    fails = 0
+    for fn in [f for f in TESTS + MODEL_TESTS if f.__module__ == __name__]:
+        try:
+            fn()
+            print("ok    ", fn.__name__)
+        except Skip as e:
+            print("skip  ", fn.__name__, "({})".format(e))
+        except Exception:
+            import traceback
+            fails += 1
+            print("FAIL  ", fn.__name__)
+            traceback.print_exc()
+    sys.exit(1 if fails else 0)

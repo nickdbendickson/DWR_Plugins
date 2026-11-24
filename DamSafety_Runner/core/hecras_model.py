@@ -311,7 +311,7 @@ class Model:
         self.points = np.zeros((0, 2))   # 2D computation points
         self.cell = 100.0
         self.nominal_cell = None     # Point Generation Data; None = cell
-        self.manning_n = 0.06
+        self.manning_n = 0.05
         self.reservoir = []          # storage-area outline (display only)
         self.elev_volume = []        # [(elevation, volume)]
         self.conn_line = []          # connection line, left to right looking downstream
@@ -4111,7 +4111,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.conn_cellsize = bl_dam
     m.cell = cell
     m.nominal_cell = nominal_cell                 # v3.10.22: median point spacing (gmsh)
-    m.manning_n = float(o["manning_n"] or settings.get("manning_n") or 0.06)
+    m.manning_n = float(o["manning_n"] or settings.get("manning_n") or 0.05)
     m.reservoir = [tuple(p) for p in reservoir]
     ev, res = storage_curve(dam, units)
     m.elev_volume = ev

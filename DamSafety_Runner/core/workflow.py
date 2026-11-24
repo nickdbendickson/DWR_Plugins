@@ -370,6 +370,9 @@ class RunSettings:
         # 3.49.0: Boann sub-grid FV (gpu-subfv) coarsening factor r (1-8). None = the engine's
         # own default (4). The QGIS run tool sets it from SUBGRID_R, the CLI from model.subgrid_r.
         self.user_subgrid_r = None
+        # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
+        # (off by default). The CLI sets it from model.subgrid_upwind.
+        self.user_subgrid_upwind = False
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
         # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
         # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
@@ -664,6 +667,9 @@ def key_settings(st):
     # a different flood); left at the engine's default it stays out, so earlier checkpoints resume
     if getattr(st, "user_subgrid_r", None) is None:
         d.pop("user_subgrid_r", None)
+    # 3.79.0: likewise the sub-grid local-inertial flux weighting, off unless asked for
+    if not getattr(st, "user_subgrid_upwind", False):
+        d.pop("user_subgrid_upwind", None)
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
@@ -1098,7 +1104,10 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=(), edi
     if refill_paths:
         from . import dem_refill
         for _p in refill_paths:
-            g = dem_refill.fill_grid(g, _p)
+            if _p == dem_refill.HOLE_FILL:       # 3.74.0: enclosed holes from the ground around
+                g, _n = dem_refill.fill_interior_holes(g)
+            else:
+                g = dem_refill.fill_grid(g, _p)
     cuts = structmod.structure_edits(structures or [], cell, model)
     counts = {}
     if cuts:
@@ -1479,7 +1488,9 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
     (dam._point_original, set before prepare() snapped it to the line, else dam_xy) and the
     move. A breach position on the crest line (st.breach_xy) keeps the point where it is (the
     record has moved=False and the mid-crest DEM crest is still used). Without a line or DEM:
-    (dam_xy, {"warning": ...}) - the point is used as given."""
+    (dam_xy, {"warning": ...}) - the point is used as given. 3.73.0 (batch 44 DWR-2976): a
+    midpoint in a dip of the crest (a spillway, a road cut, the line running off the dam) moves
+    to the middle of the line's longest level stretch (midcrest avoid_dip; rec["dip_note"])."""
     orig = getattr(dam, "_point_original", None) or dam_xy
     line = getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None)
     base = {"original_xy": [round(float(orig[0]), 3), round(float(orig[1]), 3)]}
@@ -1494,7 +1505,7 @@ def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
         g = read((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad), float(cell_m))
         z = np.where(g.valid(), g.data, np.nan)
         rec = mcmod.midcrest(pts, mcmod.bilinear(z, (g.x0, g.dx, 0.0, g.y0, 0.0, -g.dx)),
-                             original_xy=orig)
+                             original_xy=orig, avoid_dip=True)
     except Exception as e:                                   # noqa - never stop a run for this
         base["warning"] = "mid-crest not read ({}: {}): the dam point is used as given".format(
             type(e).__name__, e)
@@ -2388,6 +2399,17 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append(msg)
             log(msg)
             report["crest_line_refused"] = crf
+        rpt = getattr(dam, "_record_point", None)
+        if rpt:
+            # 3.73.0: the batch point was far from the DWR record's x_coord / y_coord (the old
+            # 4D latitude / longitude) and was moved there
+            msg = "CHECK THE DAM POINT: " + dwr_lines.RECORD_MOVE.format(
+                rpt["moved_m"], dwr_lines.RECORD_TEXT, rpt["xy"][0], rpt["xy"][1],
+                dwr_lines.NEAR_M) + "."
+            if msg not in warnings:
+                warnings.append(msg)
+            log(msg)
+            report["record_point"] = dict(rpt)
         dli = getattr(dam, "_dam_line_info", None)
         if dli:
             report["dam_line"] = {k: v for k, v in dli.items()}
@@ -2414,7 +2436,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             warnings.append("Dam point: " + mc_rec["warning"] + ".")
             mc_why = mc_rec["warning"]
             mc_rec = None if "z_m" not in mc_rec else mc_rec
-        elif mc_rec.get("review"):
+        if mc_rec is not None and mc_rec.get("dip_note"):
+            # 3.73.0: told as a warning so the run's reader checks the crest pick
+            warnings.append("Dam point: " + mc_rec["dip_note"] + ". Check the top of dam.")
+        if mc_rec is not None and not mc_rec.get("warning") and mc_rec.get("review"):
             # 3.12.5 (Nick 2026-10-29): the highest point at the edge of the +-25 m profile -
             # the pick is kept (method unchanged) but flagged
             warnings.append("REVIEW: Dam point: " + mc_rec["review"] + ".")
@@ -2950,6 +2975,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         kw = {}
         if getattr(st, "user_subgrid_r", None) is not None:
             kw["subgrid_r"] = int(st.user_subgrid_r)
+        if getattr(st, "user_subgrid_upwind", False):
+            kw["subgrid_upwind"] = True
         if stability["on"] and getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == \
                 lfmod.SOLVER_ACC:
             kw["theta"] = lfmod.STABLE_THETA
@@ -3157,6 +3184,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if gmsg not in warnings:
             warnings.append(gmsg)
             log(gmsg)
+    if lfmod.is_gpu_subli(st.lisflood_exe):
+        lmsg = ("This run uses Boann, sub-grid local inertial (on {}), not LISFLOOD-FP itself: the "
+                "ACC scheme on cells {} times the DEM cell, each keeping its DEM sub-cells as "
+                "stage tables (after Nithila Devi & Kuiry 2024, with exact stage curves and "
+                "compound-channel friction). Depth and water-surface rasters are written at the "
+                "DEM cell; arrival time and velocity are those of the coarse cell a DEM cell lies "
+                "in. On flat sub-cells it is the Boann ACC engine exactly, and on the meandering "
+                "test valley it matched the fine run within centimetres, but it is new and has "
+                "not been checked against surveyed marks: confirm a final hazard classification "
+                "with a LISFLOOD-FP run.".format(
+                    lfmod.gpu_backend_note(), getattr(st, "user_subgrid_r", None) or 4))
+        if lmsg not in warnings:
+            warnings.append(lmsg)
+            log(lmsg)
     if lfmod.is_gpu_shock(st.lisflood_exe):
         if lfmod.is_gpu_dg2(st.lisflood_exe):
             _scheme = "discontinuous Galerkin 2nd order (an RKDG2 solver of"
@@ -3202,6 +3243,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
     refilled = False
+    hole_filled = False                      # 3.74.0: enclosed holes filled from their rim
     hole_held = False
     stop_reason = None
     while it <= max_it:
@@ -3344,6 +3386,39 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             elif touch_n and refilled:
                 hole_held = True
                 stop_reason = "no-data after one refill"
+            # 3.74.0 (batch 44, DWR-2631: Low against a record of Significant, the flood held
+            # back by 28 wet cells of a 1 m LiDAR gap the 3DEP refill did not close): before
+            # calling the run held, fill the ENCLOSED holes the flood touches from the ground
+            # around them (dem_refill.fill_interior_holes) and run the same domain run again,
+            # once. A hole on the DEM's outer edge or over HOLE_FILL_MAX_AC acres is left: it
+            # still holds the run, with the warning below.
+            if hole_held and touch_n and not hole_filled and plan is None:
+                from . import dem_refill
+                from scipy.ndimage import binary_dilation as _bd
+                _fillable, _left = dem_refill.interior_holes(dem)
+                _wet = np.nan_to_num(lf_env.depth.data) > WET_M
+                _hit = _fillable & _bd(_wet, structure=np.ones((3, 3), bool))
+                if _hit.any():
+                    hole_filled = True
+                    hole_held = False
+                    refill_paths.append(dem_refill.HOLE_FILL)
+                    rec["followed_by_dem_refill"] = True
+                    msg = ("Wet cells sit on DEM no-data that {} did not fill ({:,} cells). The "
+                           "enclosed holes the flood reaches ({:,} no-data cells, each at most "
+                           "{:.0f} ac and inside surveyed ground) were filled from the ground "
+                           "around them, and the same domain run was run again. Check the "
+                           "filled cells (QA/DEM edits) if a channel or road runs through one."
+                           .format("the 3DEP refill" if refilled else "a 3DEP refill",
+                                   touch_n, int(_fillable.sum()),
+                                   dem_refill.HOLE_FILL_MAX_AC))
+                    log(msg)
+                    if msg not in warnings:
+                        warnings.append(msg)
+                    stop_reason = None
+                    state.save(iterations=iterations, next_bounds=list(bounds),
+                               next_sim_time=sim_time, warnings=warnings, lisflood_done=False,
+                               next_it=it)
+                    continue
         if hole_held and not any("held up by a hole" in w for w in warnings):
             warnings.append(
                 "Depth is held up by a hole in the terrain ({:,} wet cells still on no-data, {}). "
@@ -4021,6 +4096,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                               "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; "
                               "NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_subfv(st.lisflood_exe) else
+                              "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells; "
+                              "NOT LISFLOOD-FP)"
+                              if lfmod.is_gpu_subli(st.lisflood_exe) else
                               "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)"
                               if lfmod.is_gpu_dg2(st.lisflood_exe) else
                               "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; "

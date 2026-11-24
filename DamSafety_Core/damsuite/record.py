@@ -35,6 +35,7 @@ FV2_MARK = "metalflood/engine_fv2.py"     # ... Boann, shock-capturing 2nd order
 DG2_MARK = "metalflood/engine_dg2.py"     # ... Boann, discontinuous Galerkin 2nd order (Runner 3.34.0)
 SGC_MARK = "metalflood/engine_sgc.py"     # ... Boann, sub-grid channels (Runner 3.36.0)
 SUBFV_MARK = "metalflood/engine_subfv.py"  # ... Boann, sub-grid finite volume (Runner 3.42.0)
+SUBLI_MARK = "metalflood/engine_subli.py"  # ... Boann, sub-grid local inertial (Runner 3.79.0)
 
 
 def _digest(body):
@@ -89,6 +90,7 @@ def _engine_block(engine, manifest):
     gpu = norm.endswith(GPU_MARK)
     sgc = norm.endswith(SGC_MARK)
     subfv = norm.endswith(SUBFV_MARK)
+    subli = norm.endswith(SUBLI_MARK)
     dg2 = norm.endswith(DG2_MARK)
     fv2 = norm.endswith(FV2_MARK)
     fv = norm.endswith(FV_MARK)
@@ -97,6 +99,7 @@ def _engine_block(engine, manifest):
         if path.endswith(BUILTIN_MARK) else
         "Boann, sub-grid channels (ACC + LISFLOOD-FP sub-grid channels; NOT LISFLOOD-FP)" if sgc else
         "Boann, sub-grid finite volume (coarse HLLC with LiDAR sub-cells; NOT LISFLOOD-FP)" if subfv else
+        "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells; NOT LISFLOOD-FP)" if subli else
         "Boann (ACC scheme on the GPU; NOT LISFLOOD-FP)" if gpu else
         "Boann, discontinuous Galerkin 2nd order (RKDG2; NOT LISFLOOD-FP)" if dg2 else
         "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2 HLLC finite volume; NOT LISFLOOD-FP)"

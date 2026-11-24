@@ -675,14 +675,14 @@ def check_nlcd_raster(case):
     codes, blocks = class_codes()
     p = case.file("nlcd_classes.tif")
     gdal_io.GeoTiffWriter(CRS)(g.like(codes), p)
-    lut = nd_data.manning_lut(None, 0.06)
+    lut = nd_data.manning_lut(None, 0.05)
     out = case.file("n_from_nlcd.tif")
     r = gdal_io.nlcd_to_manning_raster(p, out, lut)
     assert r["classes"] == [11, 23, 41, 82, 99], "classes found {}".format(r["classes"])
     assert r["unknown_classes"] == [99], "unknown classes {}".format(r["unknown_classes"])
     n = gdal_io.read_grid(out)
     for cls, (rs, cs) in blocks.items():
-        want = 0.06 if cls in (99, "nodata") else lut[cls]
+        want = 0.05 if cls in (99, "nodata") else lut[cls]
         sub = n.data[rs, cs]
         assert np.all(np.abs(sub - want) < 1e-6), \
             "class {}: n should be {} but the block holds {}..{}".format(
