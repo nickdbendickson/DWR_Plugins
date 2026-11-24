@@ -116,7 +116,8 @@ def _acc_kernel(z, n, h0, dx, free_mask, src_cell, Q, dt0, nsteps, theta, fric2d
         p.dry, p.maxhflow, p.velmin, p.arr_depth = 1e-3, 10.0, 0.0, 0.0
         p.t0, p.t_end, p.theta = 0.0, 1.0e9, theta
         back.run_batch(p, nsteps)
-        return (a["h"].reshape(ny, nx).astype(float), a["vmax"].reshape(ny, nx).astype(float),
+        cells = ny * nx
+        return (a["h"].reshape(ny, nx).astype(float), a["vmax"][:cells].reshape(ny, nx).astype(float),
                 a["hmax"].reshape(ny, nx).astype(float))
     finally:
         back.close()

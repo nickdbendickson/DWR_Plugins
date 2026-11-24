@@ -103,6 +103,7 @@ struct Params {
     uint rain;            // 1: series n_series is a rainfall rate (m/s, LISFLOOD-FP's "rainfall"
                           // .rain file), added to every valid cell each step (Runner 3.60.0)
 };
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
 
 #define MF_ARGS \
     device const float* z B(0), \
@@ -522,6 +523,14 @@ kernel void k_speed(MF_ARGS) {
     float v = sqrt(vx * vx + vy * vy);
     if (v > vmax[i]) {
         vmax[i] = v;
+    }
+    float hv = h[i];
+    if (hv > p.dry) {
+        float dv = hv * v;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 }
 

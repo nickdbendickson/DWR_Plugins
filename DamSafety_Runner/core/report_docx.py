@@ -1578,7 +1578,10 @@ FINAL_FILES = (("Depth (Max).tif", "Maximum flood depth", "ft"),
                 "h after initiation"),
                ("Baseline WSE (Max).tif", "Maximum WSE without the breach", "ft"),
                ("Incremental Depth (Max).tif", "Depth with the breach minus without", "ft"),
-               ("Incremental WSE Rise (Max).tif", "Water-surface rise from the breach", "ft"))
+               ("Incremental WSE Rise (Max).tif", "Water-surface rise from the breach", "ft"),
+               ("D x V (Max).tif",
+                "Peak depth times velocity at one moment (Boann only, and only when asked)",
+                "ft2/s"))
 
 FILE_DESC = {
     "run_report.md": "Run report (markdown)", "run_report.json": "Run report data (JSON)",

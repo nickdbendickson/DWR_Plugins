@@ -730,12 +730,14 @@ class Envelopes:
     """Maximum depth (m), maximum speed (m/s), arrival (hr), max WSE (m) on the
     model grid, plus run statistics."""
 
-    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None):
+    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None,
+                 dv=None):
         self.gauges = gauges or {}       # name -> (t_s, q_cms)
         self.depth = depth
         self.velocity = velocity
         self.arrival_hr = arrival_hr
         self.wse = wse
+        self.dv = dv                     # peak depth x speed at one moment (m2/s), or None
         self.stats = stats or {}
         self.notes = notes or []
 
@@ -1417,7 +1419,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     f32 = RESULT_DTYPE
     hmax = load(".max")
     vmax = load(".maxVc", required=False)
+    dv = load(".maxDV", required=False)          # Boann only; missing is None, never an error
     vmax_written = vmax is not None
+    dv_written = dv is not None
     arr = load(".inittm", required=False)
     wse = load(".mxe", required=False)
     notes = []
@@ -1438,6 +1442,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         notes.append("The flood model wrote no maximum velocity (.maxVc).")
         vmax = np.full(hmax.shape, np.nan, dtype=f32)
     vmax = np.where(np.isfinite(vmax) & (hmax64 >= st.velocity_min_depth_m), vmax, f32(0.0))
+    if dv is not None:
+        dv = np.where(np.isfinite(dv) & (hmax64 >= st.velocity_min_depth_m), dv, f32(0.0))
     if arr is None:
         arr = np.full(hmax.shape, np.nan, dtype=f32)
     arr = np.where(np.isfinite(arr) & (arr >= 0) & wet, arr, f32(np.nan))
@@ -1471,6 +1477,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": vmax_written,
+        "dv_written": dv_written,
         "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
@@ -1535,7 +1542,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                          stats["max_volume_error_pct"]))
     return Envelopes(dem.like(hmax, nodata=np.nan, dtype=f32), dem.like(vmax, nodata=np.nan, dtype=f32),
                      dem.like(arr, nodata=np.nan, dtype=f32), dem.like(wse, nodata=np.nan, dtype=f32),
-                     stats, notes, read_gauges(workdir, st, name))
+                     stats, notes, read_gauges(workdir, st, name),
+                     dem.like(dv, nodata=np.nan, dtype=f32) if dv is not None else None)
 
 
 def source_volume(src, t_end):

@@ -94,6 +94,8 @@ struct Params {
 };
 
 // Buffer layout for the FV scheme (its own order, 0..23; Params at 24):
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS_FV \
     device const float* z B(0), \
     device const float* n2 B(1), \
@@ -512,6 +514,13 @@ kernel void k_cont_fv(MF_ARGS_FV) {
     }
     if (vmagn > vmax[i]) {
         vmax[i] = vmagn;
+    }
+    if (hn > p.dry) {
+        float dv = hn * vmagn;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 
     bool wet = hn > 0.0f;

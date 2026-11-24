@@ -89,6 +89,8 @@ struct Params {
 
 // 0..29 data buffers, Params at 30 (31 slots, the Metal argument-table cap). The channel/floodplain
 // split needs a stored old discharge for each (qxco/qxfo, qyco/qyfo) on top of the ACC buffers.
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS \
     device const float* z B(0), \
     device const float* n2 B(1), \
@@ -545,6 +547,14 @@ kernel void k_speed_sgc(MF_ARGS) {
     float v = sqrt(vx * vx + vy * vy);
     if (v > vmax[i]) {
         vmax[i] = v;
+    }
+    float hv = fmax(h[i], 0.0f);
+    if (hv > p.dry) {
+        float dv = hv * v;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 }
 

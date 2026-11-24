@@ -112,6 +112,9 @@ SCENARIO_TEXT = {SCENARIO_SUNNY: "sunny day",
 MODEL_FOLDER = "_breach_model"
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
                "arrival": "Arrival Time.tif", "wse": "WSE (Max).tif"}
+# Boann only, and only when RunSettings.write_peak_dv is on. Not in FINAL_NAMES: that dict
+# also builds the baseline names, the QA names and the self-test's required rasters.
+PEAK_DV_NAME = "D x V (Max).tif"
 BASELINE_NAMES = {k: "Baseline " + v for k, v in FINAL_NAMES.items()}
 # written by the ND 5.2 classification tool from the final rasters; removed when they change
 STALE_ON_RERUN = ("Hazard Classification (ND 5.2).md", "Hazard Classification (ND 5.2).json",
@@ -386,6 +389,10 @@ class RunSettings:
         # spill level. The water is initial water like a pond: it is taken off the depths that
         # are reported and classified.
         self.pothole_start_fill = 0.0
+        # Peak depth x velocity (m2/s at one moment) as "D x V (Max).tif", ft2/s. Off: it does
+        # not change the flood, and a run that does not ask for it writes no raster. Boann
+        # writes the grid; other engines leave it missing.
+        self.write_peak_dv = False
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -534,6 +541,8 @@ class RunSettings:
                 continue                 # v3.10.70: off - the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "write_peak_dv" and not v:
+                continue                 # off: the report stays as before (the raster is optional)
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
                 continue                 # v3.10.22: the default - the report stays as before
             elif k == "hecras_dam_axis" and v in ("crest", None, ""):
@@ -680,6 +689,8 @@ def key_settings(st):
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
+    # the peak depth x velocity raster does not change the flood, on or off
+    d.pop("write_peak_dv", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -828,6 +839,29 @@ def _final_arrays(env, arrival_m, t_ref_hr=0.0, init=None):
         "wse": np.where(wet, env.wse.data, np.nan),
     }
     return out
+
+
+def write_peak_dv_raster(dem, env, st, out_folder, writer, wet, refined, log=None):
+    """Write PEAK_DV_NAME (ft2/s) or remove a stale copy. Off unless st.write_peak_dv.
+    `wet` is the same mask _final_arrays uses (depth above the initial water, over WET_M).
+    A near-dam refine keeps only depth, velocity, WSE and arrival, so the raster is not
+    written then. Returns the path, or None. Never changes the flood."""
+    path = os.path.join(out_folder, PEAK_DV_NAME)
+    dv = getattr(env, "dv", None)
+    on = bool(getattr(st, "write_peak_dv", False)) and not refined and dv is not None
+    if not on:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if getattr(st, "write_peak_dv", False) and dv is None and not refined and log:
+            log("Peak depth x velocity was asked for, but this run has no .maxDV (this engine "
+                "does not write it, or the run resumed from before that file existed). No {} "
+                "was written.".format(PEAK_DV_NAME))
+        return None
+    data = np.where(wet, np.asarray(dv.data, dtype=float), np.nan) / (FT * FT)
+    writer(dem.like(data, np.nan), path)
+    return path
 
 
 def compare(a_env, b_env, thr_m):
@@ -3996,7 +4030,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # scenario and would be read as this run's. Clear them here; they are written again
         # below only when this run actually has a baseline.
         for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
-                      + list(INCREMENT_NAMES.values())):
+                      + list(INCREMENT_NAMES.values()) + [PEAK_DV_NAME]):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -4020,6 +4054,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
+        wet = np.isfinite(fin["depth"])
+        refined = bool((report.get("refine_near_dam") or {}).get("applied"))
+        dv_path = write_peak_dv_raster(dem, final_env, st, out_folder, writer, wet, refined, log)
+        if dv_path:
+            res.final["dv"] = dv_path
         # S3: raster + layer record of the DEM edits baked into the published model DEM
         try:
             _ei = {}

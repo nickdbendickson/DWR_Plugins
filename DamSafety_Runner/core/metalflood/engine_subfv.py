@@ -274,12 +274,17 @@ def _run(d, bk, progress, cancel, say):
     eta_max_c = hmax_c + eng.t.zbed                       # max water-surface elevation per coarse cell
     fd_max = sg.fine_depth(eta_max_c, eng.dem_fine, r)[:nyf, :nxf]
     up = lambda x: np.repeat(np.repeat(x, r, axis=0), r, axis=1)[:nyf, :nxf]
-    vmax_f = up(a["vmax"].reshape(eng.nyc, eng.nxc).astype(np.float64))
+    cells = eng.nyc * eng.nxc
+    vmax_f = up(a["vmax"][:cells].reshape(eng.nyc, eng.nxc).astype(np.float64))
+    dv_c = a["vmax"][cells:].reshape(eng.nyc, eng.nxc).astype(np.float64)
     arr_f = up(a["arr"].reshape(eng.nyc, eng.nxc).astype(np.float64))
     tmax_f = up(a["tmax"].reshape(eng.nyc, eng.nxc).astype(np.float64))
     wetf = fd_max > DRY_M
+    dv_f = np.minimum(up(dv_c), fd_max * vmax_f)
+    dv_f = np.where(wetf, dv_f, 0.0)
     bl._write_asc(root + ".max", np.where(valid, fd_max, NODATA), xll, yll, dx)
     bl._write_asc(root + ".maxVc", np.where(valid, vmax_f, NODATA), xll, yll, dx)
+    bl._write_asc(root + ".maxDV", np.where(valid, dv_f, NODATA), xll, yll, dx)
     bl._write_asc(root + ".inittm", np.where(valid, arr_f, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & wetf, tmax_f, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".mxe", np.where(valid & wetf, d.z + fd_max, NODATA), xll, yll, dx)

@@ -1017,6 +1017,13 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "pass on. 1 = full to the spill level (conservative for a PMF); for a real event "
                   "match the season. The water is initial water: it is taken off the reported and "
                   "classified depths. 0 (default) = dry, no change.")
+        self._bool("WRITE_PEAK_DV", "Write peak depth x velocity raster (Boann engines)",
+                   False, advanced=True,
+                   help="Boann records, in each cell, the largest depth times speed at one moment "
+                   "and can write it as 'D x V (Max).tif' (ft2/s) beside the other final rasters. "
+                   "Off by default: peak depth times peak speed, from different times, is what the "
+                   "classification still uses. Other engines write no such grid, so nothing is "
+                   "written and the log says so. A near-dam refine does not write it.")
         self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
                    False, advanced=True,
                    help="Accept an edge where the flood's depth (or its rise over the no-breach "
@@ -1413,6 +1420,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                     self.parameterAsEnum(parameters, "SGC_CURVE", context)))][2])
         if self.parameterDefinition("POTHOLE_START_FILL") is not None:  # 3.35.0
             st.pothole_start_fill = min(1.0, max(0.0, float(g("POTHOLE_START_FILL") or 0.0)))
+        if self.parameterDefinition("WRITE_PEAK_DV") is not None:
+            st.write_peak_dv = self.parameterAsBool(parameters, "WRITE_PEAK_DV", context)
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0

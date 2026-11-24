@@ -42,6 +42,7 @@ that already has the crest changes nothing. Nothing here has been run in a real 
 | `Velocity (Max).tif` | ft/s |
 | `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft since 3.10.53, the ND hazard 'any depth', so every wet structure has an arrival time; 1 ft before - re-run older results to fill the shallow ones) |
 | `WSE (Max).tif` | ft (DEM datum) |
+| `D x V (Max).tif` | ft2/s. Boann only, and only when "Write peak depth x velocity" (`WRITE_PEAK_DV`, `model.write_peak_dv`) is on. Each cell is the largest depth times speed at one moment, not peak depth times peak speed. |
 | `Baseline Depth (Max).tif` etc. | flood scenario: the same flood without the breach |
 | `Incremental Depth (Max).tif`, `Incremental WSE Rise (Max).tif` | flood scenario: with minus without (ND 6.4) |
 | `Flood Polygons (Max Depth).geojson`, `Flood Extent.geojson`, `Arrival Zones.geojson`, `Breach Products.gpkg` | vectors (the GeoPackage needs GDAL's OGR, which QGIS has) |
