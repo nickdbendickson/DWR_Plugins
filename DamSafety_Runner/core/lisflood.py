@@ -278,15 +278,39 @@ GPU_SUBLI_WORDS = ("gpu-subli", "metal-subli", "subli", "subgrid-li", "sub-grid 
 # other computer runs LISFLOOD-FP when one is installed, else Boann ACC on its CPU build. The run
 # report names the engine that ran, so the choice is always on the record.
 AUTO_WORDS = ("auto", "recommended", "recommended (auto)", "automatic")
+# 3.91.0 (Nick 2026-11-24, on the DWR-2801 2 m LiDAR test): where "Recommended (auto)" would run
+# Boann ACC and the model cell is this fine or finer, it runs Boann's sub-grid local inertial at its
+# default r = 4 instead (solver cells 4 x the model cell, depths still written at the model cell).
+# DWR-2801 at 2 m (88 M cells, 24 h, M2 Pro): against the plain 2 m run (121 min) sub-grid r4 was
+# within 0.08 ft in the median cell, 0.23 ft at the 90th percentile, CSI 0.93, in 7.8 min, where
+# plain ACC on 8 m cells was 0.24 / 0.83 ft, CSI 0.75, in 1.2 min. Coarser cells keep plain ACC
+# (the gain needs ground detail the solver cell cannot see). LISFLOOD-FP is never swapped out.
+AUTO_SUBLI_MAX_CELL_M = 3.0
 
 
 def is_auto_word(v):
     return str(v or "").strip().lower() in AUTO_WORDS
 
 
-def choose_auto(lisflood_exe=""):
+def auto_fine_cell(cell_m):
+    """True when a model cell of cell_m metres is fine enough for "Recommended (auto)" to run
+    Boann's sub-grid local inertial instead of Boann ACC (3.91.0; AUTO_SUBLI_MAX_CELL_M)."""
+    try:
+        c = float(cell_m)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 < c <= AUTO_SUBLI_MAX_CELL_M + 1e-9
+
+
+def choose_auto(lisflood_exe="", cell_m=None):
     """(engine exe, one line why) for "Recommended (auto)"; exe is "" when nothing can run.
-    lisflood_exe is the LISFLOOD-FP the caller found (setting or auto-detect), if any."""
+    lisflood_exe is the LISFLOOD-FP the caller found (setting or auto-detect), if any. cell_m is
+    the model cell (m); 3.91.0: where Boann ACC would run on a cell of AUTO_SUBLI_MAX_CELL_M or
+    finer, Boann's sub-grid local inertial (r = 4) runs instead. None = not known (plain ACC)."""
+    fine = auto_fine_cell(cell_m)
+    subli_why = (" Model cell {:g} m: Boann sub-grid local inertial (r = 4), solver cells {:g} m "
+                 "that keep the {:g} m ground".format(float(cell_m or 0), 4 * float(cell_m or 0),
+                                                       float(cell_m or 0)) if fine else "")
     try:
         from .metalflood import backends as mfb
         gpu, why = mfb.metal_available()
@@ -294,12 +318,19 @@ def choose_auto(lisflood_exe=""):
     except Exception as e:  # pragma: no cover - backend import trouble: LISFLOOD-FP only
         gpu, why, cpu = False, str(e), False
     if gpu:
+        if fine:
+            return GPU_SUBLI_EXE, ("Recommended (auto): Boann on this Mac's GPU." + subli_why +
+                                   " (as close to the fine run as plain ACC on the fine cells, "
+                                   "many times faster)")
         return GPU_EXE, ("Recommended (auto): Boann ACC on this Mac's GPU, the same scheme as "
                          "LISFLOOD-FP 8.3 and many times faster here")
     if lisflood_exe and os.path.isfile(str(lisflood_exe)):
         return str(lisflood_exe), ("Recommended (auto): LISFLOOD-FP (installed here; no Apple "
                                    "GPU: {})".format(why))
     if cpu:
+        if fine:
+            return GPU_SUBLI_EXE, ("Recommended (auto): Boann on the CPU (no LISFLOOD-FP found and "
+                                   "no Apple GPU: {}).".format(why) + subli_why)
         return GPU_EXE, ("Recommended (auto): Boann ACC on the CPU (no LISFLOOD-FP found and no "
                          "Apple GPU: {})".format(why))
     return "", ("Recommended (auto) found no flood engine: no Apple GPU, no LISFLOOD-FP and no "

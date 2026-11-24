@@ -1098,6 +1098,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                   "'shock' in the LISFLOOD-FP field does the same. 'Recommended (auto)' picks for this "
                   "computer: Boann's fast ACC on a Mac with an Apple GPU, else LISFLOOD-FP when "
                   "installed, else Boann on the CPU; the report names the engine that ran. "
+                  "Where it runs Boann and the model cell is 3 m or finer, it runs Boann's "
+                  "sub-grid local inertial (r = 4: solver cells 4 times the model cell that keep "
+                  "the fine ground; within about 0.1 ft of the fine run at a fraction of the time). "
                   "'Advanced' solvers are for research and special cases.")
         self.addParameter(p)
         # 3.39.0: the solver's Courant number and theta, exposed (were .par / env only). Empty =
@@ -1157,6 +1160,9 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         exe = (self._str(parameters, "LISFLOOD_EXE", context)
                or _suite_setting("lisflood_exe") or _setting(SET_LISFLOOD))
         from .core import lisflood as lfmod
+        # 3.91.0: "Recommended (auto)" runs Boann sub-grid local inertial on a 3 m or finer cell
+        _cell = (self.parameterAsDouble(parameters, "CELL", context)
+                 if self.parameterDefinition("CELL") is not None else None)
         if self.parameterDefinition("FLOOD_ENGINE") is not None and \
                 parameters.get("FLOOD_ENGINE") not in (None, ""):
             _eng = FLOOD_ENGINES[self.parameterAsEnum(parameters, "FLOOD_ENGINE", context)]
@@ -1165,7 +1171,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             # left gpu-sgc unreachable from the dropdown when #446 added it (Runner 3.38.0).
             if _eng == "auto":
                 _lf = exe if exe and os.path.isfile(exe) else nd_data.detect_lisflood()
-                return lfmod.choose_auto(_lf)[0]
+                return lfmod.choose_auto(_lf, _cell)[0]
             if _eng != "lisflood":
                 return lfmod.resolve_exe(_eng)
         # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
@@ -1177,7 +1183,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         # returns it unchanged), so the built-in numpy approximation is never silently selected
         # (M5 safety) and a real path falls through to the file check below.
         if exe and lfmod.is_auto_word(exe):
-            return lfmod.choose_auto(nd_data.detect_lisflood())[0]
+            return lfmod.choose_auto(nd_data.detect_lisflood(), _cell)[0]
         if exe:
             _resolved = lfmod.resolve_exe(exe)
             if _resolved != str(exe).strip():
