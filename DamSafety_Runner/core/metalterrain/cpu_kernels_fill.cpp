@@ -37,19 +37,26 @@ int mf_run_batch(void** b, const TParams* pp, int nsteps) {
     return 0;
 }
 
-// Priority-Flood+eps (Barnes et al. 2014), the fill fill.fill_dem uses by default (Runner 3.83.0).
-// z, w: float64 ny*nx row-major; ok, outlet: uint8 (1 = valid / seed); conn 4 or 8.
-// Writes w (valid cells; NoData cells get z back). Returns the number of valid cells never
-// reached (0 on any real DEM), or -1 on bad arguments.
-// Ties break on the smaller flat index, which is (row, col) order: the same order as
-// core/terrain.priority_flood's (level, row, col) heap. No pit queue, no float32, no datum shift.
-long long bg_priority_flood(const double* z, const unsigned char* ok, const unsigned char* outlet,
-                           double* w, int ny, int nx, int conn, double eps) {
+// Priority-Flood+eps (Barnes, Lehman and Mulla 2014), the fill fill.fill_dem uses by default.
+// It reproduces k_pd_relax's float32 arithmetic, so it settles on the relaxation's fixed point
+// in one pass instead of thousands of sweeps:
+//   z, w: float32 ny*nx row-major, the DATUM-SHIFTED ground (relief, as _fill_relax passes it)
+//   ok, outlet: uint8 (1 = valid / seed cell; outlets are fixed at z like the relaxation's)
+//   a reached cell j gets  w[j] = fmax(z[j], w[i] + eps)  with i its lowest popped neighbour,
+//   the same float32 add and the same fmax as the kernel's  nv = fmax(zi, m + p.eps).
+// Water levels pop in non-decreasing order and (w + eps) never decreases w, so the first
+// neighbour to reach j is its lowest: the value is the relaxation's fixed point. The relaxation
+// stops a lowering smaller than its tol (1e-6 m), so it can sit a float32 step or two above
+// this; that is the whole difference. Ties do not change any value (equal levels give equal
+// sums). Writes w on valid cells (NoData cells get z back). Returns the number of valid cells
+// never reached (0 on any real DEM), or -1 on bad arguments.
+long long bg_priority_flood(const float* z, const unsigned char* ok, const unsigned char* outlet,
+                           float* w, int ny, int nx, int conn, float eps) {
     if (!z || !ok || !outlet || !w || ny < 1 || nx < 1 || (conn != 4 && conn != 8))
         return -1;
     const int64_t n = (int64_t)ny * (int64_t)nx;
-    typedef std::pair<double, int64_t> E;
-    std::priority_queue<E, std::vector<E>, std::greater<E> > pq;
+    typedef std::pair<float, int64_t> E;
+    std::vector<E> store;
     std::vector<uint8_t> closed((size_t)n, 0);
     for (int64_t i = 0; i < n; ++i) {
         w[i] = z[i];
@@ -58,19 +65,20 @@ long long bg_priority_flood(const double* z, const unsigned char* ok, const unsi
     for (int64_t i = 0; i < n; ++i) {
         if (ok[i] && outlet[i]) {
             closed[i] = 1;
-            pq.push(E(w[i], i));
+            store.push_back(E(w[i], i));
         }
     }
+    std::priority_queue<E, std::vector<E>, std::greater<E> > pq(std::greater<E>(), std::move(store));
     const int d4[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     const int d8[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
     const int nd = conn == 8 ? 8 : 4;
     while (!pq.empty()) {
-        E t = pq.top();
+        const E t = pq.top();
         pq.pop();
         const int64_t i = t.second;
         const int y = (int)(i / nx);
         const int x = (int)(i - (int64_t)y * nx);
-        const double wi = w[i];
+        const float up = w[i] + eps;       // one float32 add (-ffp-contract=off: no FMA)
         for (int k = 0; k < nd; ++k) {
             const int dy = conn == 8 ? d8[k][0] : d4[k][0];
             const int dx = conn == 8 ? d8[k][1] : d4[k][1];
@@ -82,8 +90,7 @@ long long bg_priority_flood(const double* z, const unsigned char* ok, const unsi
             if (closed[j])
                 continue;
             closed[j] = 1;
-            if (w[j] <= wi)
-                w[j] = wi + eps;          // one double add; -ffp-contract=off, so no FMA
+            w[j] = fmax(z[j], up);         // the kernel's fmax(zi, m + eps), float overload
             pq.push(E(w[j], j));
         }
     }

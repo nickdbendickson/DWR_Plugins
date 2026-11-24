@@ -2,7 +2,8 @@
 
     python -m nd_breach_runner.core.metalterrain verify [-backend metal|cpu]
         fill a synthetic DEM both ways and check each against core/terrain.priority_flood
-        (priority-flood bit-identical; relaxation within 5e-3 m) plus determinism
+        (both within 5e-3 m; the priority-flood within 2 float32 steps of the relaxation) plus
+        determinism
     python -m nd_breach_runner.core.metalterrain bench [-size small|medium] [-backend ...]
         time the priority-flood and the relaxation, and report sweeps for the relaxation
     python -m nd_breach_runner.core.metalterrain fill in.asc out.asc [-backend ...]
@@ -44,15 +45,14 @@ def verify(backend):
     z = cases.pitted_plane()
     orc = _oracle(z)
     ok = True
-    for method in ("priority-flood", "relax"):
+    ref = None
+    for method in ("relax", "priority-flood"):
         f1, i1 = F.fill_dem(z, backend=backend, method=method)
         f2, _ = F.fill_dem(z, backend=backend, method=method)
         det = _hash(f1) == _hash(f2)
         d = np.abs(f1 - orc)
         dmax = float(np.nanmax(d))
         rose = bool(np.all(f1 + 1e-4 >= z))             # fill only raises the true ground
-        bound = 0.0 if method == "priority-flood" else 5e-3
-        same = bool(np.array_equal(f1, orc)) if method == "priority-flood" else dmax <= bound
         print("method        : {}  device {} ({})".format(method, i1["device"], i1["backend"]))
         print("sweeps        : {}  converged={}  unreached={}".format(
             i1["sweeps"], i1["converged"], i1.get("unreached")))
@@ -60,7 +60,16 @@ def verify(backend):
             "PASS" if det else "FAIL", "identical" if det else "DIFFER"))
         print("oracle |dh|   : max {:.2e} m vs terrain.priority_flood".format(dmax))
         print("filled >= z   : {}".format("yes" if rose else "NO"))
-        this = det and rose and i1["converged"] and same and i1.get("unreached") == 0
+        this = det and rose and i1["converged"] and dmax <= 5e-3 and i1.get("unreached") == 0
+        if ref is None:
+            ref = f1
+        else:
+            valid = np.isfinite(z) & (z != F.NODATA)
+            work = (ref[valid] - float(z[valid].min())).astype(np.float32)
+            steps = float(np.max(np.abs(f1[valid] - ref[valid]) /
+                                 np.spacing(np.abs(work)).astype(np.float64)))
+            print("vs relaxation : {:.0f} float32 steps (2 allowed)".format(steps))
+            this = this and steps <= 2.0
         print("verdict       : {}".format("PASS" if this else "FAIL"))
         ok = ok and this
     print("VERDICT       : {}".format("PASS" if ok else "FAIL"))
