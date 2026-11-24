@@ -20,10 +20,13 @@ from nd_breach_runner.tests.registry import Skip, test
 
 
 def _need_cpu_build():
+    """Skip only when this computer has neither a prebuilt fill library nor a C++ compiler.
+    A Windows release ships the library; a compiler there is enough too."""
+    if mfb.prebuilt_available(F.SPEC) or mfb.find_compiler():
+        return
     if os.name == "nt":
-        raise Skip("the fill's CPU build is not made on Windows")
-    if not mfb.find_compiler():
-        raise Skip("no C++ compiler for the fill's CPU build")
+        raise Skip("the fill's CPU build is not made on Windows (a release ships it prebuilt)")
+    raise Skip("no C++ compiler for the fill's CPU build")
 
 
 @test
@@ -32,7 +35,7 @@ def metalterrain_cpu_build_matches_priority_flood():
     never lowers the ground."""
     _need_cpu_build()
     z = cases.pitted_plane(ny=80, nx=120)
-    filled, info = F.fill_dem(z, backend="cpu")
+    filled, info = F.fill_dem(z, backend="cpu", method="relax")
     assert info["backend"] == "cpu" and info["converged"], info
     orc = terrain.priority_flood(z)
     dmax = float(np.abs(filled - orc).max())
@@ -50,8 +53,8 @@ def metalterrain_fill_is_deterministic():
     (On the CPU build trivially; on a real Metal GPU this is the determinism guarantee.)"""
     _need_cpu_build()
     z = cases.pitted_plane(ny=70, nx=70, seed=3)
-    a, _ = F.fill_dem(z, backend="cpu")
-    b, _ = F.fill_dem(z, backend="cpu")
+    a, _ = F.fill_dem(z, backend="cpu", method="relax")
+    b, _ = F.fill_dem(z, backend="cpu", method="relax")
     assert np.array_equal(a, b), "two fills differ"
 
 
@@ -61,7 +64,7 @@ def metalterrain_nodata_is_a_free_exit():
     conditioner read NoData as a wall and the whole island became one unbounded depression."""
     _need_cpu_build()
     z = cases.nodata_ringed_pit(n=64, depth=8.0)
-    filled, info = F.fill_dem(z, backend="cpu")
+    filled, info = F.fill_dem(z, backend="cpu", method="relax")
     assert info["converged"], info
     valid = np.isfinite(z)
     # every valid cell got a finite, sane level (no 1e18 "infinite depression")
@@ -90,7 +93,7 @@ def metalterrain_nested_basin_spill_sequence():
     inter-basin spill, not just that the surface is smooth."""
     _need_cpu_build()
     z, meta = cases.nested_basins()
-    filled, info = F.fill_dem(z, backend="cpu")
+    filled, info = F.fill_dem(z, backend="cpu", method="relax")
     assert info["converged"], info
     inner, outer = meta["inner"], meta["outer"]
     inner_rim, outer_rim = meta["inner_rim"], meta["outer_rim"]   # 325, 330
@@ -177,8 +180,8 @@ def metalterrain_gpu_matches_cpu_build():
         raise Skip("no Metal GPU here ({})".format(why))
     _need_cpu_build()
     z = cases.pitted_plane(ny=96, nx=140)
-    a, ia = F.fill_dem(z, backend="cpu")
-    b, ib = F.fill_dem(z, backend="metal")
+    a, ia = F.fill_dem(z, backend="cpu", method="relax")
+    b, ib = F.fill_dem(z, backend="metal", method="relax")
     assert ib["backend"] == "metal", ib
     assert float(np.abs(a - b).max()) <= 1e-3, np.abs(a - b).max()
 
