@@ -53,13 +53,14 @@ from . import subgrid as sg
 from . import engine as mfe
 
 NAME = "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells, on the GPU via Metal)"
-VERSION = "0.1.0"
+VERSION = "0.1.1"   # 0.1.1 (Runner 3.92.0): faster (mass-file wet area on the wet block, CPU dry-cell skip), same numbers
 G = bl.G
 NODATA = bl.NODATA
 DRY_M = bl.DRY_M
 MAX_HFLOW = bl.MAX_HFLOW
 BATCH_STEPS = mfe.BATCH_STEPS
 WINDOW_MARGIN = mfe.WINDOW_MARGIN
+SKIP_CHUNK = mfe.SKIP_CHUNK      # 3.92.0: the CPU dry-cell skip's redraw interval (steps)
 DEFAULT_R = 4
 MAX_R = 8
 DEFAULT_WEIGHTING = "none"
@@ -197,10 +198,53 @@ class Engine:
         """Depth above each coarse cell's lowest sub-cell, as the kernel last left it."""
         return self.a["d"].reshape(self.nyc, self.nxc)
 
-    def eta2(self):
-        """Water-surface elevation of each coarse cell (the deck's datum), from its volume."""
-        e = sg.invert_eta(self.volume2().astype(np.float64), self.t.s, self.t.csum, self.t.asub)
-        return np.where(self.okc, e, self.t.zbed)
+    def eta2(self, box=None):
+        """Water-surface elevation of each coarse cell (the deck's datum), from its volume; box =
+        (r0, r1, c0, c1) gives that block only (the same numbers as the whole grid's there)."""
+        r0, r1, c0, c1 = box if box is not None else (0, self.nyc, 0, self.nxc)
+        sl = (slice(r0, r1), slice(c0, c1))
+        e = sg.invert_eta(self.volume2()[sl].astype(np.float64), self.t.s[sl], self.t.csum[sl],
+                          self.t.asub)
+        return np.where(self.okc[sl], e, self.t.zbed[sl])
+
+    def wet_fine_counts(self, eta, box, nyf, nxf):
+        """(ny, nx) per coarse cell of box: its fine cells inside the deck extent (nyf x nxf) whose
+        downscaled depth under eta (the box's coarse surfaces) is over DRY_M."""
+        r0, r1, c0, c1 = box
+        r = self.r
+        fd = sg.fine_depth(eta, self.dem_fine[r0 * r:r1 * r, c0 * r:c1 * r], r) > DRY_M
+        fd[max(0, nyf - r0 * r):, :] = False
+        fd[:, max(0, nxf - c0 * r):] = False
+        return fd.reshape(r1 - r0, r, c1 - c0, r).sum(axis=(1, 3))
+
+    def dry_fine_counts(self, nyf, nxf):
+        """wet_fine_counts of the whole grid with no water anywhere (every volume 0): what a coarse
+        cell holding no water counts at every step (3.92.0)."""
+        keep = self.volume2().copy()
+        try:
+            self.volume2()[:] = 0.0
+            return self.wet_fine_counts(self.eta2(), (0, self.nyc, 0, self.nxc), nyf, nxf)
+        finally:
+            self.volume2()[:] = keep
+
+    def wet_fine_count(self, nyf, nxf, dry_counts):
+        """The fine cells inside the deck extent deeper than DRY_M now: the count of the whole fine
+        grid, computed on the block of coarse cells holding water only (dry_counts elsewhere)."""
+        box = self.wet_box()
+        if box is None:
+            return int(dry_counts.sum())
+        r0, r1, c0, c1 = box
+        live = self.wet_fine_counts(self.eta2(box), box, nyf, nxf)
+        return int(dry_counts.sum()) - int(dry_counts[r0:r1, c0:c1].sum()) + int(live.sum())
+
+    def wet_box(self):
+        """The bounding block (r0, r1, c0, c1) of the coarse cells holding water, or None."""
+        wet = self.volume2() > 0.0
+        rows = np.flatnonzero(wet.any(axis=1))
+        if not len(rows):
+            return None
+        cols = np.flatnonzero(wet.any(axis=0))
+        return (int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1)
 
     def volume(self):
         return float(self.a["V"].sum(dtype=np.float64))
@@ -237,7 +281,9 @@ class Engine:
         st[S_HMAX] = hm
         _setf(st, S_MINDT, 1e30)
         st[S_RMIN] = st[S_CMIN] = 0xFFFFFFFF
-        self.b.run_batch(p, nsteps)
+        # 3.92.0: the CPU build leaves out the cells of the window that cannot get wet (redrawn
+        # every SKIP_CHUNK steps, cpu_kernels_subli.cpp mf_rows; the same numbers bit for bit)
+        self.b.run_batch(p, nsteps, SKIP_CHUNK)
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
                "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
@@ -302,11 +348,20 @@ def _run(d, bk, progress, cancel, say, full_grid=False):
     t_start = time.time()
     last_prog = t_start
 
+    # 3.92.0: the mass file's wet area is counted on the block of coarse cells holding water only.
+    # A coarse cell with no water has the same surface at every step (its volume is exactly 0), so
+    # its fine cells count what they counted at the start (dry_counts): the same area as counting
+    # the whole fine grid every massint, which on a 2 m LiDAR deck took most of the run's time.
+    dry_counts = eng.dry_fine_counts(nyf, nxf)
+
+    def wet_area_count():
+        return eng.wet_fine_count(nyf, nxf, dry_counts)
+
     def write_mass(tt):
         vol = eng.volume()
         verr = vol - (vol0 + vin - vout)
         # the wet area at the fine resolution (what a fine run would report)
-        area = float((fine_depth_now() > DRY_M).sum()) * dx * dx
+        area = float(wet_area_count()) * dx * dx
         mass_f.write("{:<12.3f} {:<10.4f} {:<10.4f} {:<12d} {:<12.1f} {:<12.3f} {:<12.4f} "
                      "{:<10.4f} {:<13.4f} {:<14.6f} {:<12.4f} {:<12.4f}\n".format(
                          tt, last_dt, min_dt if steps else last_dt, steps, area, vol, qin,
@@ -389,7 +444,9 @@ def _run(d, bk, progress, cancel, say, full_grid=False):
              "coarse_cells": nyc * nxc, "fine_cells": nyf * nxf, "cells": nyf * nxf,
              "steps": steps, "batches": batches, "sim_time_s": t, "wall_s": round(wall, 2),
              "injected_m3": vin, "outflow_m3": vout, "final_volume_m3": vol,
-             "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip}
+             "mass_error_m3": vol - (vol0 + vin - vout), "clipped_m3": clip,
+             # 3.92.0: coarse-cell updates run (the CPU dry-cell skip leaves dry ones out)
+             "cell_steps": getattr(bk, "cells_run", None)}
     # where the time went (backends.Profile); timing only, no result depends on it
     stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("Boann, sub-grid local inertial ({}, {}): r={}, {} weighting, {} coarse cells ({}x fewer), "
