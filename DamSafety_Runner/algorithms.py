@@ -977,7 +977,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    help="Put the creeks and rivers the grid cannot resolve into the model as "
                    "LISFLOOD-FP sub-grid channels: every cell draining at least the smallest "
                    "channel area gets a rectangular channel inside the cell, with bankfull width "
-                   "and depth from drainage area (the North Dakota curve from 79 USGS gauges). The "
+                   "and depth from drainage area (the North Dakota curve from 79 USGS gauges by "
+                   "default; see the bankfull width/depth curve option below). The "
                    "channel carries "
                    "water the grid cannot, so depths are reported ABOVE THE BANK and a flood "
                    "that stays in the channel is not flooded ground. Channels on hydro-flattened "
@@ -998,6 +999,16 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
         _set_help(p, "Auto: channels on hydro-flattened water (LiDAR shows a water surface there) "
                   "start full to the bank, every other channel starts empty. Empty: all start "
                   "empty (the breach water fills them first). Full: all start full.")
+        self.addParameter(set_advanced(p))
+        # 3.72.0: the regional hydraulic-geometry curve that sizes the sub-grid channels
+        p = QgsProcessingParameterEnum(
+            "SGC_CURVE", "Sub-grid channels: bankfull width/depth curve",
+            list(sgc_defaults.CURVE_LABELS), defaultValue=0, optional=True)
+        _set_help(p, "The regional curve that sizes each sub-grid channel (bankfull width and "
+                  "depth from drainage area). North Dakota (79 USGS gauges) is the default; "
+                  "Bieger 2015 is the conterminous-US national curve (about twice as wide). A "
+                  "project with its own regional curve can set its four coefficients a,b,c,f on "
+                  "the command line (model.sgc_curve).")
         self.addParameter(set_advanced(p))
         self._num("POTHOLE_START_FILL", "Potholes: share of each closed depression already full "
                   "at the start (0 = dry, 1 = full)", 0.0, minimum=0.0, maximum=1.0, advanced=True,
@@ -1390,6 +1401,10 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             if parameters.get("SGC_START") not in (None, ""):
                 st.sgc_start = sgc_defaults.START_MODES[min(2, max(0, self.parameterAsEnum(
                     parameters, "SGC_START", context)))]
+            if self.parameterDefinition("SGC_CURVE") is not None and \
+                    parameters.get("SGC_CURVE") not in (None, ""):      # 3.72.0
+                st.sgc_curve = list(sgc_defaults.CURVES[min(len(sgc_defaults.CURVES) - 1, max(0,
+                    self.parameterAsEnum(parameters, "SGC_CURVE", context)))][2])
         if self.parameterDefinition("POTHOLE_START_FILL") is not None:  # 3.35.0
             st.pothole_start_fill = min(1.0, max(0.0, float(g("POTHOLE_START_FILL") or 0.0)))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0

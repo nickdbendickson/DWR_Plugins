@@ -52,6 +52,8 @@ using namespace metal;
 #define S_QIN 13       // float: inflow of the sources this step (m3/s)
 #define S_QOUT 14      // uint, atomic: outflow through the free edges this step (MF_FIX m3/s)
 #define S_LASTDT 15    // float: dt of the last step taken
+#define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell
+#define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
 #define S_WORDS 32
 // The two sums over many threads (edge outflow, clipped volume) are added as fixed-point uints:
 // not every Apple GPU has float atomics (the CI runner's paravirtual GPU has none). Each SIMD
@@ -85,7 +87,8 @@ struct Params {
     float t0;             // model time at the batch start (s)
     float t_end;          // batch end, relative to t0 (s)
     float theta;          // q-centred weighting (de Almeida et al. 2012); 1 = Bates et al. 2010
-    float pad4;
+    uint rain;            // 1: series n_series is a rainfall rate (m/s, LISFLOOD-FP's "rainfall"
+                          // .rain file), added to every valid cell each step (Runner 3.60.0)
 };
 
 #define MF_ARGS \
@@ -230,6 +233,13 @@ kernel void k_begin(MF_ARGS) {
     }
     sf[S_QIN] = qin;
     sf[S_VIN] += qin * dt;
+    // rainfall: one rate over the whole grid at the step start, as LISFLOOD-FP's Rainfall()
+    float rr = 0.0f;
+    if (p.rain != 0u) {
+        rr = fmax(mf_series(p.n_series, tm, ser_off, ser_t, ser_q, cursor), 0.0f);
+    }
+    sf[S_RAIN] = rr;
+    sf[S_RAIND] += rr * dt;
 }
 
 // every face of the window: thread (x, y) owns x-face (row r0+y, face c0+x) when y < wr and
@@ -408,7 +418,7 @@ kernel void k_cont(MF_ARGS) {
     uint fx = r * (nx + 1u) + c;
     float dx = p.dx;
     float hn = h[i] + dt / dx * (qx[fx] - qx[fx + 1u] + qy[i] - qy[i + nx])
-        + src[i] * dt / (dx * dx);
+        + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
     float clip = 0.0f;
     if (hn < 0.0f) {
         clip = -hn * dx * dx;
