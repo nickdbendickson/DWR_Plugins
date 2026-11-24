@@ -3,19 +3,23 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { gunzipSync } from "node:zlib";
 
+import { batchDisclaimer, BATCH_DISCLAIMER } from "./batch.ts";
 import { analyze } from "./engine.ts";
+import { ROUTED_LABEL } from "./inundation.ts";
 import { floodStrip } from "./floodstrip.ts";
 import { exportFloodGeoJson, exportFloodKml, fetchNd911, nd911State, nd911Table } from "./nd911.ts";
 import {
   buildOutline,
   corridorHalfM,
   DEM_ATTRIBUTION,
+  DEM_ATTRIBUTION_SHORT,
   DEM_SERVICE,
   type DemGrid,
   demRequest,
   demTiles,
   demUrl,
   fetchDem,
+  layerLabel,
   lookupArea,
   openEdgeOf,
   OUTLINE_LABEL,
@@ -25,7 +29,10 @@ import {
   outlineInputs,
   extentOf,
   outlineState,
+  type OutlineCache,
   parseBsq,
+  stampTerrain,
+  terrainInfo,
   pasteTile,
   pitsExcludedNote,
   TRACE_VERSION,
@@ -507,5 +514,38 @@ describe("openEdgeOf", () => {
     assert.equal(f.geometry.coordinates.length, 3);
     assert.equal(f.properties.held_ac_ft, 1234);
     assert.equal(openEdgeOf(4, 3, wet, ground, new Uint8Array(12), ll, 10, "x", 0), null);
+  });
+});
+
+describe("the terrain a layer was built on", () => {
+  const cache = (): OutlineCache =>
+    ({
+      fingerprint: "f",
+      builtAt: "2026-11-21T18:00:00Z",
+      source: DEM_SERVICE,
+      attribution: "x",
+      layer: "routed",
+      stats: {} as never,
+      outline: { type: "FeatureCollection", properties: { disclaimer: ROUTED_LABEL, dem_source: DEM_SERVICE, outline_area_ac: 10329 }, features: [] },
+    }) as unknown as OutlineCache;
+
+  it("3DEP stays 3DEP; a local DEM is named everywhere", () => {
+    assert.equal(terrainInfo(DEM_SERVICE).short, DEM_ATTRIBUTION_SHORT);
+    const t = terrainInfo("local DEM cass_10m_3dep.vrt");
+    assert.ok(t.local);
+    assert.equal(t.short, "Terrain: local DEM cass_10m_3dep.vrt");
+    const c = stampTerrain(cache(), t);
+    assert.equal(c.source, "local DEM cass_10m_3dep.vrt");
+    assert.equal(c.outline.properties.dem_source, "local DEM cass_10m_3dep.vrt");
+    assert.match(String(c.outline.properties.disclaimer), /^Routed terrain flood from the local DEM cass_10m_3dep\.vrt and the breach hydrograph/);
+    assert.ok(!/3DEP terrain/.test(layerLabel(c, ROUTED_LABEL)));
+    assert.equal(layerLabel(cache(), ROUTED_LABEL), ROUTED_LABEL);
+    assert.equal(layerLabel({ source: c.source, layer: "outline" }, ROUTED_LABEL), OUTLINE_LABEL.replace("from 3DEP terrain", "from the local DEM cass_10m_3dep.vrt"));
+    assert.equal(stampTerrain(cache(), terrainInfo(null)).source, DEM_SERVICE);
+  });
+
+  it("the batch footer names the local DEM", () => {
+    assert.equal(batchDisclaimer(terrainInfo(null)), BATCH_DISCLAIMER);
+    assert.match(batchDisclaimer(terrainInfo("local DEM cass_10m_3dep.vrt")), /inventories and the local DEM cass_10m_3dep\.vrt\.$/);
   });
 });
