@@ -106,6 +106,9 @@ assert tri._wanted(f, names, {"ND00199"}) and tri._wanted(f, names, {"DWR-2801"}
 assert tri._wanted(f, names, {"ND00199"}, "DWR-2801")
 assert not tri._wanted(f, names, {"ND00200"}) and tri._wanted(f, names, set())
 assert not tri._wanted(_F(dam_id="DWR-2801"), ["dam_id"], {"ND00199"})  # no nid_id column: dam id only
+# the bare DWR structure ID, as tool 1 takes it (DAM_ID=2801 dropped the dam at step 6 before)
+assert tri._wanted(f, names, {"2801"}) and tri._wanted(_F(dam_id="DWR-2801"), ["dam_id"], {"2801"})
+assert not tri._wanted(f, names, {"280"}) and not tri._wanted(f, names, {"28011"})
 
 suite_fill.layers_for_settings = real_lfs
 print("ok test_onedam_chain")
