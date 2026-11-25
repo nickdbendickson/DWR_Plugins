@@ -66,6 +66,8 @@ using namespace metal;
 #define S_QIN 13       // float: inflow of the sources this step (m3/s)
 #define S_QOUT 14      // uint, atomic: outflow through the free edges this step (MF_FIX m3/s)
 #define S_LASTDT 15    // float: dt of the last step taken
+#define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell (FV1)
+#define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
 #define S_WORDS 32
 #define MF_FIX 1.0e-4f
 
@@ -90,7 +92,8 @@ struct Params {
     float t0;
     float t_end;
     float theta;          // unused
-    float pad4;
+    uint rain;            // 1: series n_series is a rainfall rate (m/s), added to every valid cell
+                          // each step (FV1 only; matches the ACC engine). Was pad4.
 };
 
 // Buffer layout for the FV scheme (its own order, 0..23; Params at 24):
@@ -245,6 +248,14 @@ kernel void k_begin_fv(MF_ARGS_FV) {
     }
     sf[S_QIN] = qin;
     sf[S_VIN] += qin * dt;
+    // rainfall (FV1 only): one rate over the whole grid at the step start, as LISFLOOD-FP's
+    // Rainfall() and the ACC engine (kernels.metal). Added to every valid cell in k_cont_fv.
+    float rr = 0.0f;
+    if (p.rain != 0u) {
+        rr = fmax(mf_series(p.n_series, tm, ser_off, ser_t, ser_q, cursor), 0.0f);
+    }
+    sf[S_RAIN] = rr;
+    sf[S_RAIND] += rr * dt;
 }
 
 // FREE-edge outflow floor: the Manning normal-depth velocity that the water-surface slope to the
@@ -462,7 +473,7 @@ kernel void k_cont_fv(MF_ARGS_FV) {
     float dhv = -invdx * ((fxhv[fx + 1u] - fxhv[fx])
                           + ((fyhv[i + nx] + SyD) - (fyhv[i] + SyU)));
 
-    float hn = h0 + dh + src[i] * dt / (dx * dx);
+    float hn = h0 + dh + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
     float hun = hu[i] + dhu;
     float hvn = hv[i] + dhv;
 
