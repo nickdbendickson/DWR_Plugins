@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- **Runner 3.98.0 / Screening 0.61.0 / Boann 6.4.0: peak depth x velocity grid (new output, no existing result moves).**
+- **Runner 3.99.0 / Screening 0.62.0 / Boann 6.5.0: peak depth x velocity grid (new output, no existing result moves).**
   - **What.** Every Boann solver keeps, per cell, the largest depth times speed seen at one moment and writes it as `<root>.maxDV` (m2/s). Peak depth and peak speed can come from different times, so their product overstates the danger; this is the concurrent value. The Runner reads it when the file is there (`Envelopes.dv`; missing stays `None`). `D x V (Max).tif` (ft2/s) is written only when `WRITE_PEAK_DV` / `model.write_peak_dv` is on, the run is Boann (the file exists) and a near-dam refine was not applied. Off by default. A rerun with it off removes a stale copy. It is not part of the checkpoint key.
-  - **Loading and HEC-RAS.** The run tool loads that raster as "D x V (Max)". When the HEC-RAS 2D stage replaces the final rasters it drops this one and deletes the file, so a Boann depth-times-velocity is not left beside HEC-RAS depths.
+  - **Loading and HEC-RAS.** The run tool loads that raster as "D x V (Max)". The HEC-RAS 2D stage is handed the final rasters without this one, so it makes no "LISFLOOD-FP D x V (Max).tif" copy, and once HEC-RAS has run the Boann raster is deleted: no Boann depth-times-velocity, under either name, is left beside HEC-RAS depths for Hazard to pick up. A failed HEC-RAS stage leaves the Boann rasters whole. A rerun clears both names.
   - **Why nothing else moves.** The new value sits in the second half of the existing peak-speed buffer. No buffer was added, no kernel index changed, and the kernels still use only `+ - * /`, `sqrt`, `fmin`, `fmax`, `fabs` and comparisons. Depths, speeds, arrival, water level and the mass file are computed as before.
   - **Tests.** `tests/test_boann_peak_dv.py` (the grid, loading the raster, and the HEC-RAS stage dropping it).
 

@@ -1,4 +1,4 @@
-"""Boann 6.4.0 / Runner 3.98.0: peak depth x velocity (.maxDV).
+"""Boann 6.5.0 / Runner 3.99.0: peak depth x velocity (.maxDV).
 
 Each solver records, per cell, the largest depth times speed at one moment. No existing
 result moves: the same decks on origin/main, one core, match every pre-existing result
@@ -359,7 +359,11 @@ def loading_results_names_the_peak_dv_layer():
 
 @test
 def hecras_stage_drops_the_boann_peak_dv_raster():
-    """After HEC-RAS replaces the finals, the Boann D x V file is not left beside them."""
+    """After HEC-RAS replaces the finals, no Boann D x V file of any name is left in the dam
+    folder: not the raster itself, and not a "LISFLOOD-FP" copy of it (run_stage keeps such a
+    copy of every raster it is handed, and Hazard would read it as the dam's D x V). A stage
+    that fails leaves the Boann finals, D x V included, as they were."""
+    from nd_breach_runner.core import hecras_engine
     d = tempfile.mkdtemp(prefix="boann_dv_hr_")
     try:
         dv = os.path.join(d, workflow.PEAK_DV_NAME)
@@ -371,16 +375,31 @@ def hecras_stage_drops_the_boann_peak_dv_raster():
         hr_depth = os.path.join(d, "hr_depth.tif")
         with open(hr_depth, "w", encoding="utf-8") as f:
             f.write("hr\n")
-        res = types.SimpleNamespace(
-            final={"depth": depth, "velocity": depth, "arrival": depth, "wse": depth, "dv": dv},
-            warnings=[], summary={})
+
+        def new_res():
+            return types.SimpleNamespace(
+                final={"depth": depth, "velocity": depth, "arrival": depth, "wse": depth,
+                       "dv": dv},
+                warnings=[], summary={})
 
         class Eng:
+            fail = False
+            given = None
+
             class HecRasEngineError(Exception):
                 pass
 
-            @staticmethod
-            def run_stage(*_a, **_k):
+            @classmethod
+            def run_stage(cls, _folder, final_paths, *_a, **_k):
+                cls.given = dict(final_paths)
+                # what the real run_stage does first: keep a prefixed copy of every raster
+                for p in final_paths.values():
+                    if p and os.path.exists(p):
+                        shutil.copy2(p, os.path.join(os.path.dirname(p),
+                                                     hecras_engine.LISFLOOD_PREFIX
+                                                     + os.path.basename(p)))
+                if cls.fail:
+                    raise cls.HecRasEngineError("no Wine here")
                 return {"final": {"depth": hr_depth, "velocity": hr_depth,
                                   "arrival": hr_depth, "wse": hr_depth},
                         "warnings": []}
@@ -389,16 +408,46 @@ def hecras_stage_drops_the_boann_peak_dv_raster():
         old = workflow.adopt_final_engine
         workflow.adopt_final_engine = lambda *_a, **_k: {"engine": "HEC-RAS 2D"}
         try:
+            # a failed stage: the Boann finals stay whole, and still no D x V copy is made
+            Eng.fail = True
+            res = new_res()
+            try:
+                workflow.run_hecras_stage(d, res, None, workflow.RunSettings(write_peak_dv=True),
+                                          (0.0, 0.0), notes.append, Eng)
+                raise AssertionError("a failed HEC-RAS stage must raise")
+            except workflow.HecRasStageError:
+                pass
+            assert "dv" not in Eng.given, Eng.given
+            assert res.final.get("dv") == dv and os.path.exists(dv)
+            assert not os.path.exists(os.path.join(d, hecras_engine.LISFLOOD_PREFIX
+                                                   + workflow.PEAK_DV_NAME))
+            # the stage succeeds
+            Eng.fail = False
+            res = new_res()
             workflow.run_hecras_stage(d, res, None, workflow.RunSettings(write_peak_dv=True),
                                       (0.0, 0.0), notes.append, Eng)
         finally:
             workflow.adopt_final_engine = old
+        assert "dv" not in Eng.given, Eng.given
         assert "dv" not in res.final
         assert res.final["depth"] == hr_depth
-        assert not os.path.exists(dv)
-        assert any("peak depth x velocity" in n for n in notes)
+        left = [n for n in os.listdir(d) if "d x v" in n.lower() or "dxv" in n.lower()]
+        assert not left, left
+        assert any("peak depth x velocity raster was removed" in n for n in notes), notes
+        assert os.path.exists(os.path.join(d, hecras_engine.LISFLOOD_PREFIX + "Depth (Max).tif"))
     finally:
         shutil.rmtree(d, True)
+
+
+@test
+def rerun_clears_a_kept_lisflood_dv_copy():
+    """A rerun into the same folder clears both the D x V raster and a "LISFLOOD-FP" copy left
+    by an older HEC-RAS stage, so Hazard cannot pick up a stale Boann D x V."""
+    import inspect
+    src = inspect.getsource(workflow)
+    i = src.index("for stale in (list(STALE_ON_RERUN)")
+    block = src[i:i + 400]
+    assert "PEAK_DV_NAME]" in block and '"LISFLOOD-FP " + PEAK_DV_NAME' in block, block
 
 
 if __name__ == "__main__":
@@ -406,6 +455,7 @@ if __name__ == "__main__":
                runner_writes_the_peak_dv_raster_only_when_asked_and_not_in_the_key,
                loading_results_names_the_peak_dv_layer,
                hecras_stage_drops_the_boann_peak_dv_raster,
+               rerun_clears_a_kept_lisflood_dv_copy,
                boann_peak_dv_is_the_concurrent_value_on_every_solver,
                boann_peak_dv_matches_ritter_at_the_dam,
                boann_peak_dv_leaves_existing_results_identical_to_main,

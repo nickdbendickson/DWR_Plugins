@@ -4030,7 +4030,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # scenario and would be read as this run's. Clear them here; they are written again
         # below only when this run actually has a baseline.
         for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
-                      + list(INCREMENT_NAMES.values()) + [PEAK_DV_NAME]):
+                      + list(INCREMENT_NAMES.values()) + [PEAK_DV_NAME]
+                      + ["LISFLOOD-FP " + PEAK_DV_NAME]):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -6024,27 +6025,36 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     if engine is None:
         from . import hecras_engine as engine
     kw = {"cancel": cancel} if cancel is not None else {}
+    # Boann may have written a peak depth x velocity raster into res.final. HEC-RAS does not
+    # produce one, so the stage is handed the finals without it: run_stage keeps a
+    # "LISFLOOD-FP <name>" copy of every raster it is given, and a kept Boann D x V copy
+    # would be read by Hazard as the dam's D x V beside the HEC-RAS depths.
+    stage_final = {k: v for k, v in res.final.items() if k != "dv"}
     try:
         if unattended:
-            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, unattended=True, **kw)
         else:
-            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
     res.final.update(hr["final"])
-    # Boann may have written a peak depth x velocity raster into res.final. HEC-RAS does not
-    # produce one. Leaving the Boann file beside the HEC-RAS depths would hand the next tool
-    # a Boann number next to HEC-RAS depths, so drop it and delete the file.
+    # HEC-RAS ran: its depths are the final ones, so the Boann D x V no longer matches them.
+    # Drop it from the finals and delete the file (only after the stage succeeded, so a failed
+    # stage leaves the screening results whole).
     dv_path = res.final.pop("dv", None)
     if dv_path:
+        removed = False
         try:
             os.remove(dv_path)
+            removed = True
         except OSError:
-            pass
+            removed = not os.path.exists(dv_path)
         if callable(log):
             log("The Boann peak depth x velocity raster was removed: the final depths are "
-                "from HEC-RAS, and that raster is not.")
+                "from HEC-RAS, which does not make that raster." if removed else
+                "The Boann peak depth x velocity raster could not be removed ({}); it is not "
+                "from the HEC-RAS run.".format(dv_path))
     res.warnings.extend(hr["warnings"])
     # every reported figure from the final engine (the screening pass is kept)
     try:
