@@ -1,7 +1,7 @@
 """BoannGrid D4 flow directions + accumulation on the depression-filled surface (Apple GPU via
 Metal, with a CPU build of the same kernels for the cloud).
 
-    from nd_breach_runner.core.metalterrain import flow
+    from DamSafety_Core.boann.grid import flow
     direction, accum, info = flow.flow_accum(dem, backend="auto")   # NaN / -9999 = NoData
 
 `direction` is the single D4 downstream neighbour per cell (0=N, 1=E, 2=S, 3=W, 4=outlet/sink,
@@ -17,7 +17,7 @@ import os
 
 import numpy as np
 
-from ..metalflood import backends as be
+from ..hydro import backends as be
 from . import fill as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))

@@ -1,15 +1,15 @@
 """Run the BoannGrid fill from the command line:
 
-    python -m nd_breach_runner.core.metalterrain verify [-backend metal|cpu]
+    python -m DamSafety_Core.boann.grid verify [-backend metal|cpu]
         fill a synthetic DEM both ways and check each against core/terrain.priority_flood
         (both within 5e-3 m; the priority-flood within 2 float32 steps of the relaxation) plus
         determinism
-    python -m nd_breach_runner.core.metalterrain bench [-size small|medium] [-backend ...]
+    python -m DamSafety_Core.boann.grid bench [-size small|medium] [-backend ...]
         time the priority-flood and the relaxation, and report sweeps for the relaxation
-    python -m nd_breach_runner.core.metalterrain fill in.asc out.asc [-backend ...]
+    python -m DamSafety_Core.boann.grid fill in.asc out.asc [-backend ...]
         [--fill-method auto|priority-flood|relax]
         fill an ESRI ASCII-grid DEM (NODATA_value / NaN = outlet)
-    python -m nd_breach_runner.core.metalterrain condition in.tif out.tif [options]
+    python -m DamSafety_Core.boann.grid condition in.tif out.tif [options]
         condition a GeoTIFF DEM for road / rail crossings, 4-way from one fill (condition.py):
           --keepout FILE      building footprints / address points / town limits (repeatable)
           --dam-folder DIR    also use the keep-out layers found in a dam folder by name
@@ -37,8 +37,16 @@ def _hash(a):
 
 
 def _oracle(dem):
-    from ..terrain import priority_flood
-    return priority_flood(np.where(np.isfinite(dem) & (dem != F.NODATA), dem, np.nan))
+    """The host's priority-flood (the Runner lends core/terrain.priority_flood through
+    hydro/host.py), or None when Boann runs without one."""
+    import importlib
+    # hydro/host.py by way of the fill's backend module, not `from ..hydro`: run as
+    # `python -m <plugin>.core.metalterrain` this file's package is the alias, whose parent has no hydro
+    host = importlib.import_module(F.be.__name__.rsplit(".", 1)[0] + ".host")
+    pf = host.get("priority_flood")
+    if pf is None:
+        return None
+    return pf(np.where(np.isfinite(dem) & (dem != F.NODATA), dem, np.nan))
 
 
 def verify(backend):
@@ -50,15 +58,17 @@ def verify(backend):
         f1, i1 = F.fill_dem(z, backend=backend, method=method)
         f2, _ = F.fill_dem(z, backend=backend, method=method)
         det = _hash(f1) == _hash(f2)
-        d = np.abs(f1 - orc)
-        dmax = float(np.nanmax(d))
+        dmax = float(np.nanmax(np.abs(f1 - orc))) if orc is not None else 0.0
         rose = bool(np.all(f1 + 1e-4 >= z))             # fill only raises the true ground
         print("method        : {}  device {} ({})".format(method, i1["device"], i1["backend"]))
         print("sweeps        : {}  converged={}  unreached={}".format(
             i1["sweeps"], i1["converged"], i1.get("unreached")))
         print("determinism   : {}  (SHA256 of two runs {})".format(
             "PASS" if det else "FAIL", "identical" if det else "DIFFER"))
-        print("oracle |dh|   : max {:.2e} m vs terrain.priority_flood".format(dmax))
+        if orc is None:
+            print("oracle |dh|   : skipped (no host priority-flood lent, see hydro/host.py)")
+        else:
+            print("oracle |dh|   : max {:.2e} m vs terrain.priority_flood".format(dmax))
         print("filled >= z   : {}".format("yes" if rose else "NO"))
         this = det and rose and i1["converged"] and dmax <= 5e-3 and i1.get("unreached") == 0
         if ref is None:

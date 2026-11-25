@@ -29,13 +29,15 @@ RECORD_NAME = "classification_record.json"
 KIND = "nd_dam_classification_record"
 VERSION = 1
 BUILTIN_MARK = "builtin_lisflood.py"      # a run whose engine "binary" is this is the built-in
-GPU_MARK = "metalflood/engine.py"         # ... and this is Boann, ACC scheme (Runner 3.22.0)
-FV_MARK = "metalflood/engine_fv.py"       # ... Boann, shock-capturing (Runner 3.23.0)
-FV2_MARK = "metalflood/engine_fv2.py"     # ... Boann, shock-capturing 2nd order (Runner 3.33.0)
-DG2_MARK = "metalflood/engine_dg2.py"     # ... Boann, discontinuous Galerkin 2nd order (Runner 3.34.0)
-SGC_MARK = "metalflood/engine_sgc.py"     # ... Boann, sub-grid channels (Runner 3.36.0)
-SUBFV_MARK = "metalflood/engine_subfv.py"  # ... Boann, sub-grid finite volume (Runner 3.42.0)
-SUBLI_MARK = "metalflood/engine_subli.py"  # ... Boann, sub-grid local inertial (Runner 3.79.0)
+# Boann's engine files: Runner core/metalflood/ until DamSafety Core 1.7.0, DamSafety_Core/boann/hydro/
+# since (Boann 6.6.1); each mark is a tuple of both so records of either age read the same
+GPU_MARK = ("metalflood/engine.py", "boann/hydro/engine.py")         # ... and this is Boann, ACC scheme (Runner 3.22.0)
+FV_MARK = ("metalflood/engine_fv.py", "boann/hydro/engine_fv.py")       # ... Boann, shock-capturing (Runner 3.23.0)
+FV2_MARK = ("metalflood/engine_fv2.py", "boann/hydro/engine_fv2.py")     # ... Boann, shock-capturing 2nd order (Runner 3.33.0)
+DG2_MARK = ("metalflood/engine_dg2.py", "boann/hydro/engine_dg2.py")     # ... Boann, discontinuous Galerkin 2nd order (Runner 3.34.0)
+SGC_MARK = ("metalflood/engine_sgc.py", "boann/hydro/engine_sgc.py")     # ... Boann, sub-grid channels (Runner 3.36.0)
+SUBFV_MARK = ("metalflood/engine_subfv.py", "boann/hydro/engine_subfv.py")  # ... Boann, sub-grid finite volume (Runner 3.42.0)
+SUBLI_MARK = ("metalflood/engine_subli.py", "boann/hydro/engine_subli.py")  # ... Boann, sub-grid local inertial (Runner 3.79.0)
 
 
 def _digest(body):

@@ -1113,7 +1113,7 @@ def boann_shock_engines_rerun_at_a_cfl_they_honour():
         assert lf.stable_cfl(e) == lf.STABLE_CFL_SHOCK, e
     for e in (lf.GPU_EXE, lf.GPU_SGC_EXE, "/usr/local/bin/lisflood", ""):
         assert lf.stable_cfl(e) == lf.STABLE_CFL, e
-    here = os.path.join(os.path.dirname(os.path.abspath(lf.__file__)), "metalflood")
+    here = lf.BOANN_DIR                    # DamSafety_Core/boann/hydro (Runner 3.101.1: one copy, in the Core)
     for k in ("kernels_fv.metal", "kernels_fv2.metal", "kernels_dg2.metal", "kernels_subfv.metal"):
         with open(os.path.join(here, k), encoding="utf-8") as f:
             m = re.search(r"#define MF_(?:DG2_CFL|CFL_CAP) ([0-9.]+)f", f.read())

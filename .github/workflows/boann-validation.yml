@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "DamSafety_Runner/core/metalflood/**"
+      - "DamSafety_Core/boann/**"
       - "DamSafety_Runner/core/lisflood.py"
       - "DamSafety_Runner/core/sgc.py"
       - "DamSafety_Runner/core/breach.py"

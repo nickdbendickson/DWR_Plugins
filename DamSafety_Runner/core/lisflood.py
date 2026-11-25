@@ -205,6 +205,71 @@ def is_checkerboard(stats):
             and int((stats or {}).get("checkerboard_rough_cells") or 0) >= CHECKER_MIN_ROUGH)
 
 
+# 3.101.0: one cell, or a few, can blow up while the rest of the peak surface stays sound, too few to
+# pass CHECKER_MIN_ROUGH. Absaraka (DWR-2801) at 30 m, Boann ACC on Runner 3.57.0: 17.33 ft and
+# 20 ft/s on one flat water-body cell in Casselton, where every other engine read 5.6 to 6.9 ft,
+# and it alone made that run's TM-11 High. A re-run is not worth it for a handful of cells (and
+# the mound on an inflow cell looks the same at CHECKER_JUMP_M), so such cells are REPORTED: a
+# spike is a judged cell (as checkerboard(): deeper than min_depth with four neighbours that are
+# too) whose peak water level stands more than SPIKE_JUMP_M above, or below, all four neighbours,
+# more than SPIKE_SOURCE_CELLS cells from every inflow cell. A sound peak surface has none: the
+# test decks and both Absaraka runs on main (2026-11-25) have 0.
+SPIKE_JUMP_M = 0.5
+SPIKE_SOURCE_CELLS = 3
+SPIKE_LIST_MAX = 5
+
+
+def spikes(wse, depth, sources=(), min_depth=CHECKER_MIN_DEPTH_M, jump=SPIKE_JUMP_M,
+           near=SPIKE_SOURCE_CELLS):
+    """Isolated spikes in a run's peak water surface: (count, [(row, col, jump_m), ...]), the list
+    largest first and at most SPIKE_LIST_MAX long; jump_m is how far the cell stands above all four
+    neighbours (> 0) or below them (< 0). `sources` are the (row, col) of the inflow cells; a cell
+    within `near` cells of one (rows and columns) is left out."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return 0, []
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        up = np.where(ok, c - hi, 0.0)
+        down = np.where(ok, lo - c, 0.0)
+    keep = np.zeros(w.shape, dtype=bool)
+    keep[1:-1, 1:-1] = (up > jump) | (down > jump)
+    for r, cc in sources or ():
+        keep[max(0, r - near):r + near + 1, max(0, cc - near):cc + near + 1] = False
+    rows, cols = np.nonzero(keep)
+    if not len(rows):
+        return 0, []
+    sj = np.where(up[rows - 1, cols - 1] > jump, up[rows - 1, cols - 1],
+                  -down[rows - 1, cols - 1])
+    order = np.argsort(-np.abs(sj), kind="stable")[:SPIKE_LIST_MAX]
+    return int(len(rows)), [(int(rows[i]), int(cols[i]), float(sj[i])) for i in order]
+
+
+def bci_sources(path, dem):
+    """(row, col) of the point sources (P lines) of a .bci the Runner wrote, on `dem` (the .bci is
+    in local coordinates: lower-left corner at 0, 0)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 3 and p[0] == "P":
+                    x, y = float(p[1]), float(p[2])
+                    out.append((int(np.floor((dem.ny * dem.dx - y) / dem.dx)),
+                                int(np.floor(x / dem.dx))))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def checker_cfl(user_cfl=None):
     """The Courant number of the re-run of a checkerboarded ACC run: CHECKER_CFL, or the user's own
     when that is already smaller."""
@@ -282,23 +347,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
+
+
+def _boann_dir():
+    """Boann's engine folder. Runner 3.101.1 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
+    Core (DamSafety_Core/boann/hydro); core/metalflood here is only the shim onto it. Found by
+    import spec (the Core's own package folder), else the sibling plugin folder."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("DamSafety_Core.boann.hydro")
+        if spec is not None and spec.submodule_search_locations:
+            return os.path.abspath(list(spec.submodule_search_locations)[0])
+    except (ImportError, ValueError):
+        pass
+    return os.path.join(os.path.dirname(os.path.dirname(HERE)), "DamSafety_Core", "boann", "hydro")
+
+
+BOANN_DIR = _boann_dir()
+# Before Runner 3.101.1 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
+# setting or an older manifest may still hold that path: resolve_exe maps it to the same file here.
 # 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (every
 # core; shipped prebuilt, else compiled once). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
-GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
+GPU_EXE = os.path.join(BOANN_DIR, "engine.py")
 GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
 # 3.23.0: Boann's shock-capturing solver (core/metalflood/engine_fv): a well-balanced,
 # positivity-preserving HLLC finite-volume solver of the full 2-D shallow-water equations, run on
 # the same Metal/CPU kernel machinery. It resolves hydraulic jumps and dam-break fronts the ACC
 # scheme diffuses; like the others it is chosen only by name, never as a fallback.
-GPU_FV_EXE = os.path.join(HERE, "metalflood", "engine_fv.py")
+GPU_FV_EXE = os.path.join(BOANN_DIR, "engine_fv.py")
 GPU_FV_WORDS = ("gpu-fv", "metal-fv", "shock", "hllc", "gpu shock", "shock-capturing")
 # 3.33.0: Boann's 2nd-order shock-capturing solver (core/metalflood/engine_fv2): the same HLLC
 # finite-volume scheme run with MUSCL slope-limited reconstruction (2nd order in space) and SSP-RK2
 # (2nd order in time), so it holds a dam-break bore and a hydraulic jump even sharper than FV1.
 # Chosen only by name, never as a fallback.
-GPU_FV2_EXE = os.path.join(HERE, "metalflood", "engine_fv2.py")
+GPU_FV2_EXE = os.path.join(BOANN_DIR, "engine_fv2.py")
 GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2", "shock 2nd order",
                  "second order")
 # 3.34.0: Boann's 2nd-order discontinuous-Galerkin solver (core/metalflood/engine_dg2): the
@@ -306,7 +390,7 @@ GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2"
 # per-cell planar expansion (element average + x/y slopes) through the Galerkin weak form rather than
 # reconstructing the slopes from the neighbours. Its local slope limiter ("limitslopes") is on by
 # default for float32 rest stability; 'nolimitslopes' in the .par runs it unlimited. By name only.
-GPU_DG2_EXE = os.path.join(HERE, "metalflood", "engine_dg2.py")
+GPU_DG2_EXE = os.path.join(BOANN_DIR, "engine_dg2.py")
 GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
                  "discontinuous galerkin")
 # 3.36.0: Boann's sub-grid-channel solver (core/metalflood/engine_sgc): the ACC local-inertial
@@ -314,7 +398,7 @@ GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
 # than the cell and below the DEM conveys and stores a flood the grid cannot resolve, from the same
 # SGCwidth/SGCbank/SGCbed rasters LISFLOOD-FP reads (or built from the DEM). ACC-family, not
 # shock-capturing. Chosen only by name, never as a fallback.
-GPU_SGC_EXE = os.path.join(HERE, "metalflood", "engine_sgc.py")
+GPU_SGC_EXE = os.path.join(BOANN_DIR, "engine_sgc.py")
 GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid channels",
                  "sub-grid channels")
 # 3.42.0: Boann's sub-grid finite-volume solver (core/metalflood/engine_subfv): the HLLC
@@ -322,7 +406,7 @@ GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid
 # sub-cells as stage tables (Devi & Kuiry 2024), so a coarse run conveys and stores the channel a
 # flat coarse cell loses and still writes a fine-resolution inundation map. The deck DEM is the fine
 # grid; a 'subgrid <r>' keyword sets the coarsening factor. Shock-capturing family. By name only.
-GPU_SUBFV_EXE = os.path.join(HERE, "metalflood", "engine_subfv.py")
+GPU_SUBFV_EXE = os.path.join(BOANN_DIR, "engine_subfv.py")
 GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid fv", "gpu subfv",
                    "subgrid finite volume")
 # 3.79.0: Boann's sub-grid LOCAL-INERTIAL solver (core/metalflood/engine_subli): the ACC scheme run
@@ -330,7 +414,7 @@ GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid 
 # Devi & Kuiry (2024) with exact stage curves and the face's compound Manning conveyance. The deck
 # DEM is the fine grid; 'subgrid <r>' sets the coarsening factor (as for sub-grid FV) and 'upwind'
 # turns the paper's flux weighting on (off by default). ACC family, not shock-capturing. By name only.
-GPU_SUBLI_EXE = os.path.join(HERE, "metalflood", "engine_subli.py")
+GPU_SUBLI_EXE = os.path.join(BOANN_DIR, "engine_subli.py")
 GPU_SUBLI_WORDS = ("gpu-subli", "metal-subli", "subli", "subgrid-li", "sub-grid li", "gpu subli",
                    "subgrid local inertial", "sub-grid local inertial")
 
@@ -536,12 +620,30 @@ def gpu_backend_note():
         return "unknown ({})".format(e)
 
 
+def _legacy_boann(v):
+    """The engine file in DamSafety_Core/boann/hydro for a pre-3.97.1 path
+    <anything>/core/metalflood/engine*.py (a saved setting, a re-run of an older manifest), else
+    None. Only Boann's own engine file names are mapped."""
+    if not v:
+        return None
+    norm = v.replace("\\", "/")
+    base = norm.rsplit("/", 1)[-1]
+    if not norm.endswith("core/metalflood/" + base):
+        return None
+    new = os.path.join(BOANN_DIR, base)
+    return new if new in (GPU_EXE, GPU_FV_EXE, GPU_FV2_EXE, GPU_DG2_EXE, GPU_SGC_EXE,
+                          GPU_SUBFV_EXE, GPU_SUBLI_EXE) else None
+
+
 def resolve_exe(exe):
     """The flood engine for a setting or parameter value. The word "builtin" (any BUILTIN_WORDS
     spelling) selects the built-in engine; anything else is returned verbatim. An empty value
     stays empty on purpose: the caller's guard then raises, so the built-in is never used unless
     the user asked for it."""
     v = (str(exe).strip() if exe else "")
+    legacy = _legacy_boann(v)
+    if legacy:
+        return legacy
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
     if v.lower() in GPU_DG2_WORDS:
@@ -1464,6 +1566,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
     # measured from the bank and the level above was rebuilt from it)
     chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
+    # 3.101.0: isolated spikes the checkerboard share is too small to see (spikes())
+    n_spk, spk = (0, []) if sgc is not None else spikes(
+        wse, hmax, bci_sources(os.path.join(workdir, name + ".bci"), dem))
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
     tb = getattr(st, "terrain_breach", None)
@@ -1499,6 +1604,10 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
         "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
         "checkerboard_rough_cells": chk_rough,
+        # 3.101.0: [x, y, jump ft] of the largest spikes, on the DEM's coordinates
+        "spike_cells": n_spk,
+        "spikes": [[round(dem.xy(r, c)[0], 1), round(dem.xy(r, c)[1], 1), round(j / FT, 2)]
+                   for r, c, j in spk],
     }
     if tb is not None:
         from .terrain_breach import read_pool

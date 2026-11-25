@@ -4,7 +4,7 @@ Linux and macOS before the libraries ship): each engine's library under <dir>/<p
 agrees with Python on the Params layout, reports its cores, and runs a short valley flood that
 conserves water. BoannGrid's libraries are checked too: the priority-flood fill opens and gives
 the same numbers as its pure-Python twin and the relaxation kernel, and the D4 and D8 flow
-libraries open and route that filled surface with no dead ends. The libraries are copied into core/metalflood/prebuilt/<platform>/ for the run,
+libraries open and route that filled surface with no dead ends. The libraries are copied into DamSafety_Core/boann/hydro/prebuilt/<platform>/ for the run,
 exactly where a release zip puts them, and removed afterwards.
 
     python tools/boann_cpu_smoke.py build/boann"""
@@ -15,20 +15,17 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "DamSafety_Runner", "core"))
-
-from metalflood import backends as be                                   # noqa: E402
-from metalflood import engine as mfe, engine_fv as fve, engine_fv2 as fv2e  # noqa: E402
-from metalflood import engine_dg2 as dg2e, engine_sgc as sgce             # noqa: E402
-from metalflood import engine_subfv as sfve, subfv_backend as sfb         # noqa: E402
-from metalflood import engine_subli as slie, subli_backend as slb         # noqa: E402
-from metalflood.cases import valley_deck                                # noqa: E402
-
-# BoannGrid (fill, flow) imports metalflood relatively, so load it as the plugin package
+# Boann lives once, in DamSafety Core (DamSafety_Core/boann: hydro = the flood engine, grid = BoannGrid)
 sys.path.insert(0, REPO)
-from nd_breach_runner.core.metalterrain import cases as mt_cases       # noqa: E402
-from nd_breach_runner.core.metalterrain import fill as mt_fill         # noqa: E402
-from nd_breach_runner.core.metalterrain import flow as mt_flow         # noqa: E402
+from DamSafety_Core.boann.hydro import backends as be                                   # noqa: E402
+from DamSafety_Core.boann.hydro import engine as mfe, engine_fv as fve, engine_fv2 as fv2e  # noqa: E402
+from DamSafety_Core.boann.hydro import engine_dg2 as dg2e, engine_sgc as sgce             # noqa: E402
+from DamSafety_Core.boann.hydro import engine_subfv as sfve, subfv_backend as sfb         # noqa: E402
+from DamSafety_Core.boann.hydro import engine_subli as slie, subli_backend as slb         # noqa: E402
+from DamSafety_Core.boann.hydro.cases import valley_deck                                # noqa: E402
+from DamSafety_Core.boann.grid import cases as mt_cases                                 # noqa: E402
+from DamSafety_Core.boann.grid import fill as mt_fill                                   # noqa: E402
+from DamSafety_Core.boann.grid import flow as mt_flow                                   # noqa: E402
 
 ENGINES = (("acc", mfe.run_par, be.FLOOD_SPEC), ("fv", fve.run_par, be.FV_SPEC),
            ("fv2", fv2e.run_par, be.FV2_SPEC), ("dg2", dg2e.run_par, be.DG2_SPEC),
