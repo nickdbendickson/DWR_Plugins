@@ -5,7 +5,8 @@ file and every stat is the same bit for bit with the skip off. The cloud has no 
 CPU build runs the same tile kernels (DAMSAFETY_MF_CPU_TILES=1). On a Mac the GPU is checked too.
 
 FV1 only until FV2 and DG2 land: one faces-and-cont sweep per step, so water moves one cell a
-step (R = 1) and a 1-tile ring with a chunk of 8 is enough (17 > 8)."""
+step (R = 1) and a 1-tile ring with a chunk of 8 is enough (17 > 8). FV2 does two stages a step
+and its slopes read one more neighbour (R = 2, stencil 2), so the chunk is 4 (10 < 17)."""
 import os
 import re
 import shutil
@@ -21,11 +22,12 @@ from nd_breach_runner.tests.test_boann_dry_skip import _files, _need_cpu_build, 
 from nd_breach_runner.tests.test_boann_rain import _deck as rain_deck
 
 # name, order, chunk, cells of influence per step, extra stencil cells the ring must cover
-SOLVERS = (("fv", 1, fve.SKIP_CHUNK_FV, 1, 0),)
-_SPEC = {"fv": mfb.FV_SPEC}
-_LAYOUT = {"fv": mfb.fv_buffer_layout}
-_KERNEL = {"fv": mfb.FV_KERNEL_SOURCE}
-_TON = {"fv": 25}          # buffer index of ton (ACC is 24)
+SOLVERS = (("fv", 1, fve.SKIP_CHUNK_FV, 1, 0),
+           ("fv2", 2, fve.SKIP_CHUNK_FV2, 2, 2))
+_SPEC = {"fv": mfb.FV_SPEC, "fv2": mfb.FV2_SPEC}
+_LAYOUT = {"fv": mfb.fv_buffer_layout, "fv2": mfb.fv2_buffer_layout}
+_KERNEL = {"fv": mfb.FV_KERNEL_SOURCE, "fv2": mfb.FV2_KERNEL_SOURCE}
+_TON = {"fv": 25, "fv2": 29}          # buffer index of ton (ACC is 24)
 ENVS = ("DAMSAFETY_MF_SKIP", "DAMSAFETY_MF_CPU_TILES", "DAMSAFETY_MF_TILES")
 STATS = ("steps", "batches", "injected_m3", "outflow_m3", "final_volume_m3", "clipped_m3",
          "mass_error_m3", "rain_m3")
@@ -112,14 +114,14 @@ def boann_fv_tiles_kernels_match_the_backend():
     # FV1's ton is the buffer the CPU tile runner reads
     names = [n for n, _, _ in mfb.fv_buffer_layout(4, 4, 1, 1, 2)]
     assert names.index("ton") == _TON["fv"]
+    fv2_names = [n for n, _, _ in mfb.fv2_buffer_layout(4, 4, 1, 1, 2)]
+    assert fv2_names.index("h0") == 24 and fv2_names.index("hs") == 27, fv2_names
+    assert fv2_names.index("ton") == _TON["fv2"]
+    assert len(fv2_names) == 30                      # Params at 30, the Metal cap
     # rain turns FV1's skip off (its Params carries the rain word, as the ACC engine's does)
     p = mfb.Params()
     p.wr, p.wc, p.rain = 40, 70, 1
     assert not mfb._tiles_on(mfb.FV_SPEC, p, fve.SKIP_CHUNK_FV)
-    # FV2 still has its previous-step state where kernels_fv2.metal binds it (not shifted by
-    # FV1's tile buffers)
-    fv2_names = [n for n, _, _ in mfb.fv2_buffer_layout(4, 4, 1, 1, 2)]
-    assert fv2_names.index("h0") == 24 and fv2_names.index("hs") == 27, fv2_names
 
 
 @test

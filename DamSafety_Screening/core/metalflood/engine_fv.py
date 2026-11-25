@@ -29,9 +29,11 @@ DRY_M = bl.DRY_M
 NODATA = bl.NODATA
 BATCH_STEPS = 64
 WINDOW_MARGIN = BATCH_STEPS + 4
-# FV1 dry-tile skip: water moves one cell per step, so a 1-tile ring and a chunk of 8 leave an
-# off cell at least 17 cells from every seed (kernels_fv.metal MF_TILE). Same numbers bit for bit.
+# FV1: R = 1, 1-tile ring, chunk 8 (17 > 8). FV2: two stages and a slope stencil, R = 2,
+# stencil 2; a chunk of 4 with the 1-tile ring covers 10 cells and an off cell is 17 away.
+# A 2-tile ring with a chunk of 8 runs more cells on a thin flood, so the shorter chunk is used.
 SKIP_CHUNK_FV = 8
+SKIP_CHUNK_FV2 = 4
 
 EngineError = bl.EngineError
 Cancelled = bl.Cancelled
@@ -154,7 +156,8 @@ class Engine:
         st[S_WMAX] = wm
         _setf(st, S_MINDT, 1e30)
         st[S_RMIN] = st[S_CMIN] = 0xFFFFFFFF
-        chunk = SKIP_CHUNK_FV if self.scheme == "fv" else 0
+        chunk = (SKIP_CHUNK_FV if self.scheme == "fv" else
+                 SKIP_CHUNK_FV2 if self.scheme == "fv2" else 0)
         self.b.run_batch(p, nsteps, chunk)
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),

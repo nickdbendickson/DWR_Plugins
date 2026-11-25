@@ -71,7 +71,7 @@ def tile_count(ny, nx):
 FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv",
               "k_tclear_fv", "k_tseed_fv", "k_tgrow_fv")
 FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
-               "k_stage_c_fv2", "k_end_fv2")
+               "k_stage_c_fv2", "k_end_fv2", "k_tclear_fv2", "k_tseed_fv2", "k_tgrow_fv2")
 DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_faces_dg2",
                "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2")
 SGC_KERNELS = ("k_begin_sgc", "k_faces_sgc", "k_scale_sgc", "k_limit_sgc", "k_cont_sgc",
@@ -125,18 +125,16 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
 
 
 def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..27: the FV1
-    layout (0..23), the previous-step state h0/hu0/hv0 for the RK2 blend, and hs, the stage-start
-    depth k_cont_fv2 reads for its neighbours' slopes (so the in-place update has no read-after-write
-    race). Params is bound at 28. The minmod slopes are not stored (Metal caps the buffer table at
-    31 slots); they are recomputed inline in the kernels."""
+    """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..29: the FV1
+    layout without its tile buffers (0..23), the previous-step state h0/hu0/hv0 and the
+    stage-start depth hs, then tseed/ton. Params is bound at 30 (30 buffers + Params = 31 slots,
+    the Metal cap). The minmod slopes are not stored; they are recomputed inline."""
     cells = ny * nx
-    f = np.float32
-    # FV1's tile buffers sit at the end of fv_buffer_layout. FV2 does not use them yet: its
-    # previous-step state keeps the indices kernels_fv2.metal was written against.
+    f, u = np.float32, np.uint32
     base = [b for b in fv_buffer_layout(ny, nx, n_src, n_series, n_values)
             if b[0] not in ("tseed", "ton")]
-    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells), ("hs", f, cells)]
+    return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells), ("hs", f, cells),
+                   ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
 def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -252,7 +250,13 @@ def _fv2_plan(p):
             ("k_faces_fv2", faces), ("k_cont_fv2", cells), ("k_end_fv2", one)]
 
 
-FV2_SPEC = Spec("fv2", FV2_KERNEL_SOURCE, SHIM, FV2_CPU_SOURCE, FV2_KERNELS, Params, _fv2_plan)
+def _fv2_tile_plan(p):
+    tiles = (-(-int(p.wc) // TILE), -(-int(p.wr) // TILE), 1)
+    return [("k_tclear_fv2", tiles), ("k_tseed_fv2", (p.wc, p.wr, 1)), ("k_tgrow_fv2", tiles)]
+
+
+FV2_SPEC = Spec("fv2", FV2_KERNEL_SOURCE, SHIM, FV2_CPU_SOURCE, FV2_KERNELS, Params, _fv2_plan,
+                tile_plan=_fv2_tile_plan)
 
 
 def _dg2_plan(p):
