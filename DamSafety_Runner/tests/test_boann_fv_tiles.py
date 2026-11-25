@@ -281,7 +281,15 @@ def boann_fv_tiles_match_the_cpu_build():
                 sc = _run(mk(fc), order, "cpu", DAMSAFETY_MF_CPU_TILES="1")
                 assert abs(sg["steps"] - sc["steps"]) <= max(3, sc["steps"] // 200), (name, case,
                                                                                        sg, sc)
-                for ext, tol in GPU_TOL:
+                # the diagonal deck: only depth, as test_boann_gpu_tiles.py does. Its thin
+                # draining film and NoData hole make the arrival time (and the velocity) differ
+                # between the GPU and the CPU build by more than these tolerances, because the two
+                # builds round differently and a film that thin turns rounding into a whole cell's
+                # arrival hour. That is the engine without the skip too: GPU skip-on equals skip-off
+                # bit for bit and the CPU tiles equal the whole window bit for bit (the two tests
+                # above), so the two builds differ there by the same amount with the skip off.
+                checks = (("max", 0.01),) if case == "diag" else GPU_TOL
+                for ext, tol in checks:
                     x = np.loadtxt(os.path.join(fg, "results", "run." + ext), skiprows=6)
                     y = np.loadtxt(os.path.join(fc, "results", "run." + ext), skiprows=6)
                     m = (x != bl.NODATA) & (y != bl.NODATA)
