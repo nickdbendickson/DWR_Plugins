@@ -552,18 +552,22 @@ class HazardClassification(UnitAlgorithm):
                         got = (got + " " + str(sh).strip()).strip()
                     return got
 
+                # isys (0.58.0): a piece of the interstate system its name does not show (FUNC_SYS 1: 'RAMP',
+                # 'EXIT 63'); a matched count never lowers it
                 if roads is not None:
                     lines(roads, tr, fr, "road", r_in, lambda r: {
                         "name": _rname(r),
                         "aadt": r[f_aadt] if f_aadt else None,
                         "road_class": str(r[f_rcls]) if f_rcls and r[f_rcls] is not None else "",
-                        "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False})
+                        "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False,
+                        "isys": cm.interstate_system(r)})
                 for src, tfm, fback, fa, frc, fs, prefix in extra_roads:
                     lines(src, tfm, fback, "road", r_in, lambda r, fa=fa, frc=frc, fs=fs: {
                         "name": _rname(r),
                         "aadt": r[fa] if fa else None,
                         "road_class": str(r[frc]) if frc and r[frc] is not None else "",
-                        "sole_access": nh.yes_no(r[fs]) is True if fs else False}, prefix)
+                        "sole_access": nh.yes_no(r[fs]) is True if fs else False,
+                        "isys": cm.interstate_system(r)}, prefix)
                 if rail is not None:
                     lines(rail, tl, fl, "railroad", t_in, lambda r: {
                         "trains_per_day": r[f_trn] if f_trn else None,
@@ -602,15 +606,22 @@ class HazardClassification(UnitAlgorithm):
 
                 # 0.58.0: an overtopped road without AADT takes the count of the traffic line it runs along
                 # (or the count station on it) where the water crosses it; an interstate is High anyway
-                joined, tried = {}, 0
+                st8 = nh.Settings(unknown_aadt=unknown_aadt)
+                lvl = lambda r, aadt: nh.road_class(hz.nd_road(
+                    r["id"], r["depth_m"], aadt, r.get("road_class", ""),
+                    sole_access=r.get("sole_access", False), name=r.get("name", "")), st8)[0]
+                joined, kept, tried = {}, {}, 0
                 if join and road_parts:
                     wet = RA.wet_test(grid.depth, grid.x0, grid.y_top, grid.cell, rdep)
                     for r in r_in:
                         if r["id"] not in road_parts or hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
                             continue
                         tried += 1
-                        m = join.match(road_parts[r["id"]], is_wet=wet)
-                        if m:
+                        # where the water crosses it (else next to the point found overtopped), by its name
+                        m = join.match(road_parts[r["id"]], is_wet=wet, name=r.get("name", ""), at=(r["x"], r["y"]))
+                        if m and r.get("isys") and nh.RANK[lvl(r, m["aadt"])] < nh.RANK[lvl(r, None)]:
+                            kept[r["id"]] = m           # interstate system (FUNC_SYS 1): not lowered by a count
+                        elif m:
                             joined[r["id"]] = m
                     for e in join.errors:
                         if e not in said:
@@ -618,11 +629,14 @@ class HazardClassification(UnitAlgorithm):
                             feedback.reportError("Traffic counts: {} was not read (left out)".format(e))
                 r_cls = [dict(r, aadt=joined[r["id"]]["aadt"], aadt_src=joined[r["id"]]["text"])
                          if r["id"] in joined else r for r in r_in]
-                r_name = {r["id"]: str(r.get("name") or "").strip() for r in r_in if r["id"] in joined}
+                r_name = {r["id"]: str(r.get("name") or "").strip() for r in r_in if r["id"] in joined or r["id"] in kept}
 
                 def rlabel(rid):
                     """'road 12 (87TH ST NW)': the impacted feature's id and, when it has one, its name."""
                     return "road {}{}".format(rid, " ({})".format(r_name[rid]) if r_name.get(rid) else "")
+                for rid, m in kept.items():
+                    feedback.pushInfo("dam {}: {}: interstate system (FUNC_SYS 1 / SHIELD I): the matched {} would "
+                                      "lower it; not used".format(dam_id, rlabel(rid), m["text"]))
 
                 def classify(roads_in):
                     return hz.classify_nd(s_in, roads_in, t_in, method=crit, wet_m=wet_m, rule_depth_ft=rule_ft,
@@ -641,12 +655,9 @@ class HazardClassification(UnitAlgorithm):
                     for rid, m in joined.items():
                         feedback.pushInfo("dam {}: {}: {}".format(dam_id, rlabel(rid), m["text"]))
                     if nh.RANK[c.hazard_class] < nh.RANK[c0.hazard_class]:
-                        st8 = nh.Settings(unknown_aadt=unknown_aadt)
-                        lvl = lambda r, aadt: nh.road_class(hz.nd_road(
-                            r["id"], r["depth_m"], aadt, r.get("road_class", ""),
-                            sole_access=r.get("sole_access", False), name=r.get("name", "")), st8)[0]
-                        items = ["{}: {} ({} instead of {})".format(rlabel(r["id"]), joined[r["id"]]["text"],
-                                                                    lvl(r, r["aadt"]), lvl(r, None))
+                        # one entry per road: an NG9-1-1 street cut into segments that took one count is listed once
+                        items = [(r_name.get(r["id"]), r["id"], "{} ({} instead of {})".format(
+                                     joined[r["id"]]["text"], lvl(r, r["aadt"]), lvl(r, None)))
                                  for r in r_cls if r["id"] in joined
                                  and nh.RANK[lvl(r, r["aadt"])] < nh.RANK[lvl(r, None)]]
                         aadt_review = RA.review_text("Class", c.hazard_class,
@@ -678,6 +689,9 @@ class HazardClassification(UnitAlgorithm):
                         return "own AADT field"
                     if hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
                         return "no AADT; interstate (High whatever its count)"
+                    if rid in kept:
+                        return ("no AADT; interstate system (FUNC_SYS 1 / SHIELD I), so not lowered by the matched "
+                                + kept[rid]["text"])
                     if join:
                         return "no AADT; no traffic count matched within {:.0f} m".format(join.max_m)
                     return "no AADT; no traffic layer"
@@ -731,7 +745,8 @@ class HazardClassification(UnitAlgorithm):
                             "hz_border": "yes" if c.borderline_raised else "no",
                             "hz_gaps": hz.limit_text(list(c.data_gaps) + extra_gaps),
                             "hz_aadt": hz.limit_text(["{} of {} overtopped road(s) without AADT matched".format(
-                                len(joined), tried)] + ["{}: {}".format(rlabel(k), m["text"]) for k, m in joined.items()])
+                                len(joined), tried)] + RA.grouped([(r_name.get(k), k, m["text"])
+                                                                   for k, m in joined.items()])[0])
                             if tried else None,
                             "hz_aadt_review": aadt_review or None})
                 n_gaps += bool(c.data_gaps or extra_gaps)
@@ -751,7 +766,7 @@ class HazardClassification(UnitAlgorithm):
                 dfold = os.path.join(dams_folder, ho.safe_name(dam_id))
                 if os.path.isdir(dfold):
                     attrs = {n: get(f, n) for n in names}
-                    attrs.update({k: res[k] for k in ("hz_class", "hz_border", "hz_gaps")})
+                    attrs.update({k: res[k] for k in ("hz_class", "hz_border", "hz_gaps", "hz_aadt_review")})
                     if status == "noflood":      # recorded as a triage clear with its reason
                         attrs["tri_result"] = "clear"
                         attrs["tri_reason"] = res["hz_reason"]

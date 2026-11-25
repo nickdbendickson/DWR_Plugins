@@ -472,9 +472,12 @@ def changed_inputs(work, step):
 # 0.52.0: step -> (the release that moved its results, a field that release added, what changed). Only
 # input digests were compared, so a triage made by 0.47 (DWR-2636 and DWR-10551, both DWR High, cleared on
 # the envelope alone) stayed 'done' after the upgrade and tool 7 skipped those dams.
-RESULTS_MOVED = {"6": ("0.52.0", "tri_corr", "the rating guard and the downstream corridor check"),
-                 # 0.58.0: roads without AADT take the matched traffic count (a US / State highway with
-                 # more than 2,000 a day was Medium, not High); the window shows an older output out of date
+# 0.58.0: roads without AADT take the matched traffic count (a US / State highway with more than 2,000 a day
+# was Medium, not High): steps 6 and 8 made before it show out of date. Step 6's rule moves to 0.58.0 (it covers
+# the 0.52.0 one): its corridor now counts a local road matched to over 2,000 as High-capable, so an older clear
+# could be wrong and tool 7 must not keep skipping it.
+RESULTS_MOVED = {"6": ("0.58.0", "tri_aadt", "the rating guard and the downstream corridor check (0.52.0) and "
+                                             "the traffic counts for roads without AADT"),
                  "8": ("0.58.0", "hz_aadt", "the traffic counts for roads without AADT")}
 
 

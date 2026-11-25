@@ -23,6 +23,7 @@ Medium, not High (DWR-3271). Checked here:
 
 Run: python3 DamSafety_Screening/tests/test_road_aadt_join.py (or with pytest)."""
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -272,10 +273,10 @@ def test_tool8():
         assert d["hz_class"] == "Low" and d["n_road_wet"] == 2, d
         assert d["hz_conf"] == "review" and d["hz_border"] == "no" and not d["hz_gaps"], d
         assert d["hz_aadt_review"].startswith("Class Low rests on traffic counts matched from other layers for 1 "
-                                              "road(s) (road 2 (87TH ST NW): AADT 83 (2023) from ND county roads "
+                                              "road(s) (87TH ST NW (road 2): AADT 83 (2023) from ND county roads "
                                               "(ND_county_roads.gpkg) (Low instead of Medium)); without them it "
                                               "would be Medium: review"), d["hz_aadt_review"]
-        assert d["hz_aadt"].startswith("1 of 1 overtopped road(s) without AADT matched; road 2 (87TH ST NW): AADT 83"), \
+        assert d["hz_aadt"].startswith("1 of 1 overtopped road(s) without AADT matched; 87TH ST NW (road 2): AADT 83"), \
             d["hz_aadt"]
         assert "[count from ND county roads]" in d["hz_reason"], d["hz_reason"]
         assert sorted(imp) == [("road", "Low", "AADT 83 (2023) from ND county roads (ND_county_roads.gpkg)"),
@@ -410,9 +411,9 @@ def test_tool6():
         assert r["tri_result"] == "needs 2D" and r["tri_reason"].startswith("1 road(s) inside the envelope"), r
         r = w.run(ROADS=ng, ROADS_MORE=cty)
         assert r["tri_result"] == "clear" and "rests on matched traffic counts for 1 road(s)" in r["tri_reason"], r
-        assert r["tri_aadt"].startswith("Triage clear rests on traffic counts matched from other layers for 1 road(s) "
-                                        "(road 87TH ST NW: AADT 83 (2023) from ND county roads (ND_county_roads.gpkg)"
-                                        " (Low instead of Medium)); without them it needs 2D: review"), r["tri_aadt"]
+        assert re.match(r"Triage clear rests on traffic counts matched from other layers for 1 road\(s\) \(87TH ST NW "
+                        r"\(road \d+\): AADT 83 \(2023\) from ND county roads \(ND_county_roads\.gpkg\) \(Low instead "
+                        r"of Medium\)\); without them it needs 2D: review$", r["tri_aadt"]), r["tri_aadt"]
         # the rating guard and the fail-safes stay: a dam DWR rates Medium is not cleared on a matched count
         w.dams._feats[0].setAttributes(["DWR-3", 2000.0, 3.0, 2000.0, "Medium"])
         r = w.run(ROADS=ng, ROADS_MORE=cty)
@@ -450,8 +451,10 @@ def test_tool6():
         # matched to 1,200 it is Medium, not High-capable: the dam clears and the clear is flagged
         r = corr("MAIN ST", "USHY", 1200.0)
         assert r["tri_result"] == "clear" and r["tri_corr"] == "none", r
-        assert r["tri_aadt"].startswith("Triage clear rests on traffic counts matched from other layers for 1 road(s) "
-                                        "(road MAIN ST USHY in the corridor: AADT 1,200 (2024) from HPMS"), r["tri_aadt"]
+        assert re.match(r"Triage clear rests on traffic counts matched from other layers for 1 road\(s\) \(MAIN ST USHY "
+                        r"\(road \d+\): AADT 1,200 \(2024\) from HPMS", r["tri_aadt"]), r["tri_aadt"]
+        assert "in the corridor (not High-capable; without it: MAIN ST USHY (US/State highway, AADT unknown))" \
+            in r["tri_aadt"], r["tri_aadt"]
         # any error in the corridor still sends the dam to 2D (the fail-safe is untouched)
         from nd_dam_screening.core import road_aadt as _ra
         real = _ra.Join.match

@@ -165,6 +165,17 @@ def layer_path(params, key):
     return p if p and os.path.isfile(p) else ""
 
 
+def interstate_system(feat):
+    """core.road_aadt.interstate_system for a road feature: FUNC_SYS / F_SYSTEM 1 or SHIELD I / EXIT, read
+    by field name (any letter case); False when the feature has none of those fields."""
+    from ..core import road_aadt as RA
+    try:
+        low = {str(n).lower(): n for n in feat.fields().names()}
+        return RA.interstate_system({k: feat[low[k]] for k in ("func_sys", "f_system", "shield") if k in low})
+    except Exception:                                            # noqa  (never fails the tool)
+        return False
+
+
 def aadt_join(paths):
     """core.road_aadt.Join for these traffic GeoPackages, with QGIS transforms from each file's
     CRS to EPSG:5070 (a file in EPSG:5070 is read as it is)."""

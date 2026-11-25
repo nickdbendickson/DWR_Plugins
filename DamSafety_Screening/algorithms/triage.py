@@ -382,9 +382,9 @@ class Triage(UnitAlgorithm):
                     ", ".join(os.path.basename(p) for p in apaths)))
         rested, said = [], set()                               # per dam: roads rated lower only on a matched count
 
-        def match(parts, is_wet):
+        def match(parts, is_wet, name="", at=None):
             """join.match, the unread files reported once."""
-            m = join.match(parts, is_wet=is_wet) if join and parts else None
+            m = join.match(parts, is_wet=is_wet, name=name, at=at) if join and parts else None
             for e in (join.errors if join else ()):
                 if e not in said:
                     said.add(e)
@@ -475,13 +475,15 @@ class Triage(UnitAlgorithm):
 
         def _road_high_joined(r, ta, near, rd, ctext):
             kind, parts = cm.albers_parts(r, ta)
-            m = match(parts, near) if kind == "line" else None
+            m = match(parts, near, _road_name(r)) if kind == "line" else None
             if not m:
                 return _high(rd, r, ctext)
             ok, label = _high(_with_count(rd, m), r, ctext, " from " + RA.source_label(m["source"]))
             if not ok and _high(rd, r, ctext)[0]:
-                rested.append("road {} in the corridor: {} (not High-capable; without it: {})".format(
-                    _road_name(r) or ctext or r.id(), m["text"], _high(rd, r, ctext)[1]))
+                if cm.interstate_system(r):          # interstate system (FUNC_SYS 1): a count never lowers it
+                    return _high(rd, r, ctext)
+                rested.append((_road_name(r) or ctext, r.id(), "{} in the corridor (not High-capable; without it: "
+                                                               "{})".format(m["text"], _high(rd, r, ctext)[1])))
             return ok, label
 
         rlnames = _names(rail)
@@ -824,14 +826,15 @@ class Triage(UnitAlgorithm):
                         if lvl == "Low":
                             return False                # cannot raise the class above Low
                         gl = r.geometry(); gl.transform(ta)
-                        parts = cm.geom_parts(gl)[1] if join and rd.aadt is None and not rd.interstate else None
+                        parts = cm.geom_parts(gl)[1] if join and rd.aadt is None and not rd.interstate \
+                            and not cm.interstate_system(r) else None   # FUNC_SYS 1: a count never lowers it
                         gl = gl.densifyByDistance(abs(gt[1]))
-                        if not any(inside(v.x(), v.y()) for v in gl.vertices()):
+                        at = next(((v.x(), v.y()) for v in gl.vertices() if inside(v.x(), v.y())), None)
+                        if at is None:
                             return False
-                        m = match(parts, inside) if parts else None
+                        m = match(parts, inside, _road_name(r), at) if parts else None
                         if m and hz.nh.road_class(_with_count(rd, m), hz.nh.Settings())[0] == "Low":
-                            rested.append("road {}: {} (Low instead of {})".format(_road_name(r) or r.id(),
-                                                                                 m["text"], lvl))
+                            rested.append((_road_name(r), r.id(), "{} (Low instead of {})".format(m["text"], lvl)))
                             return False
                         return True
 
@@ -889,7 +892,7 @@ class Triage(UnitAlgorithm):
             if result == "clear" and rested and not (nf or ex or flag_e):
                 # 0.58.0: without the matched counts this dam would go to 2D: flag the clear for review
                 tri_aadt = RA.review_text("Triage", "clear", "it needs 2D", rested)
-                reason += "; rests on matched traffic counts for {} road(s) (tri_aadt)".format(len(rested))
+                reason += "; rests on matched traffic counts for {} road(s) (tri_aadt)".format(RA.grouped(rested)[1])
                 stats["aadt"] = stats.get("aadt", 0) + 1
             aud = "no"
             if result == "clear" and not nf and not flag_e and rnd.random() < audit:
