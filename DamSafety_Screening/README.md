@@ -472,8 +472,9 @@ converts the screening's metres and m/s to feet and ft/s.
   their R-trees, only where a road needs a count. A road's own AADT is kept; an interstate is
   High whatever its count; a road that matches nothing keeps the 'unknown AADT' class.
   Around the Runner's match (`core/road_aadt.py`): a count station counts only on the road's
-  overtopped part and on this road (named as it, or the traffic line nearest the station runs
-  the same way); when no 15 m sample is wet, the samples next to the point found overtopped
+  overtopped part and on this road (named as it, or sitting on a traffic line the road runs
+  along, so not on a crossing road or on the highway beside a frontage road); when no 15 m
+  sample is wet, the samples next to the point found overtopped
   decide; and a lower count never wins over a higher one on the same road (another traffic
   line it runs along, one named as the road, or a station on it, in a higher AADT band: the
   newest year, then the higher count, as the Hazard plugin). A piece of the interstate system
