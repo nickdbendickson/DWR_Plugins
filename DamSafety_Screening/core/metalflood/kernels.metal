@@ -54,7 +54,7 @@ using namespace metal;
 #define S_LASTDT 15    // float: dt of the last step taken
 #define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell
 #define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
-#define S_TILES 18     // uint: 1 = the grid kernels leave out the tiles ton marks off (set by the host)
+#define S_TILES 18     // uint: 0 = every cell runs; 1 = the host turned the skip on (this batch's first redraw scans every cell); 2 = k_tgrow has written ton (a later redraw may leave out a tile that was off)
 #define S_WORDS 32
 // The two sums over many threads (edge outflow, clipped volume) are added as fixed-point uints:
 // not every Apple GPU has float atomics (the CI runner's paravirtual GPU has none). Each SIMD
@@ -71,6 +71,12 @@ using namespace metal;
 // computes there. The grid kernels skip those cells (k_limit and k_cont still take part in their
 // SIMD-group reductions with the values a dry cell gives, so the groups and sums are unchanged).
 // Same numbers bit for bit, as test_boann_gpu_tiles checks. Rain wets every cell: no skip.
+// The host sets S_TILES to 1 once per batch, so the first redraw reads every cell (the window
+// may have moved, and ton is not cleared between batches). k_tgrow then sets S_TILES to 2 after
+// it writes ton, and a later redraw in the same batch does not re-read a cell whose tile was
+// off. The window does not move inside a batch, and an off tile stays dry for the chunk, so a
+// new seed can appear only in a tile that was on. The next batch starts at 1 again (full scan).
+// Thread (0, 0) still marks every source. k_tclear still runs.
 #define MF_TILE 16u
 
 struct Params {
@@ -554,23 +560,28 @@ kernel void k_tclear(MF_ARGS) {
 }
 
 // a window cell is a seed when it holds water or a face beside it carried flow or recorded a
-// velocity in the last step (as the CPU skip's mf_rows); thread (0, 0) also marks the sources
+// velocity in the last step (as the CPU skip's mf_rows); thread (0, 0) also marks the sources.
+// S_TILES == 1 (the host, once per batch) reads every cell: the window may have moved, and ton
+// is not cleared between batches. S_TILES == 2 reads a cell only when its tile was on. ton still
+// holds that map here, because only k_tgrow writes it and k_tgrow runs after this kernel.
 kernel void k_tseed(MF_ARGS) {
     if (gid.x >= p.wc || gid.y >= p.wr) {
         return;
     }
     uint nx = p.nx;
     uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
-    uint r = p.r0 + gid.y;
-    uint c = p.c0 + gid.x;
-    uint i = r * nx + c;
-    uint fx = r * (nx + 1u) + c;
-    if (h[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f || qxo[fx + 1u] != 0.0f ||
-        vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f || qyo[i + nx] != 0.0f ||
-        vyf[i + nx] != 0.0f) {
-        atomic_fetch_max_explicit((device atomic_uint*)(tseed + (gid.y / MF_TILE) * ntx
-                                                        + gid.x / MF_TILE),
-                                  1u, memory_order_relaxed);
+    uint tile = (gid.y / MF_TILE) * ntx + gid.x / MF_TILE;
+    if (st[S_TILES] != 2u || ton[tile] != 0u) {
+        uint r = p.r0 + gid.y;
+        uint c = p.c0 + gid.x;
+        uint i = r * nx + c;
+        uint fx = r * (nx + 1u) + c;
+        if (h[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f || qxo[fx + 1u] != 0.0f ||
+            vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f || qyo[i + nx] != 0.0f ||
+            vyf[i + nx] != 0.0f) {
+            atomic_fetch_max_explicit((device atomic_uint*)(tseed + tile),
+                                      1u, memory_order_relaxed);
+        }
     }
     if (gid.x == 0u && gid.y == 0u) {
         for (uint k = 0; k < p.n_src; ++k) {
@@ -605,4 +616,7 @@ kernel void k_tgrow(MF_ARGS) {
         }
     }
     ton[gid.y * ntx + gid.x] = on;
+    if (gid.x == 0u && gid.y == 0u) {
+        st[S_TILES] = 2u;   // after ton is written; the next redraw of this batch may trust it
+    }
 }
