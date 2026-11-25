@@ -297,7 +297,6 @@ def terrain_breach_baseline_deck_has_no_notch_and_the_breach_deck_does():
         assert "breachfile" not in open(os.path.join(base_dir, "run.par"), encoding="utf-8").read()
         assert "QVAR breach" in open(os.path.join(base_dir, "run.bci"), encoding="utf-8").read()
         src = open(workflow.__file__, encoding="utf-8").read()
-        assert src.count("_notch_this_pass(tag, tb_on)") >= 2
         # a resumed baseline must not be the pass that writes the report entry
         i = src.index("def load_lisflood")
         body = src[i:src.index("\n    # M5:", i)]
@@ -359,6 +358,148 @@ def terrain_breach_resume_keeps_the_stable_settings():
     assert st.subgrid_upwind is True and st.terrain_breach is None
 
 
+def _nested_fn(name):
+    """The AST of a function nested in workflow.py (lisflood_run / load_lisflood are closures
+    inside the dam run, so they are checked by structure, not by text: a comment or a dead
+    string cannot satisfy these checks)."""
+    import ast
+    tree = ast.parse(open(workflow.__file__, encoding="utf-8").read())
+    hits = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name]
+    assert len(hits) == 1, (name, len(hits))
+    return hits[0]
+
+
+def _calls(node, name):
+    import ast
+    out = []
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            f = n.func
+            fname = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute)
+                                                         else None)
+            if fname == name:
+                out.append(n)
+    return out
+
+
+def _gate(node, negated):
+    """The If statements of node whose test is _notch_this_pass(tag, tb_on) (or its 'not')."""
+    import ast
+    out = []
+    for n in ast.walk(node):
+        if not isinstance(n, ast.If):
+            continue
+        t = n.test
+        if negated:
+            if not (isinstance(t, ast.UnaryOp) and isinstance(t.op, ast.Not)):
+                continue
+            t = t.operand
+        if (isinstance(t, ast.Call) and isinstance(t.func, ast.Name)
+                and t.func.id == "_notch_this_pass"
+                and [a.id for a in t.args if isinstance(a, ast.Name)] == ["tag", "tb_on"]):
+            out.append(n)
+    return out
+
+
+@test
+def terrain_breach_pass_staging_cuts_the_notch_only_on_the_breach_pass():
+    """The breach pass raises the crest on the breach line, then stages the notch and the pool.
+    The no-breach baseline gets no notch, and its crest goes up after the start depth on the
+    same line (a batch crest line when the dam has none). Option off: the old raise, on the
+    dam's own line only. A fresh run and a resume both go through these two helpers, and
+    neither calls the stage or the raise around them."""
+    _dem0, line, dam_xy, inflow = _valley()
+    dam = _dam()
+    dam.crest_line_xy = None
+    st = _settings()
+    st.midcrest_line = line
+    geom = tb.prepare(dam, _hy(), workflow._breach_crest_lines(dam, st, 0.0),
+                      dam_xy, (1.0, 0.0), inflow)
+    calls = []
+    real_raise = lf.raise_crest
+
+    def spy_raise(dem, dxy, ixy, top_m, length_m=None, line_xy=None):
+        calls.append(("raise", line_xy))
+        return real_raise(dem, dxy, ixy, top_m, length_m=length_m, line_xy=line_xy)
+
+    def start_fn(dem):
+        def f():
+            calls.append(("start", None))
+            return None
+        return f
+
+    workflow.lfmod.raise_crest = spy_raise
+    try:
+        # the breach pass: raise on the batch line first, then the start depth, then a notch
+        dem = _valley()[0]
+        warnings = []
+        init, spec = workflow._stage_notch_pass(dem, dam, st, dam_xy, inflow, geom,
+                                                start_fn(dem), warnings, lambda m: None)
+        assert spec is not None
+        assert calls[0] == ("raise", line) and calls[-1] == ("start", None), calls
+        assert float(np.nanmax(np.asarray(init.data, float))) > 0.0   # the staged pool
+        assert any("along the dam line" in w for w in warnings), warnings
+        # the baseline, option on: no notch; raise after the start depth, on the same line
+        calls[:] = []
+        dem = _valley()[0]
+        assert not workflow._notch_this_pass("_base", True)
+        workflow._raise_crest_after_start(dem, dam, st, True, dam_xy, inflow, [], None)
+        assert calls == [("raise", line)], calls
+        # option off: the batch line is not used; the dam has none, so the crest point
+        calls[:] = []
+        dem = _valley()[0]
+        workflow._raise_crest_after_start(dem, dam, st, False, dam_xy, inflow, [], None)
+        assert calls == [("raise", None)], calls
+        # a dam line of its own: used both ways
+        dam.crest_line_xy = line
+        st.midcrest_line = None
+        calls[:] = []
+        workflow._raise_crest_after_start(_valley()[0], dam, st, False, dam_xy, inflow)
+        assert calls == [("raise", line)], calls
+    finally:
+        workflow.lfmod.raise_crest = real_raise
+    # no crest geometry on a breach pass is refused, not silently run without a notch
+    try:
+        workflow._stage_notch_pass(_valley()[0], dam, st, dam_xy, inflow, None,
+                                   lambda: None)
+    except br.BreachInputError:
+        pass
+    else:
+        raise AssertionError("a breach pass without crest geometry ran")
+    # the fresh run and the resume are wired through these helpers
+    run = _nested_fn("lisflood_run")
+    load = _nested_fn("load_lisflood")
+    for fn, late in ((run, True), (load, False)):
+        g = _gate(fn, negated=False)
+        assert len(g) == 1, (fn.name, len(g))
+        assert _calls(g[0].body[0], "_stage_notch_pass"), fn.name
+        assert _calls(g[0].orelse[0], "start_depth"), fn.name
+        assert not _calls(fn, "stage") and not _calls(fn, "raise_crest"), fn.name
+        assert not _calls(fn, "_crest_raise_lines") and not _calls(fn, "_breach_crest_lines")
+    late_gate = _gate(run, negated=True)
+    assert len(late_gate) == 1 and _calls(late_gate[0], "_raise_crest_after_start")
+    # the resumed baseline with the option on raises as the fresh baseline did
+    assert len(_calls(load, "_raise_crest_after_start")) == 1
+
+
+@test
+def terrain_breach_resume_passes_the_stable_settings_by_structure():
+    """The resume's LisfloodSettings takes **stable_kw() and the notch spec, checked on the
+    parsed call (not the text), so removing the argument fails even if the words remain in a
+    comment."""
+    import ast
+    for name in ("load_lisflood", "lisflood_run"):
+        fn = _nested_fn(name)
+        sets = _calls(fn, "LisfloodSettings")
+        assert len(sets) == 1, (name, len(sets))
+        kws = sets[0].keywords
+        star = [k for k in kws if k.arg is None]
+        assert len(star) == 1 and isinstance(star[0].value, ast.Call), name
+        assert getattr(star[0].value.func, "id", None) == "stable_kw", name
+        tbk = [k for k in kws if k.arg == "terrain_breach"]
+        assert len(tbk) == 1 and getattr(tbk[0].value, "id", None) == "tb_spec", name
+
+
 if __name__ == "__main__":
     for fn in (terrain_breach_setting_is_out_of_the_key_and_the_report_when_off,
                terrain_breach_is_refused_unless_the_run_can_lower_the_bed,
@@ -367,7 +508,9 @@ if __name__ == "__main__":
                terrain_breach_mass_uses_the_pool_and_products_omit_the_start,
                terrain_breach_baseline_deck_has_no_notch_and_the_breach_deck_does,
                terrain_breach_batch_crest_line_is_used_when_the_dam_has_none,
-               terrain_breach_resume_keeps_the_stable_settings):
+               terrain_breach_resume_keeps_the_stable_settings,
+               terrain_breach_pass_staging_cuts_the_notch_only_on_the_breach_pass,
+               terrain_breach_resume_passes_the_stable_settings_by_structure):
         try:
             fn()
             print("ok  ", fn.__name__, flush=True)

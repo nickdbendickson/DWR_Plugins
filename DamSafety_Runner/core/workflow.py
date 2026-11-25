@@ -2022,6 +2022,57 @@ def _notch_this_pass(tag, tb_on):
     return bool(tb_on) and tag != "_base"
 
 
+def _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom, start_fn, warnings=None,
+                      log=None):
+    """A pass that cuts the notch (breach inside the terrain on, not the baseline): the crest
+    goes up first, along the breach crest line(s), then the notch and the full reservoir are
+    staged. start_fn() is the pass's ordinary start depth, taken after the raise. Returns
+    (initial depth, terrain-breach spec). warnings / log: the crest-raised note (fresh runs
+    only; a resume does not repeat it)."""
+    from . import terrain_breach as tbmod
+    lines = _breach_crest_lines(dam, st, max(12.0, dem.dx) / 2.0)
+    top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
+    if top_m and getattr(st, "raise_crest", True):
+        nraise = 0
+        for ln in lines:
+            nraise += lfmod.raise_crest(
+                dem, dam_xy, inflow_xy, top_m,
+                length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=ln)
+        how = ("along the dam line" if any(ln and len(ln) >= 2 for ln in lines)
+               else "at the crest point")
+        if warnings is not None and add_crest_raised_warning(warnings, nraise, how) and log:
+            log(warnings[-1])
+    if tb_geom is None:
+        raise brmod.BreachInputError(
+            "Breach inside the terrain has no crest geometry for this pass. Turn it off.")
+    tb_spec, tb_depth = tbmod.stage(dem, tb_geom, lines)
+    return tbmod.add_depth(dem, start_fn(), tb_depth), tb_spec
+
+
+def _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy, warnings=None, log=None):
+    """The crest raise of a pass that cuts no notch, made after its start depth. Option off:
+    on the dam's own line, exactly as before the option existed. Option on (only the no-breach
+    baseline gets here): on the same line(s) as the notch, a batch crest line when the dam has
+    none, so the baseline dam is the breach pass's dam before the cut."""
+    top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
+    if not (top_m and getattr(st, "raise_crest", True)):
+        return
+    half = max(12.0, dem.dx) / 2.0
+    lines = _crest_raise_lines(dam, half) if not tb_on else _breach_crest_lines(dam, st, half)
+    nraise = 0
+    for ln in lines:
+        nraise += lfmod.raise_crest(
+            dem, dam_xy, inflow_xy, top_m,
+            length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=ln)
+    if not tb_on:
+        how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
+    else:
+        how = ("along the dam line" if any(ln and len(ln) >= 2 for ln in lines)
+               else "at the crest point")
+    if warnings is not None and add_crest_raised_warning(warnings, nraise, how) and log:
+        log(warnings[-1])
+
+
 def hecras_dam_xy(res, given_xy):
     """3.20.11 (critique 7): the dam point for the HEC-RAS stage and the final products of a
     finished run: the modelled (mid-crest) point when the dam point check moved it, else the
@@ -3188,23 +3239,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # is raised after the start depth, below. Every other pass with the option on stages
         # the notch, which needs the crest up first.
         if _notch_this_pass(tag, tb_on):
-            _lines = _breach_crest_lines(dam, st, max(12.0, dem.dx) / 2.0)
-            top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
-            if top_m and getattr(st, "raise_crest", True):
-                nraise = 0
-                for _ln in _lines:
-                    nraise += lfmod.raise_crest(
-                        dem, dam_xy, inflow_xy, top_m,
-                        length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
-                how = ("along the dam line" if any(_ln and len(_ln) >= 2 for _ln in _lines)
-                       else "at the crest point")
-                if add_crest_raised_warning(warnings, nraise, how):
-                    log(warnings[-1])
-            if tb_geom is None:
-                raise brmod.BreachInputError(
-                    "Breach inside the terrain has no crest geometry for this pass. Turn it off.")
-            tb_spec, _tb_depth = tbmod.stage(dem, tb_geom, _lines)
-            init = tbmod.add_depth(dem, start_depth(dem, bnds, cs), _tb_depth)
+            init, tb_spec = _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom,
+                                              lambda: start_depth(dem, bnds, cs), warnings, log)
         else:
             init = start_depth(dem, bnds, cs)
         gl = gauge_list(bnds, gauges)
@@ -3234,27 +3270,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         os.remove(fp[:-3] + ext)
                     except OSError:
                         pass
-        top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
-        # Off: raised after the start depth, on the dam's own line, as before.
-        # On, only the no-breach baseline reaches here, on the same line as the notch
-        # (a batch crest line when the dam has none). The breach pass already raised, above.
-        if (not tb_on or tag == "_base") and top_m and getattr(st, "raise_crest", True):
-            half = max(12.0, dem.dx) / 2.0
-            _lines = (_crest_raise_lines(dam, half) if not tb_on
-                      else _breach_crest_lines(dam, st, half))
-            nraise = 0
-            for _ln in _lines:
-                nraise += lfmod.raise_crest(
-                    dem, dam_xy, inflow_xy, top_m,
-                    length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
-            if not tb_on:
-                how = ("along the dam line" if getattr(dam, "crest_line_xy", None)
-                       else "at the crest point")
-            else:
-                how = ("along the dam line" if any(_ln and len(_ln) >= 2 for _ln in _lines)
-                       else "at the crest point")
-            if add_crest_raised_warning(warnings, nraise, how):
-                log(warnings[-1])
+        # Off: raised after the start depth, on the dam's own line, as before. On, only the
+        # no-breach baseline gets here (the breach pass raised before staging, above).
+        if not _notch_this_pass(tag, tb_on):
+            _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy, warnings, log)
         marker = os.path.join(wd, lfmod.STABILITY_MARKER)
         if not stability["on"] and os.path.exists(marker):
             os.remove(marker)
@@ -3396,28 +3415,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         man = manning_for(bnds, cs)
         tb_spec = None
         if _notch_this_pass(tag, tb_on):
-            _lines = _breach_crest_lines(dam, st, max(12.0, dem.dx) / 2.0)
-            top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
-            if top_m and getattr(st, "raise_crest", True):
-                for _ln in _lines:
-                    lfmod.raise_crest(
-                        dem, dam_xy, inflow_xy, top_m,
-                        length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
-            if tb_geom is None:
-                raise brmod.BreachInputError(
-                    "Breach inside the terrain has no crest geometry for this pass. Turn it off.")
-            tb_spec, _tb_depth = tbmod.stage(dem, tb_geom, _lines)
-            init = tbmod.add_depth(dem, start_depth(dem, bnds, cs), _tb_depth)
+            init, tb_spec = _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom,
+                                              lambda: start_depth(dem, bnds, cs))
         else:
             init = start_depth(dem, bnds, cs)
             # The baseline run raised the crest after the start depth and did not cut a notch.
+            # (Option off, a resume reads the grid as it always has, without the raise.)
             if tag == "_base" and tb_on:
-                top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
-                if top_m and getattr(st, "raise_crest", True):
-                    for _ln in _breach_crest_lines(dam, st, max(12.0, dem.dx) / 2.0):
-                        lfmod.raise_crest(
-                            dem, dam_xy, inflow_xy, top_m,
-                            length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
+                _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy)
         gl = gauge_list(bnds, st.gauges)
         lst = lfmod.LisfloodSettings(st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
