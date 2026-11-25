@@ -7,6 +7,7 @@ part of the checkpoint key.
 
     python3 -m nd_breach_runner.tests.test_boann_peak_dv
 """
+import json
 import math
 import os
 import shutil
@@ -421,11 +422,40 @@ def hecras_stage_drops_the_boann_peak_dv_raster():
             assert res.final.get("dv") == dv and os.path.exists(dv)
             assert not os.path.exists(os.path.join(d, hecras_engine.LISFLOOD_PREFIX
                                                    + workflow.PEAK_DV_NAME))
-            # the stage succeeds
+            # the stage succeeds; the run manifest listed the D x V among the outputs
+            from nd_breach_runner.core import provenance
             Eng.fail = False
             res = new_res()
+            man = os.path.join(d, provenance.MANIFEST_NAME)
+            provenance.write_manifest(man, provenance.build_manifest(
+                "test", {}, {}, None, None, {}, outputs=dict(res.final)))
+            assert "dv" in json.load(open(man, encoding="utf-8"))["outputs"]
+            res.manifest = man
             workflow.run_hecras_stage(d, res, None, workflow.RunSettings(write_peak_dv=True),
                                       (0.0, 0.0), notes.append, Eng)
+            chk = provenance.verify_manifest(man)
+            assert not any("'dv'" in p for p in chk["problems"]), chk["problems"]
+            assert not any("edited after" in p for p in chk["problems"]), chk["problems"]
+            # a D x V that cannot be deleted (a locked file) is a warning, not just a log line
+            with open(dv, "w", encoding="utf-8") as f:
+                f.write("boann\n")
+            res = new_res()
+            real_remove = workflow.os.remove
+
+            def locked(path, *a, **k):
+                if os.path.basename(path) == workflow.PEAK_DV_NAME:
+                    raise PermissionError("in use")
+                return real_remove(path, *a, **k)
+
+            workflow.os.remove = locked
+            try:
+                workflow.run_hecras_stage(d, res, None, workflow.RunSettings(write_peak_dv=True),
+                                          (0.0, 0.0), notes.append, Eng)
+            finally:
+                workflow.os.remove = real_remove
+            assert "dv" not in res.final
+            assert any("could not be removed" in w for w in res.warnings), res.warnings
+            real_remove(dv)
         finally:
             workflow.adopt_final_engine = old
         assert "dv" not in Eng.given, Eng.given
@@ -442,12 +472,28 @@ def hecras_stage_drops_the_boann_peak_dv_raster():
 @test
 def rerun_clears_a_kept_lisflood_dv_copy():
     """A rerun into the same folder clears both the D x V raster and a "LISFLOOD-FP" copy left
-    by an older HEC-RAS stage, so Hazard cannot pick up a stale Boann D x V."""
-    import inspect
-    src = inspect.getsource(workflow)
-    i = src.index("for stale in (list(STALE_ON_RERUN)")
-    block = src[i:i + 400]
-    assert "PEAK_DV_NAME]" in block and '"LISFLOOD-FP " + PEAK_DV_NAME' in block, block
+    by an older HEC-RAS stage, so Hazard cannot pick up a stale Boann D x V. Checked on the
+    parsed loop (a comment or a dead string cannot satisfy it)."""
+    import ast
+    tree = ast.parse(open(workflow.__file__, encoding="utf-8").read())
+    loops = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+             and isinstance(n.target, ast.Name) and n.target.id == "stale"
+             and any(isinstance(c, ast.Name) and c.id == "STALE_ON_RERUN"
+                     for c in ast.walk(n.iter))]
+    assert loops, "the rerun cleanup loop is gone"
+    names = set()
+    for loop in loops:
+        for c in ast.walk(loop.iter):
+            if isinstance(c, ast.Name) and c.id == "PEAK_DV_NAME":
+                names.add("plain")
+            if (isinstance(c, ast.BinOp) and isinstance(c.op, ast.Add)
+                    and isinstance(c.left, ast.Constant) and c.left.value == "LISFLOOD-FP "
+                    and isinstance(c.right, ast.Name) and c.right.id == "PEAK_DV_NAME"):
+                names.add("prefixed")
+        removes = [c for c in ast.walk(loop) if isinstance(c, ast.Call)
+                   and getattr(c.func, "attr", None) == "remove"]
+        assert removes, "the cleanup loop no longer removes anything"
+    assert names == {"plain", "prefixed"}, names
 
 
 if __name__ == "__main__":
