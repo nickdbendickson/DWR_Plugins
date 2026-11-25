@@ -55,6 +55,8 @@ class Engine:
         layout = lay(ny, nx, len(d.src_cells), len(d.series), n_values)
         a = self.a = backend.allocate(layout)
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
+        if getattr(d, "breach", None) is not None:
+            self.zref = min(self.zref, d.breach.lowest_final())
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
         a["n2"][:] = (d.n ** 2).ravel()
         if self.is_dg2:
@@ -85,6 +87,8 @@ class Engine:
         a["st"][S_WMAX] = np.float32(w0).view(np.uint32)
         self.src_rc = (np.array([s[0] for s in d.src_cells], int),
                        np.array([s[1] for s in d.src_cells], int))
+        self.breach_rc = ((d.breach.rows, d.breach.cols) if getattr(d, "breach", None) is not None
+                          else None)
         p = self.p = be.Params()
         p.nx, p.ny = nx, ny
         p.free_mask = sum(_FREE_BITS[e] for e in d.free)
@@ -109,6 +113,10 @@ class Engine:
         if len(self.src_rc[0]):
             rmin, rmax = min(rmin, self.src_rc[0].min()), max(rmax, self.src_rc[0].max())
             cmin, cmax = min(cmin, self.src_rc[1].min()), max(cmax, self.src_rc[1].max())
+        brc = getattr(self, "breach_rc", None)
+        if brc is not None and len(brc[0]):
+            rmin, rmax = min(rmin, int(brc[0].min())), max(rmax, int(brc[0].max()))
+            cmin, cmax = min(cmin, int(brc[1].min())), max(cmax, int(brc[1].max()))
         if rmin > rmax:
             return (0, 1, 0, 1)
         m = WINDOW_MARGIN
@@ -228,6 +236,9 @@ def _run(d, bk, progress, cancel, say, limiter=False):
     batches = 0
     t_start = time.time()
     last_prog = t_start
+    br = getattr(d, "breach", None)
+    if br is not None:
+        br.open_pool(root, eng)
 
     def write_mass(tt):
         vol = volume()
@@ -255,7 +266,11 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                 bl._write_asc("{}-{:04d}.wd".format(root, snap_k), h_out(), xll, yll, dx)
                 snap_k += 1
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
+            if br is not None:
+                br.catch_up(eng, t)
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
+            if br is not None and br.next_u is not None:
+                t_event = min(t_event, br.next_u)
             cut = False      # the clip_end flag; NOT the clipped-volume total `clip`
             want = int(math.ceil((t_event - t) / max(mean_dt, 1e-3))) + 1
             n = max(1, min(BATCH_STEPS, want))
@@ -270,6 +285,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                 last_dt = out["dt"]
                 qin, qout = out["qin"], out["qout"]
                 mean_dt = out["t_local"] / out["steps"]
+                if br is not None:
+                    br.note_in(out["vin"])
             if cut and (t_event - t) - out["t_local"] <= 2e-3:
                 t = t_event
             else:
@@ -280,6 +297,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                     t = max(t, t_event)
             if t >= next_mass - 1e-6:
                 write_mass(t)
+                if br is not None:
+                    br.pool_row(eng, t)
                 next_mass += massint
             now = time.time()
             if progress and now - last_prog > 2.0:
@@ -287,12 +306,16 @@ def _run(d, bk, progress, cancel, say, limiter=False):
                 last_prog = now
         if write_mass.last_t < t - 1e-6:
             write_mass(t)
+            if br is not None:
+                br.pool_row(eng, t)
         if next_snap is not None and t >= next_snap - 1e-9:
             bl._write_asc("{}-{:04d}.wd".format(root, snap_k), h_out(), xll, yll, dx)
     finally:
         mass_f.close()
         if dis_f:
             dis_f.close()
+        if br is not None:
+            br.close_pool()
 
     valid = d.valid
     shape = (ny, nx)
@@ -308,7 +331,11 @@ def _run(d, bk, progress, cancel, say, limiter=False):
     bl._write_asc(root + ".inittm", np.where(valid, arrival, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & (hmax > 0), tmax, NODATA), xll, yll, dx,
                   fmt="%.4f")
-    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), d.z + hmax, NODATA), xll, yll, dx)
+    mxe_bed = br.bed_for_mxe(a["hmax"]) if br is not None else d.z
+    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe_bed + hmax, NODATA), xll, yll, dx)
+    if br is not None:
+        bl._write_asc(root + ".bed", np.where(valid, br.final_bed(), NODATA), xll, yll, dx,
+                      fmt="%.4f")
     vol = volume()
     wall = time.time() - t_start
     stats = {"engine": NAME, "version": VERSION, "backend": bk.kind, "device": bk.device,
@@ -319,6 +346,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
              "clipped_m3": clip}
     # where the time went (backends.Profile); timing only, no result depends on it
     stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
+    if br is not None:
+        stats["breach"] = br.stats()
     say("Boann, shock-capturing ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                         stats["mass_error_m3"], vin))

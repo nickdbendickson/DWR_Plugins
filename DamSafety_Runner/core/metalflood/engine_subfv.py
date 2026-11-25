@@ -172,6 +172,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
 
     deck = Deck(par_path)
     mfe.refuse_rain(deck, "sub-grid FV")
+    mfe.refuse_breach(deck, "sub-grid FV")
     try:
         bk = be.make_backend(backend, spec=sb.SUBFV_SPEC, log=say)
     except be.BackendError as e:

@@ -256,6 +256,9 @@ MODEL_KEYS = {
     # peak depth x velocity raster (Boann .maxDV -> "D x V (Max).tif", ft2/s). Off: no raster,
     # and the checkpoint key is unchanged because the flood is the same.
     "write_peak_dv": ("write_peak_dv", ("bool",)),
+    # the dam and a full reservoir on the grid, a notch lowered into the bed. Off: the
+    # hydrograph is injected and the checkpoint key is unchanged.
+    "breach_in_terrain": ("breach_in_terrain", ("bool",)),
     # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
     # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
     "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
@@ -519,7 +522,10 @@ TEMPLATE = {
                  "reservoir_carve: off | auto | on (carve the reservoir bottom from the storage "
                  "curve where the LiDAR shows a water surface; default off). write_peak_dv: "
                  "write 'D x V (Max).tif' (ft2/s) from Boann's peak depth x velocity; default "
-                 "off, and only a Boann run has the grid. max_wall_s / "
+                 "off, and only a Boann run has the grid. breach_in_terrain: build the dam and "
+                 "a full reservoir into the grid and lower a notch into the bed (sunny-day, "
+                 "Boann ACC / FV1 / FV2 / DG2, a routed weir opening); default off, and off "
+                 "leaves every result unchanged. max_wall_s / "
                  "max_total_wall_s: wall-clock limit of one LISFLOOD-FP run / budget of the "
                  "whole domain-growth loop, in seconds (0 = automatic: 6 x the run-time "
                  "estimate when lisflood_rate - the cell-seconds per second `estimate` "
@@ -529,7 +535,7 @@ TEMPLATE = {
         "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth",
         "qa_basemap": "auto", "qa_basemap_labels": True, "reservoir_carve": "off",
-        "write_peak_dv": False,
+        "write_peak_dv": False, "breach_in_terrain": False,
         "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,

@@ -5,11 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.56.0
+version=0.57.0
 plugin_dependencies=DamSafety Core
 icon=damit.svg
 category=Plugins
-changelog=0.56.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.94.0: Boann 6.1.0 writes a peak depth x velocity grid, .maxDV. New output, no existing result moves.)
+changelog=0.57.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.95.0: Boann 6.2.0 can lower a notch into the bed, opt-in, and writes .bed and .pool. Off, no existing result moves.)
+    0.56.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.94.0: Boann 6.1.0 writes a peak depth x velocity grid, .maxDV. New output, no existing result moves.)
     0.55.0 - (2026-11-24) The same Boann 6.0.0 engine files as Runner 3.93.0: FV1, FV2 and DG2 make a face against NoData a reflecting wall (THIS MOVES FV1 / FV2 / DG2 results where water reaches NoData; ACC unchanged).
     0.54.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.90.0: the ACC engine skips dry ground on the Apple GPU (Boann 5.5.0; DAMSAFETY_MF_TILES=0 turns it off). NO result changes: the results are byte-identical with the skip on and off.)
     0.53.0 - (2026-11-24; tool 7's Boann engine files re-synced with DamSafety Runner 3.89.0: on a Mac the CPU build runs on the performance cores only; the same results bit for bit)
