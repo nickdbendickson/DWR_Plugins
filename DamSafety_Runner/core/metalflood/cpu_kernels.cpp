@@ -4,6 +4,8 @@
 // the standard headers come before the shim: it defines kernel / device / constant / thread
 // as empty macros for the Metal source, which would break libc++'s own headers (macOS)
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <vector>
 
 #include "mf_shim.h"
@@ -235,5 +237,112 @@ long long mf_run_batch_tiles(void** b, const Params* pp, int nsteps, int chunk) 
         run += (long long)cells;
     }
     return run;
+}
+}
+
+// ---- ESRI ASCII grid text (Runner 3.94.0): the rows np.savetxt(fmt="%.<prec>f") writes, byte for
+// byte, many times faster. Each value is rounded from its exact binary value to prec decimals,
+// ties to even (what Python's float formatting and a correct printf do), in integer arithmetic,
+// so no printf and no locale is involved. Values that do not fit (not finite, or |x| * 10^prec of
+// 2^63 or more) return -1 and the caller writes the file with np.savetxt instead.
+#if defined(__SIZEOF_INT128__)
+static const unsigned long long MF_POW10[7] = {1ull, 10ull, 100ull, 1000ull, 10000ull, 100000ull,
+                                               1000000ull};
+
+// one value as text into o (at most 28 chars); the length, or -1 when it does not fit
+static int mf_fmt_fixed(double x, int prec, char* o) {
+    if (!std::isfinite(x)) return -1;
+    const bool neg = std::signbit(x);
+    double ax = std::fabs(x);
+    unsigned long long q;
+    if (ax == 0.0) {
+        q = 0ull;
+    } else {
+        int e2;
+        double f = std::frexp(ax, &e2);                       // ax = f * 2^e2, f in [0.5, 1)
+        unsigned long long m = (unsigned long long)std::ldexp(f, 53);   // exact: 53-bit mantissa
+        int e = e2 - 53;                                      // ax = m * 2^e
+        unsigned __int128 num = (unsigned __int128)m * MF_POW10[prec];
+        if (e >= 0) {
+            if (e > 63) return -1;
+            unsigned __int128 v = num << e;
+            if ((v >> e) != num || v >= ((unsigned __int128)1 << 63)) return -1;
+            q = (unsigned long long)v;
+        } else {
+            int s = -e;
+            if (s >= 127) {
+                q = 0ull;                                     // under half a unit: rounds to 0
+            } else {
+                unsigned __int128 qq = num >> s;
+                unsigned __int128 r = num - (qq << s);
+                unsigned __int128 half = (unsigned __int128)1 << (s - 1);
+                if (r > half || (r == half && (qq & 1))) qq += 1;
+                if (qq >= ((unsigned __int128)1 << 63)) return -1;
+                q = (unsigned long long)qq;
+            }
+        }
+    }
+    unsigned long long ip = q / MF_POW10[prec], fp = q % MF_POW10[prec];
+    char tmp[24];
+    int n = 0;
+    do {
+        tmp[n++] = (char)('0' + (int)(ip % 10ull));
+        ip /= 10ull;
+    } while (ip);
+    int k = 0;
+    if (neg) o[k++] = '-';
+    while (n) o[k++] = tmp[--n];
+    if (prec > 0) {
+        o[k++] = '.';
+        for (int i = prec - 1; i >= 0; --i) {
+            o[k + i] = (char)('0' + (int)(fp % 10ull));
+            fp /= 10ull;
+        }
+        k += prec;
+    }
+    return k;
+}
+#else
+// no 128-bit integers in this compiler: every grid goes to np.savetxt (the kernels are unchanged)
+static int mf_fmt_fixed(double, int, char*) { return -1; }
+#endif
+
+extern "C" {
+
+// rows [0, ny) of a (ny x nx doubles, row-major) as savetxt's text: values joined by one space,
+// each row ending in '\n'. out holds cap bytes (ny * (nx * 29 + 1) is always enough); the number
+// of bytes written, or -1 when a value does not fit (see above) or prec is not 0..6
+long long mf_format_rows(const double* a, int ny, int nx, int prec, char* out, long long cap) {
+    if (prec < 0 || prec > 6 || ny < 0 || nx < 1) return -1;
+    const long long w = (long long)nx * 29 + 1;               // the most one row can take
+    if (cap < (long long)ny * w) return -1;
+    int bad = 0;
+    std::vector<long long> len((size_t)ny);
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static) if (ny > 1 && (long long)nx * ny >= 65536) reduction(| : bad)
+#endif
+    for (int y = 0; y < ny; ++y) {
+        char* o = out + (long long)y * w;
+        const double* r = a + (long long)y * nx;
+        long long k = 0;
+        for (int x = 0; x < nx; ++x) {
+            if (x) o[k++] = ' ';
+            int n = mf_fmt_fixed(r[x], prec, o + k);
+            if (n < 0) {
+                bad = 1;
+                break;
+            }
+            k += n;
+        }
+        o[k++] = '\n';
+        len[(size_t)y] = k;
+    }
+    if (bad) return -1;
+    long long t = 0;
+    for (int y = 0; y < ny; ++y) {                            // close the gaps between rows
+        if (t != (long long)y * w) std::memmove(out + t, out + (long long)y * w, (size_t)len[(size_t)y]);
+        t += len[(size_t)y];
+    }
+    return t;
 }
 }

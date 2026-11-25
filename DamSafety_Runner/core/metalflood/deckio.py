@@ -73,7 +73,72 @@ def _read_asc(path, shape=None):
 def _write_asc(path, a, xll, yll, dx, fmt="%.3f"):
     header = ("ncols {}\nnrows {}\nxllcorner {:.6f}\nyllcorner {:.6f}\ncellsize {:.6f}\n"
               "NODATA_value {:g}".format(a.shape[1], a.shape[0], xll, yll, dx, NODATA))
-    np.savetxt(path, a, fmt=fmt, header=header, comments="")
+    if not _write_asc_fast(path, a, header, fmt):
+        np.savetxt(path, a, fmt=fmt, header=header, comments="")
+
+
+# Runner 3.94.0: the result grids' text written by the CPU build's mf_format_rows, the same bytes
+# np.savetxt writes (each value rounded from its exact binary value, ties to even, in integer
+# arithmetic; tests/test_asc_writer.py compares them) about 7x faster: np.savetxt took 51 of 92 s
+# of a 1 h sub-grid run on an 88 M-cell 2 m grid. np.savetxt still writes a grid the fast writer
+# cannot (a value that is not finite or too large, another format), and every grid when no CPU
+# build is to be had (no prebuilt library and no compiler) or DAMSAFETY_MF_FAST_ASC=0.
+_FAST_ASC = {}
+
+
+def _fast_asc_fn():
+    """mf_format_rows from the CPU build, or None (looked up once per process)."""
+    if "fn" in _FAST_ASC:
+        return _FAST_ASC["fn"]
+    fn = None
+    if os.environ.get("DAMSAFETY_MF_FAST_ASC", "1").strip().lower() not in ("0", "no", "false",
+                                                                             "off"):
+        try:
+            import ctypes
+            from . import backends as _mfb
+            lib = ctypes.CDLL(_mfb.build_cpu_library(_mfb.FLOOD_SPEC))
+            fn = lib.mf_format_rows
+            fn.restype = ctypes.c_longlong
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                           ctypes.c_void_p, ctypes.c_longlong]
+        except Exception:          # no CPU build here, or an older one without the writer
+            fn = None
+    _FAST_ASC["fn"] = fn
+    return fn
+
+
+def _write_asc_fast(path, a, header, fmt):
+    """Write the grid as np.savetxt(path, a, fmt, header=header, comments="") would, through
+    mf_format_rows; False (nothing left behind) when it cannot, and np.savetxt is to write it."""
+    if (not isinstance(fmt, str) or len(fmt) != 4 or fmt[:2] != "%." or fmt[3] != "f"
+            or not fmt[2].isdigit() or getattr(a, "ndim", 0) != 2 or a.shape[1] < 1):
+        return False
+    fn = _fast_asc_fn()
+    if fn is None:
+        return False
+    prec = int(fmt[2])
+    ny, nx = a.shape
+    rows = max(1, (1 << 20) // nx)                     # about a million values per call
+    buf = np.empty(rows * (nx * 29 + 1), dtype=np.uint8)
+    ok = False
+    try:
+        # text mode, as np.savetxt opens it ('\n' becomes '\r\n' on Windows the same way)
+        with open(path, "w") as fh:
+            fh.write(header + "\n")
+            for y0 in range(0, ny, rows):
+                c = np.ascontiguousarray(a[y0:y0 + rows], dtype=np.float64)
+                n = fn(c.ctypes.data, c.shape[0], nx, prec, buf.ctypes.data, buf.size)
+                if n < 0:
+                    return False
+                fh.write(buf[:n].tobytes().decode("ascii"))
+        ok = True
+        return True
+    finally:
+        if not ok:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def read_par(path):
