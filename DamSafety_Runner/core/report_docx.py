@@ -1580,7 +1580,9 @@ FINAL_FILES = (("Depth (Max).tif", "Maximum flood depth", "ft"),
                ("Incremental Depth (Max).tif", "Depth with the breach minus without", "ft"),
                ("Incremental WSE Rise (Max).tif", "Water-surface rise from the breach", "ft"),
                ("D x V (Max).tif",
-                "Peak depth times velocity at one moment (Boann only, and only when asked)",
+                "Peak of total depth times velocity at one moment (not depth above the "
+                "arrival depth, and not shifted by the breach-initiation time; Boann only, "
+                "and only when asked)",
                 "ft2/s"))
 
 FILE_DESC = {

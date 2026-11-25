@@ -10,7 +10,7 @@ plugin_dependencies=DamSafety Core
 icon=damit.svg
 category=Plugins
 changelog=0.63.0 - (2026-11-25; tool 7's Boann engine files re-synced with DamSafety Runner 3.100.0: Boann 6.6.0 can lower a notch into the bed, opt-in, and writes .bed and .pool. Off, no existing result moves. A resumed run keeps its stable settings, the no-breach baseline is not notched, a batch crest line is used when the dam has none, the pool file's times never go backwards, and .mxe at the notch is the peak over time of depth + the lowering bed.)
-    0.62.0 - (2026-11-25; tool 7's Boann engine files re-synced with DamSafety Runner 3.99.0: Boann 6.5.0 writes a peak depth x velocity grid, .maxDV. New output, no existing result moves.)
+    0.62.0 - (2026-11-25; tool 7's Boann engine files re-synced with DamSafety Runner 3.99.0: Boann 6.5.0 writes a peak depth x velocity grid, .maxDV, the largest total water depth times speed at one moment, not the depth above the arrival depth and not shifted by the breach-initiation time. New output, no existing result moves.)
     0.61.0 - (2026-11-25; tool 7's Boann engine re-synced with DamSafety Runner 3.98.0: Boann 6.4.0. FV1 adds rain on the grid, the same source term as the ACC engine; new input, no existing result moves. engine_fv.py, kernels_fv.metal and the Boann version re-synced.)
     0.60.1 - (2026-11-25; tool 7's Boann engine re-synced with DamSafety Runner 3.97.1: Boann 6.3.1. After the first tile redraw of a batch the ACC kernels do not scan a tile that was off. NO result changes.)
     0.60.0 - (2026-11-25; tool 7's Boann version re-synced with DamSafety Runner 3.97.0: Boann 6.3.0. The sub-grid local-inertial solver, which this plugin does not carry, skips dry tiles on the Apple GPU. NO result changes.)
