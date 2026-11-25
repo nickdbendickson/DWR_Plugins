@@ -109,27 +109,42 @@ def same_name(a, b):
 
 def interstate_system(values):
     """True for a piece of the interstate system its name may not show, by the Hazard plugin's rule
-    (DamSafety_Hazard/linear.py road_class): FUNC_SYS (ND NG9-1-1) or F_SYSTEM (HPMS) 1 - ramps named
-    'RAMP', 'EXIT 63' or 'UNNAMED', 'MEMORIAL HWY SE', 'VILLARD ST' - or HPMS ROUTE_SIGNING 2. Tools 6
-    and 8 rate it Interstate (High whatever its count). values: {lower-case field name: value}."""
-    if _num(values.get("func_sys")) == 1 or _num(values.get("f_system")) == 1:
-        return True
+    (DamSafety_Hazard/linear.py road_class): F_SYSTEM (HPMS), else FUNC_SYS (ND NG9-1-1), 1 - ramps named
+    'RAMP', 'EXIT 63' or 'UNNAMED', 'MEMORIAL HWY SE', 'VILLARD ST' - or HPMS ROUTE_SIGNING 2; or an
+    NG9-1-1 SHIELD 'I' with the route number in SHIELD_LBL (Hazard reads 'I 29' from the two; the 21
+    Grand Forks I-29 'RAMP' pieces coded FUNC_SYS 7). Tools 6 and 8 rate it Interstate (High whatever
+    its count). values: {lower-case field name: value}."""
+    fs = _num(values.get("f_system"))
+    if fs is None:
+        fs = _num(values.get("func_sys"))
     rs = _num(values.get("route_signing"))
-    return (rs if rs is not None else _num(values.get("routesigning"))) == 2
+    if rs is None:
+        rs = _num(values.get("routesigning"))
+    if fs == 1 or rs == 2:
+        return True
+    return _shield(values) == "I" and bool(re.match(r"\s*\d", _text(values.get("shield_lbl"))))
 
 
 def interstate_shield(values):
-    """True for an NG9-1-1 SHIELD 'I' / 'EXIT' (a 'RAMP' coded FUNC_SYS 7, say). The Hazard plugin does
-    not rate it Interstate, so tools 6 and 8 do not either; but a matched count never lowers it."""
-    return str(values.get("shield") or "").strip().upper() in ("I", "EXIT")
+    """True for an NG9-1-1 SHIELD 'I' / 'EXIT' that interstate_system() does not take (SHIELD EXIT, or I with
+    no route number). The Hazard plugin does not rate it Interstate, so tools 6 and 8 do not either; but a
+    matched count never lowers it."""
+    return _shield(values) in ("I", "EXIT")
+
+
+def _text(v):
+    return "" if v is None or str(v).strip() == "NULL" else str(v)
+
+
+def _shield(values):
+    return _text(values.get("shield")).strip().upper()
 
 
 def _num(v):
-    """A field value as a whole number, else None (NULL, '', text)."""
+    """A field value as a finite number, else None (NULL, '', text, inf), as the Hazard plugin's _num."""
     try:
-        if v is None or str(v).strip() in ("", "NULL"):
-            return None
-        return int(float(v))
+        f = float(_text(v).strip() or "nan")
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
 

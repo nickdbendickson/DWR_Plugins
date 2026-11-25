@@ -165,7 +165,7 @@ def layer_path(params, key):
     return p if p and os.path.isfile(p) else ""
 
 
-_ISYS_FIELDS = ("func_sys", "f_system", "route_signing", "routesigning", "shield")
+_ISYS_FIELDS = ("func_sys", "f_system", "route_signing", "routesigning", "shield", "shield_lbl")
 
 
 def _isys_values(feat):
@@ -174,8 +174,9 @@ def _isys_values(feat):
 
 
 def interstate_system(feat):
-    """core.road_aadt.interstate_system for a road feature (FUNC_SYS / F_SYSTEM 1, ROUTE_SIGNING 2: rated
-    Interstate), read by field name (any letter case); False when the feature has none of those fields."""
+    """core.road_aadt.interstate_system for a road feature (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2, SHIELD I with
+    a route number in SHIELD_LBL: rated Interstate), read by field name (any letter case); False when the
+    feature has none of those fields."""
     from ..core import road_aadt as RA
     try:
         return RA.interstate_system(_isys_values(feat))

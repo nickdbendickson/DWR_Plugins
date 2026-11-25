@@ -458,8 +458,9 @@ converts the screening's metres and m/s to feet and ft/s.
 - "Any depth" is 0.1 ft = 0.03048 m (MIND and RDEP defaults; at least 0.003 m), the runner's
   WET_FT default. Before v0.8 roads needed 0.15 m and structures 0.05 m.
 - Roads: AADT > 2,000 or interstate (I-94, I 94, I94, IH-29, 'Interstate', TIGER 'I'; from
-  0.58.0 also FUNC_SYS / F_SYSTEM 1 or ROUTE_SIGNING 2, the interstate system as the Hazard
-  plugin reads it, so an NG9-1-1 'RAMP' or 'EXIT 63' of I-94) -> High;
+  0.58.0 also F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2 or an NG9-1-1 SHIELD I with a route number
+  in SHIELD_LBL, the interstate system as the Hazard plugin reads it, so an NG9-1-1 'RAMP' or
+  'EXIT 63' of I-94 or I-29) -> High;
   500-2,000 or sole access to an occupied location (optional yes/no field) -> Medium; < 500 ->
   Low. A missing, zero, negative or NaN AADT is unknown, never Low, and a road is not
   promoted by its name (the old 'state/US highway = Medium' heuristic is not in the policy):
@@ -480,9 +481,9 @@ converts the screening's metres and m/s to feet and ft/s.
   decide; and a lower count never wins over a higher one on the same road (another traffic
   line it runs along, one named as the road, or a station on it, in a higher AADT band: the
   newest year, then the higher count, as the Hazard plugin). A piece of the interstate system
-  its name does not show (FUNC_SYS / F_SYSTEM 1: 'RAMP', 'EXIT 63') is an interstate (High)
-  and is never matched; an NG9-1-1 road with SHIELD I or EXIT outside it (a 'RAMP' coded
-  FUNC_SYS 7) is never lowered by a matched count (it keeps the 'unknown AADT' class; a count
+  its name does not show (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2, SHIELD I + SHIELD_LBL 29:
+  'RAMP', 'EXIT 63') is an interstate (High) and is never matched; an NG9-1-1 road with SHIELD
+  EXIT, or SHIELD I with no route number, is never lowered by a matched count (it keeps the 'unknown AADT' class; a count
   over 2,000 still makes it High).
   `hz_aadt` lists the counts taken, each impacted road's `aadt_src` says where its count came
   from, and `hz_aadt_review` (with `hz_conf` = review) flags a class that is LOWER because of a

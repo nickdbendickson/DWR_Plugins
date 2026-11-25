@@ -85,8 +85,8 @@ class HazardClassification(UnitAlgorithm):
                 "homes (Fig. 5.2): 'mobile' / 'manufactured' / 'trailer' / NSI RES2. ROADS: a missing, "
                 "zero or NaN AADT is unknown - the 'unknown AADT' class you choose (default Medium), "
                 "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I', or (0.58.0) a "
-                "FUNC_SYS / F_SYSTEM 1 or ROUTE_SIGNING 2 field (the interstate system as the Hazard plugin "
-                "reads it: an NG9-1-1 'RAMP' or 'EXIT 63'). "
+                "F_SYSTEM / FUNC_SYS 1 or ROUTE_SIGNING 2 field, or an NG9-1-1 SHIELD I with a route number in "
+                "SHIELD_LBL (the interstate system as the Hazard plugin reads it: an NG9-1-1 'RAMP' or 'EXIT 63'). "
                 "Same for a railroad without a train count.\n"
                 "TRAFFIC COUNTS (0.58.0, as the Runner): an overtopped road with no AADT of its own (the "
                 "pack's NG9-1-1 roads have none) first takes the count of the traffic line it runs along "
@@ -697,7 +697,8 @@ class HazardClassification(UnitAlgorithm):
                     if nh.aadt_value(r.get("aadt")) is not None:
                         return "own AADT field"
                     if r.get("isys") and not hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
-                        return "no AADT; interstate system (FUNC_SYS 1; High whatever its count)"
+                        return ("no AADT; interstate system (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2 or SHIELD I + route "
+                                "number; High whatever its count)")
                     if interstate(r):
                         return "no AADT; interstate (High whatever its count)"
                     if rid in kept:
