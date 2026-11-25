@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "DamSafety_Runner/core/metalflood/**"
+      - "DamSafety_Core/boann/**"
       - "tools/validation/benchmarks/**"
       - ".github/workflows/benchmarks.yml"
 

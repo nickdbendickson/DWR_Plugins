@@ -12,7 +12,7 @@ oracle) rounds differently when the flow step takes it back to float32, makes fl
 relaxation does not have and moves flow directions and carve IDs.
 
 ```python
-from nd_breach_runner.core.metalterrain import fill
+from DamSafety_Core.boann.grid import fill
 filled, info = fill.fill_dem(dem, eps=1e-5)   # priority-flood; NaN / -9999 = NoData
 ```
 
@@ -73,10 +73,10 @@ __main__.py             verify / bench / fill CLI
 ## Check it
 
 ```bash
-python -m nd_breach_runner.core.metalterrain verify            # both fills vs priority_flood and each other
-python -m nd_breach_runner.core.metalterrain verify -backend metal   # relaxation also on the Apple GPU
-python -m nd_breach_runner.core.metalterrain bench -size medium      # priority-flood and relax, with times
-python -m nd_breach_runner.core.metalterrain fill in.asc out.asc --fill-method relax
+python -m DamSafety_Core.boann.grid verify            # both fills vs priority_flood and each other
+python -m DamSafety_Core.boann.grid verify -backend metal   # relaxation also on the Apple GPU
+python -m DamSafety_Core.boann.grid bench -size medium      # priority-flood and relax, with times
+python -m DamSafety_Core.boann.grid fill in.asc out.asc --fill-method relax
 ```
 
 `tests/test_metalterrain.py` checks, through the CPU build (so it runs in the cloud with no

@@ -14,7 +14,7 @@ The older Planchon & Darboux (2002) whole-grid relaxation stays available as met
 (Metal GPU or the CPU build of the same kernel). It is the cross-check, not the default: water
 moves about one cell per sweep, so a 3.5 M-cell DEM took minutes instead of under a second.
 
-    from nd_breach_runner.core.metalterrain import fill
+    from DamSafety_Core.boann.grid import fill
     filled, info = fill.fill_dem(dem, eps=1e-5)                  # priority-flood
     filled, info = fill.fill_dem(dem, method="relax", backend="auto")
 
@@ -28,7 +28,7 @@ import os
 
 import numpy as np
 
-from ..metalflood import backends as be
+from ..hydro import backends as be
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KERNEL_SOURCE = os.path.join(HERE, "kernels_fill.metal")

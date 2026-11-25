@@ -22,7 +22,7 @@ PROVISIONAL until a caller has checked the coefficients against the printed FHWA
 the culvert with `verified=True`. After the Froehlich/Xu-Zhang breach-regression lessons, a
 hazard-affecting rating never claims PRODUCTION on constants nobody confirmed against the book.
 
-    from nd_breach_runner.core.metalterrain import culvert as cv
+    from DamSafety_Core.boann.grid import culvert as cv
     c = cv.Culvert.preset("circular_concrete_groove", diameter_m=1.5, length_m=20, slope=0.01)
     hw_m = c.headwater(q_cms=8.0, tailwater_m=0.0)       # governing headwater depth (m) - pure math
     rated = c.emit([1, 2, 4, 8, 16], tailwater_m=0.0)     # {"status": "PROVISIONAL", "table": [...]}

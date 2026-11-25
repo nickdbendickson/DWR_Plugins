@@ -6,7 +6,7 @@ censuses each filled depression (area, volume, depth, the level it filled to) so
 not silently treated like a DEM glitch. It is pure Python on top of core/metalterrain.fill - no
 GPU kernel - and uses no scipy (a numpy label-propagation fallback) so it runs in the cloud.
 
-    from nd_breach_runner.core.metalterrain import audit
+    from DamSafety_Core.boann.grid import audit
     delta = audit.fill_delta(dem, filled)                 # how much the fill raised each cell
     labels, items = audit.depression_census(dem, filled, cell_m=10.0)
 

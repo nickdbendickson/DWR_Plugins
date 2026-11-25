@@ -117,20 +117,15 @@ def result_root(par_path):
 
 
 def _sgc_check(par_path):
-    """The SGC solver builds its channels from the DEM with the host plugin's core/sgc when the
-    deck carries no SGC channel files. Standalone there is no host, and the engine would quietly
-    run as plain ACC, so refuse instead."""
-    from . import deckio
+    """The SGC solver builds its channels from the DEM with the host plugin's channel builder
+    (host.py; the Runner lends its core/sgc) when the deck carries no SGC channel files. Standalone
+    there is no host, and the engine would quietly run as plain ACC, so refuse instead."""
+    from . import deckio, host
     par = deckio.read_par(par_path)
     if "sgcwidth" in par and "sgcbed" in par:
         return
-    parent = (__package__ or "").rpartition(".")[0]
-    if parent:
-        try:
-            importlib.import_module(parent + ".sgc")
-            return
-        except ImportError:
-            pass
+    if host.get("channel_builder") is not None:
+        return
     raise CliError("the sgc solver needs channel files in the deck (SGCwidth / SGCbed / SGCbank, "
                    "as the Runner writes them); standalone Boann cannot build channels from the "
                    "DEM. Add them, or run the deck from the Runner.")

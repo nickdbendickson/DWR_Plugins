@@ -10,8 +10,7 @@ symbology-style.db
 DamSafety_Runner/bin/
 bin/
 dist/
-DamSafety_Runner/core/metalflood/prebuilt/
-DamSafety_Screening/core/metalflood/prebuilt/
+DamSafety_Core/boann/hydro/prebuilt/
 
 # nd_hydraulic_geometry downloads (fit.py --refresh fetches them again)
 tools/validation/nd_hydraulic_geometry/cache/
