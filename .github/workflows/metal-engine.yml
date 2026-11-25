@@ -19,6 +19,7 @@ on:
       - "DamSafety_Runner/tests/test_subli_kernel.py"
       - "DamSafety_Runner/tests/test_boann_dry_skip.py"
       - "DamSafety_Runner/tests/test_boann_gpu_tiles.py"
+      - "DamSafety_Runner/tests/test_subli_gpu_tiles.py"
       - "DamSafety_Runner/tests/test_boann_pcores.py"
       - "DamSafety_Runner/tests/test_asc_writer.py"
       - ".github/workflows/metal-engine.yml"
@@ -56,6 +57,8 @@ jobs:
         run: python -m nd_breach_runner.tests.test_boann_dry_skip
       - name: GPU dry-tile skip (GPU on == off bit for bit, GPU against the CPU build)
         run: python -m nd_breach_runner.tests.test_boann_gpu_tiles
+      - name: Sub-grid local-inertial dry-tile skip (on == off bit for bit)
+        run: python -m nd_breach_runner.tests.test_subli_gpu_tiles
       # the Mac thread default (performance cores) reads real sysctl keys here
       - name: Performance-core default and any-core-count answers
         run: python -m nd_breach_runner.tests.test_boann_pcores

@@ -33,8 +33,8 @@
 // (zb_r - zb_l) + (d_r - d_l), never the difference of two large surface elevations.
 //
 // Compiled two ways, exactly like kernels.metal: by Metal at run time on a Mac, and as C++ with
-// mf_shim.h (cpu_kernels_subli.cpp) everywhere else. 28 buffers + Params at 28 = 29 slots (Metal
-// allows 31).
+// mf_shim.h (cpu_kernels_subli.cpp) everywhere else. 30 buffers + Params at 30 = 31 slots, Metal's
+// cap. Nothing else may be added to this engine without removing a buffer.
 
 #ifndef MF_CPU
 #include <metal_stdlib>
@@ -73,8 +73,26 @@ using namespace metal;
 #define S_QIN 13
 #define S_QOUT 14
 #define S_LASTDT 15
+#define S_TILES 18     // uint: 1 = the grid kernels leave out the tiles ton marks off (set by the host)
 #define S_WORDS 32
 #define MF_FIX 1.0e-4f
+
+// Dry-tile skip on the coarse grid. The window is cut into MF_TILE x MF_TILE coarse cells. Every
+// SKIP_CHUNK steps (8) three tile kernels mark a tile that holds a seed and the 8 tiles around it.
+// A seed is a cell with V or d above 0, a cell beside a face whose discharge or recorded velocity
+// is not 0, or a source cell. A face between two dry cells stays at exactly 0: each sub-segment of
+// the common edge is at least either cell's lowest sub-cell, so a dry cell's surface (its lowest
+// sub-cell) wets none of them. Water moves at most one coarse cell a step, so in one chunk it
+// reaches at most 9 cells, counting the cell beside a face that still carries flow. A tile left
+// off is at least one whole tile from every seed, further than that, so what the full window
+// would compute there is already stored: volume 0, depth 0 (inverting a zero volume is exactly 0),
+// faces 0, and the maxima do not move. A stale scale factor in an off tile is harmless, because
+// the limiter multiplies by it only on a face whose discharge is not 0, and every face next to an
+// off tile is 0. k_limit_subli and k_cont_subli do not return early on a skipped thread. They take
+// part in the SIMD-group reductions with what a dry cell gives (outflow 0, clipped volume 0,
+// depth 0, not wet), so every group adds the same numbers in the same order. This engine takes no
+// rain. Tiles are numbered from the window origin and redrawn before step 0 of every batch.
+#define MF_TILE 16u
 
 struct Params {
     uint nx, ny;          // COARSE grid columns, rows
@@ -131,7 +149,9 @@ struct Params {
     device const float* nf2x B(25), \
     device const float* zfy B(26), \
     device const float* nf2y B(27), \
-    constant Params& p B(28), \
+    device uint* tseed B(28), \
+    device uint* ton B(29), \
+    constant Params& p B(30), \
     uint2 gid GID
 
 // -- helpers ---------------------------------------------------------------------------------------
@@ -267,6 +287,20 @@ inline float mf_series(uint k, float tm, device const uint* ser_off,
     return ser_q[j] + ff * (ser_q[j + 1] - ser_q[j]);
 }
 
+// whether the grid kernels' thread (gx, gy) of the window runs: always unless the host turned the
+// dry-tile skip on for this batch; then only in a marked tile. A face thread goes with the cell
+// east of its x-face / south of its y-face (the window's last cell for the closing faces).
+inline bool mf_on(device const uint* st, device const uint* ton, uint gx, uint gy,
+                  constant Params& p) {
+    if (st[S_TILES] == 0u) {
+        return true;
+    }
+    uint tx = (gx < p.wc ? gx : p.wc - 1u) / MF_TILE;
+    uint ty = (gy < p.wr ? gy : p.wr - 1u) / MF_TILE;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    return ton[ty * ntx + tx] != 0u;
+}
+
 // -- kernels ---------------------------------------------------------------------------------------
 
 // one thread: the step's dt (CFL from the deepest water) and the source rates at the start of the
@@ -310,7 +344,7 @@ kernel void k_begin_subli(MF_ARGS_SUBLI) {
 kernel void k_faces_subli(MF_ARGS_SUBLI) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -426,7 +460,7 @@ kernel void k_faces_subli(MF_ARGS_SUBLI) {
 kernel void k_scale_subli(MF_ARGS_SUBLI) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -454,7 +488,9 @@ kernel void k_limit_subli(MF_ARGS_SUBLI) {
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
     float out = 0.0f;
-    if (gid.y < p.wr) {
+    // a skipped face is far from water: it carries 0 and sends 0 out (see MF_TILE)
+    bool on = mf_on(st, ton, gid.x, gid.y, p);
+    if (on && gid.y < p.wr) {
         uint f = r * (nx + 1u) + c;
         float q = qx[f];
         if (q > 0.0f && c > 0u) {
@@ -470,7 +506,7 @@ kernel void k_limit_subli(MF_ARGS_SUBLI) {
             out += q;
         }
     }
-    if (gid.x < p.wc) {
+    if (on && gid.x < p.wc) {
         uint f = r * nx + c;
         float q = qy[f];
         if (q > 0.0f && r > 0u) {
@@ -504,31 +540,35 @@ kernel void k_cont_subli(MF_ARGS_SUBLI) {
     uint nx = p.nx;
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
-    uint i = r * nx + c;
-    uint fx = r * (nx + 1u) + c;
-    float Vn = V[i] + dt * (qx[fx] - qx[fx + 1u] + qy[i] - qy[i + nx]) + src[i] * dt;
-    float clip = 0.0f;
-    if (Vn < 0.0f) {
-        clip = -Vn;
-        Vn = 0.0f;
-    }
-    if (ok[i] == 0) {
-        Vn = 0.0f;
-    }
-    V[i] = Vn;
+    // a skipped cell is far from water: it stays dry (volume 0, nothing clipped, no maximum), and
+    // takes part in the SIMD-group reductions below with exactly those values (see MF_TILE)
     float hn = 0.0f;
-    if (ok[i] != 0) {
-        hn = mf_invert_d(s + (size_t)i * p.m, p.m, p.wsub * p.wsub, Vn);
-    }
-    d[i] = hn;
-    float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
-    if (hn > p.dry) {
-        if (hn > hmax[i]) {
-            hmax[i] = hn;
-            tmax[i] = th;
+    float clip = 0.0f;
+    if (mf_on(st, ton, gid.x, gid.y, p)) {
+        uint i = r * nx + c;
+        uint fx = r * (nx + 1u) + c;
+        float Vn = V[i] + dt * (qx[fx] - qx[fx + 1u] + qy[i] - qy[i + nx]) + src[i] * dt;
+        if (Vn < 0.0f) {
+            clip = -Vn;
+            Vn = 0.0f;
         }
-        if (hn > p.arr_depth && arr[i] == MF_NODATA) {
-            arr[i] = th;
+        if (ok[i] == 0) {
+            Vn = 0.0f;
+        }
+        V[i] = Vn;
+        if (ok[i] != 0) {
+            hn = mf_invert_d(s + (size_t)i * p.m, p.m, p.wsub * p.wsub, Vn);
+        }
+        d[i] = hn;
+        float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
+        if (hn > p.dry) {
+            if (hn > hmax[i]) {
+                hmax[i] = hn;
+                tmax[i] = th;
+            }
+            if (hn > p.arr_depth && arr[i] == MF_NODATA) {
+                arr[i] = th;
+            }
         }
     }
     bool wet = hn > 0.0f;
@@ -565,7 +605,7 @@ kernel void k_cont_subli(MF_ARGS_SUBLI) {
 kernel void k_speed_subli(MF_ARGS_SUBLI) {
     device float* sf = (device float*)st;
     float dt = sf[S_DT];
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -594,4 +634,71 @@ kernel void k_end_subli(MF_ARGS_SUBLI) {
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
     st[S_HMAX] = st[S_HNEXT];
+}
+
+// -- dry-tile skip (see MF_TILE) ---------------------------------------------------------------
+// The host runs these three, in this order, before the first step of every chunk of steps when it
+// turns the skip on (st[S_TILES] = 1). Grid: k_tclear_subli / k_tgrow_subli one thread per tile of
+// the window, k_tseed_subli one per window cell.
+
+kernel void k_tclear_subli(MF_ARGS_SUBLI) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x < ntx && gid.y < nty) {
+        tseed[gid.y * ntx + gid.x] = 0u;
+    }
+}
+
+// a window cell is a seed when it holds water (volume or depth) or a face beside it carried flow
+// or recorded a velocity in the last step (as mf_rows); thread (0, 0) also marks the sources
+kernel void k_tseed_subli(MF_ARGS_SUBLI) {
+    if (gid.x >= p.wc || gid.y >= p.wr) {
+        return;
+    }
+    uint nx = p.nx;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint r = p.r0 + gid.y;
+    uint c = p.c0 + gid.x;
+    uint i = r * nx + c;
+    uint fx = r * (nx + 1u) + c;
+    if (V[i] > 0.0f || d[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f ||
+        qxo[fx + 1u] != 0.0f || vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f ||
+        qyo[i + nx] != 0.0f || vyf[i + nx] != 0.0f) {
+        atomic_fetch_max_explicit((device atomic_uint*)(tseed + (gid.y / MF_TILE) * ntx
+                                                        + gid.x / MF_TILE),
+                                  1u, memory_order_relaxed);
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        for (uint k = 0; k < p.n_src; ++k) {
+            uint sr = s_cell[k] / nx;
+            uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+    }
+}
+
+// a tile runs when it or one of its 8 neighbours holds a seed
+kernel void k_tgrow_subli(MF_ARGS_SUBLI) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x >= ntx || gid.y >= nty) {
+        return;
+    }
+    uint on = 0u;
+    uint y0 = gid.y > 0u ? gid.y - 1u : 0u;
+    uint y1 = gid.y + 1u < nty ? gid.y + 1u : nty - 1u;
+    uint x0 = gid.x > 0u ? gid.x - 1u : 0u;
+    uint x1 = gid.x + 1u < ntx ? gid.x + 1u : ntx - 1u;
+    for (uint y = y0; y <= y1; ++y) {
+        for (uint x = x0; x <= x1; ++x) {
+            if (tseed[y * ntx + x] != 0u) {
+                on = 1u;
+            }
+        }
+    }
+    ton[gid.y * ntx + gid.x] = on;
 }
