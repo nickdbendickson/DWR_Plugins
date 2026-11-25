@@ -68,8 +68,34 @@ using namespace metal;
 #define S_LASTDT 15    // float: dt of the last step taken
 #define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell (FV1)
 #define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
+#define S_TILES 18     // uint: 0 = every cell runs; 1 = the host turned the skip on (this batch's first redraw scans every cell); 2 = k_tgrow_fv has written ton (a later redraw may leave out a tile that was off)
 #define S_WORDS 32
 #define MF_FIX 1.0e-4f
+
+// Dry-tile skip. The window is cut into MF_TILE x MF_TILE cell tiles. Every SKIP_CHUNK_FV steps
+// (8, engine_fv.py) k_tclear_fv / k_tseed_fv / k_tgrow_fv mark the tiles that hold a seed and the
+// MF_TILE_RING tiles around each. A seed is a cell whose (h, hu, hv) is not exactly 0, or a
+// source cell. The skip is exact when all three of these hold, which is what
+// tests/test_boann_fv_tiles.py checks bit for bit:
+// 1. A cell that is exactly dry (h = hu = hv = 0) between dry cells stays exactly dry. A face
+//    between two dry cells has HLLC states of zero depth and zero velocity, so its flux is 0,
+//    and the bed source and friction are 0 at zero depth. The depth >= 0 clip stores +0, not
+//    -0, so a cell the skip never writes (it stays +0) matches a cell the full window writes.
+// 2. Water and numerical influence move at most one cell per step (one faces-and-cont sweep,
+//    and a face reads only its two cells): R = 1. An unmarked tile is at least
+//    MF_TILE * MF_TILE_RING + 1 = 17 cells from every seed, and 17 > 8 * 1.
+// 3. Face fluxes are scratch. A face is computed when either cell beside it is on, so an on
+//    cell's fluxes are rewritten by k_faces_fv before k_cont_fv reads them. An off cell is not
+//    read.
+// k_faces_fv and k_cont_fv still take part in every SIMD-group reduction with the value a dry
+// cell gives (0 outflow, 0 wave speed, not wet, 0 clip), so the groups and the sums do not move.
+// Rain wets every cell: the host does not turn the skip on, and k_tgrow_fv would mark every tile.
+// The host sets S_TILES to 1 once per batch, so the first redraw reads every cell (the window
+// may have moved, and ton is not cleared between batches). k_tgrow_fv then sets S_TILES to 2,
+// and a later redraw of the same batch does not re-read a cell whose tile was off. Thread
+// (0, 0) still marks every source. k_tclear_fv still runs.
+#define MF_TILE 16u
+#define MF_TILE_RING 1u
 
 struct Params {
     uint nx, ny;
@@ -96,7 +122,8 @@ struct Params {
                           // each step (FV1 only; matches the ACC engine). Was pad4.
 };
 
-// Buffer layout for the FV scheme (its own order, 0..23; Params at 24):
+// Buffer layout for the FV scheme (its own order, 0..25; Params at 26). tseed and ton are the
+// dry-tile skip (see MF_TILE): one uint per tile of the whole grid.
 inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
 
 #define MF_ARGS_FV \
@@ -124,7 +151,9 @@ inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
     device float* fyh B(21), \
     device float* fyhu B(22), \
     device float* fyhv B(23), \
-    constant Params& p B(24), \
+    device uint* tseed B(24), \
+    device uint* ton B(25), \
+    constant Params& p B(26), \
     uint2 gid GID
 
 struct F3 { float h, mn, mt; };   // flux: mass, normal momentum, tangential momentum
@@ -214,6 +243,42 @@ inline float mf_series(uint k, float tm, device const uint* ser_off,
     return ser_q[j] + ff * (ser_q[j + 1] - ser_q[j]);
 }
 
+// whether the grid kernels' thread (gx, gy) of the window runs: always unless the host turned the
+// dry-tile skip on; then only in a marked tile. A coordinate past the window (the closing face)
+// belongs to the window's last cell.
+inline bool mf_on(device const uint* st, device const uint* ton, uint gx, uint gy,
+                  constant Params& p) {
+    if (st[S_TILES] == 0u) {
+        return true;
+    }
+    uint tx = (gx < p.wc ? gx : p.wc - 1u) / MF_TILE;
+    uint ty = (gy < p.wr ? gy : p.wr - 1u) / MF_TILE;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    return ton[ty * ntx + tx] != 0u;
+}
+
+// an x-face / y-face runs when either cell beside it is on, so a face on the edge of an on tile
+// is still computed and its flux is rewritten before the on cell reads it
+inline bool mf_face_x(device const uint* st, device const uint* ton, uint gx, uint gy,
+                      constant Params& p) {
+    if (gy >= p.wr) {
+        return false;
+    }
+    bool right = mf_on(st, ton, gx, gy, p);
+    bool left = gx > 0u && mf_on(st, ton, gx - 1u, gy, p);
+    return left || right;
+}
+
+inline bool mf_face_y(device const uint* st, device const uint* ton, uint gx, uint gy,
+                      constant Params& p) {
+    if (gx >= p.wc) {
+        return false;
+    }
+    bool south = mf_on(st, ton, gx, gy, p);
+    bool north = gy > 0u && mf_on(st, ton, gx, gy - 1u, p);
+    return north || south;
+}
+
 // -- kernels --------------------------------------------------------------------------------
 
 // one thread: the step's dt from the CFL condition (max wave speed over the window) and the
@@ -291,8 +356,12 @@ kernel void k_faces_fv(MF_ARGS_FV) {
     float g = p.g;
     float dry = p.dry;
     float outflow = 0.0f;
+    // an off face writes nothing: it is far from water, so the flux it would write is 0, which
+    // is what the buffers already hold (see MF_TILE). The reduction below still sees 0.
+    bool xon = mf_face_x(st, ton, gid.x, gid.y, p);
+    bool yon = mf_face_y(st, ton, gid.x, gid.y, p);
 
-    if (gid.y < p.wr) {               // x-face at (row r, face column c), 0..nx
+    if (xon) {                        // x-face at (row r, face column c), 0..nx
         uint f = r * (nx + 1u) + c;
         F3 fl;
         fl.h = 0.0f; fl.mn = 0.0f; fl.mt = 0.0f;
@@ -359,7 +428,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
         fxhv[f] = fl.mt;             // tangential = y-momentum
     }
 
-    if (gid.x < p.wc) {               // y-face at (face row r, col c), 0..ny. Normal = y (south +).
+    if (yon) {                        // y-face at (face row r, col c), 0..ny. Normal = y (south +).
         uint f = r * nx + c;
         F3 fl;
         fl.h = 0.0f; fl.mn = 0.0f; fl.mt = 0.0f;
@@ -446,6 +515,12 @@ kernel void k_cont_fv(MF_ARGS_FV) {
     uint ny = p.ny;
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
+    // a skipped cell is far from water: it stays exactly dry (depth 0, nothing clipped, no
+    // maximum) and takes part in the SIMD-group reductions below with those zeros (see MF_TILE)
+    float hn = 0.0f;
+    float clip = 0.0f;
+    float wcell = 0.0f;
+    if (mf_on(st, ton, gid.x, gid.y, p)) {
     uint i = r * nx + c;
     uint fx = r * (nx + 1u) + c;      // left x-face of the cell; right is fx+1
     float dx = p.dx;
@@ -475,11 +550,10 @@ kernel void k_cont_fv(MF_ARGS_FV) {
     float dhv = -invdx * ((fxhv[fx + 1u] - fxhv[fx])
                           + ((fyhv[i + nx] + SyD) - (fyhv[i] + SyU)));
 
-    float hn = h0 + dh + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
+    hn = h0 + dh + src[i] * dt / (dx * dx) + sf[S_RAIN] * dt;
     float hun = hu[i] + dhu;
     float hvn = hv[i] + dhv;
 
-    float clip = 0.0f;
     if (hn <= 0.0f) {
         clip = -hn * dx * dx;
         hn = 0.0f;
@@ -505,7 +579,6 @@ kernel void k_cont_fv(MF_ARGS_FV) {
     hv[i] = hvn;
 
     float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
-    float wcell = 0.0f;
     float vmagn = 0.0f;
     if (hn > MF_HVEL) {
         float un = mf_vel(hun, hn);
@@ -533,6 +606,7 @@ kernel void k_cont_fv(MF_ARGS_FV) {
             vmax[j] = dv;
         }
     }
+    }   // mf_on
 
     bool wet = hn > 0.0f;
     float wm = simd_max(wcell);
@@ -576,4 +650,73 @@ kernel void k_end_fv(MF_ARGS_FV) {
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
     st[S_WMAX] = st[S_WNEXT];
+}
+
+// -- dry-tile skip (see MF_TILE) ---------------------------------------------------------------
+// The host runs these three, in this order, before the first step of every chunk when it turns
+// the skip on (st[S_TILES] = 1). Grid: k_tclear_fv / k_tgrow_fv one thread per tile of the window,
+// k_tseed_fv one per window cell.
+
+kernel void k_tclear_fv(MF_ARGS_FV) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x < ntx && gid.y < nty) {
+        tseed[gid.y * ntx + gid.x] = 0u;
+    }
+}
+
+// a window cell is a seed when h, hu or hv is not exactly 0; thread (0, 0) also marks the sources.
+// S_TILES == 1 (the host, once per batch) reads every cell. S_TILES == 2 reads a cell only when
+// its tile was on. ton still holds that map here, because only k_tgrow_fv writes it and that
+// kernel runs after this one.
+kernel void k_tseed_fv(MF_ARGS_FV) {
+    if (gid.x >= p.wc || gid.y >= p.wr) {
+        return;
+    }
+    uint nx = p.nx;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint tile = (gid.y / MF_TILE) * ntx + gid.x / MF_TILE;
+    if (st[S_TILES] != 2u || ton[tile] != 0u) {
+        uint i = (p.r0 + gid.y) * nx + (p.c0 + gid.x);
+        if (h[i] != 0.0f || hu[i] != 0.0f || hv[i] != 0.0f) {
+            atomic_fetch_max_explicit((device atomic_uint*)(tseed + tile),
+                                      1u, memory_order_relaxed);
+        }
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        for (uint k = 0; k < p.n_src; ++k) {
+            uint sr = s_cell[k] / nx;
+            uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+    }
+}
+
+// a tile runs when it, or a tile within MF_TILE_RING of it, holds a seed (or it rains)
+kernel void k_tgrow_fv(MF_ARGS_FV) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x >= ntx || gid.y >= nty) {
+        return;
+    }
+    uint on = p.rain != 0u ? 1u : 0u;
+    uint y0 = gid.y > MF_TILE_RING ? gid.y - MF_TILE_RING : 0u;
+    uint y1 = gid.y + MF_TILE_RING < nty ? gid.y + MF_TILE_RING : nty - 1u;
+    uint x0 = gid.x > MF_TILE_RING ? gid.x - MF_TILE_RING : 0u;
+    uint x1 = gid.x + MF_TILE_RING < ntx ? gid.x + MF_TILE_RING : ntx - 1u;
+    for (uint y = y0; y <= y1; ++y) {
+        for (uint x = x0; x <= x1; ++x) {
+            if (tseed[y * ntx + x] != 0u) {
+                on = 1u;
+            }
+        }
+    }
+    ton[gid.y * ntx + gid.x] = on;
+    if (gid.x == 0u && gid.y == 0u) {
+        st[S_TILES] = 2u;   // after ton is written; the next redraw of this batch may trust it
+    }
 }

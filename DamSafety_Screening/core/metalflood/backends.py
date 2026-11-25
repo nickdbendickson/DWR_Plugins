@@ -68,7 +68,8 @@ def tiles_wanted():
 def tile_count(ny, nx):
     """Tiles of the largest window (the whole grid): the length of the tseed / ton buffers."""
     return (-(-int(ny) // TILE)) * (-(-int(nx) // TILE))
-FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv")
+FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv",
+              "k_tclear_fv", "k_tseed_fv", "k_tgrow_fv")
 FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
                "k_stage_c_fv2", "k_end_fv2")
 DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_faces_dg2",
@@ -107,7 +108,9 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
 
 
 def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of kernels_fv.metal's buffer indices 0..23."""
+    """[(name, dtype, count)] in the order of kernels_fv.metal's buffer indices 0..25.
+    tseed and ton are the dry-tile skip (one uint per tile of the whole grid). Params is bound
+    at 26."""
     cells = ny * nx
     xf, yf = ny * (nx + 1), (ny + 1) * nx
     f, u = np.float32, np.uint32
@@ -117,7 +120,8 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
-            ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf)]
+            ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf),
+            ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
 def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -128,7 +132,10 @@ def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
     31 slots); they are recomputed inline in the kernels."""
     cells = ny * nx
     f = np.float32
-    base = fv_buffer_layout(ny, nx, n_src, n_series, n_values)
+    # FV1's tile buffers sit at the end of fv_buffer_layout. FV2 does not use them yet: its
+    # previous-step state keeps the indices kernels_fv2.metal was written against.
+    base = [b for b in fv_buffer_layout(ny, nx, n_src, n_series, n_values)
+            if b[0] not in ("tseed", "ton")]
     return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells), ("hs", f, cells)]
 
 
@@ -223,7 +230,13 @@ def _fv_plan(p):
     return [("k_begin_fv", one), ("k_faces_fv", faces), ("k_cont_fv", cells), ("k_end_fv", one)]
 
 
-FV_SPEC = Spec("fv", FV_KERNEL_SOURCE, SHIM, FV_CPU_SOURCE, FV_KERNELS, Params, _fv_plan)
+def _fv_tile_plan(p):
+    tiles = (-(-int(p.wc) // TILE), -(-int(p.wr) // TILE), 1)
+    return [("k_tclear_fv", tiles), ("k_tseed_fv", (p.wc, p.wr, 1)), ("k_tgrow_fv", tiles)]
+
+
+FV_SPEC = Spec("fv", FV_KERNEL_SOURCE, SHIM, FV_CPU_SOURCE, FV_KERNELS, Params, _fv_plan,
+               tile_plan=_fv_tile_plan)
 
 
 def _fv2_plan(p):
