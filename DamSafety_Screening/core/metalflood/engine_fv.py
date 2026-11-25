@@ -331,8 +331,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
     bl._write_asc(root + ".inittm", np.where(valid, arrival, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & (hmax > 0), tmax, NODATA), xll, yll, dx,
                   fmt="%.4f")
-    mxe_bed = br.bed_for_mxe(a["hmax"]) if br is not None else d.z
-    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe_bed + hmax, NODATA), xll, yll, dx)
+    mxe = br.mxe(a["hmax"]) if br is not None else d.z + hmax
+    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe, NODATA), xll, yll, dx)
     if br is not None:
         bl._write_asc(root + ".bed", np.where(valid, br.final_bed(), NODATA), xll, yll, dx,
                       fmt="%.4f")

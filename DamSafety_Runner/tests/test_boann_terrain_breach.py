@@ -355,10 +355,12 @@ def boann_breach_bed_at_halfway_is_the_law_and_mass_holds():
 
 
 @test
-def boann_mxe_uses_the_bed_from_the_period_the_peak_rose():
-    """A cell whose peak is already set when the cut happens keeps the intact bed. A cell
-    that is dry then, and wet after, records the lowered bed. Using the final bed for every
-    cell fails the first check."""
+def boann_mxe_is_the_peak_water_level_over_the_lowering_bed():
+    """.mxe on a breach cell is max over time of (depth + bed). Three cells, one cut at 10 s:
+    A stands 2.5 m over the intact crest (14.5) and is deeper but lower after the cut (3.0 m
+    on 10 = 13.0): 14.5. B is dry before the cut and 0.4 m deep after: 10.4, not the intact 12.
+    C is 1.0 m deep before (13.0) and rises to 3.5 m after (13.5): 13.5. "Peak depth plus the
+    bed of the period it rose in" gives 13.0 at A, too low."""
     ny, nx = 4, 4
 
     class Deck:
@@ -369,42 +371,144 @@ def boann_mxe_uses_the_bed_from_the_period_the_peak_rose():
     deck.valid = np.ones((ny, nx), dtype=bool)
     deck.z = np.full((ny, nx), 12.0)
     spec = {"start_s": 10.0, "formation_s": 0.0, "invert_start_m": 12.0,
-            "invert_final_m": 10.0, "bottom_width_final_m": 10.0, "side_slope_h": 0.0,
+            "invert_final_m": 10.0, "bottom_width_final_m": 40.0, "side_slope_h": 0.0,
             "update_s": 5.0}
-    br = mfe.TerrainBreach(deck, spec, [[1, 1, 0.0], [1, 2, 0.0]], None)
-    # periods start (zeros, intact 12). One update then: depth at the cut, bed after it.
-    br.zcur[:] = 10.0
-    br.periods.append((np.array([1.5, 0.0], np.float32), np.array([10.0, 10.0])))
-    hmax = np.zeros(ny * nx, np.float32)
-    hmax[1 * nx + 1] = np.float32(1.5)    # peaked at the cut, not after
-    hmax[1 * nx + 2] = np.float32(0.4)    # dry at the cut, wet after
-    bed = br.bed_for_mxe(hmax)
-    assert abs(float(bed[1, 1]) - 12.0) < 1e-6, bed[1, 1]
-    assert abs(float(bed[1, 2]) - 10.0) < 1e-6, bed[1, 2]
+    cells = [[1, 1, 0.0], [1, 2, 0.0], [1, 3, 0.0]]
+    br = mfe.TerrainBreach(deck, spec, cells, None)
+    ia, ib, ic = 1 * nx + 1, 1 * nx + 2, 1 * nx + 3
+
+    class Eng:
+        zref = 0.0
+        a = {"hmax": np.zeros(ny * nx, np.float32), "z": np.full(ny * nx, 12.0, np.float32)}
+
+    eng = Eng()
+    eng.a["hmax"][ia] = 2.5
+    eng.a["hmax"][ic] = 1.0
+    br.apply(eng)                      # the cut at 10 s
+    assert np.all(br.zcur == 10.0), br.zcur
+    eng.a["hmax"][ia] = 3.0            # deeper after the cut, but lower
+    eng.a["hmax"][ib] = 0.4
+    eng.a["hmax"][ic] = 3.5
+    mxe = br.mxe(eng.a["hmax"])
+    assert abs(float(mxe[1, 1]) - 14.5) < 1e-6, mxe[1, 1]
+    assert abs(float(mxe[1, 2]) - 10.4) < 1e-6, mxe[1, 2]
+    assert abs(float(mxe[1, 3]) - 13.5) < 1e-6, mxe[1, 3]
+    # off the notch: bed + peak depth, as with no breach file
+    assert abs(float(mxe[0, 0]) - 12.0) < 1e-9
+
+
+@test
+def boann_mxe_matches_the_sampled_peak_water_level_in_a_full_run():
+    """A full ACC run (ridge deck, 2.5 m start depth, notch forming over 10-30 s): .mxe on
+    every breach cell is at least the highest depth + bed seen after any batch, and no higher
+    than the peak depth over the intact crest. A rule that adds the peak depth to one bed
+    reads about 0.3-0.4 m too low here."""
+    _need_cpu()
+    d = tempfile.mkdtemp(prefix="boann_br_mxe_")
+    seen = {}
+    orig = mfe.TerrainBreach.catch_up
+
+    def sample(br, eng):
+        h = np.asarray(eng.h2(), dtype=np.float64).ravel()[br.idx]
+        w = np.where(h > 0, h + br.zcur, -np.inf)
+        seen["wse"] = np.maximum(seen.get("wse", w), w)
+
+    def spy(br, eng, t):
+        sample(br, eng)
+        orig(br, eng, t)
+        sample(br, eng)
+
+    try:
+        _z, cells, pool = _ridge_deck(d, sim_s=60.0, h0=2.5)
+        _write_breach(d, _spec(cells, start_s=10.0, formation_s=20.0, update_s=5.0), pool)
+        mfe.TerrainBreach.catch_up = spy
+        try:
+            with _env(DAMSAFETY_MF_THREADS="1"):
+                mfe.run_par(os.path.join(d, "run.par"), backend="cpu")
+        finally:
+            mfe.TerrainBreach.catch_up = orig
+        deck = mfe.Deck(os.path.join(d, "run.par"))
+        br = deck.breach
+        mxe = read_asc(os.path.join(d, "results", "run.mxe")).ravel()[br.idx]
+        hmax = read_asc(os.path.join(d, "results", "run.max")).ravel()[br.idx]
+        bed = read_asc(os.path.join(d, "results", "run.bed")).ravel()[br.idx]
+        wse = seen["wse"]
+        wet = np.isfinite(wse)
+        assert wet.all(), wse
+        assert np.all(mxe >= wse - 1e-3), (mxe, wse)
+        assert np.all(mxe <= hmax + br.z0 + 1e-3), (mxe, hmax + br.z0)
+        # the case this guards: the final bed under the peak depth is well short
+        assert float(np.max(wse - (hmax + bed))) > 0.1, (wse, hmax + bed)
+    finally:
+        shutil.rmtree(d, True)
+
+
+def _pool_deck(folder):
+    """The ridge deck with a 5 m3/s point source inside the pool, a start step and an update
+    interval that do not line up with the mass interval (the old pool rows went backwards)."""
+    z, cells, pool = _ridge_deck(folder, sim_s=45.0, h0=1.5)
+    par = os.path.join(folder, "run.par")
+    with open(par, encoding="utf-8") as f:
+        text = f.read()
+    text = text.replace("initial_tstep 1.0", "initial_tstep 0.37").replace("massint 10.0",
+                                                                          "massint 5.0")
+    text += "bcifile run.bci\nbdyfile run.bdy\n"
+    with open(par, "w", encoding="utf-8") as f:
+        f.write(text)
+    with open(os.path.join(folder, "run.bci"), "w", encoding="utf-8") as f:
+        f.write("P 35.000 65.000 QVAR inflow\n")
+    with open(os.path.join(folder, "run.bdy"), "w", encoding="utf-8") as f:
+        f.write("pool inflow\ninflow\n2 seconds\n0.5 0.0\n0.5 1000.0\n")
+    return z, cells, pool
 
 
 @test
 def boann_pool_times_increase_and_match_the_outflow():
-    """The pool file's time column only moves forward, and each row's outflow accounts for
-    the volume change since the previous row (no point source, so no extra inflow)."""
+    """The pool file's time column only moves forward, every row is at a model time, and the
+    outflow it reports, integrated between mass rows, is the volume that left the pool: the
+    rise in the water outside the pool, from the .mass file's total volume (closed basin, all
+    inflow into the pool). Stamping rows with the nominal update time, or dropping the
+    inflow, fails this deck."""
     _need_cpu()
     d = tempfile.mkdtemp(prefix="boann_br_pool_")
     try:
-        _z, cells, pool = _ridge_deck(d, sim_s=40.0, h0=1.5)
-        _write_breach(d, _spec(cells, formation_s=20.0, update_s=10.0), pool)
+        _z, cells, pool = _pool_deck(d)
+        _write_breach(d, _spec(cells, start_s=1.1, formation_s=20.0, update_s=3.0), pool)
         with _env(DAMSAFETY_MF_THREADS="1"):
-            mfe.run_par(os.path.join(d, "run.par"), backend="cpu")
+            stats = mfe.run_par(os.path.join(d, "run.par"), backend="cpu")
         rows = []
         for ln in open(os.path.join(d, "results", "run.pool"), encoding="utf-8"):
             if not ln.strip() or ln.startswith("time"):
                 continue
-            t, vol, q = (float(x) for x in ln.split(","))
-            rows.append((t, vol, q))
-        assert len(rows) >= 3, rows
+            rows.append(tuple(float(x) for x in ln.split(",")))
+        assert len(rows) >= 8, rows
+        assert rows[0][0] == 0.0 and rows[0][2] == 0.0
         for a, b in zip(rows, rows[1:]):
             assert b[0] > a[0] + 1e-9, (a[0], b[0])
-            expect = a[1] - b[2] * (b[0] - a[0])
-            assert abs(b[1] - expect) < 1e-2, (a, b, expect)
+        mass = {}
+        for ln in open(os.path.join(d, "results", "run.mass"), encoding="utf-8"):
+            parts = ln.split()
+            if not parts or parts[0] == "Time":
+                continue
+            mass[round(float(parts[0]), 3)] = float(parts[5])
+        vol0 = float(np.sum(mfe.Deck(os.path.join(d, "run.par")).h0)) * 100.0
+        pool_at = {round(t, 3): (t, v) for t, v, _q in rows}
+        common = sorted(k for k in mass if k in pool_at)
+        assert len(common) >= 5, (sorted(mass), sorted(pool_at))
+        checked = 0
+        prev = (0.0, rows[0][1], vol0)                      # t, pool volume, total volume
+        for k in common:
+            t, vp = pool_at[k]
+            vt = mass[k]
+            out_q = sum(q * (tb - ta) for (ta, _va, _qa), (tb, _vb, q) in zip(rows, rows[1:])
+                        if prev[0] + 1e-9 < tb <= t + 1e-9)
+            outside_rise = (vt - vp) - (prev[2] - prev[1])
+            assert abs(out_q - outside_rise) <= 0.5 + 1e-3 * abs(outside_rise), (
+                k, out_q, outside_rise)
+            checked += 1
+            prev = (t, vp, vt)
+        assert checked >= 5
+        assert stats["breach"]["updates"] >= 6
     finally:
         shutil.rmtree(d, True)
 
@@ -555,7 +659,8 @@ if __name__ == "__main__":
                boann_no_breach_file_matches_main_byte_for_byte,
                boann_instant_breach_matches_a_prelowered_bed,
                boann_breach_bed_at_halfway_is_the_law_and_mass_holds,
-               boann_mxe_uses_the_bed_from_the_period_the_peak_rose,
+               boann_mxe_is_the_peak_water_level_over_the_lowering_bed,
+               boann_mxe_matches_the_sampled_peak_water_level_in_a_full_run,
                boann_pool_times_increase_and_match_the_outflow,
                boann_fv_breach_conserves_mass_on_a_closed_basin,
                boann_breach_cpu_tiles_match_the_whole_window,

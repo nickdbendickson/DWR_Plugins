@@ -181,9 +181,12 @@ def _need(spec, key, kind):
     v = spec[key]
     if kind is float:
         try:
-            return float(v)
+            f = float(v)
         except (TypeError, ValueError):
             raise EngineError("the breach file's '{}' is not a number ({!r})".format(key, v))
+        if not math.isfinite(f):
+            raise EngineError("the breach file's '{}' is not a finite number ({!r})".format(key, v))
+        return f
     return v
 
 
@@ -223,7 +226,12 @@ class TerrainBreach:
         for i, item in enumerate(cells):
             if not isinstance(item, (list, tuple)) or len(item) != 3:
                 raise EngineError("breach cell {} is not [row, col, along_m]".format(i))
-            r, c, a = int(item[0]), int(item[1]), float(item[2])
+            try:
+                r, c, a = int(item[0]), int(item[1]), float(item[2])
+            except (TypeError, ValueError, OverflowError):
+                raise EngineError("breach cell {} is not [row, col, along_m]".format(i))
+            if not math.isfinite(a):
+                raise EngineError("breach cell {} has an along_m that is not finite".format(i))
             if not (0 <= r < ny and 0 <= c < nx) or not deck.valid[r, c]:
                 raise EngineError("breach cell {} ({}, {}) is outside the grid or NoData".format(
                     i, r, c))
@@ -249,7 +257,13 @@ class TerrainBreach:
         self.next_u = self.times[0]
         self.updates = 0
         self.last_t = None
-        self.periods = [(np.zeros(self.idx.size, np.float32), self.z0.copy())]
+        # Peak water level (datum) on the breach cells over the bed periods already closed.
+        # The bed is constant between updates and only falls; hmax only rises. For a period k
+        # with bed z_k whose peak depth so far is H_k at its end, the highest water level in
+        # it is H_k + z_k when hmax rose in that period, and at most that otherwise, which is
+        # then no higher than an earlier period's value (same H, higher bed). So the max over
+        # wet periods of (H_k + z_k) is the exact peak water level; one array, O(cells).
+        self.wse_peak = np.full(self.idx.size, -np.inf)
         self._pool_f = None
         self._pool_t = None
         self._pool_v = None
@@ -278,6 +292,11 @@ class TerrainBreach:
             pool = np.flatnonzero((data != nod) & (data != 0) & np.isfinite(data))
             if pool.size == 0:
                 raise EngineError("the pool mask has no pool cells")
+            if getattr(deck, "rain", None) is not None:
+                # the pool file's outflow is the pool's volume change plus what flowed in; rain
+                # on the pool is not counted in that, so it would show as less outflow
+                raise EngineError("the breach file's pool mask cannot be used with rainfall: the "
+                                  "pool outflow would not count the rain on the pool")
         return cls(deck, spec, cells, pool)
 
     def _times(self):
@@ -323,19 +342,25 @@ class TerrainBreach:
 
     def apply(self, eng):
         """Lower the bed to the notch at next_u. Depth is left alone, so volume is unchanged."""
-        h = np.array(eng.a["hmax"][self.idx], copy=True)
+        # close the period on the current bed: its peak water level is hmax-so-far + its bed
+        h = np.asarray(eng.a["hmax"][self.idx], dtype=np.float64)
+        self.wse_peak = np.where(h > 0, np.maximum(self.wse_peak, h + self.zcur), self.wse_peak)
         self.zcur = np.minimum(self.zcur, self.candidate(self.next_u))
         eng.a["z"][self.idx] = (self.zcur - eng.zref).astype(np.float32)
-        self.periods.append((h, self.zcur.copy()))
         self.updates += 1
         self.last_t = self.next_u
         self._k += 1
         self.next_u = self.times[self._k] if self._k < len(self.times) else None
 
     def catch_up(self, eng, t):
+        applied = False
         while self.next_u is not None and t >= self.next_u - 1e-6:
             self.apply(eng)
-        self.pool_row(eng, t)
+            applied = True
+        # a row at the model time of each bed update (the mass-interval rows and the last one
+        # are written by the run loop); never one per batch
+        if applied:
+            self.pool_row(eng, t)
 
     def note_in(self, vin):
         self._dvin += float(vin)
@@ -347,7 +372,7 @@ class TerrainBreach:
         # time column backwards, or repeat t = 0 after the file is opened. The cursor stays.
         if self._pool_t is not None and t <= self._pool_t + 1e-6:
             return
-        vol = float(eng.h2().ravel()[self.pool_idx].sum(dtype=np.float64)) * self.dx * self.dx
+        vol = float(eng.h2().flat[self.pool_idx].sum(dtype=np.float64)) * self.dx * self.dx
         if self._pool_t is None:
             q = 0.0
         else:
@@ -376,16 +401,18 @@ class TerrainBreach:
         flat[self.idx] = self.zcur
         return bed
 
-    def bed_for_mxe(self, hmax_buf):
-        """Bed (datum) to add to the peak depth. A breach cell uses the bed from the last period
-        in which its peak depth rose; if it never rose after the first update, the intact bed."""
-        bed = self.grid_z.copy()
-        hfinal = np.asarray(hmax_buf[self.idx], dtype=np.float32)
-        chosen = self.z0.copy()
-        for h_start, zbed in self.periods:
-            chosen = np.where(hfinal > h_start, zbed, chosen)
-        bed.ravel()[self.idx] = chosen
-        return bed
+    def mxe(self, hmax_buf):
+        """Peak water level (datum) for the .mxe grid. Off the notch: bed + peak depth, as with
+        no breach file. On a breach cell: the highest of (peak depth so far + bed) over the bed
+        periods, the last one closed with the final peak depth, i.e. max over time of h + z(t).
+        The peak depth alone with any single bed can be too low: the water may stand highest
+        over the intact crest before the cut and be deepest over the lowered bed after it."""
+        hmax = np.asarray(hmax_buf, dtype=np.float64)
+        out = self.grid_z + hmax.reshape(self.grid_z.shape)
+        hf = hmax[self.idx]
+        wse = np.where(hf > 0, np.maximum(self.wse_peak, hf + self.zcur), self.wse_peak)
+        out.ravel()[self.idx] = wse
+        return out
 
     def stats(self):
         frac = self._frac(self.last_t) if self.last_t is not None else 0.0
@@ -685,8 +712,8 @@ def _run(d, bk, progress, cancel, say):
     bl._write_asc(root + ".inittm", np.where(valid, arrival, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & (hmax > 0), tmax, NODATA), xll, yll, dx,
                   fmt="%.4f")
-    mxe_bed = br.bed_for_mxe(a["hmax"]) if br is not None else d.z
-    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe_bed + hmax, NODATA), xll, yll, dx)
+    mxe = br.mxe(a["hmax"]) if br is not None else d.z + hmax
+    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe, NODATA), xll, yll, dx)
     if br is not None:
         bl._write_asc(root + ".bed", np.where(valid, br.final_bed(), NODATA), xll, yll, dx,
                       fmt="%.4f")
