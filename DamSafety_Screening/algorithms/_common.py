@@ -165,13 +165,29 @@ def layer_path(params, key):
     return p if p and os.path.isfile(p) else ""
 
 
+_ISYS_FIELDS = ("func_sys", "f_system", "route_signing", "routesigning", "shield")
+
+
+def _isys_values(feat):
+    low = {str(n).lower(): n for n in feat.fields().names()}
+    return {k: feat[low[k]] for k in _ISYS_FIELDS if k in low}
+
+
 def interstate_system(feat):
-    """core.road_aadt.interstate_system for a road feature: FUNC_SYS / F_SYSTEM 1 or SHIELD I / EXIT, read
-    by field name (any letter case); False when the feature has none of those fields."""
+    """core.road_aadt.interstate_system for a road feature (FUNC_SYS / F_SYSTEM 1, ROUTE_SIGNING 2: rated
+    Interstate), read by field name (any letter case); False when the feature has none of those fields."""
     from ..core import road_aadt as RA
     try:
-        low = {str(n).lower(): n for n in feat.fields().names()}
-        return RA.interstate_system({k: feat[low[k]] for k in ("func_sys", "f_system", "shield") if k in low})
+        return RA.interstate_system(_isys_values(feat))
+    except Exception:                                            # noqa  (never fails the tool)
+        return False
+
+
+def interstate_shield(feat):
+    """core.road_aadt.interstate_shield for a road feature (SHIELD I / EXIT: a matched count never lowers it)."""
+    from ..core import road_aadt as RA
+    try:
+        return RA.interstate_shield(_isys_values(feat))
     except Exception:                                            # noqa  (never fails the tool)
         return False
 

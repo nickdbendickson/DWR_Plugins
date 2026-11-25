@@ -84,7 +84,9 @@ class HazardClassification(UnitAlgorithm):
                 "word list: barn, shed, garage, silo, grain bin, outbuilding, well pad \u2026). Mobile "
                 "homes (Fig. 5.2): 'mobile' / 'manufactured' / 'trailer' / NSI RES2. ROADS: a missing, "
                 "zero or NaN AADT is unknown - the 'unknown AADT' class you choose (default Medium), "
-                "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I'. "
+                "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I', or (0.58.0) a "
+                "FUNC_SYS / F_SYSTEM 1 or ROUTE_SIGNING 2 field (the interstate system as the Hazard plugin "
+                "reads it: an NG9-1-1 'RAMP' or 'EXIT 63'). "
                 "Same for a railroad without a train count.\n"
                 "TRAFFIC COUNTS (0.58.0, as the Runner): an overtopped road with no AADT of its own (the "
                 "pack's NG9-1-1 roads have none) first takes the count of the traffic line it runs along "
@@ -94,8 +96,8 @@ class HazardClassification(UnitAlgorithm):
                 "GeoPackages next to the roads file, plus the ROADS_MORE files. A higher count on the same road "
                 "wins over a lower one (another line it runs along, one named as the road, or a station on it: "
                 "newest year, then the higher count); a station counts only on the overtopped part and on this "
-                "road; a piece of the interstate system (FUNC_SYS 1, SHIELD I: 'RAMP') is never lowered by a "
-                "count. A road that matches "
+                "road; an interstate (FUNC_SYS 1 too) is never matched, and an NG9-1-1 SHIELD I / EXIT road "
+                "is never lowered by a count. A road that matches "
                 "nothing keeps the 'unknown AADT' class. hz_aadt lists the counts taken (the impacted "
                 "features' aadt_src says where each road's count came from); hz_aadt_review (and hz_conf "
                 "= review) marks a dam whose class is LOWER than it would be without them.\n"
@@ -557,21 +559,22 @@ class HazardClassification(UnitAlgorithm):
                     return got
 
                 # isys (0.58.0): a piece of the interstate system its name does not show (FUNC_SYS 1: 'RAMP',
-                # 'EXIT 63'); a matched count never lowers it
+                # 'EXIT 63'), rated Interstate as the Hazard plugin does; ishield: an NG9-1-1 SHIELD I / EXIT
+                # road outside it, which a matched count never lowers
                 if roads is not None:
                     lines(roads, tr, fr, "road", r_in, lambda r: {
                         "name": _rname(r),
                         "aadt": r[f_aadt] if f_aadt else None,
                         "road_class": str(r[f_rcls]) if f_rcls and r[f_rcls] is not None else "",
                         "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False,
-                        "isys": cm.interstate_system(r)})
+                        "isys": cm.interstate_system(r), "ishield": cm.interstate_shield(r)})
                 for src, tfm, fback, fa, frc, fs, prefix in extra_roads:
                     lines(src, tfm, fback, "road", r_in, lambda r, fa=fa, frc=frc, fs=fs: {
                         "name": _rname(r),
                         "aadt": r[fa] if fa else None,
                         "road_class": str(r[frc]) if frc and r[frc] is not None else "",
                         "sole_access": nh.yes_no(r[fs]) is True if fs else False,
-                        "isys": cm.interstate_system(r)}, prefix)
+                        "isys": cm.interstate_system(r), "ishield": cm.interstate_shield(r)}, prefix)
                 if rail is not None:
                     lines(rail, tl, fl, "railroad", t_in, lambda r: {
                         "trains_per_day": r[f_trn] if f_trn else None,
@@ -613,18 +616,20 @@ class HazardClassification(UnitAlgorithm):
                 st8 = nh.Settings(unknown_aadt=unknown_aadt)
                 lvl = lambda r, aadt: nh.road_class(hz.nd_road(
                     r["id"], r["depth_m"], aadt, r.get("road_class", ""),
-                    sole_access=r.get("sole_access", False), name=r.get("name", "")), st8)[0]
+                    sole_access=r.get("sole_access", False), name=r.get("name", ""),
+                    interstate_system=r.get("isys", False)), st8)[0]
+                interstate = lambda r: r.get("isys") or hz.is_interstate(r.get("road_class", ""), r.get("name", ""))
                 joined, kept, tried = {}, {}, 0
                 if join and road_parts:
                     wet = RA.wet_test(grid.depth, grid.x0, grid.y_top, grid.cell, rdep)
                     for r in r_in:
-                        if r["id"] not in road_parts or hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
+                        if r["id"] not in road_parts or interstate(r):
                             continue
                         tried += 1
                         # where the water crosses it (else next to the point found overtopped), by its name
                         m = join.match(road_parts[r["id"]], is_wet=wet, name=r.get("name", ""), at=(r["x"], r["y"]))
-                        if m and r.get("isys") and nh.RANK[lvl(r, m["aadt"])] < nh.RANK[lvl(r, None)]:
-                            kept[r["id"]] = m           # interstate system (FUNC_SYS 1): not lowered by a count
+                        if m and r.get("ishield") and nh.RANK[lvl(r, m["aadt"])] < nh.RANK[lvl(r, None)]:
+                            kept[r["id"]] = m           # SHIELD I / EXIT: not lowered by a count
                         elif m:
                             joined[r["id"]] = m
                     for e in join.errors:
@@ -639,7 +644,7 @@ class HazardClassification(UnitAlgorithm):
                     """'road 12 (87TH ST NW)': the impacted feature's id and, when it has one, its name."""
                     return "road {}{}".format(rid, " ({})".format(r_name[rid]) if r_name.get(rid) else "")
                 for rid, m in kept.items():
-                    feedback.pushInfo("dam {}: {}: interstate system (FUNC_SYS 1 / SHIELD I): the matched {} would "
+                    feedback.pushInfo("dam {}: {}: interstate shield (SHIELD I / EXIT): the matched {} would "
                                       "lower it; not used".format(dam_id, rlabel(rid), m["text"]))
 
                 def classify(roads_in):
@@ -691,10 +696,12 @@ class HazardClassification(UnitAlgorithm):
                         return joined[rid]["text"]
                     if nh.aadt_value(r.get("aadt")) is not None:
                         return "own AADT field"
-                    if hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
+                    if r.get("isys") and not hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
+                        return "no AADT; interstate system (FUNC_SYS 1; High whatever its count)"
+                    if interstate(r):
                         return "no AADT; interstate (High whatever its count)"
                     if rid in kept:
-                        return ("no AADT; interstate system (FUNC_SYS 1 / SHIELD I), so not lowered by the matched "
+                        return ("no AADT; interstate shield (SHIELD I / EXIT), so not lowered by the matched "
                                 + kept[rid]["text"])
                     if join:
                         return "no AADT; no traffic count matched within {:.0f} m".format(join.max_m)

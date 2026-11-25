@@ -466,7 +466,8 @@ class Triage(UnitAlgorithm):
         def _road_high(r, nms, faadt, frcls, fsole):
             ctext = str(r[frcls]) if frcls and r[frcls] else ""
             rd = hz.nd_road("r", 1.0, cm.fval(r, nms, faadt, float), ctext,
-                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False, name=_road_name(r))
+                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False, name=_road_name(r),
+                            interstate_system=cm.interstate_system(r))   # FUNC_SYS 1: Interstate, as tool 8
             if join and rd.aadt is None and not rd.interstate:
                 # 0.58.0: its rating rests on a traffic count: decided once the road is known to lie in the
                 # corridor, with the count of its part there
@@ -480,7 +481,7 @@ class Triage(UnitAlgorithm):
                 return _high(rd, r, ctext)
             ok, label = _high(_with_count(rd, m), r, ctext, " from " + RA.source_label(m["source"]))
             if not ok and _high(rd, r, ctext)[0]:
-                if cm.interstate_system(r):          # interstate system (FUNC_SYS 1): a count never lowers it
+                if cm.interstate_shield(r):          # SHIELD I / EXIT: a count never lowers it
                     return _high(rd, r, ctext)
                 rested.append((_road_name(r) or ctext, r.id(), "{} in the corridor (not High-capable; without it: "
                                                                "{})".format(m["text"], _high(rd, r, ctext)[1])))
@@ -821,13 +822,13 @@ class Triage(UnitAlgorithm):
                         rd = hz.nd_road("r", 1.0, cm.fval(r, nms, faadt, float),
                                         str(r[frcls]) if frcls and r[frcls] else "",
                                         sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False,
-                                        name=_road_name(r))
+                                        name=_road_name(r), interstate_system=cm.interstate_system(r))
                         lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
                         if lvl == "Low":
                             return False                # cannot raise the class above Low
                         gl = r.geometry(); gl.transform(ta)
                         parts = cm.geom_parts(gl)[1] if join and rd.aadt is None and not rd.interstate \
-                            and not cm.interstate_system(r) else None   # FUNC_SYS 1: a count never lowers it
+                            and not cm.interstate_shield(r) else None   # SHIELD I / EXIT: a count never lowers it
                         gl = gl.densifyByDistance(abs(gt[1]))
                         at = next(((v.x(), v.y()) for v in gl.vertices() if inside(v.x(), v.y())), None)
                         if at is None:

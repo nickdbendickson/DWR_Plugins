@@ -37,8 +37,9 @@ Around the Runner's match (its file is not changed), Join.match makes three chec
     line before a station whatever their years and the nearest line before a farther one, so a
     modelled county count of 311 hid the 2025 NDDOT count of 2,265 on ASH COULEE DR, and county
     roads' 1,394 hid HPMS '9THSTE' 22,966 on 9TH ST E.
-and interstate_system() names a piece of the interstate system the name does not show (FUNC_SYS 1:
-'RAMP', 'EXIT 63'), which the tools never let a matched count lower."""
+interstate_system() names a piece of the interstate system the name does not show (FUNC_SYS 1:
+'RAMP', 'EXIT 63'), which tools 6 and 8 rate Interstate as the Hazard plugin does; interstate_shield()
+names an NG9-1-1 SHIELD 'I' / 'EXIT' road outside it, which a matched count never lowers."""
 import math
 import os
 import re
@@ -107,18 +108,30 @@ def same_name(a, b):
 
 
 def interstate_system(values):
-    """True for a piece of the interstate system its name may not show: FUNC_SYS (ND NG9-1-1) or
-    F_SYSTEM (HPMS) 1 - ramps named 'RAMP', 'EXIT 63' or 'UNNAMED' - or an NG9-1-1 SHIELD 'I' / 'EXIT'.
-    The Hazard plugin rates these Interstate; tools 6 and 8 never let a matched count lower them.
-    values: {lower-case field name: value}."""
-    for k in ("func_sys", "f_system"):
-        v = values.get(k)
-        try:
-            if v is not None and str(v).strip() not in ("", "NULL") and int(float(v)) == 1:
-                return True
-        except (TypeError, ValueError):
-            pass
+    """True for a piece of the interstate system its name may not show, by the Hazard plugin's rule
+    (DamSafety_Hazard/linear.py road_class): FUNC_SYS (ND NG9-1-1) or F_SYSTEM (HPMS) 1 - ramps named
+    'RAMP', 'EXIT 63' or 'UNNAMED', 'MEMORIAL HWY SE', 'VILLARD ST' - or HPMS ROUTE_SIGNING 2. Tools 6
+    and 8 rate it Interstate (High whatever its count). values: {lower-case field name: value}."""
+    if _num(values.get("func_sys")) == 1 or _num(values.get("f_system")) == 1:
+        return True
+    rs = _num(values.get("route_signing"))
+    return (rs if rs is not None else _num(values.get("routesigning"))) == 2
+
+
+def interstate_shield(values):
+    """True for an NG9-1-1 SHIELD 'I' / 'EXIT' (a 'RAMP' coded FUNC_SYS 7, say). The Hazard plugin does
+    not rate it Interstate, so tools 6 and 8 do not either; but a matched count never lowers it."""
     return str(values.get("shield") or "").strip().upper() in ("I", "EXIT")
+
+
+def _num(v):
+    """A field value as a whole number, else None (NULL, '', text)."""
+    try:
+        if v is None or str(v).strip() in ("", "NULL"):
+            return None
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
 
 
 def sources(aadt_layers="", roads_path="", roads_more=""):

@@ -486,12 +486,13 @@ def _named_stations(path, rows):
 
 
 def _ng911x(path, rows):
-    """NG911 roads with RoadClass and FUNC_SYS: rows = [(points, FULL_NAME, RoadClass, FUNC_SYS)]."""
+    """NG911 roads with RoadClass and FUNC_SYS: rows = [(points, FULL_NAME, RoadClass, FUNC_SYS[, SHIELD])]."""
     return _gpkg.write(path, {"ND_roads_NG911": ("LINESTRING", [("FULL_NAME", "TEXT"), ("SHIELD", "TEXT"),
                                                                 ("RoadClass", "TEXT"), ("FUNC_SYS", "INTEGER")],
-                                                 [(("LineString", pts), {"FULL_NAME": nm, "SHIELD": "",
-                                                                         "RoadClass": rc, "FUNC_SYS": fs})
-                                                  for pts, nm, rc, fs in rows])}) + "|layername=ND_roads_NG911"
+                                                 [(("LineString", r[0]), {"FULL_NAME": r[1],
+                                                                          "SHIELD": r[4] if len(r) > 4 else "",
+                                                                          "RoadClass": r[2], "FUNC_SYS": r[3]})
+                                                  for r in rows])}) + "|layername=ND_roads_NG911"
 
 
 def test_join_rules():
@@ -503,11 +504,17 @@ def test_join_rules():
     assert not RA.same_name("HIGHWAY 2 FRONTAGE RD E", "U2E") and not RA.same_name("HIGHWAY 2 ON RAMP", "U2E")
     assert not RA.same_name("UNIVERSITY DR S", "2ND AVE S") and not RA.same_name("MAIN AVE S", "MAINSTS")
     assert not RA.same_name("87TH ST NW", "") and not RA.same_name("", "") and not RA.same_name("N 7TH ST", "U83S")
-    # the interstate system its name does not show (NG911 FUNC_SYS, HPMS F_SYSTEM, SHIELD)
+    # the interstate system its name does not show, by the Hazard plugin's rule (NG911 FUNC_SYS, HPMS F_SYSTEM 1,
+    # HPMS ROUTE_SIGNING 2): rated Interstate; an NG911 SHIELD I / EXIT outside it is only never lowered
     assert RA.interstate_system({"func_sys": 1}) and RA.interstate_system({"f_system": "1"})
-    assert RA.interstate_system({"shield": "I"}) and RA.interstate_system({"shield": "EXIT", "func_sys": 7})
+    assert RA.interstate_system({"func_sys": 1.0, "shield": ""}) and RA.interstate_system({"route_signing": 2})
+    assert RA.interstate_system({"routesigning": "2"}) and not RA.interstate_system({"route_signing": 3})
+    assert not RA.interstate_system({"shield": "I"}) and not RA.interstate_system({"shield": "EXIT", "func_sys": 7})
     assert not RA.interstate_system({"func_sys": 7, "shield": "USHY"}) and not RA.interstate_system({})
     assert not RA.interstate_system({"func_sys": None}) and not RA.interstate_system({"func_sys": "x"})
+    assert not RA.interstate_system({"func_sys": "NULL", "f_system": ""})
+    assert RA.interstate_shield({"shield": "I"}) and RA.interstate_shield({"shield": " exit "})
+    assert not RA.interstate_shield({"shield": "USHY"}) and not RA.interstate_shield({"func_sys": 1})
     assert [RA.band(a) for a in (83, 499.9, 500, 2000, 2000.5)] == [0, 0, 1, 1, 2]
     d = tempfile.mkdtemp(prefix="rajr_")
     try:
@@ -589,19 +596,37 @@ def test_tool8_review_fixes():
         local = [(XY(0, 20)[0], XY(0, 0)[1]), (XY(0, 20)[0], XY(39, 0)[1])]   # N-S across the wet band
         hp = os.path.join(roads_dir, "HPMS_ND_2024.gpkg")
         _lines_file(hp, "HPMS_ND_2024", [([(p[0] + 1.0, p[1]) for p in local], 41.0, 2024, "")], year_field="DATA_YEAR")
-        # 1. an I-94 ramp as the pack has it (FULL_NAME 'RAMP', FUNC_SYS 1) and its HPMS ramp count 41: not lowered
+        # 1. an I-94 ramp as the pack has it (FULL_NAME 'RAMP', FUNC_SYS 1): Interstate, as the Hazard plugin rates
+        #    it, whatever its HPMS ramp count (41) and with or without the join; never matched
         ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
+        for kw in ({}, {"AADT_JOIN": False}):
+            rows, imp = _tool8(work, ng, **kw)
+            d = rows["DWR-1"]
+            assert d["hz_class"] == "High" and d["hz_aadt_review"] is None, (kw, d)
+            assert imp == [("road", "High", "no AADT; interstate system (FUNC_SYS 1; High whatever its count)")], imp
+        assert d["hz_aadt"] in (None, ""), d["hz_aadt"]
+        # ... an HPMS F_SYSTEM 1 line given as an extra roads layer likewise
+        f1 = os.path.join(work, "hpms_ramp.gpkg")
+        w1 = G.GpkgWriter(f1)
+        w1.layer("hpms_ramp", "LINESTRING", [("RouteName", "text"), ("F_SYSTEM", "int")], 5070).add(
+            {"type": "LineString", "coordinates": [[p[0] + 1.0, p[1]] for p in local]}, {"RouteName": "", "F_SYSTEM": 1})
+        w1.close()
+        ng0 = _ng911x(os.path.join(work, "none.gpkg"), [([(p[0] + 900.0, p[1]) for p in local], "FAR RD", "Local", 7)])
+        assert _tool8(work, ng0, f1 + "|layername=hpms_ramp")[0]["DWR-1"]["hz_class"] == "High"
+        # 2. a ramp coded FUNC_SYS 7 with SHIELD I (21 such pieces in the pack): not Interstate (Hazard: by its
+        #    count), but a matched count never lowers it
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Local", 7, "I")])
         rows, imp = _tool8(work, ng)
         d = rows["DWR-1"]
         assert d["hz_class"] == "Medium" and d["hz_aadt_review"] is None, d
-        assert imp[0][2].startswith("no AADT; interstate system (FUNC_SYS 1 / SHIELD I), so not lowered by the matched "
+        assert imp[0][2].startswith("no AADT; interstate shield (SHIELD I / EXIT), so not lowered by the matched "
                                     "AADT 41 (2024) from HPMS"), imp
         assert d["hz_aadt"] == "0 of 1 overtopped road(s) without AADT matched", d["hz_aadt"]
         ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 7)])
-        assert _tool8(work, ng)[0]["DWR-1"]["hz_class"] == "Low"           # not interstate system: lowered, flagged
+        assert _tool8(work, ng)[0]["DWR-1"]["hz_class"] == "Low"           # no FUNC_SYS 1, no shield: lowered, flagged
         # ... a count over 2,000 still raises it (High), no flag
         _lines_file(hp, "HPMS_ND_2024", [([(p[0] + 1.0, p[1]) for p in local], 12550.0, 2024, "")], year_field="DATA_YEAR")
-        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Local", 7, "I")])
         d = _tool8(work, ng)[0]["DWR-1"]
         assert d["hz_class"] == "High" and d["hz_aadt_review"] is None, d
         os.remove(hp)
@@ -629,7 +654,8 @@ def test_tool8_review_fixes():
         assert d["hz_aadt"].startswith("2 of 2 overtopped road(s) without AADT matched; 98TH ST SE (2 segments): AADT 28")
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print("OK tool 8: FUNC_SYS 1 ramp not lowered, same-road station 2,265 wins, segments counted once")
+    print("OK tool 8: FUNC_SYS 1 ramp Interstate, SHIELD I ramp not lowered, same-road station 2,265 wins, "
+          "segments counted once")
 
 
 def test_tool6_interstate_system():
@@ -644,12 +670,17 @@ def test_tool6_interstate_system():
         ramp = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
         r = w.run(ROADS=ramp, ROADS_MORE=cty)               # an interstate ramp matched to 83 still blocks the clear
         assert r["tri_result"] == "needs 2D" and r["tri_aadt"] is None, r
+        r = w.run(ROADS=ramp, ROADS_MORE=cty, AADT_JOIN=False)
+        assert r["tri_result"] == "needs 2D" and r["tri_aadt"] is None, r
+        shield = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Local", 7, "EXIT")])
+        r = w.run(ROADS=shield, ROADS_MORE=cty)             # SHIELD EXIT: a matched count never clears it either
+        assert r["tri_result"] == "needs 2D" and r["tri_aadt"] is None, r
         loc = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 7)])
         r = w.run(ROADS=loc, ROADS_MORE=cty)
         assert r["tri_result"] == "clear" and r["tri_aadt"], r
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print("OK tool 6: a FUNC_SYS 1 ramp is never cleared on a matched count")
+    print("OK tool 6: a FUNC_SYS 1 ramp (Interstate) or a SHIELD EXIT ramp is never cleared on a matched count")
 
 
 def test_handoff_and_tool9():
