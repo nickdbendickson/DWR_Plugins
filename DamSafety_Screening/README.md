@@ -462,6 +462,18 @@ converts the screening's metres and m/s to feet and ft/s.
   Low. A missing, zero, negative or NaN AADT is unknown, never Low, and a road is not
   promoted by its name (the old 'state/US highway = Medium' heuristic is not in the policy):
   it gets the 'unknown AADT' class you choose (default Medium) and is listed in `hz_gaps`.
+- Traffic counts (0.58.0, as the Runner): a road with no AADT (the offline pack's NG911 roads
+  have none) first takes the count of the traffic line it runs along where the water crosses
+  it (HPMS, ND county roads: within 30 m and 30 degrees over at least 30% or 150 m of it), else
+  of an NDDOT count station on it (within 30 m); the Runner's `core/aadt_join.py`, copied byte
+  for byte. AADT_JOIN (on) and AADT_LAYERS (empty = HPMS_ND_<year>, NDDOT_traffic_counts and
+  ND_county_roads next to the roads file, per-dam `pack_*` clips too, plus every ROADS_MORE
+  file with an AADT field). The layers are read once per run, a 2 km tile at a time through
+  their R-trees, only where a road needs a count. A road's own AADT is kept; an interstate is
+  High whatever its count; a road that matches nothing keeps the 'unknown AADT' class.
+  `hz_aadt` lists the counts taken, each impacted road's `aadt_src` says where its count came
+  from, and `hz_aadt_review` (with `hz_conf` = review) flags a class that is LOWER because of a
+  matched count (a county road counted 83 that made the dam Low instead of Medium): review it.
   Railroads: Medium; >= 10 trains a day or passenger (FRA codes A/B/C or yes; never T or X) ->
   High; a missing train count is a data gap. Tools 0 and 6 use the same rules.
 - Other lethality options: the conservative 'every inundated habitable structure', and the ND
@@ -485,7 +497,10 @@ converts the screening's metres and m/s to feet and ft/s.
   governing reason (`hz_reason`) of such dams.
 - Tool 6 (triage) uses the same rules: only a road known to be Low (AADT < 500, not
   interstate, not sole access) is ignored, and a lifeline or another dam inside the envelope
-  also prevents 'clear'. Tool 9 passes all of tool 8's inputs through.
+  also prevents 'clear'. Its envelope and corridor road tests give a road with no AADT the
+  matched traffic count as tool 8 does (0.58.0); a clear that rests on one is flagged in
+  `tri_aadt`, which tool 8 carries into `hz_aadt_review`. Tool 9 passes all of tool 8's inputs
+  through.
 
 ## Detailed runs with ND Breach Runner (tool 7b)
 Needs the ND Dam Breach Runner plugin v3.1+ (provider `ndbreach`, with LISFLOOD-FP set up in
