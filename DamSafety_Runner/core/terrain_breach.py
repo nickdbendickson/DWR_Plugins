@@ -433,9 +433,12 @@ def read_pool(path):
     v0 = float(v[0])
     empty = None
     if v0 > 0.0:
-        for ti, vi in zip(t, v):
-            if ti > float(t[0]) and vi <= 0.05 * v0:
-                empty = float(ti)
+        # the 5% crossing, interpolated linearly between the rows on either side of it
+        level = 0.05 * v0
+        for i in range(1, len(t)):
+            if t[i] > float(t[0]) and v[i] <= level:
+                ta, va, tb, vb = float(t[i - 1]), float(v[i - 1]), float(t[i]), float(v[i])
+                empty = tb if va <= level or va == vb else ta + (va - level) / (va - vb) * (tb - ta)
                 break
     return {"peak_outflow_cms": float(q[k]), "time_of_peak_s": float(t[k]),
             "volume_start_m3": v0, "volume_end_m3": float(v[-1]),

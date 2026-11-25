@@ -469,7 +469,7 @@ def terrain_breach_pass_staging_cuts_the_notch_only_on_the_breach_pass():
     # the fresh run and the resume are wired through these helpers
     run = _nested_fn("lisflood_run")
     load = _nested_fn("load_lisflood")
-    for fn, late in ((run, True), (load, False)):
+    for fn in (run, load):
         g = _gate(fn, negated=False)
         assert len(g) == 1, (fn.name, len(g))
         assert _calls(g[0].body[0], "_stage_notch_pass"), fn.name
@@ -478,8 +478,23 @@ def terrain_breach_pass_staging_cuts_the_notch_only_on_the_breach_pass():
         assert not _calls(fn, "_crest_raise_lines") and not _calls(fn, "_breach_crest_lines")
     late_gate = _gate(run, negated=True)
     assert len(late_gate) == 1 and _calls(late_gate[0], "_raise_crest_after_start")
-    # the resumed baseline with the option on raises as the fresh baseline did
-    assert len(_calls(load, "_raise_crest_after_start")) == 1
+    # option off keeps its order: start depth, then the settings, then the crest raise
+    import ast
+    notch_gate = _gate(run, negated=False)[0]
+    settings_at = [n.lineno for n in ast.walk(run) if isinstance(n, ast.Assign)
+                   and any(getattr(t, "id", None) == "lst" for t in n.targets)
+                   and isinstance(n.value, ast.Call)
+                   and getattr(n.value.func, "id", None) == "settings"]
+    assert settings_at and late_gate[0].lineno > notch_gate.lineno
+    assert late_gate[0].lineno > min(settings_at), (late_gate[0].lineno, settings_at)
+    # the resumed baseline with the option on raises as the fresh baseline did, and only then
+    raise_ifs = [n for n in ast.walk(load) if isinstance(n, ast.If)
+                 and any(_calls(b, "_raise_crest_after_start") for b in n.body)]
+    assert len(raise_ifs) == 1 and len(_calls(load, "_raise_crest_after_start")) == 1
+    t = raise_ifs[0].test
+    assert isinstance(t, ast.BoolOp) and isinstance(t.op, ast.And), ast.dump(t)
+    parts = {ast.unparse(v) for v in t.values}
+    assert parts == {"tag == '_base'", "tb_on"}, parts
 
 
 @test

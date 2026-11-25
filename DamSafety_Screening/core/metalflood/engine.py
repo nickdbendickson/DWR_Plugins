@@ -357,9 +357,11 @@ class TerrainBreach:
         while self.next_u is not None and t >= self.next_u - 1e-6:
             self.apply(eng)
             applied = True
-        # a row at the model time of each bed update (the mass-interval rows and the last one
-        # are written by the run loop); never one per batch
-        if applied:
+        # A row at the model time of each bed update, and then at least every update_s while
+        # the pool drains (the time-to-empty is read from these rows; the mass-interval rows
+        # alone, 300 s by default, would put it up to a whole interval late). The run loop
+        # adds the mass-interval rows and the last one.
+        if applied or (self._pool_t is not None and t >= self._pool_t + self.update_s - 1e-6):
             self.pool_row(eng, t)
 
     def note_in(self, vin):
