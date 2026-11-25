@@ -150,11 +150,12 @@ NDHAZARD_KEYS = ("DAM_FOLDER", "STRUCTURES", "S_HABITABLE", "S_OCC", "S_MOBILE",
 
 # which dams to send
 SELECT_HIGH_MEDIUM, SELECT_HIGH, SELECT_CHANGED, SELECT_ALL, SELECT_SELECTED, SELECT_CLASSIFIED = range(6)
-SELECT_LABELS = ["High and Medium from tool 8 (hz_class), and dams with no class (NoData / empty: "
-                 "the simulation failed, so the class is unknown)",
+SELECT_LABELS = ["High and Medium from tool 8 (hz_class), dams with no class (NoData / empty: "
+                 "the simulation failed, so the class is unknown) and dams whose class rests on "
+                 "matched traffic counts (hz_aadt_review)",
                  "High only (hz_class)",
-                 "Borderline (hz_border = yes) or class changed vs the existing class "
-                 "(hz_vs_existing)",
+                 "Borderline (hz_border = yes), class changed vs the existing class "
+                 "(hz_vs_existing) or class resting on matched traffic counts (hz_aadt_review)",
                  "All dams",
                  "Selected features only",
                  "High, Medium, Low and unknown (all classified dams)"]
@@ -214,6 +215,16 @@ def _pos(attrs, key):
 
 
 # ---------------------------------------------------------------------------------- selection
+AADT_REVIEW_WHY = "class {} rests on traffic counts matched from other layers (hz_aadt_review): sent to check it"
+
+
+def aadt_review(attrs):
+    """0.58.0: tool 8's hz_aadt_review - the class (or tool 6's clear) is LOWER than it would be without
+    the traffic counts matched to roads that have none - or ''."""
+    v = attrs.get("hz_aadt_review")
+    return "" if v is None or str(v).strip() in ("", "NULL", "None") else str(v).strip()
+
+
 def selected(attrs, mode, is_selected=False):
     """(send?, why) for one dam record; `why` says why it is sent or skipped. 0.17.26: a
     flagged structure (damsuite/structure_flags.py, e.g. a road fill over backwater) is never
@@ -231,6 +242,8 @@ def selected(attrs, mode, is_selected=False):
             return True, "screening class {}".format(cls)
         if unknown:
             return True, "no screening class ({}): unknown, so sent".format(cls or "empty")
+        if aadt_review(attrs):         # 0.58.0: before the join this dam was Medium, so it was sent
+            return True, AADT_REVIEW_WHY.format(cls)
         return False, "screening class {}".format(cls)
     if mode == SELECT_CLASSIFIED:
         if cls in KNOWN_CLASSES:
@@ -248,6 +261,8 @@ def selected(attrs, mode, is_selected=False):
             return True, "borderline (hz_border = yes)"
         if vs in ("higher than existing", "lower than existing"):
             return True, "screening class {} {}".format(cls, vs)
+        if aadt_review(attrs):
+            return True, AADT_REVIEW_WHY.format(cls)
         return False, "not borderline and agrees with the existing class ({})".format(vs or "n/a")
     raise ValueError("unknown selection mode {}".format(mode))
 

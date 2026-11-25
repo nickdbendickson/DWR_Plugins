@@ -120,6 +120,8 @@ def review_reasons(rec):
     if v.startswith("higher"): r.append("screened class HIGHER than the DWR class")
     if v.startswith("lower"): r.append("screened class lower than the DWR class")
     if str(rec.get("hz_conf")) in ("review", "low", "none"): r.append(f"confidence {rec.get('hz_conf')}")
+    if str(rec.get("hz_aadt_review") or "").strip():     # 0.58.0: the class rests on matched traffic counts
+        r.append("class rests on traffic counts matched from other layers")
     if str(rec.get("edge_flag")).upper() == "YES": r.append("flood truncated at terrain edge")
     if str(rec.get("dir_conf")) == "low": r.append("breach direction uncertain")
     if rec.get("class_stable") == "no": r.append("class changes between sensitivity runs")

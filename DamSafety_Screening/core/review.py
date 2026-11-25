@@ -4,6 +4,7 @@ Flagged dams come from the work folder's own outputs:
   * breach points (4 / 16 / 18) with dir_conf = low      -> "breach direction uncertain"
   * ponds (16) with pond_conf = low, or a dugout / depression written to the dam layer
   * the hazard layer (8) with hz_border = yes or hz_conf = low  -> "borderline class"
+  * the hazard layer (8) with hz_aadt_review (0.58.0)       -> "class rests on matched traffic counts"
   * the report's review queue (10, summary.csv review = yes)
 Decisions are appended to <work>/review_decisions.csv (dam_id, action, value, reviewer, when, note)
 and written into the layers: rev_decision / rev_by / rev_date fields on the dam layer (and the
@@ -80,6 +81,10 @@ def queue(work, read_rows, decided=None):
             add(did, "borderline class ({})".format(cls or "?"), "hazard", "", name)
         elif str(conf or "").strip().lower() == "low":
             add(did, "class with low confidence ({})".format(cls or "?"), "hazard", "", name)
+    # 0.58.0: a class (or a triage clear) that rests on traffic counts matched from other layers
+    for did, name, cls, why in _rows(read_rows, haz, ("dam_id", "name", "hz_class", "hz_aadt_review")):
+        if str(why or "").strip():
+            add(did, "class {} rests on matched traffic counts".format(cls or "?"), "hazard", "", name)
     summary = os.path.join(work, wf.SUMMARY_CSV) if work else ""
     if summary and os.path.isfile(summary):
         try:

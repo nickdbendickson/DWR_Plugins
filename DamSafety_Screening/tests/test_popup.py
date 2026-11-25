@@ -513,11 +513,23 @@ assert wf.defaults("12", WS, {})["DAMS"].endswith("5_dams_breach.gpkg")
 json.dump({"tool": "ND Dam Breach Screening 0.47.0", "inputs": {}},
           open(t6p + ".manifest.json", "w", encoding="utf-8"))
 assert state(wf.statuses(WS, {}), "6")[3].startswith("made by Screening 0.47.0, before"), wf.statuses(WS, {})
+# 0.58.0: the traffic counts for roads without AADT move tool 6's results again (the corridor counts a local
+# road matched to over 2,000 as High-capable): a 0.52.0 - 0.57.0 triage is out of date too
 json.dump({"tool": "ND Dam Breach Screening 0.52.0", "inputs": {}},
+          open(t6p + ".manifest.json", "w", encoding="utf-8"))
+assert state(wf.statuses(WS, {}), "6")[2] == "stale", wf.statuses(WS, {})
+assert state(wf.statuses(WS, {}), "6")[3].startswith("made by Screening 0.52.0, before"), wf.statuses(WS, {})
+assert "traffic counts for roads without AADT of 0.58.0" in state(wf.statuses(WS, {}), "6")[3]
+assert wf.defaults("7", WS, {})["DAMS"].endswith("5_dams_breach.gpkg")
+json.dump({"tool": "ND Dam Breach Screening 0.58.0", "inputs": {}},
           open(t6p + ".manifest.json", "w", encoding="utf-8"))
 assert state(wf.statuses(WS, {}), "6")[2] == "done" and wf.defaults("7", WS, {})["DAMS"] == t6p
 os.remove(t6p + ".manifest.json")
 _gpkg.write(t6p, {"6_triage": ("POINT", [("dam_id", "TEXT"), ("tri_result", "TEXT"), ("tri_corr", "TEXT")], [])})
+os.utime(t6p, (time.time() - 100, time.time() - 100))
+assert state(wf.statuses(WS, {}), "6")[2] == "stale"            # 0.52.0's fields, not 0.58.0's tri_aadt
+_gpkg.write(t6p, {"6_triage": ("POINT", [("dam_id", "TEXT"), ("tri_result", "TEXT"), ("tri_corr", "TEXT"),
+                                          ("tri_aadt", "TEXT")], [])})
 os.utime(t6p, (time.time() - 100, time.time() - 100))
 assert state(wf.statuses(WS, {}), "6")[2] == "done" and wf.chain_next(WS, {}, ("6",), ())[0] == "7"
 
