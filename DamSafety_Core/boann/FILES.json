@@ -27,7 +27,7 @@
   "hydro/bench.py": "f9535118be7fee9c64c3c1bfb4de0f3174154dae773460cd657d4bc3a644dbfc",
   "hydro/boann.py": "111e69067dfd44ec4c2209e9071845f98558ceb1e6cb77dc35228143f2c1c01a",
   "hydro/cases.py": "b891a03392938fada602cfaf9f65d654f941197831ed4ba480d61829cf1df408",
-  "hydro/cli.py": "3432d11b504d90428829f29af10c55465391603588b70ea5b62f7a64ed439c04",
+  "hydro/cli.py": "5572681145bb75c0d270d11fd3250a2f1c3f9e0a6fd489735a70e1aab2e7920f",
   "hydro/cpu_kernels.cpp": "b818bfedec021bb61c7003447b8fdba679365378efd73669866c8156838c13d1",
   "hydro/cpu_kernels_dg2.cpp": "5247f35e0adbf4c7a16577e47c072237d0a57a35cc82e85baa2e31971cac3f0a",
   "hydro/cpu_kernels_fv.cpp": "a6994518fdfa03a51d27330b96bade2b654d8fc4db18a2819ed8a7da674c0d43",
