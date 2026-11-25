@@ -77,10 +77,13 @@ def _need_metal():
 
 
 def _cases(d):
-    """The ACC tile test's two decks: a diagonal valley (open edges, a NoData hole) and a long
-    valley of 300 x 450 cells, most of whose window is dry ground."""
-    return (("diag", lambda f: diagonal_deck(f, sim_s=1.5 * 3600.0)),
-            ("valley", lambda f: valley_deck(f, ny=300, nx=450, dx=8.0, sim_s=1800.0)))
+    """Two decks, like the ACC tile test's but smaller, because the shock-capturing solvers take
+    many more sub-steps: a diagonal valley (open edges, a NoData hole the flood reaches) and a
+    valley most of whose window is dry ground. Kept small so the CPU-build byte-identity test fits
+    the fast-checks lane's few-minute budget; the skip still turns off most of the window (the
+    valley cell_steps ratio stays well under 0.6) and water still reaches the NoData wall."""
+    return (("diag", lambda f: diagonal_deck(f, ny=90, nx=210, sim_s=3600.0)),
+            ("valley", lambda f: valley_deck(f, ny=150, nx=225, dx=8.0, sim_s=900.0)))
 
 
 @test
