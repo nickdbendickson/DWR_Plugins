@@ -15,7 +15,7 @@ FIELDS = ["dam_id", "name", "hz_class", "hz_reason", "hz_conf", "haz_existing", 
           "n_bldg_wet", "n_bldg_lethal", "n_road_wet", "n_rail_wet", "height_m", "store_af",
           "td_qp_m3s", "td_tf_min", "sim_engine", "sim_cell_m", "sim_h", "max_depth_m", "area_ha",
           "edge_flag", "dir_conf", "hz_notes", "sim_notes", "brch_notes", "cascade", "audit",
-          "sim_status", "tri_result"]
+          "sim_status", "tri_result", "hz_aadt_review"]
 
 
 class Reports(UnitAlgorithm):

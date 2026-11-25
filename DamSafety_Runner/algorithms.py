@@ -1965,7 +1965,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
 
     def load_results(self, context, res, dam_id):
         names = {"depth": "Depth (Max)", "velocity": "Velocity (Max)",
-                 "arrival": "Arrival Time", "wse": "WSE (Max)"}
+                 "arrival": "Arrival Time", "wse": "WSE (Max)",
+                 "dv": "D x V (Max)"}
         for k, p in res.final.items():
             self.load(context, p, "{} {}".format(dam_id, names[k]))
         if res.increment.get("depth"):

@@ -1,4 +1,4 @@
-"""Boann 6.1.0 / Runner 3.94.0: peak depth x velocity (.maxDV).
+"""Boann 6.4.0 / Runner 3.98.0: peak depth x velocity (.maxDV).
 
 Each solver records, per cell, the largest depth times speed at one moment. No existing
 result moves: the same decks on origin/main, one core, match every pre-existing result
@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -325,9 +326,86 @@ def runner_writes_the_peak_dv_raster_only_when_asked_and_not_in_the_key():
     assert "write_peak_dv" not in workflow.key_settings(plain_st)
 
 
+@test
+def loading_results_names_the_peak_dv_layer():
+    """WRITE_PEAK_DV puts "dv" in res.final. Loading that set of rasters must not raise,
+    and the layer is named D x V (Max)."""
+    from nd_breach_runner.tests import fake_qgis
+    fake_qgis.install()
+    from nd_breach_runner import algorithms as A
+    d = tempfile.mkdtemp(prefix="boann_dv_load_")
+    try:
+        final = {}
+        for key, leaf in (("depth", "Depth (Max).tif"), ("velocity", "Velocity (Max).tif"),
+                          ("arrival", "Arrival Time.tif"), ("wse", "WSE (Max).tif"),
+                          ("dv", workflow.PEAK_DV_NAME)):
+            path = os.path.join(d, leaf)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x\n")
+            final[key] = path
+        loaded = []
+        alg = A.RunDamAlgorithm()
+        alg.load = lambda ctx, path, name: loaded.append(name)
+        res = types.SimpleNamespace(final=final, increment={}, vectors={})
+        alg.load_results(None, res, "DWR-1")
+    finally:
+        shutil.rmtree(d, True)
+    assert "DWR-1 D x V (Max)" in loaded
+    assert "DWR-1 Depth (Max)" in loaded
+    assert "DWR-1 Velocity (Max)" in loaded
+    assert "DWR-1 Arrival Time" in loaded
+    assert "DWR-1 WSE (Max)" in loaded
+
+
+@test
+def hecras_stage_drops_the_boann_peak_dv_raster():
+    """After HEC-RAS replaces the finals, the Boann D x V file is not left beside them."""
+    d = tempfile.mkdtemp(prefix="boann_dv_hr_")
+    try:
+        dv = os.path.join(d, workflow.PEAK_DV_NAME)
+        with open(dv, "w", encoding="utf-8") as f:
+            f.write("boann\n")
+        depth = os.path.join(d, "Depth (Max).tif")
+        with open(depth, "w", encoding="utf-8") as f:
+            f.write("boann-depth\n")
+        hr_depth = os.path.join(d, "hr_depth.tif")
+        with open(hr_depth, "w", encoding="utf-8") as f:
+            f.write("hr\n")
+        res = types.SimpleNamespace(
+            final={"depth": depth, "velocity": depth, "arrival": depth, "wse": depth, "dv": dv},
+            warnings=[], summary={})
+
+        class Eng:
+            class HecRasEngineError(Exception):
+                pass
+
+            @staticmethod
+            def run_stage(*_a, **_k):
+                return {"final": {"depth": hr_depth, "velocity": hr_depth,
+                                  "arrival": hr_depth, "wse": hr_depth},
+                        "warnings": []}
+
+        notes = []
+        old = workflow.adopt_final_engine
+        workflow.adopt_final_engine = lambda *_a, **_k: {"engine": "HEC-RAS 2D"}
+        try:
+            workflow.run_hecras_stage(d, res, None, workflow.RunSettings(write_peak_dv=True),
+                                      (0.0, 0.0), notes.append, Eng)
+        finally:
+            workflow.adopt_final_engine = old
+        assert "dv" not in res.final
+        assert res.final["depth"] == hr_depth
+        assert not os.path.exists(dv)
+        assert any("peak depth x velocity" in n for n in notes)
+    finally:
+        shutil.rmtree(d, True)
+
+
 if __name__ == "__main__":
     for fn in (runner_reads_peak_dv_only_when_the_file_is_there,
                runner_writes_the_peak_dv_raster_only_when_asked_and_not_in_the_key,
+               loading_results_names_the_peak_dv_layer,
+               hecras_stage_drops_the_boann_peak_dv_raster,
                boann_peak_dv_is_the_concurrent_value_on_every_solver,
                boann_peak_dv_matches_ritter_at_the_dam,
                boann_peak_dv_leaves_existing_results_identical_to_main,

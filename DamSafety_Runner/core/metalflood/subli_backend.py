@@ -20,7 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SUBLI_KERNEL_SOURCE = os.path.join(HERE, "kernels_subli.metal")
 SUBLI_CPU_SOURCE = os.path.join(HERE, "cpu_kernels_subli.cpp")
 SUBLI_KERNELS = ("k_begin_subli", "k_faces_subli", "k_scale_subli", "k_limit_subli",
-                 "k_cont_subli", "k_speed_subli", "k_end_subli")
+                 "k_cont_subli", "k_speed_subli", "k_end_subli",
+                 "k_tclear_subli", "k_tseed_subli", "k_tgrow_subli")
 
 # Params.weighting (kernels_subli.metal MF_W_*)
 W_NONE, W_UPWIND = 0, 1
@@ -43,14 +44,15 @@ class SubLIParams(ctypes.Structure):
 
 
 def subli_buffer_layout(ny, nx, n_src, n_series, n_values, r):
-    """[(name, dtype, count)] in the order of kernels_subli.metal's buffer indices 0..27. Each cell
+    """[(name, dtype, count)] in the order of kernels_subli.metal's buffer indices 0..29. Each cell
     keeps its r*r sorted sub-heights above its own lowest sub-cell (s, stride m = r*r) and that
     lowest sub-cell's elevation above the run's datum (zb); the conserved state is the volume V, and
     d is the depth above the lowest sub-cell (the exact inverse of V, refreshed every step). The
     faces carry whole-face discharges (qx/qy, last step's qxo/qyo), the face velocities (vxf/vyf)
     and their common-edge sub-bed profiles and Manning n^2 (zfx/nf2x, zfy/nf2y, r per face; the
-    boundary slots hold the FREE-edge profile). 28 buffers + Params at 28 = 29 slots (Metal's cap
-    is 31)."""
+    boundary slots hold the FREE-edge profile). Two more words mark the dry-tile skip
+    (tseed, ton: one uint per tile of the coarse grid). 30 buffers + Params at 30 = 31 slots,
+    Metal's cap: nothing else may be added to this engine without removing a buffer."""
     cells = ny * nx
     m = r * r
     xf, yf = ny * (nx + 1), (ny + 1) * nx
@@ -62,7 +64,8 @@ def subli_buffer_layout(ny, nx, n_src, n_series, n_values, r):
             ("ser_off", u, n_series + 1), ("ser_t", f, n_values), ("ser_q", f, n_values),
             ("cursor", u, n_series), ("st", u, be.S_WORDS), ("qxo", f, xf), ("qyo", f, yf),
             ("vxf", f, xf), ("vyf", f, yf), ("zfx", f, xf * r), ("nf2x", f, xf * r),
-            ("zfy", f, yf * r), ("nf2y", f, yf * r)]
+            ("zfy", f, yf * r), ("nf2y", f, yf * r),
+            ("tseed", u, be.tile_count(ny, nx)), ("ton", u, be.tile_count(ny, nx))]
 
 
 def _subli_plan(p):
@@ -74,5 +77,11 @@ def _subli_plan(p):
             ("k_end_subli", one)]
 
 
+def _subli_tile_plan(p):
+    tiles = (-(-int(p.wc) // be.TILE), -(-int(p.wr) // be.TILE), 1)
+    return [("k_tclear_subli", tiles), ("k_tseed_subli", (p.wc, p.wr, 1)),
+            ("k_tgrow_subli", tiles)]
+
+
 SUBLI_SPEC = be.Spec("subli", SUBLI_KERNEL_SOURCE, be.SHIM, SUBLI_CPU_SOURCE, SUBLI_KERNELS,
-                     SubLIParams, _subli_plan)
+                     SubLIParams, _subli_plan, tile_plan=_subli_tile_plan)

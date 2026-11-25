@@ -1,0 +1,20 @@
+{
+ "title": "EA 2D benchmark test 5: valley flooding (Neelz & Pender SC120002), 50 m",
+ "deck": "deck/base.par",
+ "solvers": [
+  "acc"
+ ],
+ "reference": {
+  "kind": "grid",
+  "file": "reference.max",
+  "of": "LISFLOOD-FP 8.3 ACC, same deck"
+ },
+ "wet_threshold_m": 0.1,
+ "tol": {
+  "rmse_m": 0.01,
+  "maxabs_m": 0.05,
+  "min_csi": 0.985
+ },
+ "max_volume_error_frac": 0.001,
+ "note": "ACC is the reference solver here: Boann and LF ACC match to ~1 mm. FV1 differs only at the inflow cells (Boann's FV engines have no LISFLOOD-FP inflow-order option), so it is checked on the Mac kit, not gated."
+}

@@ -356,26 +356,55 @@ def boann_breach_bed_at_halfway_is_the_law_and_mass_holds():
 
 @test
 def boann_mxe_uses_the_bed_from_the_period_the_peak_rose():
-    """A cell whose peak is on the intact ridge, then the ridge is removed, keeps the intact bed
-    in .mxe. A cell that deepens after the cut uses the lowered bed."""
+    """A cell whose peak is already set when the cut happens keeps the intact bed. A cell
+    that is dry then, and wet after, records the lowered bed. Using the final bed for every
+    cell fails the first check."""
+    ny, nx = 4, 4
+
+    class Deck:
+        pass
+
+    deck = Deck()
+    deck.ny, deck.nx, deck.dx = ny, nx, 10.0
+    deck.valid = np.ones((ny, nx), dtype=bool)
+    deck.z = np.full((ny, nx), 12.0)
+    spec = {"start_s": 10.0, "formation_s": 0.0, "invert_start_m": 12.0,
+            "invert_final_m": 10.0, "bottom_width_final_m": 10.0, "side_slope_h": 0.0,
+            "update_s": 5.0}
+    br = mfe.TerrainBreach(deck, spec, [[1, 1, 0.0], [1, 2, 0.0]], None)
+    # periods start (zeros, intact 12). One update then: depth at the cut, bed after it.
+    br.zcur[:] = 10.0
+    br.periods.append((np.array([1.5, 0.0], np.float32), np.array([10.0, 10.0])))
+    hmax = np.zeros(ny * nx, np.float32)
+    hmax[1 * nx + 1] = np.float32(1.5)    # peaked at the cut, not after
+    hmax[1 * nx + 2] = np.float32(0.4)    # dry at the cut, wet after
+    bed = br.bed_for_mxe(hmax)
+    assert abs(float(bed[1, 1]) - 12.0) < 1e-6, bed[1, 1]
+    assert abs(float(bed[1, 2]) - 10.0) < 1e-6, bed[1, 2]
+
+
+@test
+def boann_pool_times_increase_and_match_the_outflow():
+    """The pool file's time column only moves forward, and each row's outflow accounts for
+    the volume change since the previous row (no point source, so no extra inflow)."""
     _need_cpu()
-    d = tempfile.mkdtemp(prefix="boann_br_mxe_")
+    d = tempfile.mkdtemp(prefix="boann_br_pool_")
     try:
-        _ridge_deck(d, sim_s=30.0, h0=1.2)
-        # one cell of the ridge, cut at t = 10 to the floor
-        spec = _spec([[6, 8, 0.0]], start_s=10.0, formation_s=0.0, update_s=5.0,
-                     invert_start_m=12.0, invert_final_m=10.0, bottom_width_final_m=10.0,
-                     side_slope_h=0.0)
-        _write_breach(d, spec)
+        _z, cells, pool = _ridge_deck(d, sim_s=40.0, h0=1.5)
+        _write_breach(d, _spec(cells, formation_s=20.0, update_s=10.0), pool)
         with _env(DAMSAFETY_MF_THREADS="1"):
             mfe.run_par(os.path.join(d, "run.par"), backend="cpu")
-        h = read_asc(os.path.join(d, "results", "run.max"))
-        mxe = read_asc(os.path.join(d, "results", "run.mxe"))
-        # the cell is wet after the cut or before; the water surface is mxe, the bed is mxe - h
-        if h[6, 8] > 0:
-            bed = float(mxe[6, 8] - h[6, 8])
-            assert bed <= 12.0 + 1e-3
-            assert abs(bed - 12.0) < 0.05 or abs(bed - 10.0) < 0.05, bed
+        rows = []
+        for ln in open(os.path.join(d, "results", "run.pool"), encoding="utf-8"):
+            if not ln.strip() or ln.startswith("time"):
+                continue
+            t, vol, q = (float(x) for x in ln.split(","))
+            rows.append((t, vol, q))
+        assert len(rows) >= 3, rows
+        for a, b in zip(rows, rows[1:]):
+            assert b[0] > a[0] + 1e-9, (a[0], b[0])
+            expect = a[1] - b[2] * (b[0] - a[0])
+            assert abs(b[1] - expect) < 1e-2, (a, b, expect)
     finally:
         shutil.rmtree(d, True)
 
@@ -527,6 +556,7 @@ if __name__ == "__main__":
                boann_instant_breach_matches_a_prelowered_bed,
                boann_breach_bed_at_halfway_is_the_law_and_mass_holds,
                boann_mxe_uses_the_bed_from_the_period_the_peak_rose,
+               boann_pool_times_increase_and_match_the_outflow,
                boann_fv_breach_conserves_mass_on_a_closed_basin,
                boann_breach_cpu_tiles_match_the_whole_window,
                boann_breach_gpu_matches_itself_and_the_cpu_build,

@@ -395,12 +395,15 @@ def nd_structure(ident, depth_m, vel_ms, mobile=False, habitable=True, x=None, y
 
 
 def nd_road(ident, depth_m, aadt=None, road_class="", x=None, y=None, sole_access=False,
-            name=""):
+            name="", interstate_system=False):
     """AADT via nd_hazard.aadt_value (missing, NaN, zero or negative = unknown -> data gap);
-    interstate from the class text or the name (nd_hazard.interstate_from_text); a US / State
-    highway likewise (nd_hazard.us_state_highway_from_text, 5.2.1.2(b): at least Medium)."""
+    interstate from the class text or the name (nd_hazard.interstate_from_text), or (0.58.0)
+    interstate_system: a piece of the interstate system its name does not show (FUNC_SYS 1, as the
+    Hazard plugin reads it; core.road_aadt.interstate_system); a US / State highway likewise
+    (nd_hazard.us_state_highway_from_text, 5.2.1.2(b): at least Medium)."""
     return nh.Road(str(ident), m_to_ft(depth_m), aadt=nh.aadt_value(aadt),
-                   interstate=is_interstate(road_class, name), sole_access=bool(sole_access),
+                   interstate=bool(interstate_system) or is_interstate(road_class, name),
+                   sole_access=bool(sole_access),
                    x=x, y=y, us_state=is_us_state(road_class, name))
 
 
@@ -459,7 +462,8 @@ def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHART
     its defaults (0.5 ft, off) - nd_hazard.Settings.
 
     structures: dicts {id, depth_m, vel_ms (None = unknown), dv_m2s, mobile, habitable, x, y};
-    roads: dicts {id, depth_m, aadt, road_class, name, sole_access, x, y}; railroads: dicts
+    roads: dicts {id, depth_m, aadt, road_class, name, sole_access, x, y, isys (interstate system,
+    0.58.0)}; railroads: dicts
     {id, depth_m, trains_per_day, passenger, x, y}; lifelines: dicts {id, depth_m, kind, x, y};
     downstream_dams: nh.DownstreamDam (already known to be wet). Depths in m and velocities in
     m/s (converted here). method: one of METHODS. The comparison criteria classify the
@@ -477,7 +481,8 @@ def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHART
     if method == nh.LETHALITY_CHARTS and (charts is None or not charts.ready):
         raise nh.ChartsNotDigitized(charts_not_digitized_message(charts))
     rd = [nd_road(r["id"], r["depth_m"], r.get("aadt"), r.get("road_class", ""), r.get("x"),
-                  r.get("y"), r.get("sole_access", False), r.get("name", "")) for r in roads]
+                  r.get("y"), r.get("sole_access", False), r.get("name", ""), bool(r.get("isys")))
+          for r in roads]
     tr = [nd_rail(r["id"], r["depth_m"], r.get("trains_per_day"), r.get("passenger", False),
                   r.get("x"), r.get("y")) for r in railroads]
     ll = [nd_lifeline(r["id"], r["depth_m"], r.get("kind", ""), r.get("x"), r.get("y"))

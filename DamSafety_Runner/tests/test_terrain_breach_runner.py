@@ -263,12 +263,111 @@ def terrain_breach_mass_uses_the_pool_and_products_omit_the_start():
         shutil.rmtree(res, True)
 
 
+@test
+def terrain_breach_baseline_deck_has_no_notch_and_the_breach_deck_does():
+    """The breach pass writes a notch file. The no-breach baseline (tag _base) does not:
+    it keeps the breach hydrograph, and it does not replace the breach report."""
+    dem, line, dam_xy, inflow = _valley()
+    dam = _dam()
+    dam.crest_line_xy = line
+    st = _settings()
+    assert workflow._notch_this_pass("", True) is True
+    assert workflow._notch_this_pass("_base", True) is False
+    assert workflow._notch_this_pass("_base", False) is False
+    geom = tb.prepare(dam, _hy(), workflow._breach_crest_lines(dam, st, 0.0),
+                      dam_xy, (1.0, 0.0), inflow)
+    lf.raise_crest(dem, dam_xy, inflow, geom["top_m"], line_xy=line)
+    spec, _depth = tb.stage(dem, geom, [line])
+    hy = br.Hydrograph(np.array([0.0, 60.0]), np.array([10.0, 0.0]), "t")
+    d = tempfile.mkdtemp(prefix="tb_base_")
+    try:
+        breach_dir = os.path.join(d, "breach")
+        base_dir = os.path.join(d, "base")
+        on = lf.LisfloodSettings(
+            lf.GPU_EXE, sim_time_s=60.0,
+            terrain_breach=spec if workflow._notch_this_pass("", True) else None)
+        off = lf.LisfloodSettings(
+            lf.GPU_EXE, sim_time_s=60.0,
+            terrain_breach=spec if workflow._notch_this_pass("_base", True) else None)
+        lf.write_inputs(breach_dir, dem, inflow, hy, on)
+        lf.write_inputs(base_dir, dem, inflow, hy, off)
+        assert os.path.isfile(os.path.join(breach_dir, "run.breach.json"))
+        assert "breachfile" in open(os.path.join(breach_dir, "run.par"), encoding="utf-8").read()
+        assert not os.path.isfile(os.path.join(base_dir, "run.breach.json"))
+        assert "breachfile" not in open(os.path.join(base_dir, "run.par"), encoding="utf-8").read()
+        assert "QVAR breach" in open(os.path.join(base_dir, "run.bci"), encoding="utf-8").read()
+        src = open(workflow.__file__, encoding="utf-8").read()
+        assert src.count("_notch_this_pass(tag, tb_on)") >= 2
+        # a resumed baseline must not be the pass that writes the report entry
+        i = src.index("def load_lisflood")
+        body = src[i:src.index("\n    # M5:", i)]
+        assert "if tb_spec is not None:" in body
+        assert "_notch_this_pass(tag, tb_on)" in body
+    finally:
+        import shutil
+        shutil.rmtree(d, True)
+
+
+@test
+def terrain_breach_batch_crest_line_is_used_when_the_dam_has_none():
+    """A batch CREST_LINE (st.midcrest_line) is enough when the dam has no crest line of
+    its own. The ordinary raise, used when the option is off, still ignores that line."""
+    dem, line, dam_xy, inflow = _valley()
+    dam = _dam()
+    dam.crest_line_xy = None
+    st = _settings()
+    st.midcrest_line = line
+    try:
+        tb.prepare(dam, _hy(), workflow._crest_raise_lines(dam, 0.0),
+                   dam_xy, (1.0, 0.0), inflow)
+    except br.BreachInputError:
+        pass
+    else:
+        raise AssertionError("a dam with no crest line was accepted")
+    lines = workflow._breach_crest_lines(dam, st, 0.0)
+    assert len(lines) == 1 and len(lines[0]) >= 2
+    geom = tb.prepare(dam, _hy(), lines, dam_xy, (1.0, 0.0), inflow)
+    assert geom["lines"][0][0] == line[0]
+    n = lf.raise_crest(dem, dam_xy, inflow, geom["top_m"],
+                       length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=lines[0])
+    assert n > 0 and np.any(dem.data == geom["top_m"])
+    # a dam line of its own still wins over the batch line
+    dam.crest_line_xy = line
+    other = [(0.0, 0.0), (5.0, 0.0)]
+    st.midcrest_line = other
+    assert workflow._breach_crest_lines(dam, st, 0.0)[0] is line
+    src = open(workflow.__file__, encoding="utf-8").read()
+    assert "_breach_crest_lines(dam, st, 0.0)" in src
+    assert "_crest_raise_lines(dam, half) if not tb_on" in src
+
+
+@test
+def terrain_breach_resume_keeps_the_stable_settings():
+    """load_lisflood is a nested closure, so a resumed run is not built in these tests.
+    The resume settings must still take theta, CFL and the sub-grid knobs (stable_kw)
+    as well as the notch. LisfloodSettings keeps each of those."""
+    src = open(workflow.__file__, encoding="utf-8").read()
+    i = src.index("def load_lisflood")
+    body = src[i:src.index("\n    # M5:", i)]
+    assert "terrain_breach=tb_spec" in body
+    assert "**stable_kw()" in body
+    run = src[src.index("def lisflood_run"):i]
+    assert "**stable_kw()" in run and "terrain_breach=tb_spec" in run
+    st = lf.LisfloodSettings(lf.GPU_EXE, theta=0.7, cfl=0.5, subgrid_r=2,
+                             subgrid_upwind=True, terrain_breach=None)
+    assert st.theta == 0.7 and st.cfl == 0.5 and st.subgrid_r == 2
+    assert st.subgrid_upwind is True and st.terrain_breach is None
+
+
 if __name__ == "__main__":
     for fn in (terrain_breach_setting_is_out_of_the_key_and_the_report_when_off,
                terrain_breach_is_refused_unless_the_run_can_lower_the_bed,
                terrain_breach_deck_has_no_breach_point_source_and_a_rerun_keeps_the_file,
                terrain_breach_pool_stays_upstream_of_a_crest_at_the_starting_level,
-               terrain_breach_mass_uses_the_pool_and_products_omit_the_start):
+               terrain_breach_mass_uses_the_pool_and_products_omit_the_start,
+               terrain_breach_baseline_deck_has_no_notch_and_the_breach_deck_does,
+               terrain_breach_batch_crest_line_is_used_when_the_dam_has_none,
+               terrain_breach_resume_keeps_the_stable_settings):
         try:
             fn()
             print("ok  ", fn.__name__, flush=True)

@@ -229,6 +229,10 @@ class DataPackage(UnitAlgorithm):
         def road(f, names):
             a = hz.nh.aadt_value(_plain(f[aadt])) if aadt in names else None
             c = str(f[rcls]) if rcls in names and _plain(f[rcls]) not in (None, "") else ""
+            if cm.interstate_system(f) and not hz.is_interstate(c):
+                # 0.58.0: the package keeps no FUNC_SYS / SHIELD fields, so a piece of the interstate system its
+                # name does not show (an I-94 'RAMP') carries it in road_class (nd_hazard.interstate_from_text)
+                c = "Interstate system" + (" / " + c if c else "")
             return [a, c, hz.road_level(a, c)]
         dump("ROADS", "roads", [("aadt", FT_DOUBLE), ("road_class", FT_STRING),
                                 ("level", FT_STRING)], road)

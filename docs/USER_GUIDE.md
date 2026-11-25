@@ -108,9 +108,9 @@ If tool 3 warns that a basin is shallow (bed-to-crest depth under 0.5 × dam hei
 
 ## How-to: force undetermined dams through tool 7b
 In tool 7b, the "Dams to send" (`WHICH`) parameter has these options:
-0. "High and Medium from tool 8 (hz_class), and dams with no class ..." (the default; unknown-like classes are included as no class)
+0. "High and Medium from tool 8 (hz_class), dams with no class ... and dams whose class rests on matched traffic counts (hz_aadt_review)" (the default; unknown-like classes are included as no class; a dam tool 8 rates Low only because a road without AADT took a matched traffic count is sent too, Screening 0.58.0)
 1. "High only (hz_class)"
-2. "Borderline (hz_border = yes) or class changed vs the existing class (hz_vs_existing)"
+2. "Borderline (hz_border = yes), class changed vs the existing class (hz_vs_existing) or class resting on matched traffic counts (hz_aadt_review)"
 3. **"All dams"**: sends every dam and doesn't need tool-8 fields.
 4. **"Selected features only"**: select the dams on the map first. This needs the dams to be a map layer, not a file path, and fails if nothing is selected.
 5. "High, Medium, Low and unknown (all classified dams)": skips any other text, such as "Excluded".

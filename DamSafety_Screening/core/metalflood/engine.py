@@ -331,12 +331,11 @@ class TerrainBreach:
         self.last_t = self.next_u
         self._k += 1
         self.next_u = self.times[self._k] if self._k < len(self.times) else None
-        if self.pool_idx is not None and self._pool_f is not None and self.last_t is not None:
-            self.pool_row(eng, self.last_t)
 
     def catch_up(self, eng, t):
         while self.next_u is not None and t >= self.next_u - 1e-6:
             self.apply(eng)
+        self.pool_row(eng, t)
 
     def note_in(self, vin):
         self._dvin += float(vin)
@@ -344,10 +343,12 @@ class TerrainBreach:
     def pool_row(self, eng, t):
         if self.pool_idx is None or self._pool_f is None:
             return
-        if self._pool_t is not None and abs(t - self._pool_t) <= 1e-6:
+        # A time that is not later than the last row is dropped. Writing it would put the
+        # time column backwards, or repeat t = 0 after the file is opened. The cursor stays.
+        if self._pool_t is not None and t <= self._pool_t + 1e-6:
             return
         vol = float(eng.h2().ravel()[self.pool_idx].sum(dtype=np.float64)) * self.dx * self.dx
-        if self._pool_t is None or t <= self._pool_t:
+        if self._pool_t is None:
             q = 0.0
         else:
             q = (self._pool_v - vol + self._dvin) / (t - self._pool_t)

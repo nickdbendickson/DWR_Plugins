@@ -457,11 +457,39 @@ converts the screening's metres and m/s to feet and ft/s.
   Square north-up cells are required.
 - "Any depth" is 0.1 ft = 0.03048 m (MIND and RDEP defaults; at least 0.003 m), the runner's
   WET_FT default. Before v0.8 roads needed 0.15 m and structures 0.05 m.
-- Roads: AADT > 2,000 or interstate (I-94, I 94, I94, IH-29, 'Interstate', TIGER 'I') -> High;
+- Roads: AADT > 2,000 or interstate (I-94, I 94, I94, IH-29, 'Interstate', TIGER 'I'; from
+  0.58.0 also F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2 or an NG9-1-1 SHIELD I with a route number
+  in SHIELD_LBL, the interstate system as the Hazard plugin reads it, so an NG9-1-1 'RAMP' or
+  'EXIT 63' of I-94 or I-29) -> High;
   500-2,000 or sole access to an occupied location (optional yes/no field) -> Medium; < 500 ->
   Low. A missing, zero, negative or NaN AADT is unknown, never Low, and a road is not
   promoted by its name (the old 'state/US highway = Medium' heuristic is not in the policy):
   it gets the 'unknown AADT' class you choose (default Medium) and is listed in `hz_gaps`.
+- Traffic counts (0.58.0, as the Runner): a road with no AADT (the offline pack's NG911 roads
+  have none) first takes the count of the traffic line it runs along where the water crosses
+  it (HPMS, ND county roads: within 30 m and 30 degrees over at least 30% or 150 m of it), else
+  of an NDDOT count station on it (within 30 m); the Runner's `core/aadt_join.py`, copied byte
+  for byte. AADT_JOIN (on) and AADT_LAYERS (empty = HPMS_ND_<year>, NDDOT_traffic_counts and
+  ND_county_roads next to the roads file, per-dam `pack_*` clips too, plus every ROADS_MORE
+  file with an AADT field). The layers are read once per run, a 2 km tile at a time through
+  their R-trees, only where a road needs a count. A road's own AADT is kept; an interstate is
+  High whatever its count; a road that matches nothing keeps the 'unknown AADT' class.
+  Around the Runner's match (`core/road_aadt.py`): a count station counts only on the road's
+  overtopped part and on this road (named as it, or sitting on a traffic line the road runs
+  along, so not on a crossing road or on the highway beside a frontage road); when no 15 m
+  sample is wet, the samples next to the point found overtopped
+  decide; and a lower count never wins over a higher one on the same road (another traffic
+  line it runs along, one named as the road, or a station on it, in a higher AADT band: the
+  newest year, then the higher count, as the Hazard plugin). A piece of the interstate system
+  its name does not show (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2, SHIELD I + SHIELD_LBL 29:
+  'RAMP', 'EXIT 63') is an interstate (High) and is never matched; an NG9-1-1 road with SHIELD
+  EXIT, or SHIELD I with no route number, is never lowered by a matched count (it keeps the 'unknown AADT' class; a count
+  over 2,000 still makes it High).
+  `hz_aadt` lists the counts taken, each impacted road's `aadt_src` says where its count came
+  from, and `hz_aadt_review` (with `hz_conf` = review) flags a class that is LOWER because of a
+  matched count (a county road counted 83 that made the dam Low instead of Medium): review it.
+  Tool 7b sends such a dam to the Runner (its High + Medium and borderline / changed choices)
+  and dam.json records the flag (`aadt_review`).
   Railroads: Medium; >= 10 trains a day or passenger (FRA codes A/B/C or yes; never T or X) ->
   High; a missing train count is a data gap. Tools 0 and 6 use the same rules.
 - Other lethality options: the conservative 'every inundated habitable structure', and the ND
@@ -485,7 +513,11 @@ converts the screening's metres and m/s to feet and ft/s.
   governing reason (`hz_reason`) of such dams.
 - Tool 6 (triage) uses the same rules: only a road known to be Low (AADT < 500, not
   interstate, not sole access) is ignored, and a lifeline or another dam inside the envelope
-  also prevents 'clear'. Tool 9 passes all of tool 8's inputs through.
+  also prevents 'clear'. Its envelope and corridor road tests give a road with no AADT the
+  matched traffic count as tool 8 does (0.58.0); a clear that rests on one is flagged in
+  `tri_aadt`, which tool 8 carries into `hz_aadt_review`. A step-6 output made before 0.58.0
+  shows out of date. Tool 9 passes all of tool 8's inputs through (AADT_JOIN and AADT_LAYERS
+  too).
 
 ## Detailed runs with ND Breach Runner (tool 7b)
 Needs the ND Dam Breach Runner plugin v3.1+ (provider `ndbreach`, with LISFLOOD-FP set up in
