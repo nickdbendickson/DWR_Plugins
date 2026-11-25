@@ -73,7 +73,7 @@ using namespace metal;
 #define S_QIN 13
 #define S_QOUT 14
 #define S_LASTDT 15
-#define S_TILES 18     // uint: 1 = the grid kernels leave out the tiles ton marks off (set by the host)
+#define S_TILES 18     // uint: 0 = every cell runs; 1 = the host turned the skip on (this batch's first redraw scans every cell); 2 = k_tgrow_subli has written ton (a later redraw may leave out a tile that was off)
 #define S_WORDS 32
 #define MF_FIX 1.0e-4f
 
@@ -92,6 +92,11 @@ using namespace metal;
 // part in the SIMD-group reductions with what a dry cell gives (outflow 0, clipped volume 0,
 // depth 0, not wet), so every group adds the same numbers in the same order. This engine takes no
 // rain. Tiles are numbered from the window origin and redrawn before step 0 of every batch.
+// The host sets S_TILES to 1 for that first redraw, so every cell is read (the window may have
+// moved, and ton is not cleared between batches). k_tgrow_subli then sets S_TILES to 2 after it
+// writes ton. A later redraw in the same batch does not re-read a cell whose tile was off: an
+// off tile stays dry for the chunk, so a new seed lies only in a tile that was on. Thread (0, 0)
+// still marks every source. k_tclear_subli still runs. The next batch starts at 1 again.
 #define MF_TILE 16u
 
 struct Params {
@@ -650,23 +655,28 @@ kernel void k_tclear_subli(MF_ARGS_SUBLI) {
 }
 
 // a window cell is a seed when it holds water (volume or depth) or a face beside it carried flow
-// or recorded a velocity in the last step (as mf_rows); thread (0, 0) also marks the sources
+// or recorded a velocity in the last step (as mf_rows); thread (0, 0) also marks the sources.
+// S_TILES == 1 (the host, once per batch) reads every cell. S_TILES == 2 reads a cell only when
+// its tile was on. ton still holds that map here, because only k_tgrow_subli writes it and that
+// kernel runs after this one.
 kernel void k_tseed_subli(MF_ARGS_SUBLI) {
     if (gid.x >= p.wc || gid.y >= p.wr) {
         return;
     }
     uint nx = p.nx;
     uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
-    uint r = p.r0 + gid.y;
-    uint c = p.c0 + gid.x;
-    uint i = r * nx + c;
-    uint fx = r * (nx + 1u) + c;
-    if (V[i] > 0.0f || d[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f ||
-        qxo[fx + 1u] != 0.0f || vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f ||
-        qyo[i + nx] != 0.0f || vyf[i + nx] != 0.0f) {
-        atomic_fetch_max_explicit((device atomic_uint*)(tseed + (gid.y / MF_TILE) * ntx
-                                                        + gid.x / MF_TILE),
-                                  1u, memory_order_relaxed);
+    uint tile = (gid.y / MF_TILE) * ntx + gid.x / MF_TILE;
+    if (st[S_TILES] != 2u || ton[tile] != 0u) {
+        uint r = p.r0 + gid.y;
+        uint c = p.c0 + gid.x;
+        uint i = r * nx + c;
+        uint fx = r * (nx + 1u) + c;
+        if (V[i] > 0.0f || d[i] > 0.0f || qxo[fx] != 0.0f || vxf[fx] != 0.0f ||
+            qxo[fx + 1u] != 0.0f || vxf[fx + 1u] != 0.0f || qyo[i] != 0.0f || vyf[i] != 0.0f ||
+            qyo[i + nx] != 0.0f || vyf[i + nx] != 0.0f) {
+            atomic_fetch_max_explicit((device atomic_uint*)(tseed + tile),
+                                      1u, memory_order_relaxed);
+        }
     }
     if (gid.x == 0u && gid.y == 0u) {
         for (uint k = 0; k < p.n_src; ++k) {
@@ -701,4 +711,7 @@ kernel void k_tgrow_subli(MF_ARGS_SUBLI) {
         }
     }
     ton[gid.y * ntx + gid.x] = on;
+    if (gid.x == 0u && gid.y == 0u) {
+        st[S_TILES] = 2u;   // after ton is written; the next redraw of this batch may trust it
+    }
 }

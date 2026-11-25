@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Runner 3.97.1 / Screening 0.60.1 / Boann 6.3.1: after the first tile redraw of a batch, a tile that was off is not scanned again (no result changes).**
+  - **What.** The host still sets the tile flag to 1 at the start of each batch, so the first redraw reads every cell (the window may have moved). `k_tgrow` then sets the flag to 2 after it writes which tiles are on. A later redraw in that batch (`k_tseed`, ACC and the sub-grid local-inertial engine) skips the wet-cell test for a tile that was off. Thread (0, 0) still marks every source. `k_tclear` still runs. No new switch. Screening re-syncs `kernels.metal` and `version.py`.
+  - **Why the answer cannot move.** The window does not move inside a batch, and water moves at most 9 cells in the 8 steps between redraws. A tile left off is at least 17 cells from every seed, so it stays dry and grows no new seed. The next batch sets the flag back to 1 and scans the whole window.
+  - **Tests.** The same byte-for-byte checks as 3.97.0 and 3.90.0 (`tests/test_boann_gpu_tiles.py`, `tests/test_subli_gpu_tiles.py`), plus a source check that the flag-2 early-out is in both kernels.
+
 - **Runner 3.97.0 / Screening 0.60.0 / Boann 6.3.0: the sub-grid local-inertial engine skips dry ground on the Apple GPU (no result changes).**
   - **What.** Before every 8 steps, three small kernels mark the 16 x 16 coarse tiles of the wet window that hold water, a face still carrying flow or a source, and the 8 tiles around each. The grid kernels leave the other tiles out. `DAMSAFETY_MF_TILES=0` turns it off. `DAMSAFETY_MF_CPU_TILES=1` runs the same tile kernels on the CPU build. The CPU build's own dry-cell skip is unchanged. Sub-grid solver 0.1.2. The engine is at Metal's 31-slot cap. Screening re-syncs `version.py` only; it does not carry this solver.
   - **Why the answer cannot move.** A face between two dry cells stays at exactly 0: each sub-segment of the common edge is at least either cell's lowest sub-cell. Water moves at most one coarse cell a step, so in 8 steps it reaches at most 9 cells, and a tile left out is at least 17 cells from every seed. The limiter and the continuity kernel still take part in their SIMD-group sums with the zeros a dry cell gives, so the mass file adds the same numbers in the same order.

@@ -121,7 +121,10 @@ dry-cell skip (Runner 3.76.0) does on the CPU. Before every `SKIP_CHUNK` = 8 ste
 kernels redraw the window's 16 x 16 tiles: `k_tclear` clears them, `k_tseed` marks each tile that
 holds water, a face still carrying flow (`qxo` / `qyo` / `vxf` / `vyf` not 0) or a source, and
 `k_tgrow` turns on every marked tile and its 8 neighbours. The grid kernels then return at once
-in a tile that is off (a face is in the tile of the cell east or south of it).
+in a tile that is off (a face is in the tile of the cell east or south of it). The first redraw
+of a batch reads every cell. After that, still in the same batch, `k_tseed` does not re-read a
+cell in a tile that was off (water cannot have reached it); thread (0, 0) still marks every
+source. `k_tclear` still runs.
 
 Why the answer is the same bit for bit: water moves at most one cell a step, so in a chunk it
 reaches at most `SKIP_CHUNK + 1` = 9 cells from where it was. A tile that is off is at least 17
@@ -232,8 +235,9 @@ Boann, sub-grid local inertial", the engine word `gpu-subli`, `SUBGRID_R` / `mod
 
 **Dry tiles on the GPU.** The same skip the ACC engine uses: before every 8 steps the window's
 16 x 16 coarse tiles are marked, a tile that holds water, a face still carrying flow or a source
-runs together with the 8 tiles around it, and the grid kernels leave the rest out. The result
-files are byte-identical with the skip on and off. `DAMSAFETY_MF_TILES=0` turns it off.
+runs together with the 8 tiles around it, and the grid kernels leave the rest out. After the
+first redraw of a batch, a cell in a tile that was off is not scanned again; every source is
+still marked. The result files are byte-identical with the skip on and off. `DAMSAFETY_MF_TILES=0` turns it off.
 `DAMSAFETY_MF_CPU_TILES=1` runs the same tile kernels on the CPU build, which is how the cloud
 checks them. The CPU build's own dry-cell skip is unchanged and stays its default.
 
