@@ -34,8 +34,7 @@ LABELS = {"ndhazard": "DamSafety Hazard",
           "ndscreen": "DamSafety Screening"}
 # suite 1.18.5: the name that starts each Browser connection connections.py adds
 CONNECTION_PREFIX = "DamSafety"
-RELEASE = {"ndhazard": "2.25.10", "ndbreach": "3.99.0", "ndscreen": "0.62.0"}
-# minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
+RELEASE = {"ndhazard": "2.25.10", "ndbreach": "3.99.0", "ndscreen": "0.62.0"}# minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",
                                "hand-off refuses a breach raster as its own baseline from 2.9.1; "

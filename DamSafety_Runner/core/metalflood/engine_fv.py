@@ -21,7 +21,8 @@ from . import engine as mfe
 from .engine import Deck, _f, _setf
 
 NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
-VERSION = "0.2.0"     # 0.2.0 (Runner 3.93.0): a face against NoData is a reflecting wall
+VERSION = "0.3.0"     # 0.3.0 (Runner 3.98.0): FV1 adds rain on the grid (new input; FV2/DG2 refuse
+                      # it still). 0.2.0 (Runner 3.93.0): a face against NoData is a reflecting wall
 G = bl.G
 DRY_M = bl.DRY_M
 NODATA = bl.NODATA
@@ -35,6 +36,7 @@ _FREE_BITS = {"N": 1, "S": 2, "E": 4, "W": 8}
 # state words (kernels_fv.metal): S_WMAX carries the max wave speed, not the max depth
 S_T, S_DT, S_WMAX, S_WNEXT, S_VIN, S_VOUT, S_CLIP, S_STEPS, S_MINDT = range(9)
 S_RMIN, S_RMAX, S_CMIN, S_CMAX, S_QIN, S_QOUT, S_LASTDT = range(9, 16)
+S_RAIN, S_RAIND = 16, 17        # FV1 rainfall: rate this step, depth this batch (mirrors ACC)
 MF_FIX = 1.0e-4
 
 
@@ -43,7 +45,9 @@ class Engine:
         self.d = d = deck
         self.b = backend
         ny, nx = d.ny, d.nx
-        n_values = sum(len(s[1]) for s in d.series)
+        # rainfall rides as one more series after the inflow series (index n_series), as in engine.py
+        self.series = list(d.series) + ([("rain",) + tuple(d.rain)] if d.rain is not None else [])
+        n_values = sum(len(s[1]) for s in self.series)
         spec = getattr(backend, "spec", None)
         # each 2nd-order scheme needs its own layout: FV2 adds the previous-step state; DG2 stores
         # the three modal coefficients of each conserved variable packed (and their RK2 copy).
@@ -52,7 +56,7 @@ class Engine:
         self.scheme = "dg2" if self.is_dg2 else ("fv2" if is_fv2 else "fv")
         lay = (be.dg2_buffer_layout if self.is_dg2 else
                be.fv2_buffer_layout if is_fv2 else be.fv_buffer_layout)
-        layout = lay(ny, nx, len(d.src_cells), len(d.series), n_values)
+        layout = lay(ny, nx, len(d.src_cells), len(self.series), n_values)
         a = self.a = backend.allocate(layout)
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
@@ -69,12 +73,12 @@ class Engine:
         a["tmax"][:] = NODATA
         a["arr"][:] = NODATA
         off = 0
-        for k, (_, ts, qs) in enumerate(d.series):
+        for k, (_, ts, qs) in enumerate(self.series):
             a["ser_off"][k] = off
             a["ser_t"][off:off + len(ts)] = ts
             a["ser_q"][off:off + len(ts)] = qs
             off += len(ts)
-        a["ser_off"][len(d.series)] = off
+        a["ser_off"][len(self.series)] = off
         for i, (r, c, k) in enumerate(d.src_cells):
             a["s_cell"][i] = r * nx + c
             a["s_series"][i] = k
@@ -91,6 +95,8 @@ class Engine:
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.dry, p.arr_depth = DRY_M, d.arr_depth
+        p.rain = int(d.rain is not None)          # FV1 rainfall (ACC-matched); FV2/DG2 refuse it
+        self.rain_area = float(d.valid.sum()) * d.dx * d.dx
         if self.is_dg2:
             # the DG2 slope limiter: on by default (float32 rest stability), the deck's
             # 'nolimitslopes' or an explicit limiter=False turns it off.
@@ -106,6 +112,8 @@ class Engine:
 
     def _bbox(self, rmin, rmax, cmin, cmax):
         d = self.d
+        if d.rain is not None:
+            return (0, d.ny, 0, d.nx)        # rain falls on every cell: the window is the grid
         if len(self.src_rc[0]):
             rmin, rmax = min(rmin, self.src_rc[0].min()), max(rmax, self.src_rc[0].max())
             cmin, cmax = min(cmin, self.src_rc[1].min()), max(cmax, self.src_rc[1].max())
@@ -138,7 +146,8 @@ class Engine:
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
                "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
-               "qout": int(st[S_QOUT]) * MF_FIX}
+               "qout": int(st[S_QOUT]) * MF_FIX,
+               "vrain": _f(st, S_RAIND) * getattr(self, "rain_area", 0.0)}
         rmin, rmax, cmin, cmax = (int(st[k]) for k in (S_RMIN, S_RMAX, S_CMIN, S_CMAX))
         if out["steps"]:
             self.win = self._bbox(rmin, rmax, cmin, cmax) if rmin <= rmax \
@@ -157,7 +166,8 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", orde
             log(msg)
 
     deck = Deck(par_path)
-    mfe.refuse_rain(deck, "FV1 / FV2 / DG2")
+    if int(order) >= 2:                    # FV1 adds rainfall (ACC-matched); FV2/DG2 do not yet
+        mfe.refuse_rain(deck, "FV2 / DG2")
     spec = (be.DG2_SPEC if int(order) >= 3 else
             be.FV2_SPEC if int(order) >= 2 else be.FV_SPEC)
     lim = getattr(deck, "dg2_limiter", True) if limiter is None else bool(limiter)
@@ -223,7 +233,7 @@ def _run(d, bk, progress, cancel, say, limiter=False):
     snap_k = 0
     next_snap = 0.0 if saveint <= sim else None
     vol0 = volume()
-    vin = vout = clip = 0.0
+    vin = vout = clip = vrain = 0.0
     qin = qout = 0.0
     batches = 0
     t_start = time.time()
@@ -231,12 +241,12 @@ def _run(d, bk, progress, cancel, say, limiter=False):
 
     def write_mass(tt):
         vol = volume()
-        verr = vol - (vol0 + vin - vout)
+        verr = vol - (vol0 + vin - vout)       # vin already includes rain (folded in below)
         area = float((eng.h2() > DRY_M).sum()) * dx * dx
         mass_f.write("{:<12.3f} {:<10.4f} {:<10.4f} {:<12d} {:<12.1f} {:<12.3f} {:<12.4f} "
                      "{:<10.4f} {:<13.4f} {:<14.6f} {:<12.4f} {:<12.4f}\n".format(
                          tt, last_dt, min_dt if steps else last_dt, steps, area, vol, qin,
-                         0.0, qout, 0.0, verr - write_mass.last_err, 0.0))
+                         0.0, qout, 0.0, verr - write_mass.last_err, vrain))
         write_mass.last_err = verr
         write_mass.last_t = tt
         mass_f.flush()
@@ -262,8 +272,9 @@ def _run(d, bk, progress, cancel, say, limiter=False):
             out = eng.batch(t, t_event, n, cut)
             batches += 1
             if out["steps"]:
-                vin += out["vin"]
+                vin += out["vin"] + out["vrain"]   # fold rain into injected (as the ACC engine does)
                 vout += out["vout"]
+                vrain += out["vrain"]
                 clip += out["clip"]
                 steps += out["steps"]
                 min_dt = min(min_dt, out["min_dt"])
@@ -316,7 +327,7 @@ def _run(d, bk, progress, cancel, say, limiter=False):
              "steps": steps, "batches": batches, "sim_time_s": t,
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout),
-             "clipped_m3": clip}
+             "clipped_m3": clip, "rain_m3": vrain}
     # where the time went (backends.Profile); timing only, no result depends on it
     stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     say("Boann, shock-capturing ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "

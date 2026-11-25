@@ -1021,6 +1021,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    False, advanced=True,
                    help="Boann records, in each cell, the largest depth times speed at one moment "
                    "and can write it as 'D x V (Max).tif' (ft2/s) beside the other final rasters. "
+                   "The depth is the total water depth, not the depth above the arrival depth, "
+                   "and the value is not shifted by the breach-initiation time. "
                    "Off by default: peak depth times peak speed, from different times, is what the "
                    "classification still uses. Other engines write no such grid, so nothing is "
                    "written and the log says so. A near-dam refine does not write it.")
