@@ -656,7 +656,7 @@ class LisfloodSettings:
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
                  cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None,
-                 subgrid_upwind=False):
+                 subgrid_upwind=False, terrain_breach=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -710,6 +710,9 @@ class LisfloodSettings:
         # more point sources: [{"name", "xy", "t_s", "q_cms", optional "line"}], e.g. ambient
         # river flow entering the domain
         self.extra_sources = extra_sources or []
+        # notch lowered into the bed (dict or None). None: the breach hydrograph is injected
+        # as before. Set only when the run asked for a breach inside the terrain.
+        self.terrain_breach = terrain_breach
         # Accept a LISFLOOD-FP build WITHOUT the arrival-depth patch (it ignores inittm_depth).
         # Off by default so _run() refuses such a build; on, the run proceeds with a loud warning
         # and `unpatched_used` is set, because arrival times then mark the first wetting (~1 mm)
@@ -887,7 +890,8 @@ def raise_crest(dem, crest_xy, inflow_xy, top_m, length_m=200.0, width_m=12.0,
 
 def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflow_line=None):
     os.makedirs(workdir, exist_ok=True)
-    cells = inflow_cells(dem_real, inflow_xy, inflow_line)
+    tb = getattr(st, "terrain_breach", None)
+    cells = inflow_cells(dem_real, inflow_xy, inflow_line) if tb is None else []
     dem = local_grid(dem_real)
     dem.write_asc(os.path.join(workdir, name + ".dem.asc"))
     xmin, ymin, xmax, ymax = dem.bounds
@@ -918,11 +922,14 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                 px, py = dem.xy(rr, cc)
                 f.write("P {:.3f} {:.3f} QVAR {}\n".format(px, py, sname))
     with open(os.path.join(workdir, name + ".bdy"), "w", encoding="utf-8") as f:
-        f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
-        f.write("breach\n")
-        f.write("{} seconds\n".format(len(t)))
-        for tv, qv in zip(t, q):
-            f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        if tb is None:
+            f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
+            f.write("breach\n")
+            f.write("{} seconds\n".format(len(t)))
+            for tv, qv in zip(t, q):
+                f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        else:
+            f.write("notch in the bed: no breach point source\n")
         for sname, sc, ts_, qs_ in extra:
             f.write("{}\n".format(sname))
             f.write("{} seconds\n".format(len(ts_)))
@@ -1007,6 +1014,9 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                     *_gauge_line(gx, gy, g["direction"], g["width_m"], dem.nx, dem.ny, dem.dx)))
         lines.append("gaugefile {}.gauge".format(name))
     lines += list(st.extra_par)
+    if tb is not None:
+        from .terrain_breach import write_deck
+        lines.append(write_deck(workdir, name, dem, tb))
     par = os.path.join(workdir, name + ".par")
     with open(par, "w", encoding="utf-8") as f:
         f.write("# written by ND Dam Breach Runner\n")
@@ -1456,7 +1466,12 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
-    injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
+    tb = getattr(st, "terrain_breach", None)
+    if tb is not None:
+        # the reservoir is already on the grid; the routed hydrograph was not injected
+        injected = float(tb.get("pool_volume_m3") or 0.0)
+    else:
+        injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
     injected += sum(source_volume(src, last_t) for src in st.extra_sources)
     stats = {
         "cells": int(dem.data.size), "cell_size_m": dem.dx,
@@ -1468,8 +1483,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "peak_inflow_cfs": round(qin_max / CFS, 0),
         # 3.13.2 (DWR-4031 toe10m): peak_inflow_cfs is the largest Qin at the .mass output
         # samples (every massint s), which can miss a short breach peak (1,570 against
-        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow
-        "peak_inflow_input_cfs": _hydrograph_peak_cfs(hydrograph),
+        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow.
+        # A notch in the bed injects nothing: the routed peak is reported separately.
+        "peak_inflow_input_cfs": (None if tb is not None else _hydrograph_peak_cfs(hydrograph)),
         "massint_s": float(st.massint_s),
         "max_volume_error_pct": round(100.0 * abs(verr) / injected, 3) if injected else None,
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
@@ -1484,6 +1500,16 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
         "checkerboard_rough_cells": chk_rough,
     }
+    if tb is not None:
+        from .terrain_breach import read_pool
+        pool = read_pool(os.path.join(res, name + ".pool"))
+        routed = tb.get("_routed_peak_cfs")
+        stats["routed_peak_cfs_not_injected"] = None if not routed else round(float(routed), 0)
+        stats["terrain_breach_pool_acft"] = round(float(tb.get("pool_volume_m3") or 0.0) / ACFT, 2)
+        if pool is not None:
+            stats["terrain_breach_peak_cfs"] = round(pool["peak_outflow_cms"] / CFS, 0)
+            stats["terrain_breach_time_to_empty_hr"] = (
+                None if pool["time_to_empty_s"] is None else round(pool["time_to_empty_s"] / 3600.0, 3))
     if st.initial_depth is not None:
         init_d = st.initial_depth.data
         stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),

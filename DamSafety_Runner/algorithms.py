@@ -1026,6 +1026,14 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                    "Off by default: peak depth times peak speed, from different times, is what the "
                    "classification still uses. Other engines write no such grid, so nothing is "
                    "written and the log says so. A near-dam refine does not write it.")
+        self._bool("BREACH_IN_TERRAIN",
+                   "Breach inside the terrain (dam and reservoir in the model)",
+                   False, advanced=True,
+                   help="The reservoir starts full behind the dam on the model grid, and a "
+                   "trapezoid notch is lowered into the bed while the run goes, instead of "
+                   "injecting a breach hydrograph. Sunny-day only, on Boann ACC, FV1, FV2 or "
+                   "DG2, and only for a routed weir opening. Off by default: the hydrograph is "
+                   "injected as before and every result is unchanged.")
         self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
                    False, advanced=True,
                    help="Accept an edge where the flood's depth (or its rise over the no-breach "
@@ -1424,6 +1432,8 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
             st.pothole_start_fill = min(1.0, max(0.0, float(g("POTHOLE_START_FILL") or 0.0)))
         if self.parameterDefinition("WRITE_PEAK_DV") is not None:
             st.write_peak_dv = self.parameterAsBool(parameters, "WRITE_PEAK_DV", context)
+        if self.parameterDefinition("BREACH_IN_TERRAIN") is not None:
+            st.breach_in_terrain = self.parameterAsBool(parameters, "BREACH_IN_TERRAIN", context)
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0

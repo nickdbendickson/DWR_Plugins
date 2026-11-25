@@ -80,6 +80,11 @@ def run_cascade(chain, st, terrain_src, writer, out_root, fail_rule="overtop", p
     progress = progress or (lambda p, m="": None)
     log = log or (lambda m: None)
     cancel = cancel or (lambda: False)
+    if getattr(st, "breach_in_terrain", False):
+        raise brmod.BreachInputError(
+            "A cascade cannot lower the breach into the terrain: each dam's wave is the next "
+            "dam's inflow, and the reservoir would already be full on the grid. Turn breach "
+            "inside the terrain off for a cascade.")
     if len(chain) < 2:
         raise brmod.BreachInputError("a cascade needs at least two dams")
     for cd in chain:                 # top of dam from the DEM when it was not given

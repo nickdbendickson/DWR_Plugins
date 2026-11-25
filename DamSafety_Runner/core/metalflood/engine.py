@@ -14,6 +14,7 @@ lowest cell so depths keep about 1e-5 m resolution, and volumes are summed in fl
 host. Expect results to match the float64 built-in engine to within a few mm of depth.
 
 Run it alone:  python -m metalflood run.par [-backend metal|cpu] [-v]"""
+import json
 import math
 import os
 import time
@@ -154,6 +155,7 @@ class Deck:
         res = os.path.join(wd, str(par.get("dirroot", "results")))
         os.makedirs(res, exist_ok=True)
         self.root = os.path.join(res, str(par.get("resroot", "run")))
+        self.breach = TerrainBreach.read(self, path("breachfile")) if "breachfile" in par else None
 
 
 def refuse_rain(deck, engine):
@@ -162,6 +164,264 @@ def refuse_rain(deck, engine):
         raise EngineError("the .par file asks for rainfall ('rainfall'), which Boann's {} engine "
                           "does not add yet; run it with Boann ACC (acceleration) or LISFLOOD-FP"
                           .format(engine))
+
+
+def refuse_breach(deck, engine):
+    """SGC and the sub-grid solvers build their tables from the bed at the start, so a bed that
+    keeps falling would not be the bed they solved. Stop rather than ignore the file."""
+    if getattr(deck, "breach", None) is not None:
+        raise EngineError(
+            "the .par file has a breachfile, which Boann's {} engine does not lower into the bed. "
+            "Use the ACC engine or a shock-capturing engine (FV1, FV2 or DG2).".format(engine))
+
+
+def _need(spec, key, kind):
+    if key not in spec:
+        raise EngineError("the breach file has no '{}'".format(key))
+    v = spec[key]
+    if kind is float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise EngineError("the breach file's '{}' is not a number ({!r})".format(key, v))
+        if not math.isfinite(f):
+            raise EngineError("the breach file's '{}' is not a finite number ({!r})".format(key, v))
+        return f
+    return v
+
+
+class TerrainBreach:
+    """A trapezoid notch lowered into the bed between batches. The host writes the bed; the
+    kernels read it every step and keep no copy. With no breach file this class is never built,
+    and the run is unchanged.
+
+    The notch follows the same linear weir opening the Runner routes: the invert falls from
+    invert_start_m to invert_final_m and the bottom width grows from 0, both linear in time.
+    frac = clamp((t - start_s) / formation_s, 0, 1), and frac = 1 once t >= start_s when
+    formation_s is 0. At along-crest distance a, zt = invert + max(0, |a| - half) / side_slope_h
+    with half = 0.5 * bottom_width_final_m * frac. A non-positive side slope is a vertical cut:
+    zt = invert where |a| <= half, and the cell is not cut otherwise. The new bed is
+    min(current, max(invert_final_m, zt)): it only falls, and never below the final invert.
+    """
+
+    def __init__(self, deck, spec, cells, pool):
+        self.start_s = _need(spec, "start_s", float)
+        self.formation_s = _need(spec, "formation_s", float)
+        self.invert_start = _need(spec, "invert_start_m", float)
+        self.invert_final = _need(spec, "invert_final_m", float)
+        self.bottom_w = _need(spec, "bottom_width_final_m", float)
+        self.slope = _need(spec, "side_slope_h", float)
+        self.update_s = _need(spec, "update_s", float)
+        if self.formation_s < 0:
+            raise EngineError("the breach file's formation_s is negative")
+        if self.update_s <= 0:
+            raise EngineError("the breach file's update_s must be positive")
+        if self.invert_final > self.invert_start:
+            raise EngineError("the breach file's invert_final_m is above invert_start_m")
+        if self.bottom_w < 0:
+            raise EngineError("the breach file's bottom_width_final_m is negative")
+        ny, nx = deck.ny, deck.nx
+        rows, cols, along = [], [], []
+        seen = set()
+        for i, item in enumerate(cells):
+            if not isinstance(item, (list, tuple)) or len(item) != 3:
+                raise EngineError("breach cell {} is not [row, col, along_m]".format(i))
+            try:
+                r, c, a = int(item[0]), int(item[1]), float(item[2])
+            except (TypeError, ValueError, OverflowError):
+                raise EngineError("breach cell {} is not [row, col, along_m]".format(i))
+            if not math.isfinite(a):
+                raise EngineError("breach cell {} has an along_m that is not finite".format(i))
+            if not (0 <= r < ny and 0 <= c < nx) or not deck.valid[r, c]:
+                raise EngineError("breach cell {} ({}, {}) is outside the grid or NoData".format(
+                    i, r, c))
+            if (r, c) in seen:
+                raise EngineError("breach cell ({}, {}) is listed twice".format(r, c))
+            seen.add((r, c))
+            rows.append(r)
+            cols.append(c)
+            along.append(abs(a))
+        if not rows:
+            raise EngineError("the breach file lists no cells")
+        self.rows = np.asarray(rows, np.int64)
+        self.cols = np.asarray(cols, np.int64)
+        self.idx = self.rows * nx + self.cols
+        self.along = np.asarray(along, np.float64)
+        self.z0 = np.asarray(deck.z, np.float64).ravel()[self.idx].copy()
+        self.zcur = self.z0.copy()
+        self.grid_z = np.asarray(deck.z, np.float64)
+        self.dx = float(deck.dx)
+        self.pool_idx = pool
+        self.times = self._times()
+        self._k = 0
+        self.next_u = self.times[0]
+        self.updates = 0
+        self.last_t = None
+        # Peak water level (datum) on the breach cells over the bed periods already closed.
+        # The bed is constant between updates and only falls; hmax only rises. For a period k
+        # with bed z_k whose peak depth so far is H_k at its end, the highest water level in
+        # it is H_k + z_k when hmax rose in that period, and at most that otherwise, which is
+        # then no higher than an earlier period's value (same H, higher bed). So the max over
+        # wet periods of (H_k + z_k) is the exact peak water level; one array, O(cells).
+        self.wse_peak = np.full(self.idx.size, -np.inf)
+        self._pool_f = None
+        self._pool_t = None
+        self._pool_v = None
+        self._dvin = 0.0
+
+    @classmethod
+    def read(cls, deck, path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                spec = json.load(f)
+        except (OSError, ValueError) as e:
+            raise EngineError("cannot read the breach file {}: {}".format(path, e))
+        if not isinstance(spec, dict):
+            raise EngineError("the breach file must be a JSON object")
+        if int(spec.get("version", 0)) != 1:
+            raise EngineError("the breach file's version must be 1")
+        cells = spec.get("cells")
+        if not isinstance(cells, list):
+            raise EngineError("the breach file's cells must be a list")
+        pool = None
+        name = spec.get("pool_mask")
+        if name:
+            mask_path = name if os.path.isabs(name) else os.path.join(os.path.dirname(path), name)
+            data, _, _, _, nod = bl._load("pool mask", bl._read_asc, mask_path,
+                                          (deck.ny, deck.nx))
+            pool = np.flatnonzero((data != nod) & (data != 0) & np.isfinite(data))
+            if pool.size == 0:
+                raise EngineError("the pool mask has no pool cells")
+            if getattr(deck, "rain", None) is not None:
+                # the pool file's outflow is the pool's volume change plus what flowed in; rain
+                # on the pool is not counted in that, so it would show as less outflow
+                raise EngineError("the breach file's pool mask cannot be used with rainfall: the "
+                                  "pool outflow would not count the rain on the pool")
+        return cls(deck, spec, cells, pool)
+
+    def _times(self):
+        start, form, upd = self.start_s, self.formation_s, self.update_s
+        end = start + max(form, 0.0)
+        if form <= 0.0:
+            return [start]
+        times = []
+        k = 0
+        while True:
+            u = start + k * upd
+            if u >= end - 1e-9:
+                times.append(end)
+                break
+            times.append(u)
+            k += 1
+            if k > 10000000:
+                raise EngineError("the breach update grid is too long")
+        return times
+
+    def _frac(self, t):
+        if t < self.start_s:
+            return 0.0
+        if self.formation_s <= 0.0:
+            return 1.0
+        return min(1.0, (t - self.start_s) / self.formation_s)
+
+    def candidate(self, t):
+        """Notch bed (m, datum) at time t, float64. +inf where a vertical cut does not reach."""
+        frac = self._frac(t)
+        invert = self.invert_start - frac * (self.invert_start - self.invert_final)
+        half = 0.5 * self.bottom_w * frac
+        if self.slope <= 0.0:
+            zt = np.where(self.along <= half, invert, np.inf)
+        else:
+            zt = invert + np.maximum(0.0, self.along - half) / self.slope
+        return np.maximum(self.invert_final, zt)
+
+    def lowest_final(self):
+        """Lowest bed on the footprint at the end of formation, for the reference level."""
+        end = self.start_s + max(self.formation_s, 0.0)
+        return float(np.minimum(self.z0, self.candidate(end)).min())
+
+    def apply(self, eng):
+        """Lower the bed to the notch at next_u. Depth is left alone, so volume is unchanged."""
+        # close the period on the current bed: its peak water level is hmax-so-far + its bed
+        h = np.asarray(eng.a["hmax"][self.idx], dtype=np.float64)
+        self.wse_peak = np.where(h > 0, np.maximum(self.wse_peak, h + self.zcur), self.wse_peak)
+        self.zcur = np.minimum(self.zcur, self.candidate(self.next_u))
+        eng.a["z"][self.idx] = (self.zcur - eng.zref).astype(np.float32)
+        self.updates += 1
+        self.last_t = self.next_u
+        self._k += 1
+        self.next_u = self.times[self._k] if self._k < len(self.times) else None
+
+    def catch_up(self, eng, t):
+        applied = False
+        while self.next_u is not None and t >= self.next_u - 1e-6:
+            self.apply(eng)
+            applied = True
+        # A row at the model time of each bed update, and then at least every update_s while
+        # the pool drains (the time-to-empty is read from these rows; the mass-interval rows
+        # alone, 300 s by default, would put it up to a whole interval late). The run loop
+        # adds the mass-interval rows and the last one.
+        if applied or (self._pool_t is not None and t >= self._pool_t + self.update_s - 1e-6):
+            self.pool_row(eng, t)
+
+    def note_in(self, vin):
+        self._dvin += float(vin)
+
+    def pool_row(self, eng, t):
+        if self.pool_idx is None or self._pool_f is None:
+            return
+        # A time that is not later than the last row is dropped. Writing it would put the
+        # time column backwards, or repeat t = 0 after the file is opened. The cursor stays.
+        if self._pool_t is not None and t <= self._pool_t + 1e-6:
+            return
+        vol = float(eng.h2().flat[self.pool_idx].sum(dtype=np.float64)) * self.dx * self.dx
+        if self._pool_t is None:
+            q = 0.0
+        else:
+            q = (self._pool_v - vol + self._dvin) / (t - self._pool_t)
+        self._pool_f.write("{:.6f},{:.6f},{:.6f}\n".format(t, vol, q))
+        self._pool_f.flush()
+        self._pool_t = t
+        self._pool_v = vol
+        self._dvin = 0.0
+
+    def open_pool(self, root, eng):
+        if self.pool_idx is None:
+            return
+        self._pool_f = open(root + ".pool", "w", encoding="utf-8")
+        self._pool_f.write("time_s,pool_volume_m3,outflow_m3s\n")
+        self.pool_row(eng, 0.0)
+
+    def close_pool(self):
+        if self._pool_f is not None:
+            self._pool_f.close()
+            self._pool_f = None
+
+    def final_bed(self):
+        bed = self.grid_z.copy()
+        flat = bed.ravel()
+        flat[self.idx] = self.zcur
+        return bed
+
+    def mxe(self, hmax_buf):
+        """Peak water level (datum) for the .mxe grid. Off the notch: bed + peak depth, as with
+        no breach file. On a breach cell: the highest of (peak depth so far + bed) over the bed
+        periods, the last one closed with the final peak depth, i.e. max over time of h + z(t).
+        The peak depth alone with any single bed can be too low: the water may stand highest
+        over the intact crest before the cut and be deepest over the lowered bed after it."""
+        hmax = np.asarray(hmax_buf, dtype=np.float64)
+        out = self.grid_z + hmax.reshape(self.grid_z.shape)
+        hf = hmax[self.idx]
+        wse = np.where(hf > 0, np.maximum(self.wse_peak, hf + self.zcur), self.wse_peak)
+        out.ravel()[self.idx] = wse
+        return out
+
+    def stats(self):
+        frac = self._frac(self.last_t) if self.last_t is not None else 0.0
+        invert = self.invert_start - frac * (self.invert_start - self.invert_final)
+        return {"updates": self.updates,
+                "final_invert_m": float(invert),
+                "final_bottom_width_m": float(self.bottom_w * frac)}
 
 
 class Engine:
@@ -174,8 +434,12 @@ class Engine:
         n_values = sum(len(s[1]) for s in series)
         layout = be.buffer_layout(ny, nx, len(d.src_cells), len(series), n_values)
         a = self.a = backend.allocate(layout)
-        # bed relative to the lowest valid cell: float32 then resolves depths to ~1e-5 m
+        # bed relative to the lowest valid cell: float32 then resolves depths to ~1e-5 m.
+        # A breach notch can go below that lowest cell; the reference includes the final notch
+        # so the lowered bed stays at or above it. No breach file: today's reference.
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
+        if d.breach is not None:
+            self.zref = min(self.zref, d.breach.lowest_final())
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
         a["n2"][:] = (d.n ** 2).ravel()
         a["h"][:] = d.h0.ravel()
@@ -198,6 +462,7 @@ class Engine:
         st[S_HMAX] = np.float32(a["h"].max()).view(np.uint32)
         self.src_rc = (np.array([s[0] for s in d.src_cells], int),
                        np.array([s[1] for s in d.src_cells], int))
+        self.breach_rc = ((d.breach.rows, d.breach.cols) if d.breach is not None else None)
         p = self.p = be.Params()
         p.nx, p.ny = nx, ny
         p.free_mask = sum(_FREE_BITS[e] for e in d.free)
@@ -220,6 +485,10 @@ class Engine:
         if len(self.src_rc[0]):
             rmin, rmax = min(rmin, self.src_rc[0].min()), max(rmax, self.src_rc[0].max())
             cmin, cmax = min(cmin, self.src_rc[1].min()), max(cmax, self.src_rc[1].max())
+        brc = getattr(self, "breach_rc", None)
+        if brc is not None and len(brc[0]):
+            rmin, rmax = min(rmin, int(brc[0].min())), max(rmax, int(brc[0].max()))
+            cmin, cmax = min(cmin, int(brc[1].min())), max(cmax, int(brc[1].max()))
         if rmin > rmax:
             return (0, 1, 0, 1)
         m = WINDOW_MARGIN
@@ -343,6 +612,9 @@ def _run(d, bk, progress, cancel, say):
     batches = 0
     t_start = time.time()
     last_prog = t_start
+    br = d.breach
+    if br is not None:
+        br.open_pool(root, eng)
 
     def write_mass(tt):
         vol = volume()
@@ -370,7 +642,13 @@ def _run(d, bk, progress, cancel, say):
                 bl._write_asc("{}-{:04d}.wd".format(root, snap_k), h_out(), xll, yll, dx)
                 snap_k += 1
                 next_snap = snap_k * saveint if snap_k * saveint <= sim + 1e-9 else None
+            # an update time that has already passed must not stay in the min below: that
+            # would make t_end <= 0, zero steps and a loop that never ends
+            if br is not None:
+                br.catch_up(eng, t)
             t_event = min(sim, next_mass, next_snap if next_snap is not None else sim)
+            if br is not None and br.next_u is not None:
+                t_event = min(t_event, br.next_u)
             # never cut a step to land on a time (as LISFLOOD-FP): a cut step is short, and the
             # Runner reads a short step in the .mass file as a collapsing solver. The kernels'
             # clip_end Param is reserved for that cut and is deliberately held False here (not dead
@@ -390,6 +668,8 @@ def _run(d, bk, progress, cancel, say):
                 last_dt = out["dt"]
                 qin, qout = out["qin"], out["qout"]
                 mean_dt = out["t_local"] / out["steps"]
+                if br is not None:
+                    br.note_in(out["vin"])
             if cut and (t_event - t) - out["t_local"] <= 2e-3:
                 t = t_event
             else:
@@ -400,6 +680,8 @@ def _run(d, bk, progress, cancel, say):
                     t = max(t, t_event)
             if t >= next_mass - 1e-6:
                 write_mass(t)
+                if br is not None:
+                    br.pool_row(eng, t)
                 next_mass += massint
             now = time.time()
             if progress and now - last_prog > 2.0:
@@ -407,12 +689,16 @@ def _run(d, bk, progress, cancel, say):
                 last_prog = now
         if write_mass.last_t < t - 1e-6:
             write_mass(t)
+            if br is not None:
+                br.pool_row(eng, t)
         if next_snap is not None and t >= next_snap - 1e-9:
             bl._write_asc("{}-{:04d}.wd".format(root, snap_k), h_out(), xll, yll, dx)
     finally:
         mass_f.close()
         if dis_f:
             dis_f.close()
+        if br is not None:
+            br.close_pool()
 
     valid = d.valid
     shape = (ny, nx)
@@ -428,7 +714,11 @@ def _run(d, bk, progress, cancel, say):
     bl._write_asc(root + ".inittm", np.where(valid, arrival, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & (hmax > 0), tmax, NODATA), xll, yll, dx,
                   fmt="%.4f")
-    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), d.z + hmax, NODATA), xll, yll, dx)
+    mxe = br.mxe(a["hmax"]) if br is not None else d.z + hmax
+    bl._write_asc(root + ".mxe", np.where(valid & (hmax > 0), mxe, NODATA), xll, yll, dx)
+    if br is not None:
+        bl._write_asc(root + ".bed", np.where(valid, br.final_bed(), NODATA), xll, yll, dx,
+                      fmt="%.4f")
     vol = volume()
     wall = time.time() - t_start
     stats = {"engine": NAME, "version": VERSION, "backend": bk.kind, "device": bk.device,
@@ -440,6 +730,8 @@ def _run(d, bk, progress, cancel, say):
              "cell_steps": getattr(bk, "cells_run", None)}
     # where the time went (backends.Profile); timing only, no result depends on it
     stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
+    if br is not None:
+        stats["breach"] = br.stats()
     say("GPU engine ({}, {}): {} steps, {:.2f} h simulated in {:.1f} min; volume error {:.3g} m3 "
         "of {:.4g} m3 injected.".format(bk.kind, bk.device, steps, t / 3600.0, wall / 60.0,
                                        stats["mass_error_m3"], vin))

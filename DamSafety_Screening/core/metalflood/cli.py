@@ -66,7 +66,10 @@ OUTPUTS = ((".max", "maximum depth (Depth)"), (".maxVc", "maximum velocity (Velo
             "(total water depth, not above the arrival depth)"),
            (".inittm", "arrival time (Arrival Time)"), (".mxe", "maximum water surface (WSE)"),
            (".maxtm", "time of maximum depth"), (".mass", "mass balance"),
-           (".discharge", "gauge discharge"))
+           (".discharge", "gauge discharge"),
+           (".bed", "final bed after an in-terrain breach, m (only when a breach file is set)"),
+           (".pool", "reservoir volume and outflow through an in-terrain breach "
+            "(only when a breach file gives a pool mask)"))
 
 
 class CliError(RuntimeError):
