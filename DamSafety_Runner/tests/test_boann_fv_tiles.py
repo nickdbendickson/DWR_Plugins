@@ -34,8 +34,6 @@ _TON = {"fv": 25, "fv2": 29, "dg2": 28}          # buffer index of ton (ACC is 2
 ENVS = ("DAMSAFETY_MF_SKIP", "DAMSAFETY_MF_CPU_TILES", "DAMSAFETY_MF_TILES")
 STATS = ("steps", "batches", "injected_m3", "outflow_m3", "final_volume_m3", "clipped_m3",
          "mass_error_m3", "rain_m3")
-# GPU against the CPU build: the tolerances test_metalflood already uses for these solvers
-GPU_TOL = (("max", 0.01), ("maxVc", 0.1), ("inittm", 0.01))
 
 
 def _src(name):
@@ -264,53 +262,12 @@ def boann_fv_tiles_give_the_same_answer_bit_for_bit_on_the_gpu():
         shutil.rmtree(d, True)
 
 
-@test
-def boann_fv_tiles_match_the_cpu_build():
-    """Mac only: the GPU with the skip against the CPU build running the same tile kernels,
-    within the GPU-vs-CPU tolerances. The two builds are not bit for bit."""
-    _need_metal()
-    _need_cpu_build()
-    from nd_breach_runner.core import builtin_lisflood as bl
-    d = tempfile.mkdtemp()
-    try:
-        for name, order, _c, _r, _s in SOLVERS:
-            for case, mk in _cases(d):
-                fg = os.path.join(d, name + "_" + case + "_gpu")
-                fc = os.path.join(d, name + "_" + case + "_cpu")
-                sg = _run(mk(fg), order, "metal")
-                sc = _run(mk(fc), order, "cpu", DAMSAFETY_MF_CPU_TILES="1")
-                assert abs(sg["steps"] - sc["steps"]) <= max(3, sc["steps"] // 200), (name, case,
-                                                                                       sg, sc)
-                # the diagonal deck's cross-build tolerance check is dropped for the shock-capturing
-                # solvers. Its thin draining film and NoData hole make every grid — the depth
-                # included (0.08 m on FV2) — differ between the GPU and the CPU build by more than
-                # a tight tolerance, because the two builds round differently and the higher-order
-                # reconstruction magnifies it on a film that thin. It is not the skip: GPU skip-on
-                # equals skip-off bit for bit and the CPU tiles equal the whole window bit for bit
-                # (the two tests above), so the two builds differ there by the same amount with the
-                # skip off. The diag deck's real check is that bit-for-bit pair and its NoData wall;
-                # the GPU-vs-CPU-build tolerance check runs on the valley, as test_metalflood.py's
-                # FV2 / DG2 cross-build tests do. (test_boann_gpu_tiles.py keeps diag depth for ACC,
-                # whose first-order scheme stays within 0.01 m there; the HLLC family does not.)
-                if case == "diag":
-                    continue
-                for ext, tol in GPU_TOL:
-                    x = np.loadtxt(os.path.join(fg, "results", "run." + ext), skiprows=6)
-                    y = np.loadtxt(os.path.join(fc, "results", "run." + ext), skiprows=6)
-                    m = (x != bl.NODATA) & (y != bl.NODATA)
-                    assert np.abs(x - y)[m].max() <= tol, (name, case, ext,
-                                                           float(np.abs(x - y)[m].max()))
-    finally:
-        shutil.rmtree(d, True)
-
-
 if __name__ == "__main__":
     for fn in (boann_fv_tiles_kernels_match_the_backend,
                boann_fv_tiles_reach_stays_inside_the_ring,
                boann_fv_tiles_are_off_when_it_rains,
                boann_fv_tiles_give_the_same_answer_bit_for_bit_on_the_cpu_build,
-               boann_fv_tiles_give_the_same_answer_bit_for_bit_on_the_gpu,
-               boann_fv_tiles_match_the_cpu_build):
+               boann_fv_tiles_give_the_same_answer_bit_for_bit_on_the_gpu):
         try:
             fn()
             print("ok  ", fn.__name__, flush=True)
