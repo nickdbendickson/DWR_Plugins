@@ -6003,6 +6003,31 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
+def _manifest_mark_removed(manifest_path, removed_path, why):
+    """Mark an output that a later stage deleted as missing in run_manifest.json (and re-seal
+    it), so verify_manifest does not report the file as lost. Best effort: the manifest is an
+    extra and never fails a run."""
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return
+    try:
+        from . import provenance
+        with open(manifest_path, encoding="utf-8") as f:
+            m = json.load(f)
+        hit = False
+        for rec in (m.get("outputs") or {}).values():
+            if (isinstance(rec, dict) and rec.get("path")
+                    and os.path.normcase(os.path.abspath(rec["path"]))
+                    == os.path.normcase(os.path.abspath(removed_path))):
+                rec["missing"] = True
+                rec["removed_by"] = why
+                hit = True
+        if hit:
+            m["manifest_sha256"] = provenance.digest_of(m)
+            provenance.write_manifest(manifest_path, m)
+    except Exception:
+        pass
+
+
 def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
                      cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
@@ -6044,17 +6069,25 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     # stage leaves the screening results whole).
     dv_path = res.final.pop("dv", None)
     if dv_path:
-        removed = False
         try:
             os.remove(dv_path)
-            removed = True
         except OSError:
-            removed = not os.path.exists(dv_path)
-        if callable(log):
-            log("The Boann peak depth x velocity raster was removed: the final depths are "
-                "from HEC-RAS, which does not make that raster." if removed else
-                "The Boann peak depth x velocity raster could not be removed ({}); it is not "
-                "from the HEC-RAS run.".format(dv_path))
+            pass
+        if not os.path.exists(dv_path):
+            note = ("The Boann peak depth x velocity raster was removed: the final depths are "
+                    "from HEC-RAS, which does not make that raster.")
+            if callable(log):
+                log(note)
+        else:
+            # still on disk (e.g. locked by an open layer): Hazard would read it beside the
+            # HEC-RAS depths, so this must reach the report, not only the log
+            note = ("The Boann peak depth x velocity raster could not be removed ({}). It is "
+                    "not from the HEC-RAS run: delete it before classifying hazard with these "
+                    "depths.".format(dv_path))
+            res.warnings.append(note)
+            if callable(log):
+                log(note)
+        _manifest_mark_removed(getattr(res, "manifest", ""), dv_path, "HEC-RAS 2D stage")
     res.warnings.extend(hr["warnings"])
     # every reported figure from the final engine (the screening pass is kept)
     try:
