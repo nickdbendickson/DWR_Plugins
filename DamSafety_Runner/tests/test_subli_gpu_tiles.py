@@ -103,6 +103,10 @@ def subli_gpu_tiles_kernels_match_the_backend():
     assert "#define S_TILES {}".format(mfb.S_TILES) in src
     for k in ("k_tclear_subli", "k_tseed_subli", "k_tgrow_subli"):
         assert "kernel void {}(".format(k) in src and k in lb.SUBLI_KERNELS, k
+    # a later redraw of the same batch leaves out a tile that was off; k_tgrow records that
+    # the first redraw is done. k_tclear stays (no profile here to drop that dispatch).
+    assert "st[S_TILES] != 2u || ton[tile] != 0u" in src
+    assert "st[S_TILES] = 2u" in src
     assert lb.SUBLI_SPEC.tile_plan is not None
     names = [n for n, _, _ in lb.subli_buffer_layout(40, 70, 1, 1, 2, 4)]
     assert names[-2:] == ["tseed", "ton"], names[-2:]

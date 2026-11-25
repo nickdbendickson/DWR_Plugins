@@ -1,7 +1,7 @@
 """Runner 3.62.0: Boann as a standalone program (core/metalflood/cli.py, boann.py, version.py).
 
 - boann_folder_imports_nothing_from_outside: every .py in Boann's engine folder (DamSafety_Core/
-  boann/hydro since Runner 3.97.1; core/metalflood is the shim onto it) imports only the standard
+  boann/hydro since Runner 3.97.2; core/metalflood is the shim onto it) imports only the standard
   library, numpy and its own folder, with no exception (engine_sgc's channel builder comes in
   through hydro/host.py since 3.97.1, not by reaching up into the Runner).
 - boann_standalone_copy_runs_bit_for_bit: the folder COPIED ALONE to a temp directory runs a deck

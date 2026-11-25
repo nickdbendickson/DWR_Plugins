@@ -285,7 +285,7 @@ BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
 
 
 def _boann_dir():
-    """Boann's engine folder. Runner 3.97.1 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
+    """Boann's engine folder. Runner 3.97.2 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
     Core (DamSafety_Core/boann/hydro); core/metalflood here is only the shim onto it. Found by
     import spec (the Core's own package folder), else the sibling plugin folder."""
     try:
@@ -299,7 +299,7 @@ def _boann_dir():
 
 
 BOANN_DIR = _boann_dir()
-# Before Runner 3.97.1 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
+# Before Runner 3.97.2 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
 # setting or an older manifest may still hold that path: resolve_exe maps it to the same file here.
 # 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (every

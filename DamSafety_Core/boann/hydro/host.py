@@ -1,4 +1,4 @@
-"""What a host plugin lends Boann, by name (DamSafety Core 1.7.0 / Boann 6.3.1).
+"""What a host plugin lends Boann, by name (DamSafety Core 1.7.0 / Boann 6.3.2).
 
 Until Boann moved into DamSafety Core, two places reached up into the Runner by relative import:
 engine_sgc built channels from the DEM with the Runner's core/sgc + core/grid, and BoannGrid's

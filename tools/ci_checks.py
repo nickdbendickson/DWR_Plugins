@@ -86,7 +86,7 @@ DS_SHIM_TEXT = "import sys\nfrom DamSafety_Core.damsuite import {name} as _m\nsy
 # the damsuite/__init__.py shim: a docstring, then exactly these two statements and nothing else
 DAMSUITE_SHIM_CODE = ("from DamSafety_Core import alias as _alias", "_alias.install(__name__)")
 
-# Core 1.7.0 / Boann 6.3.1: {plugin folder that used to hold a Boann copy: core package it aliases}
+# Core 1.7.0 / Boann 6.3.2: {plugin folder that used to hold a Boann copy: core package it aliases}
 BOANN_SHIMS = {"DamSafety_Runner/core/metalflood": "DamSafety_Core.boann.hydro",
                "DamSafety_Runner/core/metalterrain": "DamSafety_Core.boann.grid",
                "DamSafety_Screening/core/metalflood": "DamSafety_Core.boann.hydro"}

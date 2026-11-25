@@ -1,7 +1,7 @@
 """0.21.0: the GPU engine as tool 7's engine "gpu". It runs the LISFLOOD-FP ACC deck tool 7 writes,
 and its results read like LISFLOOD-FP's. Runs on the CPU build of the kernels (a C++ compiler is
 needed; skipped without one); on a Mac with a Metal GPU the engine picks the GPU.
-Screening 0.60.1 (DamSafety Core 1.7.0): core/metalflood is no longer a copy of the Runner's but a
+Screening 0.60.2 (DamSafety Core 1.7.0): core/metalflood is no longer a copy of the Runner's but a
 shim onto the one copy of Boann in DamSafety_Core/boann/hydro (tools/ci_checks.py "one Boann
 copy" guards it); this checks Screening gets that very package."""
 import os, shutil, sys, tempfile

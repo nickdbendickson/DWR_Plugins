@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""build_release.boann_libraries: since DamSafety Core 1.7.0 (Boann 6.3.1) the Core zip carries
+"""build_release.boann_libraries: since DamSafety Core 1.7.0 (Boann 6.3.2) the Core zip carries
 every Boann / BoannGrid CPU library under boann/hydro/prebuilt/, and no other plugin zip carries
 any. Stand-in library files, no compiler needed.
 

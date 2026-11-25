@@ -76,6 +76,10 @@ def boann_gpu_tiles_kernels_match_the_backend():
     assert "#define S_TILES {}".format(mfb.S_TILES) in src
     for k in ("k_tclear", "k_tseed", "k_tgrow"):
         assert "kernel void {}(".format(k) in src and k in mfb.KERNELS, k
+    # a later redraw of the same batch leaves out a tile that was off; k_tgrow records that
+    # the first redraw is done. k_tclear stays (no profile here to drop that dispatch).
+    assert "st[S_TILES] != 2u || ton[tile] != 0u" in src
+    assert "st[S_TILES] = 2u" in src
     assert mfb.tile_count(1, 1) == 1 and mfb.tile_count(16, 16) == 1
     assert mfb.tile_count(17, 33) == 2 * 3
     lay = dict((n, c) for n, _, c in mfb.buffer_layout(40, 70, 1, 1, 2))
