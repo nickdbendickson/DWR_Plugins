@@ -58,7 +58,7 @@ def subli_buffer_layout(ny, nx, n_src, n_series, n_values, r):
     f, u = np.float32, np.uint32
     return [("s", f, cells * m), ("zb", f, cells), ("V", f, cells), ("d", f, cells),
             ("qx", f, xf), ("qy", f, yf), ("src", f, cells), ("scl", f, cells),
-            ("hmax", f, cells), ("tmax", f, cells), ("arr", f, cells), ("vmax", f, cells),
+            ("hmax", f, cells), ("tmax", f, cells), ("arr", f, cells), ("vmax", f, 2 * cells),  # [0:cells) peak speed; [cells:) peak depth x speed
             ("ok", np.uint8, cells), ("s_cell", u, n_src), ("s_series", u, n_src),
             ("ser_off", u, n_series + 1), ("ser_t", f, n_values), ("ser_q", f, n_values),
             ("cursor", u, n_series), ("st", u, be.S_WORDS), ("qxo", f, xf), ("qyo", f, yf),

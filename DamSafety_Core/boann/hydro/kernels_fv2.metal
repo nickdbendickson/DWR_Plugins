@@ -108,6 +108,8 @@ struct Params {
 // previous-step state (h0/hu0/hv0) for the RK2 blend. The minmod slopes are NOT stored: Metal caps
 // the buffer argument table at 31 slots (indices 0..30), so the per-cell limited slopes are
 // recomputed inline wherever they are needed (k_faces_fv2, k_cont_fv2).
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS_FV2 \
     device const float* z B(0), \
     device const float* n2 B(1), \
@@ -690,6 +692,13 @@ kernel void k_cont_fv2(MF_ARGS_FV2) {
     }
     if (vmagn > vmax[i]) {
         vmax[i] = vmagn;
+    }
+    if (hL > p.dry) {
+        float dv = hL * vmagn;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 
     bool wet = hL > 0.0f;

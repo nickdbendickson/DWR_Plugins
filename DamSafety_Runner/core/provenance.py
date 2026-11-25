@@ -162,7 +162,7 @@ def verify_manifest(path, folder=None):
     if exe and exe.get("sha256"):
         epath = exe.get("path", "")
         if not os.path.exists(epath):
-            # Runner 3.97.2: Boann's engine files moved from core/metalflood to DamSafety Core
+            # Runner 3.101.1: Boann's engine files moved from core/metalflood to DamSafety Core
             from . import lisflood as _lf
             epath = _lf._legacy_boann(epath) or epath
         d = file_digest(epath)

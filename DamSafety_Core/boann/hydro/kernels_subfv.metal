@@ -91,6 +91,8 @@ struct Params {
 };
 
 // Buffer layout (0..29; Params at 30):
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS_SUBFV \
     device const float* s B(0), \
     device const float* nc2 B(1), \
@@ -512,6 +514,13 @@ kernel void k_cont_subfv(MF_ARGS_SUBFV) {
         if (h > p.arr_depth && arr[i] == MF_NODATA) arr[i] = th;
     }
     if (vmagn > vmax[i]) vmax[i] = vmagn;
+    if (h > p.dry) {
+        float dv = h * vmagn;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
+    }
 
     float cl = simd_sum(clip);
     float wm = simd_max(wcell);

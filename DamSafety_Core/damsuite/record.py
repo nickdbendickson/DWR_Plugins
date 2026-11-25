@@ -30,7 +30,7 @@ KIND = "nd_dam_classification_record"
 VERSION = 1
 BUILTIN_MARK = "builtin_lisflood.py"      # a run whose engine "binary" is this is the built-in
 # Boann's engine files: Runner core/metalflood/ until DamSafety Core 1.7.0, DamSafety_Core/boann/hydro/
-# since (Boann 6.3.2); each mark is a tuple of both so records of either age read the same
+# since (Boann 6.6.1); each mark is a tuple of both so records of either age read the same
 GPU_MARK = ("metalflood/engine.py", "boann/hydro/engine.py")         # ... and this is Boann, ACC scheme (Runner 3.22.0)
 FV_MARK = ("metalflood/engine_fv.py", "boann/hydro/engine_fv.py")       # ... Boann, shock-capturing (Runner 3.23.0)
 FV2_MARK = ("metalflood/engine_fv2.py", "boann/hydro/engine_fv2.py")     # ... Boann, shock-capturing 2nd order (Runner 3.33.0)

@@ -205,6 +205,71 @@ def is_checkerboard(stats):
             and int((stats or {}).get("checkerboard_rough_cells") or 0) >= CHECKER_MIN_ROUGH)
 
 
+# 3.101.0: one cell, or a few, can blow up while the rest of the peak surface stays sound, too few to
+# pass CHECKER_MIN_ROUGH. Absaraka (DWR-2801) at 30 m, Boann ACC on Runner 3.57.0: 17.33 ft and
+# 20 ft/s on one flat water-body cell in Casselton, where every other engine read 5.6 to 6.9 ft,
+# and it alone made that run's TM-11 High. A re-run is not worth it for a handful of cells (and
+# the mound on an inflow cell looks the same at CHECKER_JUMP_M), so such cells are REPORTED: a
+# spike is a judged cell (as checkerboard(): deeper than min_depth with four neighbours that are
+# too) whose peak water level stands more than SPIKE_JUMP_M above, or below, all four neighbours,
+# more than SPIKE_SOURCE_CELLS cells from every inflow cell. A sound peak surface has none: the
+# test decks and both Absaraka runs on main (2026-11-25) have 0.
+SPIKE_JUMP_M = 0.5
+SPIKE_SOURCE_CELLS = 3
+SPIKE_LIST_MAX = 5
+
+
+def spikes(wse, depth, sources=(), min_depth=CHECKER_MIN_DEPTH_M, jump=SPIKE_JUMP_M,
+           near=SPIKE_SOURCE_CELLS):
+    """Isolated spikes in a run's peak water surface: (count, [(row, col, jump_m), ...]), the list
+    largest first and at most SPIKE_LIST_MAX long; jump_m is how far the cell stands above all four
+    neighbours (> 0) or below them (< 0). `sources` are the (row, col) of the inflow cells; a cell
+    within `near` cells of one (rows and columns) is left out."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return 0, []
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        up = np.where(ok, c - hi, 0.0)
+        down = np.where(ok, lo - c, 0.0)
+    keep = np.zeros(w.shape, dtype=bool)
+    keep[1:-1, 1:-1] = (up > jump) | (down > jump)
+    for r, cc in sources or ():
+        keep[max(0, r - near):r + near + 1, max(0, cc - near):cc + near + 1] = False
+    rows, cols = np.nonzero(keep)
+    if not len(rows):
+        return 0, []
+    sj = np.where(up[rows - 1, cols - 1] > jump, up[rows - 1, cols - 1],
+                  -down[rows - 1, cols - 1])
+    order = np.argsort(-np.abs(sj), kind="stable")[:SPIKE_LIST_MAX]
+    return int(len(rows)), [(int(rows[i]), int(cols[i]), float(sj[i])) for i in order]
+
+
+def bci_sources(path, dem):
+    """(row, col) of the point sources (P lines) of a .bci the Runner wrote, on `dem` (the .bci is
+    in local coordinates: lower-left corner at 0, 0)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 3 and p[0] == "P":
+                    x, y = float(p[1]), float(p[2])
+                    out.append((int(np.floor((dem.ny * dem.dx - y) / dem.dx)),
+                                int(np.floor(x / dem.dx))))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def checker_cfl(user_cfl=None):
     """The Courant number of the re-run of a checkerboarded ACC run: CHECKER_CFL, or the user's own
     when that is already smaller."""
@@ -285,7 +350,7 @@ BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
 
 
 def _boann_dir():
-    """Boann's engine folder. Runner 3.97.2 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
+    """Boann's engine folder. Runner 3.101.1 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
     Core (DamSafety_Core/boann/hydro); core/metalflood here is only the shim onto it. Found by
     import spec (the Core's own package folder), else the sibling plugin folder."""
     try:
@@ -299,7 +364,7 @@ def _boann_dir():
 
 
 BOANN_DIR = _boann_dir()
-# Before Runner 3.97.2 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
+# Before Runner 3.101.1 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
 # setting or an older manifest may still hold that path: resolve_exe maps it to the same file here.
 # 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (every
@@ -693,7 +758,7 @@ class LisfloodSettings:
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
                  cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None,
-                 subgrid_upwind=False):
+                 subgrid_upwind=False, terrain_breach=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -747,6 +812,9 @@ class LisfloodSettings:
         # more point sources: [{"name", "xy", "t_s", "q_cms", optional "line"}], e.g. ambient
         # river flow entering the domain
         self.extra_sources = extra_sources or []
+        # notch lowered into the bed (dict or None). None: the breach hydrograph is injected
+        # as before. Set only when the run asked for a breach inside the terrain.
+        self.terrain_breach = terrain_breach
         # Accept a LISFLOOD-FP build WITHOUT the arrival-depth patch (it ignores inittm_depth).
         # Off by default so _run() refuses such a build; on, the run proceeds with a loud warning
         # and `unpatched_used` is set, because arrival times then mark the first wetting (~1 mm)
@@ -767,12 +835,14 @@ class Envelopes:
     """Maximum depth (m), maximum speed (m/s), arrival (hr), max WSE (m) on the
     model grid, plus run statistics."""
 
-    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None):
+    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None,
+                 dv=None):
         self.gauges = gauges or {}       # name -> (t_s, q_cms)
         self.depth = depth
         self.velocity = velocity
         self.arrival_hr = arrival_hr
         self.wse = wse
+        self.dv = dv                     # peak depth x speed at one moment (m2/s), or None
         self.stats = stats or {}
         self.notes = notes or []
 
@@ -922,7 +992,8 @@ def raise_crest(dem, crest_xy, inflow_xy, top_m, length_m=200.0, width_m=12.0,
 
 def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflow_line=None):
     os.makedirs(workdir, exist_ok=True)
-    cells = inflow_cells(dem_real, inflow_xy, inflow_line)
+    tb = getattr(st, "terrain_breach", None)
+    cells = inflow_cells(dem_real, inflow_xy, inflow_line) if tb is None else []
     dem = local_grid(dem_real)
     dem.write_asc(os.path.join(workdir, name + ".dem.asc"))
     xmin, ymin, xmax, ymax = dem.bounds
@@ -953,11 +1024,14 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                 px, py = dem.xy(rr, cc)
                 f.write("P {:.3f} {:.3f} QVAR {}\n".format(px, py, sname))
     with open(os.path.join(workdir, name + ".bdy"), "w", encoding="utf-8") as f:
-        f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
-        f.write("breach\n")
-        f.write("{} seconds\n".format(len(t)))
-        for tv, qv in zip(t, q):
-            f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        if tb is None:
+            f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
+            f.write("breach\n")
+            f.write("{} seconds\n".format(len(t)))
+            for tv, qv in zip(t, q):
+                f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        else:
+            f.write("notch in the bed: no breach point source\n")
         for sname, sc, ts_, qs_ in extra:
             f.write("{}\n".format(sname))
             f.write("{} seconds\n".format(len(ts_)))
@@ -1042,6 +1116,9 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                     *_gauge_line(gx, gy, g["direction"], g["width_m"], dem.nx, dem.ny, dem.dx)))
         lines.append("gaugefile {}.gauge".format(name))
     lines += list(st.extra_par)
+    if tb is not None:
+        from .terrain_breach import write_deck
+        lines.append(write_deck(workdir, name, dem, tb))
     par = os.path.join(workdir, name + ".par")
     with open(par, "w", encoding="utf-8") as f:
         f.write("# written by ND Dam Breach Runner\n")
@@ -1454,7 +1531,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     f32 = RESULT_DTYPE
     hmax = load(".max")
     vmax = load(".maxVc", required=False)
+    dv = load(".maxDV", required=False)          # Boann only; missing is None, never an error
     vmax_written = vmax is not None
+    dv_written = dv is not None
     arr = load(".inittm", required=False)
     wse = load(".mxe", required=False)
     notes = []
@@ -1475,6 +1554,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         notes.append("The flood model wrote no maximum velocity (.maxVc).")
         vmax = np.full(hmax.shape, np.nan, dtype=f32)
     vmax = np.where(np.isfinite(vmax) & (hmax64 >= st.velocity_min_depth_m), vmax, f32(0.0))
+    if dv is not None:
+        dv = np.where(np.isfinite(dv) & (hmax64 >= st.velocity_min_depth_m), dv, f32(0.0))
     if arr is None:
         arr = np.full(hmax.shape, np.nan, dtype=f32)
     arr = np.where(np.isfinite(arr) & (arr >= 0) & wet, arr, f32(np.nan))
@@ -1485,9 +1566,17 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
     # measured from the bank and the level above was rebuilt from it)
     chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
+    # 3.101.0: isolated spikes the checkerboard share is too small to see (spikes())
+    n_spk, spk = (0, []) if sgc is not None else spikes(
+        wse, hmax, bci_sources(os.path.join(workdir, name + ".bci"), dem))
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
-    injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
+    tb = getattr(st, "terrain_breach", None)
+    if tb is not None:
+        # the reservoir is already on the grid; the routed hydrograph was not injected
+        injected = float(tb.get("pool_volume_m3") or 0.0)
+    else:
+        injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
     injected += sum(source_volume(src, last_t) for src in st.extra_sources)
     stats = {
         "cells": int(dem.data.size), "cell_size_m": dem.dx,
@@ -1499,8 +1588,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "peak_inflow_cfs": round(qin_max / CFS, 0),
         # 3.13.2 (DWR-4031 toe10m): peak_inflow_cfs is the largest Qin at the .mass output
         # samples (every massint s), which can miss a short breach peak (1,570 against
-        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow
-        "peak_inflow_input_cfs": _hydrograph_peak_cfs(hydrograph),
+        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow.
+        # A notch in the bed injects nothing: the routed peak is reported separately.
+        "peak_inflow_input_cfs": (None if tb is not None else _hydrograph_peak_cfs(hydrograph)),
         "massint_s": float(st.massint_s),
         "max_volume_error_pct": round(100.0 * abs(verr) / injected, 3) if injected else None,
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
@@ -1508,12 +1598,27 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": vmax_written,
+        "dv_written": dv_written,
         "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
         "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
         "checkerboard_rough_cells": chk_rough,
+        # 3.101.0: [x, y, jump ft] of the largest spikes, on the DEM's coordinates
+        "spike_cells": n_spk,
+        "spikes": [[round(dem.xy(r, c)[0], 1), round(dem.xy(r, c)[1], 1), round(j / FT, 2)]
+                   for r, c, j in spk],
     }
+    if tb is not None:
+        from .terrain_breach import read_pool
+        pool = read_pool(os.path.join(res, name + ".pool"))
+        routed = tb.get("_routed_peak_cfs")
+        stats["routed_peak_cfs_not_injected"] = None if not routed else round(float(routed), 0)
+        stats["terrain_breach_pool_acft"] = round(float(tb.get("pool_volume_m3") or 0.0) / ACFT, 2)
+        if pool is not None:
+            stats["terrain_breach_peak_cfs"] = round(pool["peak_outflow_cms"] / CFS, 0)
+            stats["terrain_breach_time_to_empty_hr"] = (
+                None if pool["time_to_empty_s"] is None else round(pool["time_to_empty_s"] / 3600.0, 3))
     if st.initial_depth is not None:
         init_d = st.initial_depth.data
         stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),
@@ -1572,7 +1677,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                          stats["max_volume_error_pct"]))
     return Envelopes(dem.like(hmax, nodata=np.nan, dtype=f32), dem.like(vmax, nodata=np.nan, dtype=f32),
                      dem.like(arr, nodata=np.nan, dtype=f32), dem.like(wse, nodata=np.nan, dtype=f32),
-                     stats, notes, read_gauges(workdir, st, name))
+                     stats, notes, read_gauges(workdir, st, name),
+                     dem.like(dv, nodata=np.nan, dtype=f32) if dv is not None else None)
 
 
 def source_volume(src, t_end):

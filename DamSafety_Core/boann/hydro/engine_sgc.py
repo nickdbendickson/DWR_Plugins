@@ -183,6 +183,7 @@ def run_par(par_path, progress=None, cancel=None, log=None, backend="auto", buil
 
     deck = Deck(par_path, build_from_dem=build_from_dem)
     mfe.refuse_rain(deck, "sub-grid channel (SGC)")
+    mfe.refuse_breach(deck, "sub-grid channel (SGC)")
     try:
         bk = be.make_backend(backend, log=say, spec=be.SGC_SPEC)
     except be.BackendError as e:
@@ -311,12 +312,15 @@ def _run(d, bk, progress, cancel, say):
 
     valid = d.valid
     shape = (ny, nx)
+    cells = ny * nx
     hmax = a["hmax"].reshape(shape).astype(np.float64)
-    vmax = a["vmax"].reshape(shape).astype(np.float64)
+    vmax = a["vmax"][:cells].reshape(shape).astype(np.float64)
+    dv = a["vmax"][cells:].reshape(shape).astype(np.float64)
     arrival = a["arr"].reshape(shape).astype(np.float64)
     tmax = a["tmax"].reshape(shape).astype(np.float64)
     bl._write_asc(root + ".max", np.where(valid, hmax, NODATA), xll, yll, dx)
     bl._write_asc(root + ".maxVc", np.where(valid, vmax, NODATA), xll, yll, dx)
+    bl._write_asc(root + ".maxDV", np.where(valid, dv, NODATA), xll, yll, dx)
     bl._write_asc(root + ".inittm", np.where(valid, arrival, NODATA), xll, yll, dx, fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(valid & (hmax > 0), tmax, NODATA), xll, yll, dx,
                   fmt="%.4f")

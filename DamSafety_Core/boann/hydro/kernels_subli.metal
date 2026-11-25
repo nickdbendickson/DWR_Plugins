@@ -125,6 +125,8 @@ struct Params {
     float wsub;           // dx / r: the length of a face sub-segment
 };
 
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS_SUBLI \
     device const float* s B(0), \
     device const float* zb B(1), \
@@ -623,6 +625,14 @@ kernel void k_speed_subli(MF_ARGS_SUBLI) {
     float v = sqrt(vx * vx + vy * vy);
     if (v > vmax[i]) {
         vmax[i] = v;
+    }
+    float hv = d[i];
+    if (hv > p.dry) {
+        float dv = hv * v;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 }
 

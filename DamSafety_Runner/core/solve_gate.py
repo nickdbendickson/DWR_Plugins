@@ -143,14 +143,14 @@ def storage_check(dem_m3, inventory_m3, tol=0.5):
 
 _SMOKE = {}
 _CORE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
-# Runner 3.97.2: Boann's engine*.py live in DamSafety Core (the sibling plugin folder), not here
+# Runner 3.101.1: Boann's engine*.py live in DamSafety Core (the sibling plugin folder), not here
 _BOANN = os.path.join(os.path.dirname(os.path.dirname(_CORE)), "DamSafety_Core", "boann", "hydro")
 
 
 def is_inprocess_engine(exe):
     """True when `exe` is one of this plugin's in-process engines - a .py file under this core
     folder (the built-in engine) or Boann's engine*.py in DamSafety_Core/boann/hydro (under this
-    core folder before Runner 3.97.2), as core/lisflood.py names them. Needs no import of
+    core folder before Runner 3.101.1), as core/lisflood.py names them. Needs no import of
     lisflood.py, so the standalone tools/lisflood_smoke.py can load this file alone."""
     exe = str(exe or "").strip()
     if not exe.lower().endswith(".py"):

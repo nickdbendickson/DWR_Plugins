@@ -89,7 +89,7 @@ def runner_binaries(folder):
     return out
 
 
-# Core 1.7.0 / Boann 6.3.2: Boann lives once, in DamSafety Core, so the Core zip carries every
+# Core 1.7.0 / Boann 6.6.1: Boann lives once, in DamSafety Core, so the Core zip carries every
 # Boann / BoannGrid CPU library (the Runner and Screening zips carried them before, Screening a subset)
 BOANN_PLUGIN = "DamSafety_Core"
 

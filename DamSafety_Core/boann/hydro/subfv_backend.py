@@ -48,7 +48,7 @@ def subfv_buffer_layout(ny, nx, n_src, n_series, n_values, r):
     f, u = np.float32, np.uint32
     return [("s", f, cells * m), ("nc2", f, cells), ("V", f, cells), ("Px", f, cells),
             ("Py", f, cells), ("eta", f, cells), ("src", f, cells), ("hmax", f, cells),
-            ("tmax", f, cells), ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("tmax", f, cells), ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, be.S_WORDS), ("fxA", f, xf), ("fxN", f, xf), ("fxT", f, xf),

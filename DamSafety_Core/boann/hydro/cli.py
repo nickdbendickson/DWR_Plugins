@@ -12,7 +12,9 @@ CPU build also needs a C++ compiler unless the plugin shipped one prebuilt for t
 
 The deck is the one the Runner writes for LISFLOOD-FP (.par, .dem.asc, .bci, .bdy, optional
 .n.asc, .start, .gauge, SGC channel files); the results are LISFLOOD-FP's files, written where the
-.par's dirroot / resroot say: .max (maximum depth), .maxVc (maximum velocity), .inittm (arrival
+.par's dirroot / resroot say: .max (maximum depth), .maxVc (maximum velocity), .maxDV (maximum
+depth x velocity at one step: total water depth, not depth above the arrival depth, and not
+shifted by a breach-initiation time), .inittm (arrival
 time), .mxe (maximum water-surface elevation), .maxtm, .mass, .discharge and -NNNN.wd snapshots.
 The Runner turns those into Depth / Velocity / Arrival Time / WSE GeoTIFFs exactly as it does
 LISFLOOD-FP's.
@@ -60,9 +62,14 @@ for _k, _m, _d, _words in SOLVERS:
 COMMANDS = ("run", "check", "solvers", "version")
 # what each result file is, in the words the Runner's rasters use
 OUTPUTS = ((".max", "maximum depth (Depth)"), (".maxVc", "maximum velocity (Velocity)"),
+           (".maxDV", "maximum depth x velocity, m2/s, at the same step "
+            "(total water depth, not above the arrival depth)"),
            (".inittm", "arrival time (Arrival Time)"), (".mxe", "maximum water surface (WSE)"),
            (".maxtm", "time of maximum depth"), (".mass", "mass balance"),
-           (".discharge", "gauge discharge"))
+           (".discharge", "gauge discharge"),
+           (".bed", "final bed after an in-terrain breach, m (only when a breach file is set)"),
+           (".pool", "reservoir volume and outflow through an in-terrain breach "
+            "(only when a breach file gives a pool mask)"))
 
 
 class CliError(RuntimeError):

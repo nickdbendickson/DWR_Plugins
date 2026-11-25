@@ -112,6 +112,9 @@ SCENARIO_TEXT = {SCENARIO_SUNNY: "sunny day",
 MODEL_FOLDER = "_breach_model"
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
                "arrival": "Arrival Time.tif", "wse": "WSE (Max).tif"}
+# Boann only, and only when RunSettings.write_peak_dv is on. Not in FINAL_NAMES: that dict
+# also builds the baseline names, the QA names and the self-test's required rasters.
+PEAK_DV_NAME = "D x V (Max).tif"
 BASELINE_NAMES = {k: "Baseline " + v for k, v in FINAL_NAMES.items()}
 # written by the ND 5.2 classification tool from the final rasters; removed when they change
 STALE_ON_RERUN = ("Hazard Classification (ND 5.2).md", "Hazard Classification (ND 5.2).json",
@@ -386,6 +389,14 @@ class RunSettings:
         # spill level. The water is initial water like a pond: it is taken off the depths that
         # are reported and classified.
         self.pothole_start_fill = 0.0
+        # Peak depth x velocity (m2/s at one moment) as "D x V (Max).tif", ft2/s. Off: it does
+        # not change the flood, and a run that does not ask for it writes no raster. Boann
+        # writes the grid; other engines leave it missing.
+        self.write_peak_dv = False
+        # The dam and a full reservoir are built into the DEM and a notch is lowered into the
+        # bed while the run goes, instead of injecting the breach hydrograph. Off (default):
+        # today's order, and the key below leaves it out so an older checkpoint still resumes.
+        self.breach_in_terrain = False
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -534,6 +545,10 @@ class RunSettings:
                 continue                 # v3.10.70: off - the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "write_peak_dv" and not v:
+                continue                 # off: the report stays as before (the raster is optional)
+            elif k == "breach_in_terrain" and not v:
+                continue                 # off: the report stays as before (the flood is unchanged)
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
                 continue                 # v3.10.22: the default - the report stays as before
             elif k == "hecras_dam_axis" and v in ("crest", None, ""):
@@ -680,6 +695,11 @@ def key_settings(st):
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
+    # the peak depth x velocity raster does not change the flood, on or off
+    d.pop("write_peak_dv", None)
+    # a notch in the bed changes the flood, so it stays in the key when it is on
+    if not getattr(st, "breach_in_terrain", False):
+        d.pop("breach_in_terrain", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -811,16 +831,22 @@ def _to_us(kind, a):
     return a
 
 
-def _final_arrays(env, arrival_m, t_ref_hr=0.0, init=None):
+def _final_arrays(env, arrival_m, t_ref_hr=0.0, init=None, blank_start_arrival=False):
     """Result arrays (SI) with the wet/dry rules applied. `init` is the initial
     water depth of ponds (m): the depth shown is the water the flood adds above
-    it. Arrival times count from breach initiation (t_ref_hr)."""
+    it. Arrival times count from breach initiation (t_ref_hr).
+    blank_start_arrival: cells that already hold the arrival depth at the start
+    (the reservoir, when a notch is lowered into the bed) get no arrival time.
+    Off unless that option is on, so a pond run is unchanged."""
     d = env.depth.data
     if init is not None:
         d = np.where(np.isfinite(d), np.clip(d - np.nan_to_num(init.data), 0.0, None), d)
     wet = np.isfinite(d) & (d > WET_M)
     arr = env.arrival_hr.data - t_ref_hr
     arr = np.where(np.isfinite(arr), np.clip(arr, 0.0, None), np.nan)
+    if blank_start_arrival and init is not None:
+        started = np.nan_to_num(init.data) >= arrival_m - lfmod.ARRIVAL_TOL_M
+        arr = np.where(started, np.nan, arr)
     out = {
         "depth": np.where(wet, d, np.nan),
         "velocity": np.where(wet, env.velocity.data, np.nan),
@@ -828,6 +854,29 @@ def _final_arrays(env, arrival_m, t_ref_hr=0.0, init=None):
         "wse": np.where(wet, env.wse.data, np.nan),
     }
     return out
+
+
+def write_peak_dv_raster(dem, env, st, out_folder, writer, wet, refined, log=None):
+    """Write PEAK_DV_NAME (ft2/s) or remove a stale copy. Off unless st.write_peak_dv.
+    `wet` is the same mask _final_arrays uses (depth above the initial water, over WET_M).
+    A near-dam refine keeps only depth, velocity, WSE and arrival, so the raster is not
+    written then. Returns the path, or None. Never changes the flood."""
+    path = os.path.join(out_folder, PEAK_DV_NAME)
+    dv = getattr(env, "dv", None)
+    on = bool(getattr(st, "write_peak_dv", False)) and not refined and dv is not None
+    if not on:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if getattr(st, "write_peak_dv", False) and dv is None and not refined and log:
+            log("Peak depth x velocity was asked for, but this run has no .maxDV (this engine "
+                "does not write it, or the run resumed from before that file existed). No {} "
+                "was written.".format(PEAK_DV_NAME))
+        return None
+    data = np.where(wet, np.asarray(dv.data, dtype=float), np.nan) / (FT * FT)
+    writer(dem.like(data, np.nan), path)
+    return path
 
 
 def compare(a_env, b_env, thr_m):
@@ -1026,11 +1075,14 @@ def attach_proposed(st, out_folder, dam, warnings, log):
 
 
 
-def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
+def _write_pass_products(out_folder, dem, env, arrival_m, writer, it, init=None):
     """Depth, velocity, and arrival rasters plus polygons for one finished pass.
 
     LISFLOOD has already written run.max, run.maxVc, and run.inittm. This copies
     them into the dam folder so a domain that is still growing still leaves a result.
+    `init` (a Grid, or None) is the water already on the grid at the start. Passed
+    only when a notch is lowered into the bed, so the reservoir is not drawn as the
+    flood. None leaves this pass exactly as before.
     """
     import numpy as np
     from . import products
@@ -1043,6 +1095,17 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         return np.asarray(getattr(obj, "data", obj), float)
 
     depth, vel, arr = grid(env.depth), grid(getattr(env, "velocity", None)), grid(getattr(env, "arrival", None))
+    if init is not None and arr is None:
+        hr = grid(getattr(env, "arrival_hr", None))
+        if hr is not None:
+            arr = hr * 3600.0
+    if init is not None and depth is not None:
+        raw = grid(init)
+        raw = np.where(np.isfinite(raw), raw, 0.0)
+        depth = np.where(np.isfinite(depth), np.clip(depth - raw, 0.0, None), depth)
+        if arr is not None:
+            started = raw >= arrival_m - lfmod.ARRIVAL_TOL_M
+            arr = np.where(started, np.nan, arr)
     if not (getattr(env, "stats", {}) or {}).get("velocity_written", True):
         vel = None          # M21: the build wrote no .maxVc - emit no zeros-velocity pass product
     names = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif", "arrival": "Arrival Time.tif"}
@@ -1939,6 +2002,77 @@ def _crest_raise_lines(dam, half_m=0.0):
     return [getattr(dam, "crest_line_xy", None)]
 
 
+def _breach_crest_lines(dam, st, half_m=0.0):
+    """Crest line(s) for a breach lowered into the terrain. The dam's own line when it has
+    one (including a line trimmed around a spillway). A batch CREST_LINE (st.midcrest_line)
+    stands in only when the dam has no line. The ordinary crest raise does not call this,
+    so a run with the option off is unchanged."""
+    lines = _crest_raise_lines(dam, half_m)
+    if any(ln and len(ln) >= 2 for ln in lines) or lines == []:
+        return lines
+    mid = getattr(st, "midcrest_line", None)
+    if mid and len(mid) >= 2:
+        return [mid]
+    return lines
+
+
+def _notch_this_pass(tag, tb_on):
+    """True when this pass cuts the notch. The no-breach baseline (tag "_base") stays intact
+    even when breach-inside-the-terrain is on."""
+    return bool(tb_on) and tag != "_base"
+
+
+def _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom, start_fn, warnings=None,
+                      log=None):
+    """A pass that cuts the notch (breach inside the terrain on, not the baseline): the crest
+    goes up first, along the breach crest line(s), then the notch and the full reservoir are
+    staged. start_fn() is the pass's ordinary start depth, taken after the raise. Returns
+    (initial depth, terrain-breach spec). warnings / log: the crest-raised note (fresh runs
+    only; a resume does not repeat it)."""
+    from . import terrain_breach as tbmod
+    lines = _breach_crest_lines(dam, st, max(12.0, dem.dx) / 2.0)
+    top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
+    if top_m and getattr(st, "raise_crest", True):
+        nraise = 0
+        for ln in lines:
+            nraise += lfmod.raise_crest(
+                dem, dam_xy, inflow_xy, top_m,
+                length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=ln)
+        how = ("along the dam line" if any(ln and len(ln) >= 2 for ln in lines)
+               else "at the crest point")
+        if warnings is not None and add_crest_raised_warning(warnings, nraise, how) and log:
+            log(warnings[-1])
+    if tb_geom is None:
+        raise brmod.BreachInputError(
+            "Breach inside the terrain has no crest geometry for this pass. Turn it off.")
+    tb_spec, tb_depth = tbmod.stage(dem, tb_geom, lines)
+    return tbmod.add_depth(dem, start_fn(), tb_depth), tb_spec
+
+
+def _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy, warnings=None, log=None):
+    """The crest raise of a pass that cuts no notch, made after its start depth. Option off:
+    on the dam's own line, exactly as before the option existed. Option on (only the no-breach
+    baseline gets here): on the same line(s) as the notch, a batch crest line when the dam has
+    none, so the baseline dam is the breach pass's dam before the cut."""
+    top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
+    if not (top_m and getattr(st, "raise_crest", True)):
+        return
+    half = max(12.0, dem.dx) / 2.0
+    lines = _crest_raise_lines(dam, half) if not tb_on else _breach_crest_lines(dam, st, half)
+    nraise = 0
+    for ln in lines:
+        nraise += lfmod.raise_crest(
+            dem, dam_xy, inflow_xy, top_m,
+            length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=ln)
+    if not tb_on:
+        how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
+    else:
+        how = ("along the dam line" if any(ln and len(ln) >= 2 for ln in lines)
+               else "at the crest point")
+    if warnings is not None and add_crest_raised_warning(warnings, nraise, how) and log:
+        log(warnings[-1])
+
+
 def hecras_dam_xy(res, given_xy):
     """3.20.11 (critique 7): the dam point for the HEC-RAS stage and the final products of a
     finished run: the modelled (mid-crest) point when the dam point check moved it, else the
@@ -2271,6 +2405,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     progress = progress or (lambda p, m="": None)
     log = log or (lambda m: None)
     cancel = cancel or (lambda: False)
+    from . import terrain_breach as tbmod
+    tbmod.refuse(st)
     if st.breach_xy is not None:
         dam_xy = (float(st.breach_xy[0]), float(st.breach_xy[1]))
     res = RunResult()
@@ -2327,6 +2463,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     # embankment from dam.json) apply to everything the models read
     raw_terrain = terrain_src                  # the near-dam refine run wraps the edits itself
     attach_proposed(st, out_folder, dam, warnings, log)
+    tbmod.refuse(st)                           # a proposed embankment may have been attached above
     if st.edits is not None and not st.edits.empty():
         terrain_src = cond.ConditionedTerrain(terrain_src, st.edits, default_n=st.manning_n)
         # S6a: a channel burn narrower than the model cell is floored to one cell wide
@@ -2749,12 +2886,26 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             report["inflow_point"] = {"xy": list(inflow_xy), "how": "given"}
     log("Breach inflow at {:.1f}, {:.1f} ({})".format(inflow_xy[0], inflow_xy[1],
                                                       report["inflow_point"]["how"]))
+    tb_on = bool(getattr(st, "breach_in_terrain", False))
+    tb_geom = None
+    if tb_on:
+        tb_geom = tbmod.prepare(dam, hy, _breach_crest_lines(dam, st, 0.0), dam_xy,
+                                qa_ctx.get("downstream"), inflow_xy)
     # --- v3.10.20: reservoir bottom carved from the storage curve (opt-in) -----------
     # the engines (model_dem: LISFLOOD-FP, ANUGA, the refine run) and the HEC-RAS terrain read
     # the carved copy from here on; the source DEM is never written
     from . import reservoir_carve as rcarve
+    carve_st = st
+    if tb_on and rcarve.normalize(getattr(st, "reservoir_carve", rcarve.MODE_OFF)) == rcarve.MODE_OFF:
+        # the elevation model often stops at the water surface, and "off" is also the default,
+        # so a full reservoir cannot be told from a flat sheet. Carve on a copy; `st` stays off.
+        carve_st = copy.copy(st)
+        carve_st.reservoir_carve = rcarve.MODE_AUTO
+        report["terrain_breach_carve"] = "auto (the run's own reservoir carve stays off)"
+        log("Breach inside the terrain: the reservoir bottom is carved where the ground looks "
+            "like a water surface. The reservoir-carve setting on this run stays off.")
     terrain_src, raw_terrain = rcarve.run_hook(
-        st, dam, dam_xy, inflow_xy, terrain_src, raw_terrain, model_dir, report, warnings, log,
+        carve_st, dam, dam_xy, inflow_xy, terrain_src, raw_terrain, model_dir, report, warnings, log,
         downstream=qa_ctx.get("downstream"), crs_wkt=report.get("work_crs"))
 
     # --- initial domain from a flow trace --------------------------------------
@@ -2780,6 +2931,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 "a closed basin; give the breach inflow point explicitly (just below the "
                 "dam).".format(plen, d_end))
     report["trace"] = {"length_mi": round(plen / MILE, 2), "points": len(path)}
+    if tb_on and plan is None and tb_geom is not None:
+        bounds, _tb_note = tbmod.union_bounds(bounds, terrain_src, tb_geom, dam, cs, cs)
+        if _tb_note and _tb_note not in warnings:
+            warnings.append(_tb_note)
+            log(_tb_note)
     if burner is not None:
         # 3.15.0: from here on the model reads are burned; the traced main channel and the
         # bridges stay as the DEM has them (crestburn.guard_cells)
@@ -3076,7 +3232,17 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
-        init = start_depth(dem, bnds, cs)
+        # A notch in the bed needs the crest up before the reservoir is staged. Off, the
+        # crest is raised after the start depth, as before, so that order does not move.
+        tb_spec = None
+        # The no-breach baseline (tag "_base") keeps the intact dam: no notch, and the crest
+        # is raised after the start depth, below. Every other pass with the option on stages
+        # the notch, which needs the crest up first.
+        if _notch_this_pass(tag, tb_on):
+            init, tb_spec = _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom,
+                                              lambda: start_depth(dem, bnds, cs), warnings, log)
+        else:
+            init = start_depth(dem, bnds, cs)
         gl = gauge_list(bnds, gauges)
         chans = sgc_for(dem, tag)
 
@@ -3093,6 +3259,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 max_wall_s=getattr(st, "max_wall_s", 0.0) or 0.0,          # audit P2
                 rate=getattr(st, "lisflood_rate", None) or lfmod.known_rate(st.lisflood_exe),
                 sgc=chans,
+                terrain_breach=tb_spec,
                 **stable_kw())
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
@@ -3103,16 +3270,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         os.remove(fp[:-3] + ext)
                     except OSError:
                         pass
-        top_m = (dam.top_of_dam_ft * FT) if getattr(dam, "top_of_dam_ft", None) else None
-        if top_m and getattr(st, "raise_crest", True):
-            nraise = 0
-            for _ln in _crest_raise_lines(dam, max(12.0, dem.dx) / 2.0):
-                nraise += lfmod.raise_crest(
-                    dem, dam_xy, inflow_xy, top_m,
-                    length_m=(dam.crest_length_ft or 400.0) * FT, line_xy=_ln)
-            how = "along the dam line" if getattr(dam, "crest_line_xy", None) else "at the crest point"
-            if add_crest_raised_warning(warnings, nraise, how):
-                log(warnings[-1])
+        # Off: raised after the start depth, on the dam's own line, as before. On, only the
+        # no-breach baseline gets here (the breach pass raised before staging, above).
+        if not _notch_this_pass(tag, tb_on):
+            _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy, warnings, log)
         marker = os.path.join(wd, lfmod.STABILITY_MARKER)
         if not stability["on"] and os.path.exists(marker):
             os.remove(marker)
@@ -3220,6 +3381,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 report["lisflood_checkerboard"] = {
                     "run": "lisflood" + tag, "pct": env.stats.get("checkerboard_pct"),
                     "cells": env.stats.get("checkerboard_rough_cells")}
+        # 3.101.0: a few cells that blew up while the rest of the peak surface is sound
+        # (lfmod.spikes; Absaraka's 17 ft Casselton cell on 3.57.0) are too few to re-run for:
+        # they are reported, with where they are, on every engine
+        _old = stability.setdefault("spike_msgs", {}).pop(tag, None)
+        if _old in warnings:                 # this pass replaces the last one of the same grid
+            warnings.remove(_old)
+        if (report.get("lisflood_spikes") or {}).get("run") == "lisflood" + tag:
+            report.pop("lisflood_spikes", None)
+        n_spk = int(env.stats.get("spike_cells") or 0)
+        if n_spk and not lfmod.is_checkerboard(env.stats):
+            where = env.stats.get("spikes") or []
+            msg = ("{}'s peak water surface has {} isolated spike{} in lisflood{}: a cell whose "
+                   "peak water level stands more than {:.1f} ft above or below all four "
+                   "neighbours, away from the inflow ({}). That is the solver blowing up in "
+                   "one place, not the flood: the depth, velocity and hazard at {} are not "
+                   "reliable. Check {} on the maps; a run with a smaller CFL (the run tool's "
+                   "CFL setting, or model.cfl in the command-line config) normally removes "
+                   "{}.".format(
+                       lfmod.engine_name(st.lisflood_exe), n_spk, "" if n_spk == 1 else "s",
+                       tag, lfmod.SPIKE_JUMP_M / FT,
+                       "; ".join("{:+.1f} ft at {:.0f}, {:.0f}".format(j, x, y)
+                                 for x, y, j in where[:3]),
+                       "that cell" if n_spk == 1 else "those cells",
+                       "it" if n_spk == 1 else "them", "it" if n_spk == 1 else "them"))
+            warnings.append(msg)
+            log(msg)
+            stability["spike_msgs"][tag] = msg
+            report["lisflood_spikes"] = {"run": "lisflood" + tag, "cells": n_spk,
+                                         "where_x_y_jump_ft": where}
         if stability["on"] and lst.solver == lfmod.SOLVER_ACC:
             with open(marker, "w") as f:
                 json.dump({"theta": lst.theta, "cfl": lst.cfl,
@@ -3237,6 +3427,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 "LISFLOOD-FP's {} run wrote no maximum velocity (.maxVc), which the hazard "
                 "classification needs. Use ACC.".format(
                     lfmod.SOLVER_SHORT.get(lst.solver, lst.solver)))
+        if tb_spec is not None:
+            _tb_pool = tbmod.read_pool(os.path.join(wd, "results", "run.pool"))
+            report["terrain_breach"] = tbmod.report_entry(tb_spec, _tb_pool, dem.dx)
+            for _tb_note in (tbmod.storage_warning(tb_spec),
+                             tbmod.resolution_warning(tb_spec, dem.dx)):
+                if _tb_note and _tb_note not in warnings:
+                    warnings.append(_tb_note)
+                    log(_tb_note)
         return env, dem, init, runtime, wd, lst
 
 
@@ -3244,7 +3442,16 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         """Results of a finished run (resume)."""
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
-        init = start_depth(dem, bnds, cs)
+        tb_spec = None
+        if _notch_this_pass(tag, tb_on):
+            init, tb_spec = _stage_notch_pass(dem, dam, st, dam_xy, inflow_xy, tb_geom,
+                                              lambda: start_depth(dem, bnds, cs))
+        else:
+            init = start_depth(dem, bnds, cs)
+            # The baseline run raised the crest after the start depth and did not cut a notch.
+            # (Option off, a resume reads the grid as it always has, without the raise.)
+            if tag == "_base" and tb_on:
+                _raise_crest_after_start(dem, dam, st, tb_on, dam_xy, inflow_xy)
         gl = gauge_list(bnds, st.gauges)
         lst = lfmod.LisfloodSettings(st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
@@ -3254,9 +3461,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      closed_edges=closed_edges(),
                                      limit_slopes=getattr(st, "lisflood_limit_slopes", True),
                                      sgc=sgc_for(dem, tag),
+                                     terrain_breach=tb_spec,
                                      **stable_kw())
-        env = lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd)
-
+        wd = os.path.join(model_dir, "lisflood" + tag)
+        env = lfmod.read_results(wd, dem, lst, hyd)
+        if tb_spec is not None:
+            _tb_pool = tbmod.read_pool(os.path.join(wd, "results", "run.pool"))
+            report["terrain_breach"] = tbmod.report_entry(tb_spec, _tb_pool, dem.dx)
+            for _tb_note in (tbmod.storage_warning(tb_spec),
+                             tbmod.resolution_warning(tb_spec, dem.dx)):
+                if _tb_note and _tb_note not in warnings:
+                    warnings.append(_tb_note)
+                    log(_tb_note)
         return env, dem, init
 
     # M5: a run on the built-in engine is a SCREENING approximation, not LISFLOOD-FP. Say so
@@ -3420,7 +3636,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # growing domain still leaves depth, velocity, and arrival rasters and polygons.
         if st.write_final:    # per-run rasters off (the probabilistic/Monte-Carlo default):
             try:              # do not write Depth/Velocity/Arrival(Max)/Extent into every run
-                _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
+                _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it,
+                                     init_grid if getattr(st, "breach_in_terrain", False) else None)
             except Exception as _e:
                 log("Could not write pass {} products: {}".format(it, _e))
         nodata = ~dem.valid()
@@ -3754,7 +3971,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 "bounds": tuple(bounds), "sim_time": sim_time, "trace_length_m": plen}
 
     def write_qa(tag, env, model, init):
-        fa = _final_arrays(env, arrival_m, t_ref_hr, init)
+        fa = _final_arrays(env, arrival_m, t_ref_hr, init,
+                           blank_start_arrival=bool(getattr(st, "breach_in_terrain", False)))
         # M21: a build that wrote no .maxVc must not leave a zeros velocity QA raster in the model
         # folder either - the Hazard plugin autodetects _breach_model/*_vmax_fps.tif as the velocity
         # raster, which would satisfy its pre-flight and defeat the defence. Skip (and drop any
@@ -3996,7 +4214,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # scenario and would be read as this run's. Clear them here; they are written again
         # below only when this run actually has a baseline.
         for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
-                      + list(INCREMENT_NAMES.values())):
+                      + list(INCREMENT_NAMES.values()) + [PEAK_DV_NAME]
+                      + ["LISFLOOD-FP " + PEAK_DV_NAME]):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -4020,6 +4239,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
+        wet = np.isfinite(fin["depth"])
+        refined = bool((report.get("refine_near_dam") or {}).get("applied"))
+        dv_path = write_peak_dv_raster(dem, final_env, st, out_folder, writer, wet, refined, log)
+        if dv_path:
+            res.final["dv"] = dv_path
         # S3: raster + layer record of the DEM edits baked into the published model DEM
         try:
             _ei = {}
@@ -5963,6 +6187,31 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
+def _manifest_mark_removed(manifest_path, removed_path, why):
+    """Mark an output that a later stage deleted as missing in run_manifest.json (and re-seal
+    it), so verify_manifest does not report the file as lost. Best effort: the manifest is an
+    extra and never fails a run."""
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return
+    try:
+        from . import provenance
+        with open(manifest_path, encoding="utf-8") as f:
+            m = json.load(f)
+        hit = False
+        for rec in (m.get("outputs") or {}).values():
+            if (isinstance(rec, dict) and rec.get("path")
+                    and os.path.normcase(os.path.abspath(rec["path"]))
+                    == os.path.normcase(os.path.abspath(removed_path))):
+                rec["missing"] = True
+                rec["removed_by"] = why
+                hit = True
+        if hit:
+            m["manifest_sha256"] = provenance.digest_of(m)
+            provenance.write_manifest(manifest_path, m)
+    except Exception:
+        pass
+
+
 def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
                      cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
@@ -5985,15 +6234,44 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     if engine is None:
         from . import hecras_engine as engine
     kw = {"cancel": cancel} if cancel is not None else {}
+    # Boann may have written a peak depth x velocity raster into res.final. HEC-RAS does not
+    # produce one, so the stage is handed the finals without it: run_stage keeps a
+    # "LISFLOOD-FP <name>" copy of every raster it is given, and a kept Boann D x V copy
+    # would be read by Hazard as the dam's D x V beside the HEC-RAS depths.
+    stage_final = {k: v for k, v in res.final.items() if k != "dv"}
     try:
         if unattended:
-            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, unattended=True, **kw)
         else:
-            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
     res.final.update(hr["final"])
+    # HEC-RAS ran: its depths are the final ones, so the Boann D x V no longer matches them.
+    # Drop it from the finals and delete the file (only after the stage succeeded, so a failed
+    # stage leaves the screening results whole).
+    dv_path = res.final.pop("dv", None)
+    if dv_path:
+        try:
+            os.remove(dv_path)
+        except OSError:
+            pass
+        if not os.path.exists(dv_path):
+            note = ("The Boann peak depth x velocity raster was removed: the final depths are "
+                    "from HEC-RAS, which does not make that raster.")
+            if callable(log):
+                log(note)
+        else:
+            # still on disk (e.g. locked by an open layer): Hazard would read it beside the
+            # HEC-RAS depths, so this must reach the report, not only the log
+            note = ("The Boann peak depth x velocity raster could not be removed ({}). It is "
+                    "not from the HEC-RAS run: delete it before classifying hazard with these "
+                    "depths.".format(dv_path))
+            res.warnings.append(note)
+            if callable(log):
+                log(note)
+        _manifest_mark_removed(getattr(res, "manifest", ""), dv_path, "HEC-RAS 2D stage")
     res.warnings.extend(hr["warnings"])
     # every reported figure from the final engine (the screening pass is kept)
     try:

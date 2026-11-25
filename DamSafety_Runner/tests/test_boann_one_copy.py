@@ -1,4 +1,4 @@
-"""Runner 3.97.2 / DamSafety Core 1.7.0 / Boann 6.3.2: Boann lives once, in DamSafety_Core/boann.
+"""Runner 3.101.1 / DamSafety Core 1.7.0 / Boann 6.6.1: Boann lives once, in DamSafety_Core/boann.
 
 - the Runner's core.metalflood / core.metalterrain are the very Core packages (one module object)
 - `python -m <runner>.core.metalflood ...` and `-m ...core.metalterrain verify` still run (paste kits)
