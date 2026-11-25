@@ -1,0 +1,49 @@
+name: Boann published-benchmark gate
+
+# Boann's CPU build on a handful of small published benchmark decks (EA 2D benchmark tests 3 and 5,
+# the three-humps dam break and lake at rest, and a lake at rest beside NoData), scored against a
+# committed LISFLOOD-FP 8.3 / analytic / frozen reference. A GATE: the job is red when a case's
+# peak-depth RMSE, maximum difference, flood-extent CSI, still-water speed or volume error leaves
+# the band in its case.json. This catches the regression class the 2026-11-24 NoData wall bug
+# belonged to (PR #516). No network, no LISFLOOD-FP build, no GPU; a few minutes on one core.
+#
+# When it runs: on a pull request that changes Boann or the benchmark set, and by hand.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "DamSafety_Runner/core/metalflood/**"
+      - "tools/validation/benchmarks/**"
+      - ".github/workflows/benchmarks.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Published benchmark gate (Boann CPU build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+      DAMSAFETY_MF_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: numpy (the CPU build compiles with the runner's g++)
+        run: python -m pip install "numpy<2.3"
+      - name: Gate self-test (scoring logic, no engine)
+        run: python tools/validation/benchmarks/test_benchmark_gate.py
+      - name: Run the benchmark cases and gate on the references
+        run: |
+          python tools/validation/benchmarks/benchmark_gate.py | tee bench.md
+          rc="${PIPESTATUS[0]}"
+          { echo '## Boann benchmark gate'; echo; cat bench.md; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" = "0" ]

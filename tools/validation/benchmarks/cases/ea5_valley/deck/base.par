@@ -1,0 +1,9 @@
+DEMfile dem.asc
+fpfric 0.04
+sim_time 108000
+initial_tstep 1
+saveint 300
+massint 300
+bcifile src.bci
+bdyfile src.bdy
+elevoff
