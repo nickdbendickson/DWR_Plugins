@@ -203,6 +203,7 @@ def test_wiring():
             assert wf.defaults(step, work, {"suite_folder": suite}).get("AADT_LAYERS") == want, step
             assert "AADT_LAYERS" not in wf.defaults(step, work, {"suite_folder": lone}), step
         assert wf.RESULTS_MOVED["8"][:2] == ("0.58.0", "hz_aadt")
+        assert wf.RESULTS_MOVED["6"][:2] == ("0.58.0", "tri_aadt")          # a 0.52 - 0.57 triage is out of date
         # the review flag reaches the Review tab's queue and the report's review reasons
         from nd_dam_screening.core import report as rp, review as rv
         open(wf.path(work, "8", "OUT"), "wb").close()
@@ -472,10 +473,211 @@ def test_tool6():
     print("OK tool 6: envelope and corridor road tests use the matched count; clears on it are flagged")
 
 
+# ------------------------------------------------------------------- the review's fixes (0.58.0 review)
+def _named_stations(path, rows):
+    """NDDOT count stations: rows = [((x, y), name, aadt, year)]."""
+    w = G.GpkgWriter(path)
+    lyr = w.layer("NDDOT_traffic_counts", "POINT", [("name", "text"), ("aadt", "real"), ("aadt_year", "int")],
+                  5070, spatial_index=True)
+    for (x, y), nm, aadt, yr in rows:
+        lyr.add({"type": "Point", "coordinates": [x, y]}, {"name": nm, "aadt": aadt, "aadt_year": yr})
+    w.close()
+    return path
+
+
+def _ng911x(path, rows):
+    """NG911 roads with RoadClass and FUNC_SYS: rows = [(points, FULL_NAME, RoadClass, FUNC_SYS)]."""
+    return _gpkg.write(path, {"ND_roads_NG911": ("LINESTRING", [("FULL_NAME", "TEXT"), ("SHIELD", "TEXT"),
+                                                                ("RoadClass", "TEXT"), ("FUNC_SYS", "INTEGER")],
+                                                 [(("LineString", pts), {"FULL_NAME": nm, "SHIELD": "",
+                                                                         "RoadClass": rc, "FUNC_SYS": fs})
+                                                  for pts, nm, rc, fs in rows])}) + "|layername=ND_roads_NG911"
+
+
+def test_join_rules():
+    """What the review found (real pack cases), in core/road_aadt.py; aadt_join.py stays the Runner's file."""
+    # names: the same road across the layers' spellings; a route number; never an empty name
+    assert RA.same_name("ASH COULEE DR", "ASHCOULEEDR") and RA.same_name("JOHNSON ST S", "JOHNSON ST")
+    assert RA.same_name("158th Street Northeast", "158TH ST NE") and RA.same_name("HIGHWAY 85 N USHY", "U85N")
+    assert RA.same_name("HIGHWAY 2 AND 52 W", "U52E") and RA.same_name("9TH ST E", "9THSTE")
+    assert not RA.same_name("UNIVERSITY DR S", "2ND AVE S") and not RA.same_name("MAIN AVE S", "MAINSTS")
+    assert not RA.same_name("87TH ST NW", "") and not RA.same_name("", "") and not RA.same_name("N 7TH ST", "U83S")
+    # the interstate system its name does not show (NG911 FUNC_SYS, HPMS F_SYSTEM, SHIELD)
+    assert RA.interstate_system({"func_sys": 1}) and RA.interstate_system({"f_system": "1"})
+    assert RA.interstate_system({"shield": "I"}) and RA.interstate_system({"shield": "EXIT", "func_sys": 7})
+    assert not RA.interstate_system({"func_sys": 7, "shield": "USHY"}) and not RA.interstate_system({})
+    assert not RA.interstate_system({"func_sys": None}) and not RA.interstate_system({"func_sys": "x"})
+    assert [RA.band(a) for a in (83, 499.9, 500, 2000, 2000.5)] == [0, 0, 1, 1, 2]
+    d = tempfile.mkdtemp(prefix="rajr_")
+    try:
+        road = [[(0.0, 0.0), (400.0, 0.0)]]
+        # 1. ASH COULEE DR (pack fid 132420): county 311 (no year) 2.7 m off and the 2025 NDDOT count 2,265 on it.
+        #    aadt_join takes the line whatever the years; the higher count on the same road wins (Hazard: High)
+        cty = _lines_file(os.path.join(d, "ND_county_roads.gpkg"), "ND_county_roads",
+                          [([(-50, 2.7), (450, 2.7)], 311.0, None, "")])
+        st = _named_stations(os.path.join(d, "NDDOT_traffic_counts.gpkg"),
+                             [((200.0, 1.0), "ASH COULEE DR", 2265.0, 2025)])
+        assert AJ.match(road, RA.Join([cty, st]).features((-100, -100, 500, 100)))["aadt"] == 311.0   # the Runner's pick
+        m = RA.Join([cty, st]).match(road, name="ASH COULEE DR")
+        assert m["aadt"] == 2265.0 and m["over"]["aadt"] == 311.0, m
+        assert m["text"] == ("AADT 2,265 (2025) from an NDDOT count station (NDDOT_traffic_counts.gpkg, ASH COULEE DR) "
+                             "(not the AADT 311 from ND county roads: the higher count on the same road)"), m["text"]
+        j = RA.Join([cty, st])
+        assert j.match(road)["aadt"] == 2265.0 and j.raised == 1      # unnamed: the station lies along the road
+        assert "1 took a higher count on the same road" in j.summary()
+        # a station in the same band does not replace the line; a lower one never does
+        _named_stations(st, [((200.0, 1.0), "ASH COULEE DR", 450.0, 2025)])
+        assert RA.Join([cty, st]).match(road, name="ASH COULEE DR")["aadt"] == 311.0
+        # 2. a line NAMED as the road beats a nearer line with a lower band (9TH ST E: county 1,394 vs HPMS 22,966)
+        hp = _lines_file(os.path.join(d, "HPMS_ND_2024.gpkg"), "HPMS_ND_2024",
+                         [([(-50, 6.0), (450, 6.0)], 22966.0, 2024, "9THSTE")], year_field="DATA_YEAR")
+        cty2 = _lines_file(os.path.join(d, "cty2.gpkg"), "ND_county_roads", [([(-50, 1.0), (450, 1.0)], 1394.0, 2023, "")])
+        assert RA.Join([hp, cty2]).match(road, name="9TH ST E")["aadt"] == 22966.0
+        assert RA.Join([hp, cty2]).match(road, name="")["aadt"] == 1394.0             # no name: the nearest line
+        assert RA.Join([hp, cty2]).match(road, name="FRONTAGE RD")["aadt"] == 1394.0  # another road's line
+        # 3. a station counts only where the water crosses the road and only on this road
+        long_ = [[(0.0, 0.0), (1600.0, 0.0)]]
+        wet = lambda x, y: 280.0 <= x <= 320.0
+        far = _named_stations(os.path.join(d, "far.gpkg"), [((1590.0, 20.0), "45TH ST", 40.0, 2023)])
+        assert RA.Join([far]).match(long_, is_wet=wet) is None                  # by the dry far end: not taken
+        assert RA.Join([far]).match(long_)["aadt"] == 40.0                      # no water given: anywhere on it
+        xing = _named_stations(os.path.join(d, "xing.gpkg"), [((300.0, 20.0), "45TH ST", 40.0, 2023)])
+        xl = _lines_file(os.path.join(d, "xl.gpkg"), "ND_county_roads", [([(302.0, -300.0), (302.0, 300.0)], 40.0,
+                                                                          2023, "")])
+        assert RA.Join([xing, xl]).match(long_, is_wet=wet, name="12TH AVE") is None   # on the crossing road
+        _named_stations(xing, [((300.0, 20.0), "12TH AVE", 40.0, 2023)])
+        assert RA.Join([xing, xl]).match(long_, is_wet=wet, name="12TH AVE")["aadt"] == 40.0   # named as this road
+        # 4. no wet 15 m sample (a 0.2 m wet sliver): the samples next to the point the tool found overtopped,
+        #    not the whole road (DWR-2635 'RAMP': 32 on the whole road, 12,550 where the water crosses it)
+        two = _lines_file(os.path.join(d, "two.gpkg"), "ND_county_roads",
+                          [([(0, 3.0), (300, 3.0)], 32.0, 2023, ""), ([(300, 3.0), (1600, 3.0)], 12550.0, 2023, "")])
+        sliver = lambda x, y: 100.2 <= x <= 100.4
+        j = RA.Join([two])
+        assert j.match(long_, is_wet=sliver, at=(100.3, 0.0))["aadt"] == 32.0 and j.near_point == 1
+        assert RA.Join([two]).match(long_, is_wet=sliver)["aadt"] == 12550.0      # no point given: the whole road
+        # 5. the cache is bounded: over max_feats it restarts and the answers stay the same
+        jc = RA.Join([cty], max_feats=0)
+        assert jc.match(road)["aadt"] == 311.0
+        assert jc.match([[(0.0, 9000.0), (400.0, 9000.0)]]) is None and jc.resets == 1
+        assert jc.match(road)["aadt"] == 311.0 and jc.reads == 3 and "restarted 1 time(s)" in jc.summary()
+        # 6. review texts: a road cut into NG911 segments is listed once and counted once
+        items = [("98TH ST SE", "71804", "AADT 28 (Low instead of Medium)"), ("98TH ST SE", "71646", "AADT 28 (Low "
+                 "instead of Medium)"), ("", "7", "AADT 5 (Low instead of Medium)"), ("87TH ST NW", "3", "AADT 60")]
+        assert RA.grouped(items) == (["98TH ST SE (2 segments): AADT 28 (Low instead of Medium)",
+                                      "road 7: AADT 5 (Low instead of Medium)", "87TH ST NW (road 3): AADT 60"], 3, 4)
+        t = RA.review_text("Class", "Low", "it would be Medium", items)
+        assert t.startswith("Class Low rests on traffic counts matched from other layers for 3 road(s), 4 segments "
+                            "(98TH ST SE (2 segments): AADT 28"), t
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("OK join rules: same-road higher count, named line, station on the wet part / this road, sliver, cache")
+
+
+def test_tool8_review_fixes():
+    work = tempfile.mkdtemp(prefix="raj8r_")
+    try:
+        roads_dir = os.path.join(work, "roads")
+        os.makedirs(roads_dir)
+        local = [(XY(0, 20)[0], XY(0, 0)[1]), (XY(0, 20)[0], XY(39, 0)[1])]   # N-S across the wet band
+        hp = os.path.join(roads_dir, "HPMS_ND_2024.gpkg")
+        _lines_file(hp, "HPMS_ND_2024", [([(p[0] + 1.0, p[1]) for p in local], 41.0, 2024, "")], year_field="DATA_YEAR")
+        # 1. an I-94 ramp as the pack has it (FULL_NAME 'RAMP', FUNC_SYS 1) and its HPMS ramp count 41: not lowered
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
+        rows, imp = _tool8(work, ng)
+        d = rows["DWR-1"]
+        assert d["hz_class"] == "Medium" and d["hz_aadt_review"] is None, d
+        assert imp[0][2].startswith("no AADT; interstate system (FUNC_SYS 1 / SHIELD I), so not lowered by the matched "
+                                    "AADT 41 (2024) from HPMS"), imp
+        assert d["hz_aadt"] == "0 of 1 overtopped road(s) without AADT matched", d["hz_aadt"]
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 7)])
+        assert _tool8(work, ng)[0]["DWR-1"]["hz_class"] == "Low"           # not interstate system: lowered, flagged
+        # ... a count over 2,000 still raises it (High), no flag
+        _lines_file(hp, "HPMS_ND_2024", [([(p[0] + 1.0, p[1]) for p in local], 12550.0, 2024, "")], year_field="DATA_YEAR")
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
+        d = _tool8(work, ng)[0]["DWR-1"]
+        assert d["hz_class"] == "High" and d["hz_aadt_review"] is None, d
+        os.remove(hp)
+        # 2. ASH COULEE DR: the county twin 311 and the 2025 station 2,265 on the road -> High (Hazard: High)
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "ASH COULEE DR", "Local", 4)])
+        cty = _lines_file(os.path.join(roads_dir, "ND_county_roads.gpkg"), "ND_county_roads",
+                          [([(p[0] + 2.7, p[1]) for p in local], 311.0, None, "")])
+        st = _named_stations(os.path.join(roads_dir, "NDDOT_traffic_counts.gpkg"),
+                             [((XY(20, 20)[0] + 1.0, XY(20, 20)[1]), "ASH COULEE DR", 2265.0, 2025)])
+        rows, imp = _tool8(work, ng, cty + "|layername=ND_county_roads")
+        d = rows["DWR-1"]
+        assert d["hz_class"] == "High" and d["hz_aadt_review"] is None and d["hz_conf"] == "medium", d
+        assert ("road", "High", "AADT 2,265 (2025) from an NDDOT count station (NDDOT_traffic_counts.gpkg, ASH COULEE "
+                                "DR) (not the AADT 311 from ND county roads: the higher count on the same road)") in imp, imp
+        os.remove(st)
+        # 3. one street cut into 2 NG911 segments, both matched to 28: one road, 2 segments in the review flag
+        half = (local[0][0], XY(20, 0)[1])
+        ng = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [([local[0], half], "98TH ST SE", "Local", 7),
+                                                                      ([half, local[1]], "98TH ST SE", "Local", 7)])
+        _lines_file(cty, "ND_county_roads", [([(p[0] + 2.7, p[1]) for p in local], 28.0, 2023, "")])
+        d = _tool8(work, ng)[0]["DWR-1"]
+        assert d["hz_class"] == "Low", d
+        assert d["hz_aadt_review"].startswith("Class Low rests on traffic counts matched from other layers for 1 road(s), "
+                                              "2 segments (98TH ST SE (2 segments): AADT 28 (2023)"), d["hz_aadt_review"]
+        assert d["hz_aadt"].startswith("2 of 2 overtopped road(s) without AADT matched; 98TH ST SE (2 segments): AADT 28")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    print("OK tool 8: FUNC_SYS 1 ramp not lowered, same-road station 2,265 wins, segments counted once")
+
+
+def test_tool6_interstate_system():
+    work = tempfile.mkdtemp(prefix="raj6r_")
+    try:
+        w = _World(work)
+        roads_dir = os.path.join(work, "roads")
+        os.makedirs(roads_dir)
+        local = [w.xy(40, 185), w.xy(80, 185)]
+        cty = _lines_file(os.path.join(roads_dir, "ND_county_roads.gpkg"), "ND_county_roads",
+                          [([(p[0] + 5.0, p[1]) for p in local], 83.0, 2023, "")]) + "|layername=ND_county_roads"
+        ramp = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 1)])
+        r = w.run(ROADS=ramp, ROADS_MORE=cty)               # an interstate ramp matched to 83 still blocks the clear
+        assert r["tri_result"] == "needs 2D" and r["tri_aadt"] is None, r
+        loc = _ng911x(os.path.join(roads_dir, "ND_roads_NG911.gpkg"), [(local, "RAMP", "Ramp", 7)])
+        r = w.run(ROADS=loc, ROADS_MORE=cty)
+        assert r["tri_result"] == "clear" and r["tri_aadt"], r
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    print("OK tool 6: a FUNC_SYS 1 ramp is never cleared on a matched count")
+
+
+def test_handoff_and_tool9():
+    """Tool 7b sends a dam whose class rests on matched counts (before the join it was Medium, so it was sent);
+    dam.json records the flag; tool 9 has tool 8's AADT_JOIN switch and passes it on."""
+    from nd_dam_screening.core import handoff as ho, damrecord_io as dri
+    low = {"dam_id": "DWR-4031", "hz_class": "Low", "hz_vs_existing": "agree",
+           "hz_aadt_review": "Class Low rests on traffic counts matched from other layers for 1 road(s) (...): review"}
+    for mode in (ho.SELECT_HIGH_MEDIUM, ho.SELECT_CHANGED):
+        ok, why = ho.selected(low, mode)
+        assert ok and "rests on traffic counts matched from other layers (hz_aadt_review)" in why, (mode, why)
+        assert not ho.selected(dict(low, hz_aadt_review=None), mode)[0]
+        assert not ho.selected(dict(low, hz_aadt_review="NULL"), mode)[0]
+    assert not ho.selected(low, ho.SELECT_HIGH)[0]                           # 'High only' stays High only
+    assert "hz_aadt_review" in ho.SELECT_LABELS[ho.SELECT_HIGH_MEDIUM] and "hz_aadt_review" in ho.SELECT_LABELS[
+        ho.SELECT_CHANGED]
+    assert dri.screening_result(low, "tool 8")["aadt_review"].startswith("Class Low rests on")
+    assert "aadt_review" not in dri.screening_result({"hz_class": "Low"}, "tool 8")
+    from nd_dam_screening.algorithms.sensitivity import Sensitivity
+    alg = Sensitivity()
+    alg.initAlgorithm()
+    assert alg.parameterDefinition("AADT_JOIN").defaultValue is True
+    import inspect
+    src = inspect.getsource(Sensitivity.processAlgorithm)
+    assert '"AADT_JOIN": self.parameterAsBool(params, "AADT_JOIN", context)' in src
+    print("OK tool 7b sends flagged Lows; dam.json aadt_review; tool 9 AADT_JOIN")
+
+
 if __name__ == "__main__":
     test_copy_is_the_runners_file()
     test_join_core()
     test_wiring()
     test_tool8()
     test_tool6()
+    test_join_rules()
+    test_tool8_review_fixes()
+    test_tool6_interstate_system()
+    test_handoff_and_tool9()
     print("ALL OK")
