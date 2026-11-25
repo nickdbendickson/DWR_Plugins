@@ -6033,6 +6033,18 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
     res.final.update(hr["final"])
+    # Boann may have written a peak depth x velocity raster into res.final. HEC-RAS does not
+    # produce one. Leaving the Boann file beside the HEC-RAS depths would hand the next tool
+    # a Boann number next to HEC-RAS depths, so drop it and delete the file.
+    dv_path = res.final.pop("dv", None)
+    if dv_path:
+        try:
+            os.remove(dv_path)
+        except OSError:
+            pass
+        if callable(log):
+            log("The Boann peak depth x velocity raster was removed: the final depths are "
+                "from HEC-RAS, and that raster is not.")
     res.warnings.extend(hr["warnings"])
     # every reported figure from the final engine (the screening pass is kept)
     try:

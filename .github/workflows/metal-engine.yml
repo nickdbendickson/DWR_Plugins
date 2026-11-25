@@ -19,8 +19,10 @@ on:
       - "DamSafety_Runner/tests/test_subli_kernel.py"
       - "DamSafety_Runner/tests/test_boann_dry_skip.py"
       - "DamSafety_Runner/tests/test_boann_gpu_tiles.py"
+      - "DamSafety_Runner/tests/test_subli_gpu_tiles.py"
       - "DamSafety_Runner/tests/test_boann_pcores.py"
       - "DamSafety_Runner/tests/test_boann_peak_dv.py"
+      - "DamSafety_Runner/tests/test_asc_writer.py"
       - ".github/workflows/metal-engine.yml"
 
 permissions:
@@ -56,9 +58,15 @@ jobs:
         run: python -m nd_breach_runner.tests.test_boann_dry_skip
       - name: GPU dry-tile skip (GPU on == off bit for bit, GPU against the CPU build)
         run: python -m nd_breach_runner.tests.test_boann_gpu_tiles
+      - name: Sub-grid local-inertial dry-tile skip (on == off bit for bit)
+        run: python -m nd_breach_runner.tests.test_subli_gpu_tiles
       # the Mac thread default (performance cores) reads real sysctl keys here
       - name: Performance-core default and any-core-count answers
         run: python -m nd_breach_runner.tests.test_boann_pcores
+      # Apple clang builds the result-grid text writer (unsigned __int128) and it writes what
+      # np.savetxt writes
+      - name: Result-grid text writer (the same bytes as np.savetxt)
+        run: python -m nd_breach_runner.tests.test_asc_writer
       - name: Sub-grid FV kernel tests (Metal and the CPU build)
         run: python -m nd_breach_runner.tests.test_subgrid_kernel
       - name: Sub-grid local-inertial kernel and engine tests (Metal and the CPU build)
