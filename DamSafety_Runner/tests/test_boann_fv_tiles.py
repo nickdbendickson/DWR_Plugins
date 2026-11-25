@@ -4,9 +4,9 @@ A cell left out stays exactly dry, which is what the whole window computes there
 file and every stat is the same bit for bit with the skip off. The cloud has no Metal GPU, so the
 CPU build runs the same tile kernels (DAMSAFETY_MF_CPU_TILES=1). On a Mac the GPU is checked too.
 
-FV1 only until FV2 and DG2 land: one faces-and-cont sweep per step, so water moves one cell a
-step (R = 1) and a 1-tile ring with a chunk of 8 is enough (17 > 8). FV2 does two stages a step
-and its slopes read one more neighbour (R = 2, stencil 2), so the chunk is 4 (10 < 17)."""
+FV1: one faces-and-cont sweep per step, so water moves one cell a step (R = 1) and a 1-tile ring
+with a chunk of 8 is enough (17 > 8). FV2 and DG2 do two stages a step and their slopes read one
+more neighbour (R = 2, stencil 2), so the chunk is 4 (10 < 17)."""
 import os
 import re
 import shutil
@@ -23,11 +23,14 @@ from nd_breach_runner.tests.test_boann_rain import _deck as rain_deck
 
 # name, order, chunk, cells of influence per step, extra stencil cells the ring must cover
 SOLVERS = (("fv", 1, fve.SKIP_CHUNK_FV, 1, 0),
-           ("fv2", 2, fve.SKIP_CHUNK_FV2, 2, 2))
-_SPEC = {"fv": mfb.FV_SPEC, "fv2": mfb.FV2_SPEC}
-_LAYOUT = {"fv": mfb.fv_buffer_layout, "fv2": mfb.fv2_buffer_layout}
-_KERNEL = {"fv": mfb.FV_KERNEL_SOURCE, "fv2": mfb.FV2_KERNEL_SOURCE}
-_TON = {"fv": 25, "fv2": 29}          # buffer index of ton (ACC is 24)
+           ("fv2", 2, fve.SKIP_CHUNK_FV2, 2, 2),
+           ("dg2", 3, fve.SKIP_CHUNK_DG2, 2, 2))
+_SPEC = {"fv": mfb.FV_SPEC, "fv2": mfb.FV2_SPEC, "dg2": mfb.DG2_SPEC}
+_LAYOUT = {"fv": mfb.fv_buffer_layout, "fv2": mfb.fv2_buffer_layout,
+           "dg2": mfb.dg2_buffer_layout}
+_KERNEL = {"fv": mfb.FV_KERNEL_SOURCE, "fv2": mfb.FV2_KERNEL_SOURCE,
+           "dg2": mfb.DG2_KERNEL_SOURCE}
+_TON = {"fv": 25, "fv2": 29, "dg2": 28}          # buffer index of ton (ACC is 24)
 ENVS = ("DAMSAFETY_MF_SKIP", "DAMSAFETY_MF_CPU_TILES", "DAMSAFETY_MF_TILES")
 STATS = ("steps", "batches", "injected_m3", "outflow_m3", "final_volume_m3", "clipped_m3",
          "mass_error_m3", "rain_m3")
@@ -118,6 +121,9 @@ def boann_fv_tiles_kernels_match_the_backend():
     assert fv2_names.index("h0") == 24 and fv2_names.index("hs") == 27, fv2_names
     assert fv2_names.index("ton") == _TON["fv2"]
     assert len(fv2_names) == 30                      # Params at 30, the Metal cap
+    dg2_names = [n for n, _, _ in mfb.dg2_buffer_layout(4, 4, 1, 1, 2)]
+    assert dg2_names.index("Uh0") == 24 and dg2_names.index("ton") == _TON["dg2"], dg2_names
+    assert len(dg2_names) == 29                      # Params at 29
     # rain turns FV1's skip off (its Params carries the rain word, as the ACC engine's does)
     p = mfb.Params()
     p.wr, p.wc, p.rain = 40, 70, 1
@@ -146,6 +152,9 @@ def boann_fv_tiles_give_the_same_answer_bit_for_bit_on_the_cpu_build():
                 if case == "valley":
                     assert sa["cell_steps"] < 0.6 * sb["cell_steps"], (name, sa["cell_steps"],
                                                                         sb["cell_steps"])
+                    print("valley {} cell_steps {} / {} = {:.3f}".format(
+                        name, sa["cell_steps"], sb["cell_steps"],
+                        sa["cell_steps"] / float(sb["cell_steps"])), flush=True)
                 else:
                     assert sa["outflow_m3"] > 0.0, (what, sa)
                     h = np.loadtxt(os.path.join(fa, "results", "run.max"), skiprows=6)
@@ -193,7 +202,12 @@ def boann_fv_tiles_reach_stays_inside_the_ring():
                     assert out["steps"] == nsteps, (name, nsteps, out["steps"])
                     h = eng.h2()
                     changed = h != 0.0
-                    if name != "dg2":
+                    if name == "dg2":
+                        uh = eng.a["Uh"].reshape(ny, nx, 3)
+                        uhu = eng.a["Uhu"].reshape(ny, nx, 3)
+                        uhv = eng.a["Uhv"].reshape(ny, nx, 3)
+                        changed = ((uh != 0.0) | (uhu != 0.0) | (uhv != 0.0)).any(axis=2)
+                    else:
                         changed = changed | (eng.a["hu"].reshape(ny, nx) != 0.0) \
                             | (eng.a["hv"].reshape(ny, nx) != 0.0)
                     ys, xs = np.nonzero(changed)

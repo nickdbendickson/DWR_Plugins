@@ -73,7 +73,8 @@ FV_KERNELS = ("k_begin_fv", "k_faces_fv", "k_cont_fv", "k_end_fv",
 FV2_KERNELS = ("k_stage_p_fv2", "k_begin_fv2", "k_save_fv2", "k_faces_fv2", "k_cont_fv2",
                "k_stage_c_fv2", "k_end_fv2", "k_tclear_fv2", "k_tseed_fv2", "k_tgrow_fv2")
 DG2_KERNELS = ("k_stage_p_dg2", "k_begin_dg2", "k_save_dg2", "k_limit_dg2", "k_faces_dg2",
-               "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2")
+               "k_cont_dg2", "k_stage_c_dg2", "k_end_dg2",
+               "k_tclear_dg2", "k_tseed_dg2", "k_tgrow_dg2")
 SGC_KERNELS = ("k_begin_sgc", "k_faces_sgc", "k_scale_sgc", "k_limit_sgc", "k_cont_sgc",
                "k_speed_sgc", "k_end_sgc")
 
@@ -138,11 +139,11 @@ def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
 
 
 def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
-    """[(name, dtype, count)] in the order of kernels_dg2.metal's buffer indices 0..26. The three
+    """[(name, dtype, count)] in the order of kernels_dg2.metal's buffer indices 0..28. The three
     conserved variables (Uh, Uhu, Uhv) and their previous-step RK2 copy (Uh0, Uhu0, Uhv0) are stored
     packed, three modal coefficients per cell (3*cells floats): [3 i + 0] element average, [3 i + 1]
-    x-slope, [3 i + 2] y-slope. The bed z is piecewise constant (one float per cell). 27 buffers keep
-    DG2 inside Metal's 31-slot argument-table cap (slopes are modal unknowns, not separate buffers)."""
+    x-slope, [3 i + 2] y-slope. The bed z is piecewise constant (one float per cell). tseed and ton
+    are the dry-tile skip. 29 buffers plus Params at 29 stay inside Metal's 31-slot cap."""
     cells = ny * nx
     xf, yf = ny * (nx + 1), (ny + 1) * nx
     f, u = np.float32, np.uint32
@@ -153,7 +154,8 @@ def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
             ("fyh", f, yf), ("fyhu", f, yf), ("fyhv", f, yf),
-            ("Uh0", f, 3 * cells), ("Uhu0", f, 3 * cells), ("Uhv0", f, 3 * cells)]
+            ("Uh0", f, 3 * cells), ("Uhu0", f, 3 * cells), ("Uhv0", f, 3 * cells),
+            ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
 def sgc_buffer_layout(ny, nx, n_src, n_series, n_values):
@@ -272,7 +274,13 @@ def _dg2_plan(p):
             ("k_end_dg2", one)]
 
 
-DG2_SPEC = Spec("dg2", DG2_KERNEL_SOURCE, SHIM, DG2_CPU_SOURCE, DG2_KERNELS, Params, _dg2_plan)
+def _dg2_tile_plan(p):
+    tiles = (-(-int(p.wc) // TILE), -(-int(p.wr) // TILE), 1)
+    return [("k_tclear_dg2", tiles), ("k_tseed_dg2", (p.wc, p.wr, 1)), ("k_tgrow_dg2", tiles)]
+
+
+DG2_SPEC = Spec("dg2", DG2_KERNEL_SOURCE, SHIM, DG2_CPU_SOURCE, DG2_KERNELS, Params, _dg2_plan,
+                tile_plan=_dg2_tile_plan)
 
 
 def _sgc_plan(p):

@@ -97,8 +97,29 @@ using namespace metal;
 #define S_QOUT 14
 #define S_LASTDT 15
 #define S_STAGE 16     // uint: current RK2 stage (0 = predictor, 1 = corrector)
+#define S_TILES 18     // uint: 0 = every cell runs; 1 = the host turned the skip on (this batch's first redraw scans every cell); 2 = k_tgrow_dg2 has written ton
 #define S_WORDS 32
 #define MF_FIX 1.0e-4f
+
+// Dry-tile skip. Same tiles as FV1 (MF_TILE 16, state word 18). Exact when all three hold
+// (tests/test_boann_fv_tiles.py, bit for bit):
+// 1. A dry element (average depth 0) stays dry. mf_sx / mf_sy return 0 at or below MF_DRYSLOPE
+//    and mf_pvel returns 0 at or below MF_HVEL, so the edge state is zero depth and zero velocity
+//    even if a slope coefficient were nonzero. k_limit_dg2, when it runs, writes a dry cell's six
+//    slope coefficients to 0. A cell with any of the nine coefficients nonzero is a seed, so a
+//    cell the skip leaves out already holds nine zeros. The positivity clip stores +0 for all
+//    nine when the average is not positive. A face between two dry cells therefore has a zero
+//    flux, and the volume integral of a zero state is zero (the two Gauss mass fluxes sum to
+//    twice the mean discharge).
+// 2. Two stages a step, each one faces-and-cont sweep: R = 2. The limiter reads one neighbour,
+//    and only while the cell is above MF_DRYSLOPE, so that read does not write the neighbour.
+//    Chunk 4 and a 1-tile ring cover 4 * 2 + 2 = 10 cells; an off cell is at least 17 away.
+// 3. Uh0, Uhu0, Uhv0 are written by k_save_dg2 at stage 0, and the face fluxes by k_faces_dg2,
+//    before k_cont_dg2 reads them. A face runs when either cell beside it is on.
+// Reductions still include every lane with a dry cell's values. S_TILES is 1 for the batch's
+// first redraw and 2 after k_tgrow_dg2.
+#define MF_TILE 16u
+#define MF_TILE_RING 1u
 
 struct Params {
     uint nx, ny;
@@ -124,11 +145,11 @@ struct Params {
     float pad4;
 };
 
-// Buffer layout for the DG2 scheme (its own order, 0..26; Params at 27). The three conserved
+// Buffer layout for the DG2 scheme (its own order, 0..28; Params at 29). The three conserved
 // variables and their previous-step copy are stored packed (three modal coefficients per cell):
 // Uh/Uhu/Uhv and Uh0/Uhu0/Uhv0 each hold 3*cells floats. The bed z is one float per cell (piecewise
-// constant). The interface fluxes fxh..fyhv are as in the FV kernels. 27 buffers keep DG2 inside
-// Metal's 31-slot argument-table cap.
+// constant). The interface fluxes fxh..fyhv are as in the FV kernels. tseed and ton are the
+// dry-tile skip (one uint per tile). 29 buffers plus Params stay inside Metal's 31-slot cap.
 inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
 
 #define MF_ARGS_DG2 \
@@ -159,7 +180,9 @@ inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
     device float* Uh0 B(24), \
     device float* Uhu0 B(25), \
     device float* Uhv0 B(26), \
-    constant Params& p B(27), \
+    device uint* tseed B(27), \
+    device uint* ton B(28), \
+    constant Params& p B(29), \
     uint2 gid GID
 
 struct F3 { float h, mn, mt; };   // flux: mass, normal momentum, tangential momentum
@@ -268,6 +291,37 @@ inline float mf_pvel(float q0, float h0c, float sq, float sh, float fac) {
     return u0 + fac * (sq - u0 * sh) / h0c;
 }
 
+inline bool mf_on(device const uint* st, device const uint* ton, uint gx, uint gy,
+                  constant Params& p) {
+    if (st[S_TILES] == 0u) {
+        return true;
+    }
+    uint tx = (gx < p.wc ? gx : p.wc - 1u) / MF_TILE;
+    uint ty = (gy < p.wr ? gy : p.wr - 1u) / MF_TILE;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    return ton[ty * ntx + tx] != 0u;
+}
+
+inline bool mf_face_x(device const uint* st, device const uint* ton, uint gx, uint gy,
+                      constant Params& p) {
+    if (gy >= p.wr) {
+        return false;
+    }
+    bool right = mf_on(st, ton, gx, gy, p);
+    bool left = gx > 0u && mf_on(st, ton, gx - 1u, gy, p);
+    return left || right;
+}
+
+inline bool mf_face_y(device const uint* st, device const uint* ton, uint gx, uint gy,
+                      constant Params& p) {
+    if (gx >= p.wc) {
+        return false;
+    }
+    bool south = mf_on(st, ton, gx, gy, p);
+    bool north = gy > 0u && mf_on(st, ton, gx, gy - 1u, p);
+    return north || south;
+}
+
 // -- kernels --------------------------------------------------------------------------------
 
 // one thread each: set the RK2 stage for the dispatches that follow in the plan.
@@ -320,7 +374,7 @@ kernel void k_begin_dg2(MF_ARGS_DG2) {
 // each variable) for the RK2 blend, before k_cont_dg2 overwrites the state. A no-op at the corrector.
 kernel void k_save_dg2(MF_ARGS_DG2) {
     device float* sf = (device float*)st;
-    if (sf[S_DT] <= 0.0f || st[S_STAGE] != 0u) {
+    if (sf[S_DT] <= 0.0f || st[S_STAGE] != 0u || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint r = p.r0 + gid.y;
@@ -340,7 +394,7 @@ kernel void k_save_dg2(MF_ARGS_DG2) {
 // the face sweep of each RK stage, only where a slope is actually clipped. A no-op when limiter == 0.
 kernel void k_limit_dg2(MF_ARGS_DG2) {
     device float* sf = (device float*)st;
-    if (sf[S_DT] <= 0.0f || p.limiter == 0u) {
+    if (sf[S_DT] <= 0.0f || p.limiter == 0u || !mf_on(st, ton, gid.x, gid.y, p)) {
         return;
     }
     uint nx = p.nx;
@@ -413,8 +467,10 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
     uint c = p.c0 + gid.x;
     float g = p.g;
     float outflow = 0.0f;
+    bool xon = mf_face_x(st, ton, gid.x, gid.y, p);
+    bool yon = mf_face_y(st, ton, gid.x, gid.y, p);
 
-    if (gid.y < p.wr) {               // x-face at (row r, face column c), 0..nx
+    if (xon) {                        // x-face at (row r, face column c), 0..nx
         uint f = r * (nx + 1u) + c;
         F3 fl;
         fl.h = 0.0f; fl.mn = 0.0f; fl.mt = 0.0f;
@@ -487,7 +543,7 @@ kernel void k_faces_dg2(MF_ARGS_DG2) {
         fxhv[f] = fl.mt;
     }
 
-    if (gid.x < p.wc) {               // y-face at (face row r, col c), 0..ny. Normal = y (south +).
+    if (yon) {                        // y-face at (face row r, col c), 0..ny. Normal = y (south +).
         uint f = r * nx + c;
         F3 fl;
         fl.h = 0.0f; fl.mn = 0.0f; fl.mt = 0.0f;
@@ -585,6 +641,12 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     uint c = p.c0 + gid.x;
     uint i = r * nx + c;
     uint j = 3u * i;
+    // a skipped cell stays at nine zeros and joins the stage-1 reductions with zeros (see MF_TILE).
+    // Stage 0 has no reduction: every thread returns together, on or off.
+    float nh0 = 0.0f;
+    float clip = 0.0f;
+    float wcell = 0.0f;
+    if (mf_on(st, ton, gid.x, gid.y, p)) {
     uint fx = r * (nx + 1u) + c;
     float dx = p.dx;
     float g = p.g;
@@ -657,7 +719,7 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     float srcterm = src[i] * dt / (dx * dx);     // point source into the element average
 
     // -- SSP-RK2 blend, per modal coefficient ------------------------------------------------
-    float nh0, nhu0, nhv0, nhx, nhux, nhvx, nhy, nhuy, nhvy;
+    float nhu0, nhv0, nhx, nhux, nhvx, nhy, nhuy, nhvy;
     if (stage == 0u) {               // predictor: U* = U^n + dt L(U^n)
         nh0 = h0 + dh0 + srcterm;  nhu0 = hu0 + dhu0;  nhv0 = hv0 + dhv0;
         nhx = hx + dhx;  nhux = ux + dhux;  nhvx = vx + dhvx;
@@ -674,7 +736,6 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
         nhvy = 0.5f * (Uhv0[j + 2u] + (vy + dhvy));
     }
 
-    float clip = 0.0f;
     if (nh0 <= 0.0f) {               // positivity: a dry element average is first order and still
         clip = -nh0 * dx * dx;
         nh0 = 0.0f;
@@ -699,18 +760,20 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     Uh[j] = nh0;   Uh[j + 1u] = nhx;   Uh[j + 2u] = nhy;
     Uhu[j] = nhu0; Uhu[j + 1u] = nhux; Uhu[j + 2u] = nhuy;
     Uhv[j] = nhv0; Uhv[j + 1u] = nhvx; Uhv[j + 2u] = nhvy;
-
-    if (stage == 0u) {               // the predictor's clip is a half-step transient; count the corrector's
-        return;
     }
 
+    // the predictor's clip is a half-step transient; every thread returns before any
+    // reduction (stage 0 has none). Maxima are the corrector's, and only in an on tile.
+    if (stage == 0u) {
+        return;
+    }
+    if (mf_on(st, ton, gid.x, gid.y, p)) {
     float th = (p.t0 + sf[S_T] + dt) / 3600.0f;
-    float wcell = 0.0f;
     float vmagn = 0.0f;
     if (nh0 > MF_HVEL) {
-        float un = mf_vel(nhu0, nh0);
-        float vn = mf_vel(nhv0, nh0);
-        float cc = sqrt(g * nh0);
+        float un = mf_vel(Uhu[j], nh0);
+        float vn = mf_vel(Uhv[j], nh0);
+        float cc = sqrt(p.g * nh0);
         wcell = fmax(fabs(un) + cc, fabs(vn) + cc);
         vmagn = sqrt(un * un + vn * vn);
     }
@@ -728,10 +791,11 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     }
     if (nh0 > p.dry) {
         float dv = nh0 * vmagn;
-        uint j = mf_cells(p) + i;
-        if (dv > vmax[j]) {
-            vmax[j] = dv;
+        uint jd = mf_cells(p) + i;
+        if (dv > vmax[jd]) {
+            vmax[jd] = dv;
         }
+    }
     }
 
     bool wet = nh0 > 0.0f;
@@ -772,4 +836,71 @@ kernel void k_end_dg2(MF_ARGS_DG2) {
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += 0.5f * float(st[S_QOUT]) * MF_FIX * dt;   // half the two-stage sum (k_begin)
     st[S_WMAX] = st[S_WNEXT];
+}
+
+// -- dry-tile skip (see MF_TILE) ---------------------------------------------------------------
+
+kernel void k_tclear_dg2(MF_ARGS_DG2) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x < ntx && gid.y < nty) {
+        tseed[gid.y * ntx + gid.x] = 0u;
+    }
+}
+
+kernel void k_tseed_dg2(MF_ARGS_DG2) {
+    if (gid.x >= p.wc || gid.y >= p.wr) {
+        return;
+    }
+    uint nx = p.nx;
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint tile = (gid.y / MF_TILE) * ntx + gid.x / MF_TILE;
+    if (st[S_TILES] != 2u || ton[tile] != 0u) {
+        uint j = 3u * ((p.r0 + gid.y) * nx + (p.c0 + gid.x));
+        bool seed = false;
+        for (uint m = 0u; m < 3u; ++m) {
+            if (Uh[j + m] != 0.0f || Uhu[j + m] != 0.0f || Uhv[j + m] != 0.0f) {
+                seed = true;
+            }
+        }
+        if (seed) {
+            atomic_fetch_max_explicit((device atomic_uint*)(tseed + tile),
+                                      1u, memory_order_relaxed);
+        }
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        for (uint k = 0; k < p.n_src; ++k) {
+            uint sr = s_cell[k] / nx;
+            uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+    }
+}
+
+kernel void k_tgrow_dg2(MF_ARGS_DG2) {
+    uint ntx = (p.wc + MF_TILE - 1u) / MF_TILE;
+    uint nty = (p.wr + MF_TILE - 1u) / MF_TILE;
+    if (gid.x >= ntx || gid.y >= nty) {
+        return;
+    }
+    uint on = 0u;
+    uint y0 = gid.y > MF_TILE_RING ? gid.y - MF_TILE_RING : 0u;
+    uint y1 = gid.y + MF_TILE_RING < nty ? gid.y + MF_TILE_RING : nty - 1u;
+    uint x0 = gid.x > MF_TILE_RING ? gid.x - MF_TILE_RING : 0u;
+    uint x1 = gid.x + MF_TILE_RING < ntx ? gid.x + MF_TILE_RING : ntx - 1u;
+    for (uint y = y0; y <= y1; ++y) {
+        for (uint x = x0; x <= x1; ++x) {
+            if (tseed[y * ntx + x] != 0u) {
+                on = 1u;
+            }
+        }
+    }
+    ton[gid.y * ntx + gid.x] = on;
+    if (gid.x == 0u && gid.y == 0u) {
+        st[S_TILES] = 2u;
+    }
 }
