@@ -205,6 +205,71 @@ def is_checkerboard(stats):
             and int((stats or {}).get("checkerboard_rough_cells") or 0) >= CHECKER_MIN_ROUGH)
 
 
+# 3.101.0: one cell, or a few, can blow up while the rest of the peak surface stays sound, too few to
+# pass CHECKER_MIN_ROUGH. Absaraka (DWR-2801) at 30 m, Boann ACC on Runner 3.57.0: 17.33 ft and
+# 20 ft/s on one flat water-body cell in Casselton, where every other engine read 5.6 to 6.9 ft,
+# and it alone made that run's TM-11 High. A re-run is not worth it for a handful of cells (and
+# the mound on an inflow cell looks the same at CHECKER_JUMP_M), so such cells are REPORTED: a
+# spike is a judged cell (as checkerboard(): deeper than min_depth with four neighbours that are
+# too) whose peak water level stands more than SPIKE_JUMP_M above, or below, all four neighbours,
+# more than SPIKE_SOURCE_CELLS cells from every inflow cell. A sound peak surface has none: the
+# test decks and both Absaraka runs on main (2026-11-25) have 0.
+SPIKE_JUMP_M = 0.5
+SPIKE_SOURCE_CELLS = 3
+SPIKE_LIST_MAX = 5
+
+
+def spikes(wse, depth, sources=(), min_depth=CHECKER_MIN_DEPTH_M, jump=SPIKE_JUMP_M,
+           near=SPIKE_SOURCE_CELLS):
+    """Isolated spikes in a run's peak water surface: (count, [(row, col, jump_m), ...]), the list
+    largest first and at most SPIKE_LIST_MAX long; jump_m is how far the cell stands above all four
+    neighbours (> 0) or below them (< 0). `sources` are the (row, col) of the inflow cells; a cell
+    within `near` cells of one (rows and columns) is left out."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return 0, []
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        up = np.where(ok, c - hi, 0.0)
+        down = np.where(ok, lo - c, 0.0)
+    keep = np.zeros(w.shape, dtype=bool)
+    keep[1:-1, 1:-1] = (up > jump) | (down > jump)
+    for r, cc in sources or ():
+        keep[max(0, r - near):r + near + 1, max(0, cc - near):cc + near + 1] = False
+    rows, cols = np.nonzero(keep)
+    if not len(rows):
+        return 0, []
+    sj = np.where(up[rows - 1, cols - 1] > jump, up[rows - 1, cols - 1],
+                  -down[rows - 1, cols - 1])
+    order = np.argsort(-np.abs(sj), kind="stable")[:SPIKE_LIST_MAX]
+    return int(len(rows)), [(int(rows[i]), int(cols[i]), float(sj[i])) for i in order]
+
+
+def bci_sources(path, dem):
+    """(row, col) of the point sources (P lines) of a .bci the Runner wrote, on `dem` (the .bci is
+    in local coordinates: lower-left corner at 0, 0)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 3 and p[0] == "P":
+                    x, y = float(p[1]), float(p[2])
+                    out.append((int(np.floor((dem.ny * dem.dx - y) / dem.dx)),
+                                int(np.floor(x / dem.dx))))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def checker_cfl(user_cfl=None):
     """The Courant number of the re-run of a checkerboarded ACC run: CHECKER_CFL, or the user's own
     when that is already smaller."""
@@ -1464,6 +1529,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
     # measured from the bank and the level above was rebuilt from it)
     chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
+    # 3.101.0: isolated spikes the checkerboard share is too small to see (spikes())
+    n_spk, spk = (0, []) if sgc is not None else spikes(
+        wse, hmax, bci_sources(os.path.join(workdir, name + ".bci"), dem))
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
     tb = getattr(st, "terrain_breach", None)
@@ -1499,6 +1567,10 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
         "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
         "checkerboard_rough_cells": chk_rough,
+        # 3.101.0: [x, y, jump ft] of the largest spikes, on the DEM's coordinates
+        "spike_cells": n_spk,
+        "spikes": [[round(dem.xy(r, c)[0], 1), round(dem.xy(r, c)[1], 1), round(j / FT, 2)]
+                   for r, c, j in spk],
     }
     if tb is not None:
         from .terrain_breach import read_pool
