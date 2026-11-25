@@ -1,0 +1,21 @@
+{
+ "title": "Three humps, lake at rest (LISFLOOD-FP test T01): still water must stay still",
+ "deck": "deck/base.par",
+ "solvers": [
+  "acc",
+  "fv1",
+  "dg2"
+ ],
+ "reference": {
+  "kind": "startfile",
+  "file": "deck/humps_cp.wd"
+ },
+ "wet_threshold_m": 0.01,
+ "tol": {
+  "rmse_m": 0.002,
+  "maxabs_m": 0.01,
+  "max_speed_ms": 0.01
+ },
+ "max_volume_error_frac": 0.0001,
+ "note": "Lake-at-rest (C-property): a ponded surface with no inflow must not move. Guards the whole solver ladder against spurious momentum."
+}
