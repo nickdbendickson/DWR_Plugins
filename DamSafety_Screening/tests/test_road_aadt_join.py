@@ -10,6 +10,8 @@ Medium, not High (DWR-3271). Checked here:
   * core/road_aadt.py: sources (siblings, per-dam pack clips, ROADS_MORE), the area read (tiles, R-tree,
     a file that cannot be read), a county twin, an HPMS highway, a count station only, a short stub,
     nothing to match, the text;
+  * the window's wiring: Core's suite_fill finds HPMS / NDDOT count stations, steps 6, 8 and 9 get them
+    as AADT_LAYERS (nothing when the pack has none); hz_aadt_review reaches the Review tab and the report;
   * tool 8 (mock QGIS): NG911 + county twin 83 -> Low with hz_aadt_review / hz_conf review and the
     impacted feature's aadt_src; NG911 US highway + HPMS 5,784 -> High (no review flag); a station only;
     unmatched -> Medium as before; AADT_JOIN = False and no traffic files -> exactly the old result;
@@ -166,6 +168,55 @@ def test_join_core():
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print("OK core/road_aadt.py: sources, area reads, twin / HPMS / station / stub / no match, text")
+
+
+# ------------------------------------------------------------------------------------- wiring (window)
+def test_wiring():
+    """Core's suite_fill finds the pack's traffic layers (damsuite 1.18.11) and the window hands them to steps
+    6, 8 and 9 as AADT_LAYERS; with no traffic file nothing is put (the tools then look next to the roads)."""
+    from nd_dam_screening.core import workflow as wf
+    from nd_dam_screening.damsuite import suite_fill as SF
+    d = tempfile.mkdtemp(prefix="rajw_")
+    try:
+        suite = os.path.join(d, "ND_Dam_Suite_Pack")
+        roads = os.path.join(suite, "roads")
+        os.makedirs(roads)
+        line = lambda f: ("LINESTRING", f, [])
+        _gpkg.write(os.path.join(roads, "ND_roads_NG911.gpkg"), {"ND_roads_NG911": line([("FULL_NAME", "TEXT")])})
+        lone = suite + "_lone"
+        shutil.copytree(suite, lone)
+        _gpkg.write(os.path.join(roads, "ND_county_roads.gpkg"), {"ND_county_roads": line([("AADT", "REAL")])})
+        _gpkg.write(os.path.join(roads, "HPMS_ND_2024.gpkg"), {"HPMS_ND_2024": line([("AADT", "REAL")])})
+        _gpkg.write(os.path.join(roads, "NDDOT_traffic_counts.gpkg"),
+                    {"NDDOT_traffic_counts": ("POINT", [("aadt", "REAL")], [])})
+        found = SF.scan(suite)[0]
+        assert found["hpms"].endswith("HPMS_ND_2024.gpkg|layername=HPMS_ND_2024"), found
+        assert found["traffic_counts"].endswith("NDDOT_traffic_counts.gpkg|layername=NDDOT_traffic_counts"), found
+        assert found["roads"].endswith("ND_roads_NG911.gpkg|layername=ND_roads_NG911"), found
+        want = ";;".join(found[k] for k in ("hpms", "traffic_counts", "county_roads"))
+        assert SF.more_uris(found, "aadt") == want
+        assert SF.more_uris(found, "roads") == found["county_roads"]          # the county roads stay a road layer
+        work = os.path.join(d, "work")
+        os.makedirs(work)
+        for step in ("6", "8", "9"):
+            assert wf.defaults(step, work, {"suite_folder": suite}).get("AADT_LAYERS") == want, step
+            assert "AADT_LAYERS" not in wf.defaults(step, work, {"suite_folder": lone}), step
+        assert wf.RESULTS_MOVED["8"][:2] == ("0.58.0", "hz_aadt")
+        # the review flag reaches the Review tab's queue and the report's review reasons
+        from nd_dam_screening.core import report as rp, review as rv
+        open(wf.path(work, "8", "OUT"), "wb").close()
+        rows = {"dam_id": ["DWR-1", "DWR-2"], "name": ["A", "B"], "hz_class": ["Low", "Medium"],
+                "hz_aadt_review": ["Class Low rests on traffic counts ...: review", None],
+                "hz_border": ["no", "no"], "hz_conf": ["review", "medium"]}
+        read = lambda ref, fields: list(zip(*[rows[k] for k in fields])) if ref == wf.path(work, "8", "OUT") else []
+        q = {i["dam_id"]: i for i in rv.queue(work, read, decided={})}
+        assert "DWR-2" not in q and "class Low rests on matched traffic counts" in q["DWR-1"]["why"], q
+        assert "class rests on traffic counts matched from other layers" in rp.review_reasons(
+            {"hz_aadt_review": "Class Low rests on ...", "hz_conf": "review"})
+        assert "class rests on traffic counts matched from other layers" not in rp.review_reasons({"hz_conf": "medium"})
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("OK wiring: suite_fill hpms / traffic_counts slots, AADT_LAYERS for steps 6, 8 and 9")
 
 
 # ---------------------------------------------------------------------------------------- tool 8 (mock)
@@ -421,6 +472,7 @@ def test_tool6():
 if __name__ == "__main__":
     test_copy_is_the_runners_file()
     test_join_core()
+    test_wiring()
     test_tool8()
     test_tool6()
     print("ALL OK")
