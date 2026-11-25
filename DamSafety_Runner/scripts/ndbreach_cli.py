@@ -1530,7 +1530,7 @@ def _describe_result(res, writer):
     say()
     say("Results: " + res.folder)
     labels = {"depth": "Depth (Max)", "velocity": "Velocity (Max)", "arrival": "Arrival Time",
-              "wse": "WSE (Max)"}
+              "wse": "WSE (Max)", "dv": "D x V (Max)"}
     actual = getattr(writer, "actual", lambda p: p)
     for k, p in res.final.items():
         say("  {:15s} {}".format(labels.get(k, k), actual(p)))

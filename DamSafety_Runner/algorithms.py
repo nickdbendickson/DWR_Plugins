@@ -1968,7 +1968,7 @@ class _Base(_UnitParams, QgsProcessingAlgorithm):
                  "arrival": "Arrival Time", "wse": "WSE (Max)",
                  "dv": "D x V (Max)"}
         for k, p in res.final.items():
-            self.load(context, p, "{} {}".format(dam_id, names[k]))
+            self.load(context, p, "{} {}".format(dam_id, names.get(k, k)))
         if res.increment.get("depth"):
             self.load(context, res.increment["depth"], "{} Incremental Depth (Max)".format(dam_id))
         for k in ("depth_polygons", "arrival_zones"):
