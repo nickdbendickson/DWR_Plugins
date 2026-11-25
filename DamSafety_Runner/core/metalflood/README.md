@@ -16,7 +16,7 @@ The two solvers mirror LISFLOOD-FP's own pair:
 
 It reads the LISFLOOD-FP input deck the Runner already writes (`.par`, `.dem.asc`, `.bci`,
 `.bdy`, optional `.n.asc`, `.start`, `.gauge`) and writes the result files the Runner already
-reads (`.max`, `.maxVc`, `.inittm`, `.maxtm`, `.mxe`, `.mass`, `.discharge`, `-NNNN.wd`), so it
+reads (`.max`, `.maxVc`, `.maxDV`, `.inittm`, `.maxtm`, `.mxe`, `.mass`, `.discharge`, `-NNNN.wd`), so it
 plugs into the Runner as an engine of its own.
 
 **Choosing it (Runner 3.22.0, Screening 0.21.0):** the Runner's run tools have "Flood engine"

@@ -111,7 +111,7 @@ def boann_cpu_build_gives_the_same_answer_on_any_core_count():
             (_t1, s1, f1) = runs[0]
             for threads, st, f in runs[1:]:
                 assert st["steps"] == s1["steps"], (solver, threads)
-                for ext in ("max", "maxVc", "inittm", "maxtm", "mxe", "mass"):
+                for ext in ("max", "maxVc", "maxDV", "inittm", "maxtm", "mxe", "mass"):
                     a = os.path.join(f1, "results", "run." + ext)
                     b = os.path.join(f, "results", "run." + ext)
                     assert filecmp.cmp(a, b, shallow=False), \

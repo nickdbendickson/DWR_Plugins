@@ -429,8 +429,14 @@ def _run(d, bk, progress, cancel, say, full_grid=False):
                          r, axis=1)[:nyf, :nxf]
     wetf = valid & (fd_max > 0.0)
     bl._write_asc(root + ".max", np.where(valid, fd_max, NODATA), xll, yll, dx)
-    bl._write_asc(root + ".maxVc", np.where(valid, np.where(wetf, up(a["vmax"]), 0.0), NODATA),
+    cells = nyc * nxc
+    vmax_f = up(a["vmax"][:cells])
+    dv_c = a["vmax"][cells:].reshape(nyc, nxc).astype(np.float64)
+    dv_f = np.minimum(up(dv_c), fd_max * vmax_f)
+    dv_f = np.where(wetf, dv_f, 0.0)
+    bl._write_asc(root + ".maxVc", np.where(valid, np.where(wetf, vmax_f, 0.0), NODATA),
                   xll, yll, dx)
+    bl._write_asc(root + ".maxDV", np.where(valid, dv_f, NODATA), xll, yll, dx)
     bl._write_asc(root + ".inittm", np.where(wetf, up(a["arr"]), NODATA), xll, yll, dx,
                   fmt="%.4f")
     bl._write_asc(root + ".maxtm", np.where(wetf, up(a["tmax"]), NODATA), xll, yll, dx,

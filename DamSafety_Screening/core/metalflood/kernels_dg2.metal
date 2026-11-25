@@ -129,6 +129,8 @@ struct Params {
 // Uh/Uhu/Uhv and Uh0/Uhu0/Uhv0 each hold 3*cells floats. The bed z is one float per cell (piecewise
 // constant). The interface fluxes fxh..fyhv are as in the FV kernels. 27 buffers keep DG2 inside
 // Metal's 31-slot argument-table cap.
+inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
+
 #define MF_ARGS_DG2 \
     device const float* z B(0), \
     device const float* n2 B(1), \
@@ -723,6 +725,13 @@ kernel void k_cont_dg2(MF_ARGS_DG2) {
     }
     if (vmagn > vmax[i]) {
         vmax[i] = vmagn;
+    }
+    if (nh0 > p.dry) {
+        float dv = nh0 * vmagn;
+        uint j = mf_cells(p) + i;
+        if (dv > vmax[j]) {
+            vmax[j] = dv;
+        }
     }
 
     bool wet = nh0 > 0.0f;

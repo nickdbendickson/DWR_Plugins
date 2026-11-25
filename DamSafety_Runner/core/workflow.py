@@ -112,6 +112,9 @@ SCENARIO_TEXT = {SCENARIO_SUNNY: "sunny day",
 MODEL_FOLDER = "_breach_model"
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
                "arrival": "Arrival Time.tif", "wse": "WSE (Max).tif"}
+# Boann only, and only when RunSettings.write_peak_dv is on. Not in FINAL_NAMES: that dict
+# also builds the baseline names, the QA names and the self-test's required rasters.
+PEAK_DV_NAME = "D x V (Max).tif"
 BASELINE_NAMES = {k: "Baseline " + v for k, v in FINAL_NAMES.items()}
 # written by the ND 5.2 classification tool from the final rasters; removed when they change
 STALE_ON_RERUN = ("Hazard Classification (ND 5.2).md", "Hazard Classification (ND 5.2).json",
@@ -386,6 +389,10 @@ class RunSettings:
         # spill level. The water is initial water like a pond: it is taken off the depths that
         # are reported and classified.
         self.pothole_start_fill = 0.0
+        # Peak depth x velocity (m2/s at one moment) as "D x V (Max).tif", ft2/s. Off: it does
+        # not change the flood, and a run that does not ask for it writes no raster. Boann
+        # writes the grid; other engines leave it missing.
+        self.write_peak_dv = False
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -534,6 +541,8 @@ class RunSettings:
                 continue                 # v3.10.70: off - the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "write_peak_dv" and not v:
+                continue                 # off: the report stays as before (the raster is optional)
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
                 continue                 # v3.10.22: the default - the report stays as before
             elif k == "hecras_dam_axis" and v in ("crest", None, ""):
@@ -680,6 +689,8 @@ def key_settings(st):
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
+    # the peak depth x velocity raster does not change the flood, on or off
+    d.pop("write_peak_dv", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
     # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
@@ -828,6 +839,29 @@ def _final_arrays(env, arrival_m, t_ref_hr=0.0, init=None):
         "wse": np.where(wet, env.wse.data, np.nan),
     }
     return out
+
+
+def write_peak_dv_raster(dem, env, st, out_folder, writer, wet, refined, log=None):
+    """Write PEAK_DV_NAME (ft2/s) or remove a stale copy. Off unless st.write_peak_dv.
+    `wet` is the same mask _final_arrays uses (depth above the initial water, over WET_M).
+    A near-dam refine keeps only depth, velocity, WSE and arrival, so the raster is not
+    written then. Returns the path, or None. Never changes the flood."""
+    path = os.path.join(out_folder, PEAK_DV_NAME)
+    dv = getattr(env, "dv", None)
+    on = bool(getattr(st, "write_peak_dv", False)) and not refined and dv is not None
+    if not on:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if getattr(st, "write_peak_dv", False) and dv is None and not refined and log:
+            log("Peak depth x velocity was asked for, but this run has no .maxDV (this engine "
+                "does not write it, or the run resumed from before that file existed). No {} "
+                "was written.".format(PEAK_DV_NAME))
+        return None
+    data = np.where(wet, np.asarray(dv.data, dtype=float), np.nan) / (FT * FT)
+    writer(dem.like(data, np.nan), path)
+    return path
 
 
 def compare(a_env, b_env, thr_m):
@@ -3996,7 +4030,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         # scenario and would be read as this run's. Clear them here; they are written again
         # below only when this run actually has a baseline.
         for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
-                      + list(INCREMENT_NAMES.values())):
+                      + list(INCREMENT_NAMES.values()) + [PEAK_DV_NAME]
+                      + ["LISFLOOD-FP " + PEAK_DV_NAME]):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -4020,6 +4055,11 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
+        wet = np.isfinite(fin["depth"])
+        refined = bool((report.get("refine_near_dam") or {}).get("applied"))
+        dv_path = write_peak_dv_raster(dem, final_env, st, out_folder, writer, wet, refined, log)
+        if dv_path:
+            res.final["dv"] = dv_path
         # S3: raster + layer record of the DEM edits baked into the published model DEM
         try:
             _ei = {}
@@ -5963,6 +6003,31 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
+def _manifest_mark_removed(manifest_path, removed_path, why):
+    """Mark an output that a later stage deleted as missing in run_manifest.json (and re-seal
+    it), so verify_manifest does not report the file as lost. Best effort: the manifest is an
+    extra and never fails a run."""
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return
+    try:
+        from . import provenance
+        with open(manifest_path, encoding="utf-8") as f:
+            m = json.load(f)
+        hit = False
+        for rec in (m.get("outputs") or {}).values():
+            if (isinstance(rec, dict) and rec.get("path")
+                    and os.path.normcase(os.path.abspath(rec["path"]))
+                    == os.path.normcase(os.path.abspath(removed_path))):
+                rec["missing"] = True
+                rec["removed_by"] = why
+                hit = True
+        if hit:
+            m["manifest_sha256"] = provenance.digest_of(m)
+            provenance.write_manifest(manifest_path, m)
+    except Exception:
+        pass
+
+
 def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
                      cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
@@ -5985,15 +6050,44 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     if engine is None:
         from . import hecras_engine as engine
     kw = {"cancel": cancel} if cancel is not None else {}
+    # Boann may have written a peak depth x velocity raster into res.final. HEC-RAS does not
+    # produce one, so the stage is handed the finals without it: run_stage keeps a
+    # "LISFLOOD-FP <name>" copy of every raster it is given, and a kept Boann D x V copy
+    # would be read by Hazard as the dam's D x V beside the HEC-RAS depths.
+    stage_final = {k: v for k, v in res.final.items() if k != "dv"}
     try:
         if unattended:
-            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, unattended=True, **kw)
         else:
-            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
+            hr = engine.run_stage(folder, stage_final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
     res.final.update(hr["final"])
+    # HEC-RAS ran: its depths are the final ones, so the Boann D x V no longer matches them.
+    # Drop it from the finals and delete the file (only after the stage succeeded, so a failed
+    # stage leaves the screening results whole).
+    dv_path = res.final.pop("dv", None)
+    if dv_path:
+        try:
+            os.remove(dv_path)
+        except OSError:
+            pass
+        if not os.path.exists(dv_path):
+            note = ("The Boann peak depth x velocity raster was removed: the final depths are "
+                    "from HEC-RAS, which does not make that raster.")
+            if callable(log):
+                log(note)
+        else:
+            # still on disk (e.g. locked by an open layer): Hazard would read it beside the
+            # HEC-RAS depths, so this must reach the report, not only the log
+            note = ("The Boann peak depth x velocity raster could not be removed ({}). It is "
+                    "not from the HEC-RAS run: delete it before classifying hazard with these "
+                    "depths.".format(dv_path))
+            res.warnings.append(note)
+            if callable(log):
+                log(note)
+        _manifest_mark_removed(getattr(res, "manifest", ""), dv_path, "HEC-RAS 2D stage")
     res.warnings.extend(hr["warnings"])
     # every reported figure from the final engine (the screening pass is kept)
     try:

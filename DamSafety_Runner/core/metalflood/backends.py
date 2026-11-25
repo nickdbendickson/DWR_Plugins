@@ -98,7 +98,7 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("qx", f, ny * (nx + 1)),
             ("qy", f, (ny + 1) * nx), ("src", f, cells), ("scl", f, cells), ("hmax", f, cells),
-            ("tmax", f, cells), ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("tmax", f, cells), ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("qxo", f, ny * (nx + 1)), ("qyo", f, (ny + 1) * nx),
@@ -113,7 +113,7 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("hu", f, cells),
             ("hv", f, cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
-            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
@@ -143,7 +143,7 @@ def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("Uh", f, 3 * cells), ("Uhu", f, 3 * cells),
             ("Uhv", f, 3 * cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
-            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("fxh", f, xf), ("fxhu", f, xf), ("fxhv", f, xf),
@@ -162,7 +162,7 @@ def sgc_buffer_layout(ny, nx, n_src, n_series, n_values):
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells),
             ("qxc", f, xf), ("qxf", f, xf), ("qyc", f, yf), ("qyf", f, yf),
             ("src", f, cells), ("scl", f, cells), ("hmax", f, cells), ("tmax", f, cells),
-            ("arr", f, cells), ("vmax", f, cells), ("ok", np.uint8, cells),
+            ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
             ("st", u, S_WORDS), ("qxco", f, xf), ("qxfo", f, xf), ("qyco", f, yf), ("qyfo", f, yf),
