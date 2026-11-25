@@ -3381,6 +3381,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 report["lisflood_checkerboard"] = {
                     "run": "lisflood" + tag, "pct": env.stats.get("checkerboard_pct"),
                     "cells": env.stats.get("checkerboard_rough_cells")}
+        # 3.101.0: a few cells that blew up while the rest of the peak surface is sound
+        # (lfmod.spikes; Absaraka's 17 ft Casselton cell on 3.57.0) are too few to re-run for:
+        # they are reported, with where they are, on every engine
+        _old = stability.setdefault("spike_msgs", {}).pop(tag, None)
+        if _old in warnings:                 # this pass replaces the last one of the same grid
+            warnings.remove(_old)
+        if (report.get("lisflood_spikes") or {}).get("run") == "lisflood" + tag:
+            report.pop("lisflood_spikes", None)
+        n_spk = int(env.stats.get("spike_cells") or 0)
+        if n_spk and not lfmod.is_checkerboard(env.stats):
+            where = env.stats.get("spikes") or []
+            msg = ("{}'s peak water surface has {} isolated spike{} in lisflood{}: a cell whose "
+                   "peak water level stands more than {:.1f} ft above or below all four "
+                   "neighbours, away from the inflow ({}). That is the solver blowing up in "
+                   "one place, not the flood: the depth, velocity and hazard at {} are not "
+                   "reliable. Check {} on the maps; a run with a smaller CFL (the run tool's "
+                   "CFL setting, or model.cfl in the command-line config) normally removes "
+                   "{}.".format(
+                       lfmod.engine_name(st.lisflood_exe), n_spk, "" if n_spk == 1 else "s",
+                       tag, lfmod.SPIKE_JUMP_M / FT,
+                       "; ".join("{:+.1f} ft at {:.0f}, {:.0f}".format(j, x, y)
+                                 for x, y, j in where[:3]),
+                       "that cell" if n_spk == 1 else "those cells",
+                       "it" if n_spk == 1 else "them", "it" if n_spk == 1 else "them"))
+            warnings.append(msg)
+            log(msg)
+            stability["spike_msgs"][tag] = msg
+            report["lisflood_spikes"] = {"run": "lisflood" + tag, "cells": n_spk,
+                                         "where_x_y_jump_ft": where}
         if stability["on"] and lst.solver == lfmod.SOLVER_ACC:
             with open(marker, "w") as f:
                 json.dump({"theta": lst.theta, "cfl": lst.cfl,
