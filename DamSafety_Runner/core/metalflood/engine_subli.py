@@ -53,7 +53,7 @@ from . import subgrid as sg
 from . import engine as mfe
 
 NAME = "Boann, sub-grid local inertial (coarse ACC with LiDAR sub-cells, on the GPU via Metal)"
-VERSION = "0.1.1"   # 0.1.1 (Runner 3.92.0): faster (mass-file wet area on the wet block, CPU dry-cell skip), same numbers
+VERSION = "0.1.2"   # 0.1.2 (Runner 3.97.0): the Apple GPU skips dry tiles, same numbers
 G = bl.G
 NODATA = bl.NODATA
 DRY_M = bl.DRY_M

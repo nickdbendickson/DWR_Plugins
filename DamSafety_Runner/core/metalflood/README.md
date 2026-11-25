@@ -220,7 +220,7 @@ Kuiry (2024, *Water Resources Research* 60, e2023WR035334), with two departures 
 |---|---|
 | `subgrid.py` | Builds the per-cell and per-face tables from the fine DEM (shared with sub-grid FV). |
 | `subli_ref.py` | The float64 reference: states the scheme, the paper's equations and the departures. |
-| `kernels_subli.metal`, `cpu_kernels_subli.cpp` | The kernels (seven per step, 28 buffers) and their CPU build. |
+| `kernels_subli.metal`, `cpu_kernels_subli.cpp` | The kernels (seven per step, plus three tile kernels, 30 buffers) and their CPU build. |
 | `subli_backend.py` | The kernel's `Params`, buffer layout and dispatch plan (Runner only, not in Screening). |
 | `engine_subli.py` | The driver: reads an ordinary deck, runs on the wet window, writes fine rasters. |
 
@@ -229,6 +229,13 @@ weighting (its Eq. 7 and 8, adaptive theta after Sridharan et al. 2020). `cfl`, 
 `physicalinflow` work as for ACC. `theta` is ignored. In the Runner: Flood engine "Advanced:
 Boann, sub-grid local inertial", the engine word `gpu-subli`, `SUBGRID_R` / `model.subgrid_r`, and
 `model.subgrid_upwind` for the weighting.
+
+**Dry tiles on the GPU.** The same skip the ACC engine uses: before every 8 steps the window's
+16 x 16 coarse tiles are marked, a tile that holds water, a face still carrying flow or a source
+runs together with the 8 tiles around it, and the grid kernels leave the rest out. The result
+files are byte-identical with the skip on and off. `DAMSAFETY_MF_TILES=0` turns it off.
+`DAMSAFETY_MF_CPU_TILES=1` runs the same tile kernels on the CPU build, which is how the cloud
+checks them. The CPU build's own dry-cell skip is unchanged and stays its default.
 
 **The flux weighting is off by default** (Nick, 2026-11-23, on these numbers). It blends each
 face's discharge with the face upwind along the grid axis. On a reach that crosses the grid at an
