@@ -24,8 +24,10 @@ coordinate transforms.
 
 Around the Runner's match (its file is not changed), Join.match makes three checks (0.58.0 review):
   * a count station counts only where it is on the road's OVERTOPPED part (within 30 m of it) and
-    on this road: its name matches the road's, or the traffic line nearest it runs the same way
-    (a station on a crossing road is not taken); aadt_join measured a station to the whole road;
+    on this road: its name matches the road's, or the traffic line nearest it is one the road runs
+    along (when the road runs along none: one that runs the same way), so a station on a crossing
+    road or on the highway beside a frontage road is not taken; aadt_join measured a station to the
+    whole road;
   * the road's overtopped part decides: when none of the join's 15 m samples is wet (a narrow
     crossing), the samples next to the point the tool found overtopped are used, not the whole road;
   * a lower count never wins over a higher one on the same road: when another traffic line the
@@ -73,9 +75,17 @@ def _tokens(text):
     return [_ABBR.get(t, t) for t in re.findall(r"[A-Z0-9]+", s) if t not in _SHIELDS]
 
 
+_NOT_ROUTE = {"FRONTAGE", "RAMP", "SERVICE", "EXIT", "BYP", "BYPASS", "BUS", "BUSINESS", "SPUR", "LOOP", "ACCESS",
+              "CONNECTOR", "OLD"}     # 'HIGHWAY 2 FRONTAGE RD', 'HIGHWAY 2 ON RAMP': not the route's own count
+
+
 def _routes(text):
-    """Route numbers a name gives: 'HIGHWAY 85 N' -> {85}, 'HIGHWAY 2 AND 52 W' -> {2, 52}, 'U85N' -> {85}."""
-    s = " ".join(_tokens(text))
+    """Route numbers a name gives: 'HIGHWAY 85 N' -> {85}, 'HIGHWAY 2 AND 52 W' -> {2, 52}, 'U85N' -> {85};
+    none for a frontage road, ramp, bypass or business route of it."""
+    toks = _tokens(text)
+    if _NOT_ROUTE & set(toks):
+        return set()
+    s = " ".join(toks)
     m = _RE_ROUTE_CODE.match(s.replace(" ", ""))
     if m:
         return {int(m.group(1))}
@@ -317,10 +327,12 @@ class Join:
                 self.near_point += 1
         return samp, (wet or samp)
 
-    def _on_road(self, t, parts, wet, lines, name):
-        """A count station that describes THIS road where it is overtopped: within max_m of the road and
-        of its wet samples (to sampling), and its name matches the road's or the traffic line nearest
-        it runs the same way as the road (none within max_m: taken)."""
+    def _on_road(self, t, parts, wet, lines, name, own):
+        """A count station that describes THIS road where it is overtopped: within max_m of the road and of
+        its wet samples (to sampling), and named as the road, or else the traffic line nearest it (within
+        max_m) is one the road itself runs along (own: those lines' ids) - or, when the road runs along none,
+        one that runs the same way. A station on a crossing road, or on the highway beside a frontage road,
+        is not taken; one with no traffic line near it is."""
         x, y = t["parts"][0]
         best = None
         for ln in parts:
@@ -338,9 +350,11 @@ class Join:
         for ln in lines:
             d, v = AJ._near_line(x, y, ln)
             if d <= self.max_m and v is not None and (near is None or d < near[0]):
-                near = (d, v)
+                near = (d, v, ln)
         if near is None:
             return True
+        if own:
+            return id(near[2]) in own
         rv, lv = best[1], near[1]
         la, lb = math.hypot(*rv), math.hypot(*lv)
         if not la or not lb:
@@ -348,12 +362,13 @@ class Join:
         return abs(rv[0] * lv[0] + rv[1] * lv[1]) / (la * lb) >= math.cos(math.radians(AJ.MAX_ANGLE_DEG))
 
     def _line_options(self, wet, lines, name=""):
-        """Every traffic-line value the overtopped part runs along, with its share: as aadt_join.match finds
-        them (each sample takes the nearest same-way line within max_m), and also a line NAMED as the road
-        that is not the nearest (a county-roads line 1 m off hid HPMS '9THSTE' 5 m off on 9TH ST E); a value
-        counts when it covers MIN_SHARE of the samples or MIN_LEN_M of road."""
+        """(options, own): every traffic-line value the overtopped part runs along, with its share - as
+        aadt_join.match finds them (each sample takes the nearest same-way line within max_m), and also a line
+        NAMED as the road that is not the nearest (a county-roads line 1 m off hid HPMS '9THSTE' 5 m off on
+        9TH ST E); a value counts when it covers MIN_SHARE of the samples or MIN_LEN_M of road - and the ids
+        of the lines some sample took (the road's own lines)."""
         cos_max = math.cos(math.radians(AJ.MAX_ANGLE_DEG))
-        groups, named = {}, {}
+        groups, named, own = {}, {}, set()
         key = lambda t: (t["aadt"], t.get("year") or 0, t["source"], t.get("name") or "")
         same = {id(t) for t in lines if same_name(name, t.get("name"))}
         for x, y, (ux, uy) in wet:
@@ -371,6 +386,7 @@ class Join:
                     named.setdefault(key(t), [set(), t])[0].add((x, y))
             if best:
                 t = best[1]
+                own.add(id(t))
                 g = groups.setdefault(key(t), [0, t])
                 g[0] += 1
         for k, (pts, t) in named.items():
@@ -378,7 +394,7 @@ class Join:
                 groups[k] = [len(pts), t]
         n = float(len(wet)) or 1.0
         return [(t, cnt / n) for cnt, t in groups.values()
-                if cnt / n >= AJ.MIN_SHARE or cnt * self.step >= AJ.MIN_LEN_M]
+                if cnt / n >= AJ.MIN_SHARE or cnt * self.step >= AJ.MIN_LEN_M], own
 
     def match(self, parts, is_wet=None, name="", at=None):
         """aadt_join.match for a road ([[(x, y)...]] in the work CRS), with 'text' (describe()), or None.
@@ -397,13 +413,14 @@ class Join:
         if not samp:
             return None
         lines = [t for t in feats if t["kind"] == "line"]
-        stations = [t for t in feats if t["kind"] == "point" and self._on_road(t, parts, wet, lines, name)]
+        opts, own = self._line_options(wet, lines, name)
+        stations = [t for t in feats if t["kind"] == "point" and self._on_road(t, parts, wet, lines, name, own)]
         keys = {(s[0], s[1]) for s in wet}
         m = AJ.match(parts, lines + stations, max_m=self.max_m,
                      is_wet=(lambda x, y: (x, y) in keys) if len(wet) < len(samp) else None)
         if not m:
             return None
-        alts = self._line_options(wet, lines, name) + [(t, 1.0) for t in stations]
+        alts = opts + [(t, 1.0) for t in stations]
         top = max((band(t["aadt"]) for t, _sh in alts), default=-1)
         if top > band(m["aadt"]):
             t, sh = max(((t, sh) for t, sh in alts if band(t["aadt"]) == top),

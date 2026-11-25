@@ -500,6 +500,7 @@ def test_join_rules():
     assert RA.same_name("ASH COULEE DR", "ASHCOULEEDR") and RA.same_name("JOHNSON ST S", "JOHNSON ST")
     assert RA.same_name("158th Street Northeast", "158TH ST NE") and RA.same_name("HIGHWAY 85 N USHY", "U85N")
     assert RA.same_name("HIGHWAY 2 AND 52 W", "U52E") and RA.same_name("9TH ST E", "9THSTE")
+    assert not RA.same_name("HIGHWAY 2 FRONTAGE RD E", "U2E") and not RA.same_name("HIGHWAY 2 ON RAMP", "U2E")
     assert not RA.same_name("UNIVERSITY DR S", "2ND AVE S") and not RA.same_name("MAIN AVE S", "MAINSTS")
     assert not RA.same_name("87TH ST NW", "") and not RA.same_name("", "") and not RA.same_name("N 7TH ST", "U83S")
     # the interstate system its name does not show (NG911 FUNC_SYS, HPMS F_SYSTEM, SHIELD)
@@ -525,6 +526,13 @@ def test_join_rules():
         j = RA.Join([cty, st])
         assert j.match(road)["aadt"] == 2265.0 and j.raised == 1      # unnamed: the station lies along the road
         assert "1 took a higher count on the same road" in j.summary()
+        # a station on the highway beside a frontage road is not the frontage road's (pack: FRONTAGE RD took US 2's
+        # 10,515): its nearest traffic line is the highway's, not one the frontage road runs along
+        fr = _lines_file(os.path.join(d, "fr.gpkg"), "ND_county_roads", [([(-50, 2.0), (450, 2.0)], 227.0, 2023, ""),
+                                                                         ([(-50, 26.0), (450, 26.0)], 10515.0, 2023, "")])
+        frs = _named_stations(os.path.join(d, "frs.gpkg"), [((200.0, 25.0), "U2E", 10515.0, 2026)])
+        assert RA.Join([fr, frs]).match(road, name="FRONTAGE RD")["aadt"] == 227.0
+        assert RA.Join([fr, frs]).match(road, name="HIGHWAY 2 USHY")["aadt"] == 10515.0   # named as the road
         # a station in the same band does not replace the line; a lower one never does
         _named_stations(st, [((200.0, 1.0), "ASH COULEE DR", 450.0, 2025)])
         assert RA.Join([cty, st]).match(road, name="ASH COULEE DR")["aadt"] == 311.0
