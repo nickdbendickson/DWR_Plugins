@@ -52,7 +52,7 @@ jobs:
         run: python3 tools/test_blas_selfcheck.py
       - name: LISFLOOD-FP start check self-test (the release's Windows gate, stand-in programs)
         run: python3 tools/test_lisflood_smoke.py
-      - name: Release zips carry the right Boann / BoannGrid libraries (Screening has no BoannGrid)
+      - name: Release zips carry Boann / BoannGrid libraries in DamSafety Core only
         run: python3 tools/test_build_release_libs.py
       - name: The helper that makes QGIS importable on a Windows runner (self-test)
         run: python3 -W error tools/test_ci_qgis_env.py

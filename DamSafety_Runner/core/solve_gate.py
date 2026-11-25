@@ -143,20 +143,26 @@ def storage_check(dem_m3, inventory_m3, tol=0.5):
 
 _SMOKE = {}
 _CORE = os.path.dirname(os.path.realpath(os.path.abspath(__file__)))
+# Runner 3.97.1: Boann's engine*.py live in DamSafety Core (the sibling plugin folder), not here
+_BOANN = os.path.join(os.path.dirname(os.path.dirname(_CORE)), "DamSafety_Core", "boann", "hydro")
 
 
 def is_inprocess_engine(exe):
     """True when `exe` is one of this plugin's in-process engines - a .py file under this core
-    folder (the built-in engine, or Boann's engine*.py), as core/lisflood.py names them. Needs no
-    import of lisflood.py, so the standalone tools/lisflood_smoke.py can load this file alone."""
+    folder (the built-in engine) or Boann's engine*.py in DamSafety_Core/boann/hydro (under this
+    core folder before Runner 3.97.1), as core/lisflood.py names them. Needs no import of
+    lisflood.py, so the standalone tools/lisflood_smoke.py can load this file alone."""
     exe = str(exe or "").strip()
     if not exe.lower().endswith(".py"):
         return False
-    try:
-        real = os.path.realpath(os.path.abspath(exe))
-        return os.path.commonpath([real, _CORE]) == _CORE
-    except ValueError:                     # another drive on Windows
-        return False
+    real = os.path.realpath(os.path.abspath(exe))
+    for root in (_CORE, os.path.realpath(_BOANN)):
+        try:
+            if os.path.commonpath([real, root]) == root:
+                return True
+        except ValueError:                 # another drive on Windows
+            pass
+    return False
 
 
 def lisflood_smoke(exe, work=None):

@@ -9,8 +9,8 @@ uploads to the GitHub Release and plugins.xml points at), on any OS with git and
          DamSafety_Runner/bin/<platform>/..., which core/lisflood.bundled_exe() finds)
     python3 tools/build_release.py --out dist --boann-cpu build/boann
         (also puts Boann's CPU libraries, build/boann/<platform>/*, made by
-         tools/build_boann_cpu.py, into the Runner and Screening zips under
-         core/metalflood/prebuilt/<platform>/, which metalflood/backends.build_cpu_library finds)
+         tools/build_boann_cpu.py, into the DamSafety Core zip under
+         boann/hydro/prebuilt/<platform>/, which boann/hydro/backends.build_cpu_library finds)
 
 Like tools/mac/make_plugin_zips.py (the Mac installer's zips): committed files only, through
 `git archive`, so an uncommitted edit never ships; fixed timestamps, so the same files give the
@@ -89,18 +89,17 @@ def runner_binaries(folder):
     return out
 
 
-# library name prefixes (backends.Spec names) only the Runner zip carries
-RUNNER_ONLY_LIBRARIES = ("subfv_", "subli_", "mt_", "mf4_", "mf8_")
+# Core 1.7.0 / Boann 6.3.1: Boann lives once, in DamSafety Core, so the Core zip carries every
+# Boann / BoannGrid CPU library (the Runner and Screening zips carried them before, Screening a subset)
+BOANN_PLUGIN = "DamSafety_Core"
 
 
-def boann_libraries(folder, plugin):
+def boann_libraries(folder, plugin=BOANN_PLUGIN):
     """{zip path: (bytes, False)} for Boann's prebuilt CPU libraries under folder/<platform>/, laid
-    out as <plugin>/core/metalflood/prebuilt/<platform>/<name>. Only the Runner gets them all:
-    Screening has no sub-grid FV or sub-grid local-inertial engine and no BoannGrid
-    (core/metalterrain), so its zip leaves out the subfv_* and subli_* libraries and BoannGrid's
-    fill (mt_*) and D4 / D8 flow (mf4_*, mf8_*) libraries."""
+    out as DamSafety_Core/boann/hydro/prebuilt/<platform>/<name>: every engine's and BoannGrid's
+    (fill mt_*, D4 / D8 flow mf4_* / mf8_*). Empty for any plugin but DamSafety Core."""
     out = {}
-    if not folder:
+    if not folder or plugin != BOANN_PLUGIN:
         return out
     for plat in BIN_PLATFORMS:
         sub = os.path.join(folder, plat)
@@ -109,10 +108,8 @@ def boann_libraries(folder, plugin):
         for name in sorted(os.listdir(sub)):
             if name.startswith(".") or not name.endswith((".so", ".dll", ".dylib")):
                 continue
-            if plugin != "DamSafety_Runner" and name.startswith(RUNNER_ONLY_LIBRARIES):
-                continue
             with open(os.path.join(sub, name), "rb") as fh:
-                out["{}/core/metalflood/prebuilt/{}/{}".format(plugin, plat, name)] = (fh.read(), False)
+                out["{}/boann/hydro/prebuilt/{}/{}".format(plugin, plat, name)] = (fh.read(), False)
     return out
 
 
@@ -164,15 +161,14 @@ def main(argv=None):
     bins = runner_binaries(a.runner_bin)
     if a.runner_bin and not bins:
         raise SystemExit("no <platform>/lisflood[.exe] under " + a.runner_bin)
-    if a.boann_cpu and not boann_libraries(a.boann_cpu, "DamSafety_Runner"):
+    if a.boann_cpu and not boann_libraries(a.boann_cpu):
         raise SystemExit("no <platform>/*_cpu_* library under " + a.boann_cpu)
     sums, built = [], []
     for p in plugins:
         files = committed_files(commit, p)
         dest = os.path.join(a.out, "{}_{}.zip".format(p, version(files, p)))
         extra = dict(bins) if p == "DamSafety_Runner" else {}
-        if p in ("DamSafety_Runner", "DamSafety_Screening"):
-            extra.update(boann_libraries(a.boann_cpu, p))
+        extra.update(boann_libraries(a.boann_cpu, p))
         write_zip(dest, files, extra or None)
         sums.append("{}  {}".format(sha256_of(dest), os.path.basename(dest)))
         built.append(dest)

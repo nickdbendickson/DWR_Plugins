@@ -29,7 +29,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BOANN = os.path.join(REPO, "DamSafety_Runner", "core", "metalflood", "boann.py")
+BOANN = os.path.join(REPO, "DamSafety_Core", "boann", "hydro", "boann.py")
 CASES = os.path.join(HERE, "cases")
 
 # .par solver keyword and boann.py --solver name

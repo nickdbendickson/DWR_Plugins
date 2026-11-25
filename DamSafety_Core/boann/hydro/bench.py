@@ -2,7 +2,7 @@
 on the CPU build of the same kernels (one core), and through LISFLOOD-FP when one is given or
 found, with the floods compared. Prints a table and writes metalflood_bench.json.
 
-    <QGIS python> -m nd_breach_runner.core.metalflood.bench [--size small|medium|large]
+    <QGIS python> -m DamSafety_Core.boann.hydro.bench [--size small|medium|large]
         [--case valley|diagonal|compact] [--solver acc|sgc|fv|fv2|dg2|subfv] [--profile]
         [--lisflood PATH] [--threads N] [--no-cpu] [--out DIR]
 

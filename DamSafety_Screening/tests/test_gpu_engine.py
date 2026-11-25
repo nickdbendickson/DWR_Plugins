@@ -1,38 +1,28 @@
-"""0.21.0: the GPU engine as tool 7's engine "gpu". Its files are a copy of the Runner's
-core/metalflood (checked byte for byte), it runs the LISFLOOD-FP ACC deck tool 7 writes, and its
-results read like LISFLOOD-FP's. Runs on the CPU build of the kernels (a C++ compiler is needed;
-skipped without one); on a Mac with a Metal GPU the engine picks the GPU."""
+"""0.21.0: the GPU engine as tool 7's engine "gpu". It runs the LISFLOOD-FP ACC deck tool 7 writes,
+and its results read like LISFLOOD-FP's. Runs on the CPU build of the kernels (a C++ compiler is
+needed; skipped without one); on a Mac with a Metal GPU the engine picks the GPU.
+Screening 0.60.1 (DamSafety Core 1.7.0): core/metalflood is no longer a copy of the Runner's but a
+shim onto the one copy of Boann in DamSafety_Core/boann/hydro (tools/ci_checks.py "one Boann
+copy" guards it); this checks Screening gets that very package."""
 import os, shutil, sys, tempfile
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))   # DamSafety_Core
 from core import runner as rn, solver_io as sio  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MINE = os.path.join(HERE, "..", "core", "metalflood")
-RUNNER = os.path.join(HERE, "..", "..", "DamSafety_Runner", "core", "metalflood")
-FILES = ("__init__.py", "__main__.py", "backends.py", "deckio.py", "engine.py", "kernels.metal",
-         "cpu_kernels.cpp", "mf_shim.h", "engine_fv.py", "kernels_fv.metal", "cpu_kernels_fv.cpp",
-         "engine_fv2.py", "kernels_fv2.metal", "cpu_kernels_fv2.cpp",
-         "engine_dg2.py", "kernels_dg2.metal", "cpu_kernels_dg2.cpp",
-         "engine_sgc.py", "kernels_sgc.metal", "cpu_kernels_sgc.cpp",
-         "version.py", "cli.py", "boann.py")                # 0.38.0: Boann's standalone CLI
 
 # the engine list: appended, older indices unchanged
 assert rn.ENGINES[:4] == ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir")
 assert rn.ENGINES[4] == "gpu"
 assert rn.deck_engine("gpu") and rn.deck_engine("lisflood-acc") and not rn.deck_engine("builtin")
 
-if os.path.isdir(RUNNER):
-    for f in FILES:
-        with open(os.path.join(MINE, f), "rb") as a, open(os.path.join(RUNNER, f), "rb") as b:
-            assert a.read() == b.read(), "core/metalflood/{} differs from the Runner's".format(f)
-    extra = set(os.listdir(MINE)) - set(FILES) - {"__pycache__"}
-    assert not extra, extra
-    print("copy of the Runner's GPU engine: identical")
-else:
-    print("SKIP: the Runner is not beside Screening here (copy check)")
-
+assert sorted(set(os.listdir(MINE)) - {"__pycache__"}) == ["__init__.py"], os.listdir(MINE)
 from core import metalflood as mf  # noqa: E402
+import DamSafety_Core.boann.hydro as _core_boann  # noqa: E402
+assert mf is _core_boann, (mf, _core_boann)
+print("core/metalflood is DamSafety Core's Boann ({})".format(mf.BOANN_VERSION))
 ok, why = mf.available()
 if not ok:
     print("SKIP: " + why); sys.exit(0)

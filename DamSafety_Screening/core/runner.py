@@ -35,7 +35,7 @@ from .gridutil import xy_to_rc, rc_to_xy, rasterize_lines, rasterize_polygons, N
 # program it starts opens its own window, and closing that window kills the run)
 NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
 
-# 0.21.0: "gpu" (appended) = the GPU engine (core/metalflood, a copy of the Runner's): the
+# 0.21.0: "gpu" (appended) = the GPU engine (core/metalflood; since 0.60.1 a shim onto DamSafety_Core/boann/hydro): the
 # LISFLOOD-FP ACC deck run in-process on the Apple GPU, or on the CPU build of its kernels
 ENGINES = ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir", "gpu")
 

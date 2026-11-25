@@ -19,7 +19,7 @@ another. This module is not wired into the default model-terrain conditioner run
 subgrid-topography variant (Devi & Kuiry 2024 tables) is a separate research item with the flood
 engine.
 
-    from nd_breach_runner.core.metalterrain import prism
+    from DamSafety_Core.boann.grid import prism
     carved, channels, refusals = prism.carve_channels(dem, cell_m=1.0)   # DEM-intrinsic flowlines
     carved, reaches = prism.carve_prism(dem, flowline, da_km2, cell_m=1.0)  # a supplied flowline
 """

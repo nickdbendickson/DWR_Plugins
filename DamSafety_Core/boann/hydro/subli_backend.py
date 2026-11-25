@@ -1,8 +1,7 @@
 """Sub-grid local-inertial backend definitions (Boann's gpu-subli solver, Runner 3.79.0).
 
-Like subfv_backend.py these live here, NOT in backends.py, so backends.py (and __init__.py) stay
-byte-for-byte identical with the copy DamSafety_Screening carries: the sub-grid solvers are
-Runner-only. This module adds the one engine's kernel sources, its ctypes Params, its buffer layout
+Like subfv_backend.py these live here, NOT in backends.py (kept apart while DamSafety_Screening
+carried a subset copy, until DamSafety Core 1.7.0). This module adds the one engine's kernel sources, its ctypes Params, its buffer layout
 and its dispatch plan, as its own Spec for the shared Metal/CPU backend.
 
     from . import backends as be

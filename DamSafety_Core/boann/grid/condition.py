@@ -1,7 +1,7 @@
 """BoannGrid crossing conditioning in one call, with a keep-out mask built from the layers the
 Hazard plugin already uses (Runner 3.58.0).
 
-    from nd_breach_runner.core.metalterrain import condition as C
+    from DamSafety_Core.boann.grid import condition as C
     out, records, info = C.condition(z, cell_m=30.0, keepout=mask)             # arrays
     info = C.condition_file("dem.tif", "dem_conditioned.tif", dam_folder=".")  # files
 

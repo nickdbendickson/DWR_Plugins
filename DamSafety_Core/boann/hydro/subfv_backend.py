@@ -1,8 +1,8 @@
 """Sub-grid finite-volume backend definitions (Boann's gpu-subfv solver, Runner 3.42.0).
 
-These live here, NOT in backends.py, so backends.py (and __init__.py) stay byte-for-byte identical
-with the copy DamSafety_Screening carries: the sub-grid FV solver is Runner-only research and is not
-mirrored into Screening. Everything else — the generic Metal/CPU backend, Spec, the build cache, the
+These live here, NOT in backends.py, so that backends.py (and __init__.py) stayed byte-for-byte
+identical with the subset copy DamSafety_Screening carried until DamSafety Core 1.7.0 (now there is
+one copy, which Screening shares). Everything else — the generic Metal/CPU backend, Spec, the build cache, the
 ACC/FV/FV2/DG2/SGC specs — stays in backends.py and is shared. This module just adds the one engine's
 kernel sources, its ctypes Params, its buffer layout and its dispatch plan, as its own Spec.
 

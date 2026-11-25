@@ -94,20 +94,21 @@ class Deck(mfe.Deck):
         self.h0 = np.where(self.valid, np.where(self.h0 > 0.0, self.h0, h_chan), 0.0)
 
     def _build_from_dem(self):
-        """(w, D, start_depth) from core/sgc.build on this DEM. Returns zeros if sgc / grid are
-        unavailable, so the engine still runs (as plain ACC)."""
+        """(w, D, start_depth) from the host's channel builder (host.py; the Runner lends its
+        core/sgc.build) on this DEM. Returns zeros if no host lent one, so the engine still runs
+        (as plain ACC)."""
         try:
-            from .. import sgc as _sgc
-            from .. import grid as _grid
+            from . import host
+            build = host.get("channel_builder")
         except Exception:
+            build = None
+        if build is None:
             return (np.zeros((self.ny, self.nx)),) * 3
         z = np.where(self.valid, self.z, NODATA)
-        dem = _grid.Grid(z, self.xll, self.yll, self.dx, NODATA)
         inflow_rc = self.src_cells[0][:2] if self.src_cells else None
-        ch = _sgc.build(dem, inflow_rc=inflow_rc, channel_n=self.channel_n)
-        self.channel_n = ch.channel_n
-        return (np.asarray(ch.width, float), np.asarray(ch.depth, float),
-                np.asarray(ch.start_depth, float))
+        w, D, start_depth, self.channel_n = build(z, self.xll, self.yll, self.dx, NODATA,
+                                                  inflow_rc, self.channel_n)
+        return (np.asarray(w, float), np.asarray(D, float), np.asarray(start_depth, float))
 
 
 class Engine:

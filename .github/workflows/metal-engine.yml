@@ -1,6 +1,6 @@
 name: GPU flood engine (Metal)
 
-# The GPU flood engine (DamSafety_Runner/core/metalflood) on an Apple Silicon runner: its tests
+# The GPU flood engine (DamSafety_Core/boann/hydro; the Runner's core/metalflood is a shim onto it) on an Apple Silicon runner: its tests
 # with the Metal kernels on the runner's GPU against their CPU build, and the small speed test.
 # Linux runs the same tests (CPU build only) in ci.yml's Runner fast suite, and against
 # LISFLOOD-FP in its model suite. Not a merge gate.
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "DamSafety_Runner/core/metalflood/**"
+      - "DamSafety_Core/boann/**"
       - "DamSafety_Runner/tests/test_metalflood.py"
       - "DamSafety_Runner/tests/test_boann_profile.py"
       - "DamSafety_Runner/tests/test_subgrid_kernel.py"
@@ -73,10 +73,10 @@ jobs:
       - name: Profile tests (profile on == off, on the GPU and the CPU build)
         run: python -m nd_breach_runner.tests.test_boann_profile
       - name: Speed test (small valley)
-        run: python -m nd_breach_runner.core.metalflood.bench --size small --out "$RUNNER_TEMP"
+        run: python -m DamSafety_Core.boann.hydro.bench --size small --out "$RUNNER_TEMP"
       - name: Speed test (medium valley, GPU only)
-        run: python -m nd_breach_runner.core.metalflood.bench --size medium --no-cpu --out "$RUNNER_TEMP"
+        run: python -m DamSafety_Core.boann.hydro.bench --size medium --no-cpu --out "$RUNNER_TEMP"
       - name: Profile (small diagonal valley, ACC, GPU only)
-        run: python -m nd_breach_runner.core.metalflood.bench --size small --case diagonal --profile --no-cpu --out "$RUNNER_TEMP"
+        run: python -m DamSafety_Core.boann.hydro.bench --size small --case diagonal --profile --no-cpu --out "$RUNNER_TEMP"
       - name: Profile (small diagonal valley, FV2, GPU only)
-        run: python -m nd_breach_runner.core.metalflood.bench --size small --case diagonal --solver fv2 --profile --no-cpu --out "$RUNNER_TEMP"
+        run: python -m DamSafety_Core.boann.hydro.bench --size small --case diagonal --solver fv2 --profile --no-cpu --out "$RUNNER_TEMP"

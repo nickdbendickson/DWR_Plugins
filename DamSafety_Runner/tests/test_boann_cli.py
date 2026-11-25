@@ -1,7 +1,9 @@
 """Runner 3.62.0: Boann as a standalone program (core/metalflood/cli.py, boann.py, version.py).
 
-- boann_folder_imports_nothing_from_outside: every .py in core/metalflood imports only the standard
-  library, numpy and its own folder (engine_sgc's guarded use of the host's core/sgc excepted).
+- boann_folder_imports_nothing_from_outside: every .py in Boann's engine folder (DamSafety_Core/
+  boann/hydro since Runner 3.97.1; core/metalflood is the shim onto it) imports only the standard
+  library, numpy and its own folder, with no exception (engine_sgc's channel builder comes in
+  through hydro/host.py since 3.97.1, not by reaching up into the Runner).
 - boann_standalone_copy_runs_bit_for_bit: the folder COPIED ALONE to a temp directory runs a deck
   with `python -I boann.py run ...` for every solver it can run standalone, and its result files
   are byte-identical to the in-plugin run_par's (the standalone path changes no number).
@@ -55,11 +57,7 @@ def boann_folder_imports_nothing_from_outside():
                 if node.level == 1:
                     continue                                    # this folder
                 if node.level >= 2:
-                    # the one allowed reach outside: engine_sgc builds channels with the host
-                    # plugin's core/sgc when it is there (guarded; standalone refuses instead)
                     names = {a.name for a in node.names}
-                    if os.path.basename(path) == "engine_sgc.py" and names <= {"sgc", "grid"}:
-                        continue
                     bad.append("{}: from {}{} import {}".format(os.path.basename(path),
                                "." * node.level, node.module or "", sorted(names)))
                     continue
@@ -71,7 +69,7 @@ def boann_folder_imports_nothing_from_outside():
             for m in mods:
                 if m not in STDLIB_OK and m.split(".")[0] not in STDLIB_OK:
                     bad.append("{}: import {}".format(os.path.basename(path), m))
-    assert not bad, "core/metalflood imports from outside itself:\n" + "\n".join(bad)
+    assert not bad, "Boann's engine folder imports from outside itself:\n" + "\n".join(bad)
 
 
 def _standalone_copy(tmp):

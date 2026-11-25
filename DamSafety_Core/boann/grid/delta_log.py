@@ -14,7 +14,7 @@ The one hard invariant, enforced in the constructor path: a FLAGGED edit without
 raises. You cannot record an inferred culvert size or an ambiguous depression class without
 stating the basis - the API refuses it ("assumptions are registered, never silent").
 
-    from nd_breach_runner.core.metalterrain import delta_log as dl
+    from DamSafety_Core.boann.grid import delta_log as dl
     log = dl.DeltaLog(run_id=run_hash, engine="boanngrid")     # :memory: by default
     log.add(dl.Edit(dl.EditClass.CHANNEL_BURN, "BURN", evidence="NHD_FLOWLINE", n_cells=310,
                     dz_mean=-1.1, algo_ref="CHANNEL_BURN_V1"))
@@ -22,7 +22,7 @@ stating the basis - the API refuses it ("assumptions are registered, never silen
              reason="culvert size inferred from drainage area; no inventory")
     print(log.summary())
 
-    python3 -m nd_breach_runner.core.metalterrain.delta_log selftest
+    python3 -m DamSafety_Core.boann.grid.delta_log selftest
 """
 import json
 import sqlite3
