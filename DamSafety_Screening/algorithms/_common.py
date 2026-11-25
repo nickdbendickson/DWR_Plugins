@@ -138,6 +138,91 @@ def from_albers(src):
     return QgsCoordinateTransform(albers(), src.sourceCrs(), QgsProject.instance())
 
 
+# ------------------------------------------------------------------ AADT join (0.58.0) --
+AADT_LAYERS_LABEL = ("Traffic (AADT) GeoPackages for roads without a count, separated by ;; "
+                     "(HPMS, NDDOT traffic counts, county roads; empty = those next to the roads "
+                     "file; the ROADS_MORE files are read too)")
+AADT_JOIN_LABEL = ("Give a road without AADT the count of the traffic line it runs along or the "
+                   "count station on it (HPMS, NDDOT, county roads; as the Runner)")
+
+
+def layer_path(params, key):
+    """File path of a layer parameter (a path, a 'path|layername=' URI, a layer or a feature
+    source definition), without the |layername part; '' when it is not a file (a memory layer,
+    a layer id of the project resolves through the project)."""
+    v = params.get(key) if params else None
+    try:
+        if v is not None and not isinstance(v, str) and hasattr(v, "source"):
+            s = v.source
+            v = s() if callable(s) else (s.staticValue() if hasattr(s, "staticValue") else s)
+        if isinstance(v, str) and v and not os.path.isfile(v.split("|", 1)[0]):
+            lyr = QgsProject.instance().mapLayer(v) if hasattr(QgsProject.instance(), "mapLayer") else None
+            if lyr is not None:
+                v = lyr.source()
+    except Exception:                                            # noqa  (no sibling search then)
+        return ""
+    p = str(v).split("|", 1)[0] if isinstance(v, str) else ""
+    return p if p and os.path.isfile(p) else ""
+
+
+_ISYS_FIELDS = ("func_sys", "f_system", "route_signing", "routesigning", "shield", "shield_lbl")
+
+
+def _isys_values(feat):
+    low = {str(n).lower(): n for n in feat.fields().names()}
+    return {k: feat[low[k]] for k in _ISYS_FIELDS if k in low}
+
+
+def interstate_system(feat):
+    """core.road_aadt.interstate_system for a road feature (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2, SHIELD I with
+    a route number in SHIELD_LBL: rated Interstate), read by field name (any letter case); False when the
+    feature has none of those fields."""
+    from ..core import road_aadt as RA
+    try:
+        return RA.interstate_system(_isys_values(feat))
+    except Exception:                                            # noqa  (never fails the tool)
+        return False
+
+
+def interstate_shield(feat):
+    """core.road_aadt.interstate_shield for a road feature (SHIELD I / EXIT: a matched count never lowers it)."""
+    from ..core import road_aadt as RA
+    try:
+        return RA.interstate_shield(_isys_values(feat))
+    except Exception:                                            # noqa  (never fails the tool)
+        return False
+
+
+def aadt_join(paths):
+    """core.road_aadt.Join for these traffic GeoPackages, with QGIS transforms from each file's
+    CRS to EPSG:5070 (a file in EPSG:5070 is read as it is)."""
+    from ..core import road_aadt as RA
+    from qgis.core import QgsPointXY
+    alb = albers()
+    cache = {}
+
+    def crs(srs):
+        c = QgsCoordinateReferenceSystem("EPSG:{}".format(int(srs)))
+        if hasattr(c, "isValid") and not c.isValid():
+            raise ValueError("unknown CRS (srs_id {})".format(srs))
+        return c
+
+    def to_work(srs):
+        if int(srs) == 5070:
+            return None
+        t = QgsCoordinateTransform(crs(srs), alb, QgsProject.instance())
+        return lambda x, y: (lambda q: (q.x(), q.y()))(t.transform(QgsPointXY(x, y)))
+
+    def to_layer_box(srs, box):
+        if int(srs) == 5070:
+            return box
+        if srs not in cache:
+            cache[srs] = QgsCoordinateTransform(alb, crs(srs), QgsProject.instance())
+        r = cache[srs].transformBoundingBox(QgsRectangle(*box))
+        return r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum()
+    return RA.Join(paths, to_work, to_layer_box)
+
+
 def extend_fields(src_fields, new):
     """Copy src fields and add `new` [(name, QVariant type)], reusing names that already exist.
 

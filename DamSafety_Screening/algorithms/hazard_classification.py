@@ -19,6 +19,7 @@ from ..core import hazard as hz, gridutil as gu
 from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri, handoff as ho
 from ..core import receptor_dump as RD
+from ..core import road_aadt as RA
 from ..core.more_layers import pick, layer_name
 from . import _common as cm
 from ..damsuite import structure_flags as SF
@@ -32,7 +33,10 @@ NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
        ("hz_notes", FT_STRING), ("hz_vs_existing", FT_STRING),
        ("audit", FT_STRING), ("hz_basis", FT_STRING),
        ("hz_border", FT_STRING), ("hz_gaps", FT_STRING),
-       ("hz_chart", FT_STRING)]
+       ("hz_chart", FT_STRING),
+       # 0.58.0: the counts roads without AADT took from the traffic layers, and the review flag
+       # when the class is lower than it would be without them
+       ("hz_aadt", FT_STRING), ("hz_aadt_review", FT_STRING)]
 # enum order = hz.METHODS: ND charts (default), ND 1D 2 ft, ND conservative all wet,
 # then the two comparison-only criteria
 CRIT_LABELS = [hz.METHOD_LABELS[m] for m in hz.METHODS]
@@ -80,8 +84,23 @@ class HazardClassification(UnitAlgorithm):
                 "word list: barn, shed, garage, silo, grain bin, outbuilding, well pad \u2026). Mobile "
                 "homes (Fig. 5.2): 'mobile' / 'manufactured' / 'trailer' / NSI RES2. ROADS: a missing, "
                 "zero or NaN AADT is unknown - the 'unknown AADT' class you choose (default Medium), "
-                "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I'. "
+                "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I', or (0.58.0) a "
+                "F_SYSTEM / FUNC_SYS 1 or ROUTE_SIGNING 2 field, or an NG9-1-1 SHIELD I with a route number in "
+                "SHIELD_LBL (the interstate system as the Hazard plugin reads it: an NG9-1-1 'RAMP' or 'EXIT 63'). "
                 "Same for a railroad without a train count.\n"
+                "TRAFFIC COUNTS (0.58.0, as the Runner): an overtopped road with no AADT of its own (the "
+                "pack's NG9-1-1 roads have none) first takes the count of the traffic line it runs along "
+                "(HPMS, ND county roads: at least 30% of its overtopped length within 30 m, the same "
+                "direction) or of an NDDOT count station within 30 m (core/aadt_join.py, the Runner's file). "
+                "Read from AADT_LAYERS, else the HPMS_ND_<year>, NDDOT_traffic_counts and ND_county_roads "
+                "GeoPackages next to the roads file, plus the ROADS_MORE files. A higher count on the same road "
+                "wins over a lower one (another line it runs along, one named as the road, or a station on it: "
+                "newest year, then the higher count); a station counts only on the overtopped part and on this "
+                "road; an interstate (FUNC_SYS 1 too) is never matched, and an NG9-1-1 SHIELD I / EXIT road "
+                "is never lowered by a count. A road that matches "
+                "nothing keeps the 'unknown AADT' class. hz_aadt lists the counts taken (the impacted "
+                "features' aadt_src says where each road's count came from); hz_aadt_review (and hz_conf "
+                "= review) marks a dam whose class is LOWER than it would be without them.\n"
                 "OUTPUT: hz_class, hz_basis (method), hz_border, hz_gaps, hz_chart (chart status and "
                 "the first 12 characters of the chart file's SHA-256). Dams cleared by triage are LOW "
                 "(hz_conf = triage). For audited dams, 'audit' says whether the 2D model agreed. "
@@ -143,6 +162,9 @@ class HazardClassification(UnitAlgorithm):
         P(QgsProcessingParameterString(
             "BLD_MORE", "More structure GeoPackages, separated by ;; (address points, USA Structures)",
             defaultValue="", optional=True))
+        # 0.58.0: traffic counts for roads without one (defaults: a saved run of an older version still runs)
+        P(QgsProcessingParameterBoolean("AADT_JOIN", cm.AADT_JOIN_LABEL, defaultValue=True))
+        P(QgsProcessingParameterString("AADT_LAYERS", cm.AADT_LAYERS_LABEL, defaultValue="", optional=True))
         P(QgsProcessingParameterFile("DAMS_FOLDER", "Dams folder: add a 'screened' status to dam.json of "
                                      "the dams that have a folder there (optional)",
                                      behavior=FILE_FOLDER, optional=True))
@@ -303,7 +325,7 @@ class HazardClassification(UnitAlgorithm):
         ifields = QgsFields()
         for n, t in (("dam_id", FT_STRING), ("kind", FT_STRING), ("depth_m", FT_DOUBLE),
                      ("vel_ms", FT_DOUBLE), ("dv_m2s", FT_DOUBLE), ("lethal", FT_STRING),
-                     ("level", FT_STRING)):
+                     ("level", FT_STRING), ("aadt_src", FT_STRING)):     # aadt_src: 0.58.0, roads
             ifields.append(QgsField(n, t))
         isink, idest = self.parameterAsSink(params, "IMP", context, ifields, WKB_POINT, cm.albers())
         tf = lambda src: (cm.to_albers(src), cm.from_albers(src)) if src is not None else (None, None)
@@ -354,13 +376,30 @@ class HazardClassification(UnitAlgorithm):
                       for ly in _open(S("LIFE_MORE"), "lifelines")]
         extra_bld = [(ly, *tf(ly), *_bld_cols(ly), layer_name(ly) + ":")
                      for ly in _open(S("BLD_MORE"), "structures")]
-        if primary_roads_no_aadt and not any(cols[3] for cols in extra_roads):
+        # 0.58.0: traffic counts for the roads without one (core/road_aadt.py, the Runner's aadt_join)
+        join = None
+        if self.parameterAsBool(params, "AADT_JOIN", context) and (roads is not None or extra_roads):
+            apaths = RA.sources(S("AADT_LAYERS"), cm.layer_path(params, "ROADS"), S("ROADS_MORE"))
+            if apaths:
+                join = cm.aadt_join(apaths)
+                feedback.pushInfo("Traffic counts for roads without AADT (the traffic line a road runs along, "
+                                  "else a count station within {:.0f} m): {}".format(
+                                      join.max_m, ", ".join(os.path.basename(p) for p in apaths)))
+            else:
+                feedback.pushInfo("Traffic counts: no AADT layer given (AADT_LAYERS) or found next to the roads "
+                                  "file; roads without AADT keep the 'unknown AADT' class.")
+        if primary_roads_no_aadt and not any(cols[3] for cols in extra_roads) and not join:
             feedback.reportError("Roads: no AADT field - every overtopped road is a data gap classified "
                                  "{} by assumption.".format(unknown_aadt))
-        elif primary_roads_no_aadt:
+        elif primary_roads_no_aadt and not join:
             feedback.pushInfo("The primary roads layer has no AADT. AADT is read from the extra road "
                               "files. An overtopped road from the primary layer is still a data gap "
                               "classified {}.".format(unknown_aadt))
+        elif primary_roads_no_aadt:
+            feedback.pushInfo("The primary roads layer has no AADT: an overtopped road takes the count it "
+                              "matches in the traffic layers; one that matches none is a data gap classified "
+                              "{} by assumption.".format(unknown_aadt))
+        n_aadt_review, said = 0, set()
         total = sim.featureCount() or 1
         tally, n_gaps, n_border = {}, 0, 0
         chart_txt = hz.chart_text(charts)
@@ -421,6 +460,9 @@ class HazardClassification(UnitAlgorithm):
                             "hz_reason": "triage: " + str(get(f, "tri_reason") or "nothing inside the envelope"),
                             "n_bldg_wet": 0, "n_bldg_lethal": 0, "n_road_wet": 0, "n_rail_wet": 0,
                             "hz_border": "no", "hz_gaps": ""})
+                if get(f, "tri_aadt"):          # 0.58.0: the clear rests on matched traffic counts
+                    res["hz_aadt_review"] = str(get(f, "tri_aadt"))
+                    n_aadt_review += 1
             elif status not in ("ok", "cached") or not dtif or not vtif:
                 res.update({"hz_class": "NoData", "hz_conf": "none",
                             "hz_notes": "no simulation result: " + str(get(f, "sim_notes") or get(f, "notes") or "")})
@@ -482,6 +524,8 @@ class HazardClassification(UnitAlgorithm):
                         where[("structure", sid)] = ((s["x"], s["y"]), s, ("mobile home" if mob else "structure")
                                                      if hab else "uninhabited building")
 
+                road_parts = {}                      # 0.58.0: overtopped roads without AADT -> line parts
+
                 def lines(src, tfm, fback, kind, out, attrs, prefix=""):
                     for r in feats(src, fback):
                         k, parts = cm.albers_parts(r, tfm)
@@ -492,6 +536,8 @@ class HazardClassification(UnitAlgorithm):
                             rec.update(attrs(r))
                             out.append(rec)
                             where[(kind, rid)] = ((s["x"], s["y"]), s, kind)
+                            if kind == "road" and k == "line" and nh.aadt_value(rec.get("aadt")) is None:
+                                road_parts[rid] = parts
 
                 def _rname(r):
                     # 0.17.38: the road's name (and an ND NG9-1-1 SHIELD code), so a US / State
@@ -512,18 +558,23 @@ class HazardClassification(UnitAlgorithm):
                         got = (got + " " + str(sh).strip()).strip()
                     return got
 
+                # isys (0.58.0): a piece of the interstate system its name does not show (FUNC_SYS 1: 'RAMP',
+                # 'EXIT 63'), rated Interstate as the Hazard plugin does; ishield: an NG9-1-1 SHIELD I / EXIT
+                # road outside it, which a matched count never lowers
                 if roads is not None:
                     lines(roads, tr, fr, "road", r_in, lambda r: {
                         "name": _rname(r),
                         "aadt": r[f_aadt] if f_aadt else None,
                         "road_class": str(r[f_rcls]) if f_rcls and r[f_rcls] is not None else "",
-                        "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False})
+                        "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False,
+                        "isys": cm.interstate_system(r), "ishield": cm.interstate_shield(r)})
                 for src, tfm, fback, fa, frc, fs, prefix in extra_roads:
                     lines(src, tfm, fback, "road", r_in, lambda r, fa=fa, frc=frc, fs=fs: {
                         "name": _rname(r),
                         "aadt": r[fa] if fa else None,
                         "road_class": str(r[frc]) if frc and r[frc] is not None else "",
-                        "sole_access": nh.yes_no(r[fs]) is True if fs else False}, prefix)
+                        "sole_access": nh.yes_no(r[fs]) is True if fs else False,
+                        "isys": cm.interstate_system(r), "ishield": cm.interstate_shield(r)}, prefix)
                 if rail is not None:
                     lines(rail, tl, fl, "railroad", t_in, lambda r: {
                         "trains_per_day": r[f_trn] if f_trn else None,
@@ -560,19 +611,75 @@ class HazardClassification(UnitAlgorithm):
                             where[("dam", oid)] = ((x, y), {"depth_m": dd, "vel_ms": vv, "dv_m2s": None},
                                                    "dam")
 
+                # 0.58.0: an overtopped road without AADT takes the count of the traffic line it runs along
+                # (or the count station on it) where the water crosses it; an interstate is High anyway
+                st8 = nh.Settings(unknown_aadt=unknown_aadt)
+                lvl = lambda r, aadt: nh.road_class(hz.nd_road(
+                    r["id"], r["depth_m"], aadt, r.get("road_class", ""),
+                    sole_access=r.get("sole_access", False), name=r.get("name", ""),
+                    interstate_system=r.get("isys", False)), st8)[0]
+                interstate = lambda r: r.get("isys") or hz.is_interstate(r.get("road_class", ""), r.get("name", ""))
+                joined, kept, tried = {}, {}, 0
+                if join and road_parts:
+                    wet = RA.wet_test(grid.depth, grid.x0, grid.y_top, grid.cell, rdep)
+                    for r in r_in:
+                        if r["id"] not in road_parts or interstate(r):
+                            continue
+                        tried += 1
+                        # where the water crosses it (else next to the point found overtopped), by its name
+                        m = join.match(road_parts[r["id"]], is_wet=wet, name=r.get("name", ""), at=(r["x"], r["y"]))
+                        if m and r.get("ishield") and nh.RANK[lvl(r, m["aadt"])] < nh.RANK[lvl(r, None)]:
+                            kept[r["id"]] = m           # SHIELD I / EXIT: not lowered by a count
+                        elif m:
+                            joined[r["id"]] = m
+                    for e in join.errors:
+                        if e not in said:
+                            said.add(e)
+                            feedback.reportError("Traffic counts: {} was not read (left out)".format(e))
+                r_cls = [dict(r, aadt=joined[r["id"]]["aadt"], aadt_src=joined[r["id"]]["text"])
+                         if r["id"] in joined else r for r in r_in]
+                r_name = {r["id"]: str(r.get("name") or "").strip() for r in r_in if r["id"] in joined or r["id"] in kept}
+
+                def rlabel(rid):
+                    """'road 12 (87TH ST NW)': the impacted feature's id and, when it has one, its name."""
+                    return "road {}{}".format(rid, " ({})".format(r_name[rid]) if r_name.get(rid) else "")
+                for rid, m in kept.items():
+                    feedback.pushInfo("dam {}: {}: interstate shield (SHIELD I / EXIT): the matched {} would "
+                                      "lower it; not used".format(dam_id, rlabel(rid), m["text"]))
+
+                def classify(roads_in):
+                    return hz.classify_nd(s_in, roads_in, t_in, method=crit, wet_m=wet_m, rule_depth_ft=rule_ft,
+                                          unknown_aadt=unknown_aadt, charts=charts, curve=curve,
+                                          lifelines=l_in, downstream_dams=d_in, unknown_trains=unknown_trains)
                 try:
-                    c = hz.classify_nd(s_in, r_in, t_in, method=crit, wet_m=wet_m, rule_depth_ft=rule_ft,
-                                       unknown_aadt=unknown_aadt, charts=charts, curve=curve,
-                                       lifelines=l_in, downstream_dams=d_in, unknown_trains=unknown_trains)
+                    c = classify(r_cls)
+                    c0 = classify(r_in) if joined else c        # the class without the matched counts
                 except nh.ChartsNotDigitized as e:
                     raise QgsProcessingException(str(e))
+                aadt_review = ""
+                if joined:
+                    for fnd in c.findings:
+                        if fnd.kind == "road" and fnd.id in joined:
+                            fnd.reason += " [count from {}]".format(RA.source_label(joined[fnd.id]["source"]))
+                    for rid, m in joined.items():
+                        feedback.pushInfo("dam {}: {}: {}".format(dam_id, rlabel(rid), m["text"]))
+                    if nh.RANK[c.hazard_class] < nh.RANK[c0.hazard_class]:
+                        # one entry per road: an NG9-1-1 street cut into segments that took one count is listed once
+                        items = [(r_name.get(r["id"]), r["id"], "{} ({} instead of {})".format(
+                                     joined[r["id"]]["text"], lvl(r, r["aadt"]), lvl(r, None)))
+                                 for r in r_cls if r["id"] in joined
+                                 and nh.RANK[lvl(r, r["aadt"])] < nh.RANK[lvl(r, None)]]
+                        aadt_review = RA.review_text("Class", c.hazard_class,
+                                                     "it would be " + c0.hazard_class, items)
+                        n_aadt_review += 1
+                        feedback.pushWarning("dam {}: {}".format(dam_id, aadt_review))
                 if RD.folder():                     # known-class benchmark fixtures (off by default)
                     try:
                         RD.write(dam_id, {"method": crit, "wet_m": wet_m, "rule_depth_ft": rule_ft,
                                           "unknown_aadt": unknown_aadt, "unknown_trains": unknown_trains,
                                           "struct_min_m": mind, "road_min_m": rdep,
                                           "incremental": bool(itif)},
-                                 s_in, r_in, t_in, l_in, d_in,
+                                 s_in, r_cls, t_in, l_in, d_in,
                                  result={"hz_class": c.hazard_class, "governing": hz.governing_summary(c),
                                          "counts": dict(c.counts), "data_gaps": list(c.data_gaps),
                                          "borderline_raised": bool(c.borderline_raised)},
@@ -580,6 +687,27 @@ class HazardClassification(UnitAlgorithm):
                                                                        "height_m", "peak_cms")}})
                     except Exception as e:              # a fixture must never stop the classification
                         feedback.pushWarning("dam {}: receptor dump not written: {}".format(dam_id, e))
+                by_id = {r["id"]: r for r in r_cls}
+
+                def aadt_src(rid):
+                    """Where the road's count came from (the impacted features' aadt_src)."""
+                    r = by_id.get(rid) or {}
+                    if rid in joined:
+                        return joined[rid]["text"]
+                    if nh.aadt_value(r.get("aadt")) is not None:
+                        return "own AADT field"
+                    if r.get("isys") and not hz.is_interstate(r.get("road_class", ""), r.get("name", "")):
+                        return ("no AADT; interstate system (F_SYSTEM / FUNC_SYS 1, ROUTE_SIGNING 2 or SHIELD I + route "
+                                "number; High whatever its count)")
+                    if interstate(r):
+                        return "no AADT; interstate (High whatever its count)"
+                    if rid in kept:
+                        return ("no AADT; interstate shield (SHIELD I / EXIT), so not lowered by the matched "
+                                + kept[rid]["text"])
+                    if join:
+                        return "no AADT; no traffic count matched within {:.0f} m".format(join.max_m)
+                    return "no AADT; no traffic layer"
+
                 for fnd in c.findings:
                     w = where.get((fnd.kind, fnd.id))
                     if w is None:
@@ -594,7 +722,7 @@ class HazardClassification(UnitAlgorithm):
                     it = QgsFeature(ifields)
                     it.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(w[0][0], w[0][1])))
                     it.setAttributes([dam_id, w[2], w[1]["depth_m"], w[1].get("vel_ms"), w[1].get("dv_m2s"),
-                                      lethal, fnd.level])
+                                      lethal, fnd.level, aadt_src(fnd.id) if fnd.kind == "road" else None])
                     isink.addFeature(it)
 
                 cls = c.hazard_class
@@ -605,6 +733,10 @@ class HazardClassification(UnitAlgorithm):
                 conf = "medium"
                 if str(get(f, "edge_flag")) == "YES":
                     conf = "review"; notes.append("flood reached terrain edge; impacts may be missed")
+                if aadt_review:
+                    conf = "review"
+                    notes.append("class {} rests on matched traffic counts (without them {}; hz_aadt_review)".format(
+                        c.hazard_class, c0.hazard_class))
                 eng = str(get(f, "sim_engine") or get(f, "solver") or "")
                 if "acc" in eng and cls != "Low":
                     notes.append("ACC velocities near the breach may be unreliable")
@@ -623,7 +755,12 @@ class HazardClassification(UnitAlgorithm):
                             "n_rail_wet": c.counts["railroads_overtopped"],
                             "hz_notes": hz.limit_text(notes),
                             "hz_border": "yes" if c.borderline_raised else "no",
-                            "hz_gaps": hz.limit_text(list(c.data_gaps) + extra_gaps)})
+                            "hz_gaps": hz.limit_text(list(c.data_gaps) + extra_gaps),
+                            "hz_aadt": hz.limit_text(["{} of {} overtopped road(s) without AADT matched".format(
+                                len(joined), tried)] + RA.grouped([(r_name.get(k), k, m["text"])
+                                                                   for k, m in joined.items()])[0])
+                            if tried else None,
+                            "hz_aadt_review": aadt_review or None})
                 n_gaps += bool(c.data_gaps or extra_gaps)
                 n_border += bool(c.borderline_raised)
                 for gap in (list(c.data_gaps) + extra_gaps)[:20]:
@@ -641,7 +778,7 @@ class HazardClassification(UnitAlgorithm):
                 dfold = os.path.join(dams_folder, ho.safe_name(dam_id))
                 if os.path.isdir(dfold):
                     attrs = {n: get(f, n) for n in names}
-                    attrs.update({k: res[k] for k in ("hz_class", "hz_border", "hz_gaps")})
+                    attrs.update({k: res[k] for k in ("hz_class", "hz_border", "hz_gaps", "hz_aadt_review")})
                     if status == "noflood":      # recorded as a triage clear with its reason
                         attrs["tri_result"] = "clear"
                         attrs["tri_reason"] = res["hz_reason"]
@@ -669,6 +806,10 @@ class HazardClassification(UnitAlgorithm):
                 n_records, dams_folder))
         feedback.pushInfo("classes: " + ", ".join(f"{k} {v}" for k, v in sorted(tally.items())))
         feedback.pushInfo(f"dams with data gaps: {n_gaps}; borderline raised (ND 5.3): {n_border}")
+        if join:
+            feedback.pushInfo("traffic counts: {}; {} file read(s) by area; dams whose class is lower because of "
+                              "a matched count (hz_aadt_review, to review): {}".format(join.summary(), join.reads,
+                                                                                       n_aadt_review))
         feedback.pushInfo("Screening classification; the official classification is made by the ND "
                           "Department of Water Resources.")
         return {"OUT": dest, "IMP": idest}

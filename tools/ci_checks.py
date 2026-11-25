@@ -93,6 +93,9 @@ IDENTICAL_ACROSS_PLUGINS = {
     # Runner 3.10.89 / Screening 0.17.50: one rule for the elevation unit a DEM records (the
     # Runner's 'Detect from the raster' and what Download DEM tags)
     "core/dem_zunit.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    # Screening 0.58.0: one AADT join for roads without a count (HPMS, NDDOT count stations, ND
+    # county roads), so tools 6 / 8 and the Runner's ND classification give a road the same count
+    "core/aadt_join.py": ("DamSafety_Runner", "DamSafety_Screening"),
     # audit R-H1: the Suite status dock's Linux LISFLOOD-FP build applies the same patch
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),

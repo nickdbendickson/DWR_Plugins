@@ -1,0 +1,20 @@
+{
+ "title": "EA 2D benchmark test 3: dam break over a floodplain (Neelz & Pender SC120002), 5 m",
+ "deck": "deck/base.par",
+ "solvers": [
+  "fv1"
+ ],
+ "reference": {
+  "kind": "grid",
+  "file": "reference.max",
+  "of": "LISFLOOD-FP 8.3 FV1 (HLLC), same deck"
+ },
+ "wet_threshold_m": 0.1,
+ "tol": {
+  "rmse_m": 0.01,
+  "maxabs_m": 0.05,
+  "min_csi": 0.98
+ },
+ "max_volume_error_frac": 0.001,
+ "note": "ACC is excluded: LISFLOOD-FP's ACC gains mass on this steep break while Boann's conserves, so the two ACC runs legitimately differ. Boann and LF agree on FV1."
+}

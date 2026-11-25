@@ -1,0 +1,20 @@
+{
+ "title": "Three humps, dam break (LISFLOOD-FP test T03): a reservoir drains over three hills",
+ "deck": "deck/base.par",
+ "solvers": [
+  "fv1"
+ ],
+ "reference": {
+  "kind": "grid",
+  "file": "reference.max",
+  "of": "Boann 6.0.0 FV1 CPU build, frozen on this deck (drift self-reference)"
+ },
+ "wet_threshold_m": 0.05,
+ "tol": {
+  "rmse_m": 0.005,
+  "maxabs_m": 0.03,
+  "min_csi": 0.99
+ },
+ "max_volume_error_frac": 0.001,
+ "note": "Boann and LISFLOOD-FP 8.3 FV1 agree on this deck, but the dam break over three hills is wave-dominated, so a few cells differ by ~0.2 m in peak timing between any two codes. A frozen Boann self-reference makes this a tight drift guard; external agreement with LF is checked in the Mac/cloud kit, not gated to the millimetre here."
+}
