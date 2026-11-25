@@ -1,4 +1,5 @@
 """Quick screen (triage): clear dams whose generous flood envelope reaches nothing."""
+import dataclasses
 import os
 import random
 
@@ -12,6 +13,7 @@ from qgis.core import (QgsProcessingParameterFeatureSource,
                        QgsGeometry, QgsPointXY)
 
 from ..core import triage as tg, hazard as hz, gridutil as gu, runner as rn, nd_counties as ndc
+from ..core import road_aadt as RA
 from . import _common as cm
 from ..core import errors as er
 from ..core.inventory import DWR_ALIASES, NID_ALIASES
@@ -35,7 +37,9 @@ NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
        ("tri_reach_m", FT_DOUBLE), ("tri_hits", FT_INT),
        ("tri_audit", FT_STRING), ("tri_tif", FT_STRING),
        # 0.52.0 downstream corridor: hit | incomplete | none | off | not run | failed
-       ("tri_corr", FT_STRING), ("tri_corr_m", FT_DOUBLE), ("tri_corr_hit", FT_STRING)]
+       ("tri_corr", FT_STRING), ("tri_corr_m", FT_DOUBLE), ("tri_corr_hit", FT_STRING),
+       # 0.58.0: a clear that rests on traffic counts matched from other layers (review)
+       ("tri_aadt", FT_STRING)]
 CORR_TERRAIN = ["Cached clips only (tool 2)", "USGS 3DEP service", "Local DEM folder"]
 CORR_TERRAIN_SRC = ("cache", "3dep", "local")          # cm.TerrainLoader sources, in that order
 CORR_FIELDS = [("dam_id", FT_STRING), ("part", FT_STRING), ("tri_corr", FT_STRING)]
@@ -103,7 +107,9 @@ class Triage(UnitAlgorithm):
                 "tri_result = clear: no habitable structure (tool 8's rule: habitable unless the "
                 "occupancy names an uninhabited building), no road that could rate Medium or High "
                 "(only a known AADT < 500, not interstate, not a US / State highway, not sole access is left out; an unknown "
-                "AADT counts), no railroad, no lifeline facility and no other dam of the layer lies "
+                "AADT counts; 0.58.0: a road without AADT first takes the count of the traffic line it runs "
+                "along or the count station on it, as tool 8), no railroad, no lifeline facility and no other "
+                "dam of the layer lies "
                 "inside the envelope, so the dam screens LOW without the 2D model. needs 2D: something is inside, the envelope reached the terrain edge, or the "
                 "dam is above the size limit. Tool 7 skips cleared dams.\n"
                 "A dam DWR rates above Low (haz_existing High, Significant or Medium; NID H / S) is never cleared.\n"
@@ -130,6 +136,11 @@ class Triage(UnitAlgorithm):
                 "(tri_corr = off). tri_corr: hit | incomplete | none | not run | failed; tri_corr_hit "
                 "says what and where. Expect most unrated dams in settled valleys to go to 2D: in "
                 "testing, 0 of 46 dams the envelope cleared still cleared.\n"
+                "TRAFFIC COUNTS (0.58.0): roads without AADT (the pack's NG9-1-1 roads) take the count of the "
+                "HPMS / county road line they run along or the NDDOT count station on them (AADT_LAYERS, else the "
+                "files next to the roads file, plus ROADS_MORE), in the envelope where the water crosses them "
+                "and in the corridor where they lie within its width; one that matches nothing keeps the "
+                "'unknown AADT' rule. tri_aadt marks a clear that rests on such a count (to review).\n"
                 "AUDIT: a random share of cleared dams is still sent to tool 7 (tri_audit = yes); "
                 "tool 8 reports whether the 2D model agreed. Screening shortcut only.")
 
@@ -169,6 +180,9 @@ class Triage(UnitAlgorithm):
         P(QgsProcessingParameterString(
             "BLD_MORE", "More structure GeoPackages, separated by ;; (address points, USA Structures)",
             defaultValue="", optional=True))
+        # 0.58.0: traffic counts for roads without one, as tool 8 (defaults: an older saved run still runs)
+        P(QgsProcessingParameterBoolean("AADT_JOIN", cm.AADT_JOIN_LABEL, defaultValue=True))
+        P(QgsProcessingParameterString("AADT_LAYERS", cm.AADT_LAYERS_LABEL, defaultValue="", optional=True))
         P(QgsProcessingParameterFeatureSource("STREAMS", "Stream lines for road-crossing cuts (optional)",
                                               [SRC_LINE], optional=True))
         P(QgsProcessingParameterFeatureSource("DAMLINES", "DWR dam lines (protected from cuts, optional)",
@@ -358,6 +372,28 @@ class Triage(UnitAlgorithm):
                                      "FUNCTIONAL_CLASS", "functional_class"),
                                _cols(lyr, f_sole or "", "sole_access")))
 
+        # 0.58.0: traffic counts for roads without AADT (core/road_aadt.py, the Runner's aadt_join), read by area
+        join = None
+        if self.parameterAsBool(params, "AADT_JOIN", context) and (roads is not None or road_extra):
+            apaths = RA.sources(S("AADT_LAYERS"), cm.layer_path(params, "ROADS"), S("ROADS_MORE"))
+            if apaths:
+                join = cm.aadt_join(apaths)
+                feedback.pushInfo("Traffic counts for roads without AADT: {}".format(
+                    ", ".join(os.path.basename(p) for p in apaths)))
+        rested, said = [], set()                               # per dam: roads rated lower only on a matched count
+
+        def match(parts, is_wet):
+            """join.match, the unread files reported once."""
+            m = join.match(parts, is_wet=is_wet) if join and parts else None
+            for e in (join.errors if join else ()):
+                if e not in said:
+                    said.add(e)
+                    feedback.reportError("Traffic counts: {} was not read (left out)".format(e))
+            return m
+
+        def _with_count(rd, m):
+            return dataclasses.replace(rd, aadt=hz.nh.aadt_value(m["aadt"]))
+
         def points_of(kind, parts):
             """Points tested against the envelope: the points; a polygon's vertex mean and vertices;
             a line's vertices (lines are densified before)."""
@@ -419,16 +455,34 @@ class Triage(UnitAlgorithm):
             p = cm.rep_point(g)
             return p is not None and all(np.hypot(p[0] - q[0], p[1] - q[1]) > OWN_DAM_M for q in cur["own"])
 
+        def _high(rd, r, ctext, src=""):
+            # tool 8 rates it High, or a US / State highway with no AADT (it may carry > 2,000)
+            if not (hz.nh.road_class(rd, st8)[0] == hz.nh.HIGH or (rd.us_state and rd.aadt is None)):
+                return False, ""
+            why = ("interstate" if rd.interstate else "AADT {:,.0f}{}".format(rd.aadt, src) if rd.aadt is not None
+                   else "US/State highway, AADT unknown" if rd.us_state else "AADT unknown, assumed High")
+            return True, "{} ({})".format(_road_name(r) or ctext or "road", why)
+
         def _road_high(r, nms, faadt, frcls, fsole):
             ctext = str(r[frcls]) if frcls and r[frcls] else ""
             rd = hz.nd_road("r", 1.0, cm.fval(r, nms, faadt, float), ctext,
                             sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False, name=_road_name(r))
-            # tool 8 rates it High, or a US / State highway with no AADT (it may carry > 2,000)
-            if not (hz.nh.road_class(rd, st8)[0] == hz.nh.HIGH or (rd.us_state and rd.aadt is None)):
-                return False, ""
-            why = ("interstate" if rd.interstate else "AADT {:,.0f}".format(rd.aadt) if rd.aadt is not None
-                   else "US/State highway, AADT unknown" if rd.us_state else "AADT unknown, assumed High")
-            return True, "{} ({})".format(_road_name(r) or ctext or "road", why)
+            if join and rd.aadt is None and not rd.interstate:
+                # 0.58.0: its rating rests on a traffic count: decided once the road is known to lie in the
+                # corridor, with the count of its part there
+                return None, (lambda feat, ta, near: _road_high_joined(feat, ta, near, rd, ctext))
+            return _high(rd, r, ctext)
+
+        def _road_high_joined(r, ta, near, rd, ctext):
+            kind, parts = cm.albers_parts(r, ta)
+            m = match(parts, near) if kind == "line" else None
+            if not m:
+                return _high(rd, r, ctext)
+            ok, label = _high(_with_count(rd, m), r, ctext, " from " + RA.source_label(m["source"]))
+            if not ok and _high(rd, r, ctext)[0]:
+                rested.append("road {} in the corridor: {} (not High-capable; without it: {})".format(
+                    _road_name(r) or ctext or r.id(), m["text"], _high(rd, r, ctext)[1]))
+            return ok, label
 
         rlnames = _names(rail)
         pax_f = pick(rlnames, S("RAIL_PAX"), "PASSNGR", "passenger")
@@ -592,6 +646,9 @@ class Triage(UnitAlgorithm):
             if len(axis):
                 idx = tg.PointIndex(axis, max(corr_w, 100.0))
                 seen = set()
+
+                def near(x, y):
+                    return bool(np.isfinite(idx.nearest(np.array([[x, y]]), corr_w + 5.0)[0][0]))
                 for b0 in np.arange(0.0, float(line_m.max()) + 1000.0, 1000.0):   # nearest 1 km band first
                     m = (line_m >= b0) & (line_m < b0 + 1000.0)
                     if not m.any():
@@ -604,7 +661,7 @@ class Triage(UnitAlgorithm):
                                 continue
                             seen.add((k, feat.id()))
                             ok, label = classify(feat)
-                            if not ok:
+                            if not ok and not callable(label):
                                 continue
                             pts = test_points(feat, ta)
                             if pts is None:
@@ -612,6 +669,10 @@ class Triage(UnitAlgorithm):
                             d, j = idx.nearest(pts, corr_w + 5.0)
                             if not np.isfinite(d).any():
                                 continue
+                            if callable(label):                # 0.58.0: a road rated on a matched count
+                                ok, label = label(feat, ta, near)
+                                if not ok:
+                                    continue
                             q = int(np.argmin(d)); jj = int(j[q])
                             if hit is None or line_m[jj] < hit[3]:
                                 hit = (label, float(d[q]), str(src[jj]), float(line_m[jj]))
@@ -666,6 +727,7 @@ class Triage(UnitAlgorithm):
                 continue
             a = cm.blank_attrs(fields, f)
             result, reason, reach, hits, tif = "needs 2D", "", None, 0, None
+            del rested[:]
             tri_corr, corr_m, corr_hit = ("not run" if corr_on else "off"), None, None
             nf, nf_why = cm.no_flood(f, dams.fields().names())
             ex, ex_why = cm.excluded(f, dams.fields().names())
@@ -748,37 +810,47 @@ class Triage(UnitAlgorithm):
                     for oid, (x, y) in dam_pts:
                         if oid != dam_id and inside(x, y):
                             found.append("dam")
+                    def env_road(r, ta, nms, faadt, frcls, fsole):
+                        """A road inside the envelope that could raise the class above Low. Same rule as tool 8
+                        (nd_hazard): only a road KNOWN to be low (AADT < 500, not interstate, not US / State, not
+                        sole access) cannot; an unknown AADT is assumed Medium there, so it counts here too -
+                        0.58.0: unless the road takes a count from the traffic layers where the envelope
+                        crosses it."""
+                        rd = hz.nd_road("r", 1.0, cm.fval(r, nms, faadt, float),
+                                        str(r[frcls]) if frcls and r[frcls] else "",
+                                        sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False,
+                                        name=_road_name(r))
+                        lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
+                        if lvl == "Low":
+                            return False                # cannot raise the class above Low
+                        gl = r.geometry(); gl.transform(ta)
+                        parts = cm.geom_parts(gl)[1] if join and rd.aadt is None and not rd.interstate else None
+                        gl = gl.densifyByDistance(abs(gt[1]))
+                        if not any(inside(v.x(), v.y()) for v in gl.vertices()):
+                            return False
+                        m = match(parts, inside) if parts else None
+                        if m and hz.nh.road_class(_with_count(rd, m), hz.nh.Settings())[0] == "Low":
+                            rested.append("road {}: {} (Low instead of {})".format(_road_name(r) or r.id(),
+                                                                                 m["text"], lvl))
+                            return False
+                        return True
+
                     for src, kind in ((roads, "road"), (rail, "railroad")):
                         if src is None:
                             continue
                         ta, fa = cm.to_albers(src), cm.from_albers(src)
                         for r in src.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
                             if kind == "road":
-                                aadt = cm.fval(r, rnames, f_aadt, float)
-                                # same rule as tool 8 (nd_hazard): only a road KNOWN to be
-                                # low (AADT < 500, not interstate, not US / State) cannot raise the class; an
-                                # unknown AADT is assumed Medium there, so it counts here too
-                                rd = hz.nd_road("r", 1.0, aadt, str(r[f_rcls]) if f_rcls and r[f_rcls] else "",
-                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False,
-                                                name=_road_name(r))
-                                lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
-                                if lvl == "Low":
-                                    continue            # cannot raise the class above Low
+                                if env_road(r, ta, rnames, f_aadt, f_rcls, f_sole):
+                                    found.append(kind)
+                                continue
                             gl = r.geometry(); gl.transform(ta); gl = gl.densifyByDistance(abs(gt[1]))
                             if any(inside(v.x(), v.y()) for v in gl.vertices()):
                                 found.append(kind)
                     for lyr, nms, faadt, frcls, fsole in road_extra:
                         ta, fa = cm.to_albers(lyr), cm.from_albers(lyr)
                         for r in lyr.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
-                            aadt = cm.fval(r, nms, faadt, float)
-                            rd = hz.nd_road("r", 1.0, aadt,
-                                            str(r[frcls]) if frcls and r[frcls] else "",
-                                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False,
-                                            name=_road_name(r))
-                            if hz.nh.road_class(rd, hz.nh.Settings())[0] == "Low":
-                                continue
-                            gl = r.geometry(); gl.transform(ta); gl = gl.densifyByDistance(abs(gt[1]))
-                            if any(inside(v.x(), v.y()) for v in gl.vertices()):
+                            if env_road(r, ta, nms, faadt, frcls, fsole):
                                 found.append("road")
                     hits = len(found)
                     if env.get("untraced"):
@@ -813,6 +885,12 @@ class Triage(UnitAlgorithm):
                 result, reason = "clear", "no breach flood: {}".format(e)
             except Exception as e:  # keep the batch going
                 reason = "not screened: " + er.plain(e, dam_id, "6")
+            tri_aadt = None
+            if result == "clear" and rested and not (nf or ex or flag_e):
+                # 0.58.0: without the matched counts this dam would go to 2D: flag the clear for review
+                tri_aadt = RA.review_text("Triage", "clear", "it needs 2D", rested)
+                reason += "; rests on matched traffic counts for {} road(s) (tri_aadt)".format(len(rested))
+                stats["aadt"] = stats.get("aadt", 0) + 1
             aud = "no"
             if result == "clear" and not nf and not flag_e and rnd.random() < audit:
                 aud = "yes"; stats["audit"] += 1
@@ -820,12 +898,16 @@ class Triage(UnitAlgorithm):
             corr_stats[tri_corr] = corr_stats.get(tri_corr, 0) + 1
             for k, v in (("tri_result", result), ("tri_reason", reason), ("tri_reach_m", reach),
                          ("tri_hits", hits), ("tri_audit", aud), ("tri_tif", tif), ("tri_corr", tri_corr),
-                         ("tri_corr_m", corr_m), ("tri_corr_hit", corr_hit[:254] if corr_hit else None)):
+                         ("tri_corr_m", corr_m), ("tri_corr_hit", corr_hit[:254] if corr_hit else None),
+                         ("tri_aadt", tri_aadt)):
                 put(a, k, v)
             o = QgsFeature(fields); o.setGeometry(f.geometry()); o.setAttributes(a)
             sink.addFeature(o)
         feedback.pushInfo(f"triage: {stats['clear']} cleared ({stats['audit']} of them audited in 2D), "
                           f"{stats['needs 2D']} need the 2D model")
+        if join:
+            feedback.pushInfo("traffic counts: {}; {} file read(s) by area; clears that rest on a matched count "
+                              "(tri_aadt, to review): {}".format(join.summary(), join.reads, stats.get("aadt", 0)))
         if corr_on:
             feedback.pushInfo("downstream corridor: " + ", ".join(
                 "{} {}".format(corr_stats.get(k, 0), k) for k in ("hit", "incomplete", "failed", "none", "not run")) +

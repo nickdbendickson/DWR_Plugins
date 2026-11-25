@@ -91,6 +91,9 @@ class Sensitivity(UnitAlgorithm):
             "ROADS_MORE", "More road GeoPackages, separated by ;; (as tool 8)",
             defaultValue="", optional=True))
         P(QgsProcessingParameterString(
+            "AADT_LAYERS", "Traffic (AADT) GeoPackages for roads without a count, separated by ;; (as tool 8; "
+            "empty = those next to the roads file)", defaultValue="", optional=True))
+        P(QgsProcessingParameterString(
             "LIFE_MORE", "More lifeline GeoPackages, separated by ;; (as tool 8)",
             defaultValue="", optional=True))
         P(QgsProcessingParameterString(
@@ -158,6 +161,7 @@ class Sensitivity(UnitAlgorithm):
                 "SIM": s["OUT"], "BLD": params.get("BLD"), "ROADS": params.get("ROADS"),
                 "RAIL": params.get("RAIL"), "LIFELINES": params.get("LIFELINES"),
                 "ROADS_MORE": self.parameterAsString(params, "ROADS_MORE", context),
+                "AADT_LAYERS": self.parameterAsString(params, "AADT_LAYERS", context),     # 0.58.0
                 "LIFE_MORE": self.parameterAsString(params, "LIFE_MORE", context),
                 "BLD_MORE": self.parameterAsString(params, "BLD_MORE", context),
                 **{k: self.parameterAsString(params, k, context) for k in
