@@ -152,7 +152,7 @@ def metalflood_params_layout_matches_kernels():
     _need_cpu_build()
     import ctypes
     lib = ctypes.CDLL(mfb.build_cpu_library())
-    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 96
+    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 100  # 6.8.0 added n_wl
     names = [n for n, _, _ in mfb.buffer_layout(3, 4, 1, 1, 2)]
     with open(mfb.KERNEL_SOURCE, encoding="utf-8") as f:
         src = f.read()
@@ -1228,7 +1228,7 @@ def metalflood_sgc_params_layout_matches_kernels():
     _need_cpu_build()
     import ctypes
     lib = ctypes.CDLL(mfb.build_cpu_library(mfb.SGC_SPEC))
-    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 96
+    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 100  # 6.8.0 added n_wl
     names = [n for n, _, _ in mfb.sgc_buffer_layout(3, 4, 1, 1, 2)]
     assert len(names) == 30, len(names)
     assert names[:3] == ["z", "n2", "h"] and names[-3:] == ["w", "Dd", "nc2"]
