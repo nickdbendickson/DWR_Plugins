@@ -40,6 +40,18 @@ SIZES = {"small": dict(ny=300, nx=500, dx=10.0, peak_cms=800.0, sim_s=7200.0),
 CASES = ("valley", "diagonal", "compact")
 
 
+def _spec(solver):
+    """The kernel Spec whose CPU library the solver runs on."""
+    if solver == "subfv":
+        from . import subfv_backend
+        return subfv_backend.SUBFV_SPEC
+    if solver == "subli":
+        from . import subli_backend
+        return subli_backend.SUBLI_SPEC
+    return {"sgc": be.SGC_SPEC, "fv": be.FV_SPEC, "fv2": be.FV2_SPEC,
+            "dg2": be.DG2_SPEC}.get(solver, be.FLOOD_SPEC)
+
+
 def _deck(folder, size, case="valley"):
     from . import cases
     s = SIZES[size]
@@ -127,7 +139,9 @@ def main(argv=None):
     runs = []
     if ok:
         runs.append("metal")
-    if not args.no_cpu and (args.size != "large" or args.cpu) and be.find_compiler():
+    # Boann 6.8.1: a prebuilt library counts as well as a compiler (a Windows install has the
+    # first and not the second)
+    if not args.no_cpu and (args.size != "large" or args.cpu) and be.cpu_available(_spec(solver)):
         runs.append("cpu")
     lf = args.lisflood or os.environ.get("NDBREACH_LISFLOOD") or _find_lisflood()
     if lf and solver == "acc":
@@ -178,6 +192,7 @@ def main(argv=None):
         for k, v in sorted(r.items()):
             if k.startswith("vs_"):
                 print("{:<10} {} {}".format("", k, json.dumps(v)))
+    os.makedirs(os.path.abspath(args.out), exist_ok=True)     # Boann 6.8.1: --out need not exist
     out = os.path.join(os.path.abspath(args.out), "metalflood_bench.json")
     with open(out, "w") as f:
         json.dump(info, f, indent=1)
