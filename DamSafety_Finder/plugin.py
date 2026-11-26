@@ -490,8 +490,6 @@ class FindWater(_Base):
 
     def processAlgorithm(self, params, context, feedback):
         from . import finder
-        import glob
-        import os
         self._feedback = feedback
         bbox = _bbox(self, params, context)
         out = self.parameterAsFileOutput(params, "OUT", context)
@@ -818,7 +816,7 @@ class AddEvidence(_Base):
         out = self.parameterAsFileOutput(params, "OUT", context)
         opt = lambda n: _src(self, params, n, context, required=False) or None  # noqa: E731
         try:
-            res = finder.run_evidence(
+            finder.run_evidence(
                 _src(self, params, "FILLS", context), out,
                 images=self.parameterAsString(params, "IMAGES", context) or None,
                 ndwi_threshold=self.parameterAsDouble(params, "NDWI", context),
