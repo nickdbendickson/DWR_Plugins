@@ -1,9 +1,9 @@
 {
- "boann_version": "6.8.0",
+ "boann_version": "6.8.1",
  "files": {
   "__init__.py": "1fdf88fe49f3237719f5d9164c5e06f47f085b56c7c2c09208c6b90b54ed0ecc",
   "grid/README.md": "d8b6307a5f7d64a1d89be9233599e664cbf56061e12b741059cb3496e5fb85a3",
-  "grid/__init__.py": "e9ff49e109b8e458fd9bb909830c00a3b981e4cc89b83c72af273f64ef30e17f",
+  "grid/__init__.py": "753796968faccc15a30ea29841fc8f827cebf213c0feb98eed80bc73f72bade1",
   "grid/__main__.py": "2b74537b56d40c650a5d783e8d7cb860da0eb1c631a372f1755ec02ff6b3fbe2",
   "grid/audit.py": "9f39c282fd26ff8ae47439666e32da0b42cf6512f6b800729a7f041cbad84276",
   "grid/burn.py": "39c3512fa54f86e9a9eb1df8fb020ebae1cf32aa2170193c4a36b2f9398e7f3e",
@@ -23,8 +23,8 @@
   "hydro/README.md": "9da0844ade94a039de18e203008b92bda5bf22c57ec683881f7ba31cd59e37cc",
   "hydro/__init__.py": "3975488cf1e995eba23fbfa4589bfe4f92f45d4f89a027e5c723334d4bd814ec",
   "hydro/__main__.py": "84cb653f103583bcd92c9586eefc69f92603fc5f9431cf25196f1aa880b97fae",
-  "hydro/backends.py": "b13c05dd4710306806140afdef22dab8a807cea3cd1fcbc5cd89855511edb3c1",
-  "hydro/bench.py": "f9535118be7fee9c64c3c1bfb4de0f3174154dae773460cd657d4bc3a644dbfc",
+  "hydro/backends.py": "7a43d0424bf1f892a908dd932de723c0f570c7ecf1ca777ec5b77000f7858bc4",
+  "hydro/bench.py": "e62d9e0b20cc6887ecd22509529985cb9cd1ce9b07471752bf74b4f7ebd5fd71",
   "hydro/boann.py": "111e69067dfd44ec4c2209e9071845f98558ceb1e6cb77dc35228143f2c1c01a",
   "hydro/cases.py": "b891a03392938fada602cfaf9f65d654f941197831ed4ba480d61829cf1df408",
   "hydro/cli.py": "5572681145bb75c0d270d11fd3250a2f1c3f9e0a6fd489735a70e1aab2e7920f",
@@ -59,6 +59,6 @@
   "hydro/subgrid.py": "38374ab641d89cb67d20bea3ba612cf1663f137d3eabd1668be29ca0a68be5f8",
   "hydro/subli_backend.py": "71e952718540c2ecee255d2632f8a8e31ebff4c14d8242a9d430e08affa1d272",
   "hydro/subli_ref.py": "d3a71e4eacec2dcfc88154bf255426d189822f9468f5394ddc5210bff9868103",
-  "hydro/version.py": "c95b61a7275beb575bea419d8573dea87a1bf980962c1fb8b32848acf16ebe76"
+  "hydro/version.py": "7dbb1e7666d952113d1daddd2fddc20892b63a86fcbd9178ed846cf9d360efa4"
  }
 }
