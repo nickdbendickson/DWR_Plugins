@@ -26,7 +26,10 @@ concurrency:
 jobs:
   fast-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # the Runner fast suite has grown (several GPU-tile byte-identity checks run on the CPU build);
+    # it is 11-16 min on main already, so 20 left no room for a slow/contended runner. 30 gives
+    # headroom without turning the fast lane into a long one.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
