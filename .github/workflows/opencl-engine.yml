@@ -52,7 +52,31 @@ jobs:
         env:
           DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
         run: python -m nd_breach_runner.tests.test_boann_opencl
-      - name: Speed (small valley, OpenCL on PoCL, for a look only)
+      - name: The check a GPU computer runs (small valley; PoCL is a CPU, so the times mean nothing)
+        env:
+          DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
+        run: python tools/boann_opencl_check.py --size small --skip-tests
+
+  windows-libs:
+    # Boann's CPU libraries for Windows from this branch's sources, cross-built as release.yml
+    # does: a Windows computer has no C++ compiler, and tools/boann_opencl_check.py compares the
+    # GPU with the CPU build. Unzip into DamSafety_Core/boann/hydro/prebuilt/.
+    name: Windows CPU libraries (for the GPU check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Cross-compile with MinGW-w64 (posix threads, OpenMP, -static)
         run: |
-          mkdir -p "$RUNNER_TEMP/s"
-          python DamSafety_Core/boann/hydro/boann.py run "$(python -c "import sys; sys.path.insert(0, '.'); from DamSafety_Core.boann.hydro.cases import valley_deck; print(valley_deck('$RUNNER_TEMP/s', ny=300, nx=500, dx=10.0, sim_s=3600.0))")" --backend opencl
+          sudo apt-get update -q && sudo apt-get install -y -q g++-mingw-w64-x86-64-posix
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out boann --platform windows-x64 \
+            --cxx x86_64-w64-mingw32-g++-posix --require-openmp --extra=-static
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boann-windows-x64
+          path: boann/
+          if-no-files-found: error

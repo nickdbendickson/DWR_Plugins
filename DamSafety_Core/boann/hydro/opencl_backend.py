@@ -79,6 +79,8 @@ CL_DEVICE_TYPE_ALL = 0xFFFFFFFF
 CL_PLATFORM_NAME = 0x0902
 CL_DEVICE_NAME = 0x102B
 CL_DEVICE_VERSION = 0x102F
+CL_DEVICE_EXTENSIONS = 0x1030
+CL_DEVICE_OPENCL_C_VERSION = 0x103D
 CL_DEVICE_TYPE = 0x1000
 CL_DEVICE_GLOBAL_MEM_SIZE = 0x101F
 CL_DEVICE_MAX_COMPUTE_UNITS = 0x1002
@@ -208,6 +210,27 @@ def _pick(ds):
     return (gpus or ds)[0]
 
 
+def _subgroups_wanted(cl, dev):
+    """The -cl-std the subgroup build uses ("CL2.0" / "CL3.0"), or "" for the one-work-item
+    build: the device's OpenCL C is 2.0 or newer and it has cl_khr_subgroups or
+    cl_intel_subgroups. DAMSAFETY_MF_CL_SUBGROUPS=0 / 1 turns it off / insists on it."""
+    want = os.environ.get("DAMSAFETY_MF_CL_SUBGROUPS", "auto").strip().lower()
+    if want in ("0", "no", "off", "false"):
+        return ""
+    ext = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_EXTENSIONS).value.decode(errors="replace")
+    cver = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_OPENCL_C_VERSION).value.decode(
+        errors="replace")
+    m = re.search(r"OpenCL C (\d+)\.(\d+)", cver)
+    major = int(m.group(1)) if m else 1
+    has = "cl_khr_subgroups" in ext.split() or "cl_intel_subgroups" in ext.split()
+    if major >= 2 and has:
+        return "CL3.0" if major >= 3 else "CL2.0"
+    if want in ("1", "yes", "on", "true"):
+        raise be.BackendError("DAMSAFETY_MF_CL_SUBGROUPS=1 but this device has no subgroups "
+                              "({}; {})".format(cver.strip(), "no subgroup extension"))
+    return ""
+
+
 # -- the backend ------------------------------------------------------------------------------
 
 class OpenCLBackend:
@@ -232,7 +255,11 @@ class OpenCLBackend:
         self.queue = cl.clCreateCommandQueue(self.ctx, dev, 0, _c.byref(err))
         _check(err.value, "clCreateCommandQueue")
         with open(spec.kernel_source, encoding="utf-8") as f:
-            src = translate(f.read()).encode("utf-8")
+            metal = f.read()
+        # the buffers no kernel writes (device const in the argument list): never read back
+        self.read_only = {int(i) for i in
+                          re.findall(r"device const \w+\* *\w+ B\((\d+)\)", metal)}
+        src = translate(metal).encode("utf-8")
         srcs = (_c.c_char_p * 1)(src)
         lens = (_sz * 1)(len(src))
         self.program = cl.clCreateProgramWithSource(self.ctx, 1, srcs, lens, _c.byref(err))
@@ -240,6 +267,10 @@ class OpenCLBackend:
         # DAMSAFETY_MF_CL_OPTIONS adds build options (CI: -cl-opt-disable for PoCL, whose LLVM
         # aborts optimising the DG2 kernels; it changes no arithmetic: no fast-math either way)
         opts = BUILD_OPTIONS
+        self.subgroups = _subgroups_wanted(cl, dev)
+        if self.subgroups:
+            opts = opts.replace(b"-cl-std=CL1.2", b"-cl-std=" + self.subgroups.encode()) \
+                + b" -D MF_CL_SUBGROUPS=1"
         extra = os.environ.get("DAMSAFETY_MF_CL_OPTIONS", "").strip()
         if extra:
             opts = opts + b" " + extra.encode()
@@ -259,8 +290,12 @@ class OpenCLBackend:
         self.buffers = []
         self.arrays = {}
         self.cells_run = 0
+        self.copied_bytes = 0
         self.threads = 1
+        self._shadow = {}
         self.prof = be.Profile(self)
+        if self.subgroups:
+            self.device += ", subgroups"
         if log:
             log("OpenCL GPU: {}".format(self.device))
 
@@ -283,18 +318,40 @@ class OpenCLBackend:
             self.buffers.append(_vp(buf))
             self.arrays[name] = a
         self._names = [n for n, _d, _c2 in layout]
+        self._shadow = {}           # each array as the GPU last held it (after a read-back)
         for kh in self.kernels.values():
             for i, b in enumerate(self.buffers):
                 _check(cl.clSetKernelArg(kh, i, _c.sizeof(_vp), _c.byref(b)), "clSetKernelArg")
         return self.arrays
 
     def _copy(self, to_gpu):
+        """to_gpu: write the arrays the host changed since the last read-back (all of them the
+        first time); else read back every array a kernel may write. Between batches the host's
+        arrays and the GPU's buffers then hold the same numbers."""
         cl = self.cl
-        fn = cl.clEnqueueWriteBuffer if to_gpu else cl.clEnqueueReadBuffer
-        for name, b in zip(self._names, self.buffers):
+        n = 0
+        for k, (name, b) in enumerate(zip(self._names, self.buffers)):
             a = self.arrays[name]
-            _check(fn(self.queue, b, CL_TRUE if not to_gpu else 0, 0, a.nbytes,
-                      a.ctypes.data, 0, None, None), "copy " + name)
+            if to_gpu:
+                sh = self._shadow.get(name)
+                if sh is not None and np.array_equal(a, sh):
+                    continue
+                _check(cl.clEnqueueWriteBuffer(self.queue, b, 0, 0, a.nbytes, a.ctypes.data, 0,
+                                               None, None), "copy " + name)
+            else:
+                if k in self.read_only and name in self._shadow:
+                    continue
+                _check(cl.clEnqueueReadBuffer(self.queue, b, CL_TRUE, 0, a.nbytes, a.ctypes.data,
+                                              0, None, None), "copy " + name)
+            n += a.nbytes
+        if not to_gpu:
+            for name in self._names:
+                sh = self._shadow.get(name)
+                if sh is None:
+                    self._shadow[name] = self.arrays[name].copy()
+                else:
+                    np.copyto(sh, self.arrays[name])
+        self.copied_bytes += n
 
     def run_batch(self, params, nsteps, chunk=0):
         cl = self.cl
