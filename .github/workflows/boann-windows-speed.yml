@@ -83,17 +83,17 @@ jobs:
           python -c "import os; print('cores:', os.cpu_count())"
           powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List"
       - name: ACC vs LISFLOOD-FP, small valley
-        run: python -m DamSafety_Core.boann.hydro.bench --size small --lisflood win/lisflood/lisflood.exe --out out/small
+        run: python tools/boann_bench_prebuilt.py --size small --lisflood win/lisflood/lisflood.exe --out out/small
       - name: ACC vs LISFLOOD-FP, medium valley
-        run: python -m DamSafety_Core.boann.hydro.bench --size medium --lisflood win/lisflood/lisflood.exe --out out/medium
+        run: python tools/boann_bench_prebuilt.py --size medium --lisflood win/lisflood/lisflood.exe --out out/medium
       - name: ACC vs LISFLOOD-FP, medium diagonal valley (mostly dry window)
-        run: python -m DamSafety_Core.boann.hydro.bench --size medium --case diagonal --lisflood win/lisflood/lisflood.exe --out out/diagonal
+        run: python tools/boann_bench_prebuilt.py --size medium --case diagonal --lisflood win/lisflood/lisflood.exe --out out/diagonal
       - name: ACC, one core each (Boann vs LISFLOOD-FP), medium valley
         env:
           DAMSAFETY_MF_THREADS: "1"
-        run: python -m DamSafety_Core.boann.hydro.bench --size medium --threads 1 --lisflood win/lisflood/lisflood.exe --out out/medium-1core
+        run: python tools/boann_bench_prebuilt.py --size medium --threads 1 --lisflood win/lisflood/lisflood.exe --out out/medium-1core
       - name: FV1, medium valley
-        run: python -m DamSafety_Core.boann.hydro.bench --size medium --solver fv --out out/fv1
+        run: python tools/boann_bench_prebuilt.py --size medium --solver fv --out out/fv1
       - uses: actions/upload-artifact@v7
         if: always()
         with:
