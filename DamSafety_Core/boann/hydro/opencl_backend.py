@@ -237,7 +237,13 @@ class OpenCLBackend:
         lens = (_sz * 1)(len(src))
         self.program = cl.clCreateProgramWithSource(self.ctx, 1, srcs, lens, _c.byref(err))
         _check(err.value, "clCreateProgramWithSource")
-        code = cl.clBuildProgram(self.program, 1, devs, BUILD_OPTIONS, None, None)
+        # DAMSAFETY_MF_CL_OPTIONS adds build options (CI: -cl-opt-disable for PoCL, whose LLVM
+        # aborts optimising the DG2 kernels; it changes no arithmetic: no fast-math either way)
+        opts = BUILD_OPTIONS
+        extra = os.environ.get("DAMSAFETY_MF_CL_OPTIONS", "").strip()
+        if extra:
+            opts = opts + b" " + extra.encode()
+        code = cl.clBuildProgram(self.program, 1, devs, opts, None, None)
         if code != CL_SUCCESS:
             n = _sz(0)
             cl.clGetProgramBuildInfo(self.program, dev, CL_PROGRAM_BUILD_LOG, 0, None, _c.byref(n))

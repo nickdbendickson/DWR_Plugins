@@ -44,7 +44,13 @@ jobs:
           clinfo -l
       - name: Devices Boann sees
         run: python DamSafety_Core/boann/hydro/boann.py check
+      # PoCL's LLVM aborts ("Instruction Combining did not reach a fixpoint") optimising the DG2
+      # kernels, a PoCL / LLVM bug; unoptimised they build. No fast-math either way, so the
+      # arithmetic is the same IEEE float32 (ACC, SGC, FV1 and FV2 matched the CPU build exactly
+      # optimised too). A real GPU driver builds them optimised.
       - name: OpenCL backend tests
+        env:
+          DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
         run: python -m nd_breach_runner.tests.test_boann_opencl
       - name: Speed (small valley, OpenCL on PoCL, for a look only)
         run: |
