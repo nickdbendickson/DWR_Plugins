@@ -55,6 +55,7 @@ using namespace metal;
 #define S_RAIN 16      // float: rainfall rate this step (m/s), added to every valid cell
 #define S_RAIND 17     // float: rainfall depth added in this batch (m; x valid cells x dx^2 = m3)
 #define S_TILES 18     // uint: 0 = every cell runs; 1 = the host turned the skip on (this batch's first redraw scans every cell); 2 = k_tgrow has written ton (a later redraw may leave out a tile that was off)
+#define S_QBIN 19      // uint, atomic: inflow through the water-level edges this step (MF_FIX m3/s)
 #define S_WORDS 32
 // The two sums over many threads (edge outflow, clipped volume) are added as fixed-point uints:
 // not every Apple GPU has float atomics (the CI runner's paravirtual GPU has none). Each SIMD
@@ -108,6 +109,8 @@ struct Params {
     float theta;          // q-centred weighting (de Almeida et al. 2012); 1 = Bates et al. 2010
     uint rain;            // 1: series n_series is a rainfall rate (m/s, LISFLOOD-FP's "rainfall"
                           // .rain file), added to every valid cell each step (Runner 3.60.0)
+    uint n_wl;            // water-level (HFIX / HVAR) edge faces, s_cell / s_series [n_src ..)
+                          // (Boann 6.8.0; 0 = none, and nothing below reads them)
 };
 inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
 
@@ -139,6 +142,46 @@ inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
     device uint* ton B(24), \
     constant Params& p B(25), \
     uint2 gid GID
+
+// -- water-level (stage) boundary, Boann 6.8.0 ----------------------------------------------
+// A water-level face j (0 <= j < n_wl) is s_cell[n_src + j] = its edge position (W: row,
+// E: ny + row, N: 2 ny + column, S: 2 ny + nx + column) and s_series[n_src + j] = its level
+// series (relative to the bed reference). k_begin writes each face's level at the step start into
+// src[cells + position]; a position that is not a water-level face holds MF_WL_NONE. A deck
+// without water levels has n_wl = 0: src has no slots past the cells and none of this runs.
+#define MF_WL_NONE (-1.0e30f)
+#define MF_WL_CUT (-1.0e29f)        // a slot above this holds a level
+
+// the edge cell of edge position pos
+inline uint mf_wl_cell(uint pos, constant Params& p) {
+    if (pos < p.ny) {
+        return pos * p.nx;                                   // W
+    }
+    pos -= p.ny;
+    if (pos < p.ny) {
+        return pos * p.nx + p.nx - 1u;                       // E
+    }
+    pos -= p.ny;
+    if (pos < p.nx) {
+        return pos;                                          // N
+    }
+    return (p.ny - 1u) * p.nx + (pos - p.nx);                // S
+}
+
+// LISFLOOD-FP 8.3's acceleration HFIX / HVAR edge face (boundary.cpp BCs): the ghost surface
+// stands at the level lev over the edge cell's bed zc; hflow = max(hc, lev - zc); no flow below
+// the dry depth; the discharge from the surface step (lev - zc) - hc over dx, with the 1-D
+// Manning term. sgn = +1 on the N / W edges (inflow is +), -1 on the E / S edges (inflow is -).
+inline float mf_wl_q(float q0, float lev, float zc, float hc, float n2c, bool okc, float sgn,
+                     float dt, constant Params& p) {
+    float hflow = fmax(hc, lev - zc);
+    if (!okc || !(hflow > p.dry)) {
+        return 0.0f;
+    }
+    float dh = (lev - zc) - hc;
+    return (q0 + sgn * p.g * dt * hflow * dh / p.dx)
+        / (1.0f + p.g * dt * n2c * fabs(q0) / pow(hflow, 7.0f / 3.0f));
+}
 
 // -- helpers ------------------------------------------------------------------------------
 
@@ -247,6 +290,14 @@ kernel void k_begin(MF_ARGS) {
         return;
     }
     float hm = as_type<float>(st[S_HMAX]);
+    float tm = p.t0 + t;
+    // water levels at the step start; the ghost depth counts in the CFL depth, as a cell's would
+    for (uint j = 0; j < p.n_wl; ++j) {
+        uint k = p.n_src + j;
+        float lev = mf_series(s_series[k], tm, ser_off, ser_t, ser_q, cursor);
+        src[mf_cells(p) + s_cell[k]] = lev;
+        hm = fmax(hm, lev - z[mf_wl_cell(s_cell[k], p)]);
+    }
     float dt = p.dt0;
     if (hm > p.dry) {
         dt = fmin(dt, p.alpha * p.dx / sqrt(p.g * hm));
@@ -257,7 +308,7 @@ kernel void k_begin(MF_ARGS) {
     sf[S_DT] = dt;
     st[S_HNEXT] = 0u;
     st[S_QOUT] = 0u;
-    float tm = p.t0 + t;
+    st[S_QBIN] = 0u;
     for (uint i = 0; i < p.n_src; ++i) {
         src[s_cell[i]] = 0.0f;
     }
@@ -295,7 +346,12 @@ kernel void k_faces(MF_ARGS) {
         uint f = r * (nx + 1u) + c;
         float q = 0.0f;
         float v = 0.0f;
-        if (c == 0u) {
+        float lev = (c == 0u || c == nx) && p.n_wl != 0u
+            ? src[mf_cells(p) + (c == 0u ? r : ny + r)] : MF_WL_NONE;
+        if (lev > MF_WL_CUT) {          // water-level edge face (W or E)
+            uint i = c == 0u ? r * nx : r * nx + nx - 1u;
+            q = mf_wl_q(qxo[f], lev, z[i], h[i], n2[i], ok[i] != 0, c == 0u ? 1.0f : -1.0f, dt, p);
+        } else if (c == 0u) {
             if ((p.free_mask & MF_W) != 0u && nx > 1u) {
                 uint i = r * nx;
                 q = -mf_free(qxo[f], h[i], z[i] + h[i], z[i + 1u] + h[i + 1u], n2[i], ok[i] != 0,
@@ -331,7 +387,12 @@ kernel void k_faces(MF_ARGS) {
         uint f = r * nx + c;
         float q = 0.0f;
         float v = 0.0f;
-        if (r == 0u) {
+        float lev = (r == 0u || r == ny) && p.n_wl != 0u
+            ? src[mf_cells(p) + (r == 0u ? 2u * ny + c : 2u * ny + nx + c)] : MF_WL_NONE;
+        if (lev > MF_WL_CUT) {          // water-level edge face (N or S)
+            uint i = r == 0u ? c : (ny - 1u) * nx + c;
+            q = mf_wl_q(qyo[f], lev, z[i], h[i], n2[i], ok[i] != 0, r == 0u ? 1.0f : -1.0f, dt, p);
+        } else if (r == 0u) {
             if ((p.free_mask & MF_N) != 0u && ny > 1u) {
                 uint i = c;
                 q = -mf_free(qyo[f], h[i], z[i] + h[i], z[i + nx] + h[i + nx], n2[i], ok[i] != 0,
@@ -401,6 +462,8 @@ kernel void k_limit(MF_ARGS) {
     uint r = p.r0 + gid.y;
     uint c = p.c0 + gid.x;
     float out = 0.0f;
+    float inq = 0.0f;               // water in through a water-level edge (walls and FREE edges
+                                    // carry none: their discharge is 0 or outward)
     // a skipped face is far from water: it carries 0 and sends 0 out (see MF_TILE)
     bool on = mf_on(st, ton, gid.x, gid.y, p);
     if (on && gid.y < p.wr) {
@@ -417,6 +480,10 @@ kernel void k_limit(MF_ARGS) {
             out += -q;
         } else if (c == nx && q > 0.0f) {
             out += q;
+        } else if (c == 0u && q > 0.0f) {
+            inq += q;
+        } else if (c == nx && q < 0.0f) {
+            inq += -q;
         }
     }
     if (on && gid.x < p.wc) {
@@ -433,12 +500,23 @@ kernel void k_limit(MF_ARGS) {
             out += -q;
         } else if (r == ny && q > 0.0f) {
             out += q;
+        } else if (r == 0u && q > 0.0f) {
+            inq += q;
+        } else if (r == ny && q < 0.0f) {
+            inq += -q;
         }
     }
     float tot = simd_sum(out);
     if (simd_is_first() && tot != 0.0f) {
         atomic_fetch_add_explicit((device atomic_uint*)(st + S_QOUT),
                                   uint(tot * p.dx / MF_FIX + 0.5f), memory_order_relaxed);
+    }
+    if (p.n_wl != 0u) {
+        float tin = simd_sum(inq);
+        if (simd_is_first() && tin != 0.0f) {
+            atomic_fetch_add_explicit((device atomic_uint*)(st + S_QBIN),
+                                      uint(tin * p.dx / MF_FIX + 0.5f), memory_order_relaxed);
+        }
     }
 }
 
@@ -552,6 +630,11 @@ kernel void k_end(MF_ARGS) {
     sf[S_MINDT] = fmin(sf[S_MINDT], dt);
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
+    if (st[S_QBIN] != 0u) {         // water-level inflow: booked as inflow (Qin, injected volume)
+        float qb = float(st[S_QBIN]) * MF_FIX;
+        sf[S_QIN] += qb;
+        sf[S_VIN] += qb * dt;
+    }
     st[S_HMAX] = st[S_HNEXT];
 }
 
@@ -596,6 +679,17 @@ kernel void k_tseed(MF_ARGS) {
         for (uint k = 0; k < p.n_src; ++k) {
             uint sr = s_cell[k] / nx;
             uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+        // a water-level edge cell is a seed like a source: water can come in there at any step
+        for (uint j = 0; j < p.n_wl; ++j) {
+            uint e = mf_wl_cell(s_cell[p.n_src + j], p);
+            uint sr = e / nx;
+            uint sc = e % nx;
             if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
                 atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
                                                                 * ntx + (sc - p.c0) / MF_TILE),

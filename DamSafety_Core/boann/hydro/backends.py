@@ -89,17 +89,30 @@ class Params(ctypes.Structure):
         "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
         "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
-            "theta")] + [("rain", ctypes.c_uint32)]
-    # "rain" is kernels.metal's last word (ACC only, Runner 3.60.0); the FV / FV2 / DG2 / SGC
-    # kernels declare that word as an unused float pad4, and the engines leave it 0 (= 0.0f).
+            "theta")] + [("rain", ctypes.c_uint32), ("n_wl", ctypes.c_uint32)]
+    # "rain" is kernels.metal's rainfall switch (ACC and FV1; FV2 / DG2 / SGC declare that word
+    # as an unused float pad4, left 0 = 0.0f). "n_wl" (Boann 6.8.0) counts the water-level (HFIX /
+    # HVAR) boundary faces, listed in s_cell / s_series after the n_src point sources; 0 in every
+    # deck without one (SGC declares the word and never reads it).
 
 
-def buffer_layout(ny, nx, n_src, n_series, n_values):
+def _wl_counts(ny, nx, n_src, n_wl):
+    """(src length, s_cell / s_series length): a deck with water-level faces lists them after the
+    point sources and keeps each edge position's level in src past the cells (engine.wl_setup);
+    without them both are the cells and n_src, as before."""
+    cells = ny * nx
+    if not n_wl:
+        return cells, n_src
+    return cells + 2 * (nx + ny), n_src + n_wl
+
+
+def buffer_layout(ny, nx, n_src, n_series, n_values, n_wl=0):
     """[(name, dtype, count)] in the order of the kernels' buffer indices 0..24."""
     cells = ny * nx
+    nsrcb, n_src = _wl_counts(ny, nx, n_src, n_wl)
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("qx", f, ny * (nx + 1)),
-            ("qy", f, (ny + 1) * nx), ("src", f, cells), ("scl", f, cells), ("hmax", f, cells),
+            ("qy", f, (ny + 1) * nx), ("src", f, nsrcb), ("scl", f, cells), ("hmax", f, cells),
             ("tmax", f, cells), ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
@@ -108,15 +121,16 @@ def buffer_layout(ny, nx, n_src, n_series, n_values):
             ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
-def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
+def fv_buffer_layout(ny, nx, n_src, n_series, n_values, n_wl=0):
     """[(name, dtype, count)] in the order of kernels_fv.metal's buffer indices 0..25.
     tseed and ton are the dry-tile skip (one uint per tile of the whole grid). Params is bound
     at 26."""
     cells = ny * nx
+    nsrcb, n_src = _wl_counts(ny, nx, n_src, n_wl)
     xf, yf = ny * (nx + 1), (ny + 1) * nx
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("h", f, cells), ("hu", f, cells),
-            ("hv", f, cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("hv", f, cells), ("src", f, nsrcb), ("hmax", f, cells), ("tmax", f, cells),
             ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),
@@ -125,30 +139,31 @@ def fv_buffer_layout(ny, nx, n_src, n_series, n_values):
             ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
-def fv2_buffer_layout(ny, nx, n_src, n_series, n_values):
+def fv2_buffer_layout(ny, nx, n_src, n_series, n_values, n_wl=0):
     """[(name, dtype, count)] in the order of kernels_fv2.metal's buffer indices 0..29: the FV1
     layout without its tile buffers (0..23), the previous-step state h0/hu0/hv0 and the
     stage-start depth hs, then tseed/ton. Params is bound at 30 (30 buffers + Params = 31 slots,
     the Metal cap). The minmod slopes are not stored; they are recomputed inline."""
     cells = ny * nx
     f, u = np.float32, np.uint32
-    base = [b for b in fv_buffer_layout(ny, nx, n_src, n_series, n_values)
+    base = [b for b in fv_buffer_layout(ny, nx, n_src, n_series, n_values, n_wl)
             if b[0] not in ("tseed", "ton")]
     return base + [("h0", f, cells), ("hu0", f, cells), ("hv0", f, cells), ("hs", f, cells),
                    ("tseed", u, tile_count(ny, nx)), ("ton", u, tile_count(ny, nx))]
 
 
-def dg2_buffer_layout(ny, nx, n_src, n_series, n_values):
+def dg2_buffer_layout(ny, nx, n_src, n_series, n_values, n_wl=0):
     """[(name, dtype, count)] in the order of kernels_dg2.metal's buffer indices 0..28. The three
     conserved variables (Uh, Uhu, Uhv) and their previous-step RK2 copy (Uh0, Uhu0, Uhv0) are stored
     packed, three modal coefficients per cell (3*cells floats): [3 i + 0] element average, [3 i + 1]
     x-slope, [3 i + 2] y-slope. The bed z is piecewise constant (one float per cell). tseed and ton
     are the dry-tile skip. 29 buffers plus Params at 29 stay inside Metal's 31-slot cap."""
     cells = ny * nx
+    nsrcb, n_src = _wl_counts(ny, nx, n_src, n_wl)
     xf, yf = ny * (nx + 1), (ny + 1) * nx
     f, u = np.float32, np.uint32
     return [("z", f, cells), ("n2", f, cells), ("Uh", f, 3 * cells), ("Uhu", f, 3 * cells),
-            ("Uhv", f, 3 * cells), ("src", f, cells), ("hmax", f, cells), ("tmax", f, cells),
+            ("Uhv", f, 3 * cells), ("src", f, nsrcb), ("hmax", f, cells), ("tmax", f, cells),
             ("arr", f, cells), ("vmax", f, 2 * cells), ("ok", np.uint8, cells),  # vmax: [0:cells) peak speed; [cells:) peak depth x speed
             ("s_cell", u, n_src), ("s_series", u, n_src), ("ser_off", u, n_series + 1),
             ("ser_t", f, n_values), ("ser_q", f, n_values), ("cursor", u, n_series),

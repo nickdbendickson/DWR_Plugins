@@ -173,6 +173,25 @@ Kept from the built-in engine: the donor-cell limiter (a cell never sends more w
 holds, so no water is created by clipping negative depths; LISFLOOD-FP clips instead), and
 FREE applies to a whole edge (the Runner always writes whole edges).
 
+**Water-level (stage) boundary** (Boann 6.8.0, ACC / FV1 / FV2 / DG2). The `.bci` lines
+`W <y1> <y2> HFIX <level>` and `W <y1> <y2> HVAR <series>` (likewise `N`, `S`, `E`, with x for
+`N` / `S`) hold the edge cells they cover at a water-surface elevation in the DEM's datum; an HVAR
+series is a `.bdy` series of levels (`value time`, not multiplied by the cell size). The cells a
+line covers are LISFLOOD-FP 8.3's (its boundary index from the coordinate range, the end
+exclusive), and the last line covering a cell wins; a FREE line still frees its whole edge and
+also takes its cells back from an earlier water-level line. ACC drives the edge face with
+LISFLOOD-FP's acceleration boundary (`boundary.cpp`: `hflow = max(h, level - z)`, the surface step
+over `dx`, 1-D Manning). FV1 / FV2 / DG2 put LISFLOOD-FP's ghost cell outside the face (`fv1.cpp`:
+depth `max(0, level - z)` over the edge cell's bed) with the edge cell's velocity carried over
+(LISFLOOD-FP carries the discharge; the velocity keeps a shallow ghost bounded), and their own HLLC
+flux lets water in or out. Water in through the edge is booked as inflow (`Qin`, injected volume),
+water out as edge outflow, so the mass balance closes. A point water level (`P x y HFIX`) is
+refused, and the sub-grid engines (SGC, sub-grid FV, sub-grid local inertial) refuse a deck with a
+water level rather than run the edge as a wall. EA 2D benchmark Test 1 (a water level on the west
+edge filling a disconnected pond) runs with it. No buffer was added: the faces ride in
+`s_cell` / `s_series` after the point sources and each step's levels in `src` past its cells, so a
+deck without a water level allocates and runs exactly as before.
+
 Arithmetic is float32 (Apple GPUs have no float64). Bed elevations are stored relative to the
 lowest cell and the water-surface slope is formed as `(z_r - z_l) + (h_r - h_l)`, so depths keep
 about 1e-5 m of resolution; volumes are summed in float64 on the host.
