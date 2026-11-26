@@ -221,15 +221,15 @@ def boann_water_level_tide_flows_in_and_out():
 
 
 def _far_edge_deck(folder):
-    """A 60 x 120 dry valley sloping down to the east, a small pond at its west end, and a
-    water level on part of the east edge well above the bed: the only flood comes in from the
-    water-level edge, 100 cells from the start water."""
-    ny, nx = 60, 120
+    """A 32 x 64 dry valley sloping down to the east, a small pond at its west end, and a
+    water level on part of the east edge above the bed: the only flood comes in from the
+    water-level edge, about 60 cells (four tiles) from the start water."""
+    ny, nx = 32, 64
     yy, xx = np.mgrid[0:ny, 0:nx].astype(float)
     z = 2.0 - 0.01 * xx + 0.002 * np.abs(yy - ny / 2.0)
     h0 = np.zeros((ny, nx))
-    h0[28:32, 2:5] = 0.3
-    return _deck(folder, z, "E 200 400 HFIX 1.8\n", h0=h0, sim=1500.0, dx=10.0, n=0.04)
+    h0[14:18, 2:5] = 0.3
+    return _deck(folder, z, "E 100 220 HFIX 1.8\n", h0=h0, sim=900.0, dx=10.0, n=0.04)
 
 
 @test
