@@ -84,6 +84,7 @@ jobs:
           mkdir -p DamSafety_Core/boann/hydro/prebuilt
           cp -r win/boann/windows-x64 DamSafety_Core/boann/hydro/prebuilt/
           ls DamSafety_Core/boann/hydro/prebuilt/windows-x64
+          mkdir -p out/small out/medium out/diagonal out/medium-1core out/fv1   # bench.py does not make --out
           python -c "import os; print('cores:', os.cpu_count())"
           powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List"
       - name: ACC vs LISFLOOD-FP, small valley
