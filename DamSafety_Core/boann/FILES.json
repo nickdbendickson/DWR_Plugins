@@ -1,5 +1,5 @@
 {
- "boann_version": "6.8.0",
+ "boann_version": "6.9.0",
  "files": {
   "__init__.py": "1fdf88fe49f3237719f5d9164c5e06f47f085b56c7c2c09208c6b90b54ed0ecc",
   "grid/README.md": "d8b6307a5f7d64a1d89be9233599e664cbf56061e12b741059cb3496e5fb85a3",
@@ -23,11 +23,11 @@
   "hydro/README.md": "9da0844ade94a039de18e203008b92bda5bf22c57ec683881f7ba31cd59e37cc",
   "hydro/__init__.py": "3975488cf1e995eba23fbfa4589bfe4f92f45d4f89a027e5c723334d4bd814ec",
   "hydro/__main__.py": "84cb653f103583bcd92c9586eefc69f92603fc5f9431cf25196f1aa880b97fae",
-  "hydro/backends.py": "b13c05dd4710306806140afdef22dab8a807cea3cd1fcbc5cd89855511edb3c1",
+  "hydro/backends.py": "dd2624adf4e6fcf836c38e6ced419326525ab7c7da3d42ab0ef4ae2fef2e2082",
   "hydro/bench.py": "f9535118be7fee9c64c3c1bfb4de0f3174154dae773460cd657d4bc3a644dbfc",
   "hydro/boann.py": "111e69067dfd44ec4c2209e9071845f98558ceb1e6cb77dc35228143f2c1c01a",
   "hydro/cases.py": "b891a03392938fada602cfaf9f65d654f941197831ed4ba480d61829cf1df408",
-  "hydro/cli.py": "5572681145bb75c0d270d11fd3250a2f1c3f9e0a6fd489735a70e1aab2e7920f",
+  "hydro/cli.py": "aeb26589ed92293906ee8d37cb4725338117cb56f6f65528d0c7cfedd1e2056e",
   "hydro/cpu_kernels.cpp": "c72f3905a245bba9ece7cfde2bd926fe1b57c54f196a9bea5fc511e35f77d482",
   "hydro/cpu_kernels_dg2.cpp": "ba0fe2b258760557a73dc6751acc14cd5d138ef987dcaffbaef71cea91810a09",
   "hydro/cpu_kernels_fv.cpp": "9aed26dd0cf5368ddb3430b7d014ad63002473f457954c47932a611de8496a61",
@@ -41,8 +41,8 @@
   "hydro/engine_fv.py": "7980a2cbf52a57ec19eb60503609a49c21c1d08c66ea31ca2c2585d6819689aa",
   "hydro/engine_fv2.py": "a8035c4704367743474314fb1c6432148c851b9b7e2b1efb4f507df350803ac9",
   "hydro/engine_sgc.py": "c3334cc67e9b0c4f1c4713cbfb3723ec425ebc7e19ac62c11a2d48eede882e05",
-  "hydro/engine_subfv.py": "db351724d632295ab37e1a4900f5dd3598d8ff9567f8aa36478718305750f766",
-  "hydro/engine_subli.py": "e6f700979f893b174ec58333b7b2282aa30ba45f4b1eb079f60853a018c22228",
+  "hydro/engine_subfv.py": "dc7498835d07a7d03aa54b057d11758165d5a728548106c47b565cf07bb749a8",
+  "hydro/engine_subli.py": "2a5ccbaef52891ed522c313811f5925ef9fcbfaa3a446bf69a41ef30ff6522f7",
   "hydro/host.py": "8bc125e0dfe74564d206a9e23cd8189509af17aadc3cb958f25b4eed7559394e",
   "hydro/kernels.metal": "6ab65706b95eb8de2e2c8c529381a90d91e46dca09756cd6f504eb335434dc2a",
   "hydro/kernels_dg2.metal": "efc1c1de9fd1f0c5b283856cf479ccf27b1fb194e6ec4ab1b3ecc28fc8e5d618",
@@ -52,6 +52,8 @@
   "hydro/kernels_subfv.metal": "80e72e6416dba062b70b47bebf76be61a0bf0341f9c9353adbf24c1b3685268b",
   "hydro/kernels_subli.metal": "4d19ed11ffe6f220375d8533ae5d0762e6267257491c5031a70c93d389610ad0",
   "hydro/mf_shim.h": "89d9dcbed71c0566c6b0421a84f17309b2854350effd6414569d99079799b78b",
+  "hydro/ocl_shim.h": "c6010c281f5c20a65a7a0c1d73c51dcd989bf79c58a1b81e6e2eacf22d9aa952",
+  "hydro/opencl_backend.py": "719a008c7ec04b987dee1f910e6869d7301b5013832d1a95c9aa10557beea842",
   "hydro/sgc_ref.py": "92c3e2924cdebbf64a3cf8f3cc65cba933e4d19af2f26a49003a2924ba8f4ae6",
   "hydro/subfv_backend.py": "f150770bf5a4a517aee1e9cfc91fd4ba744bef0d94490fecd39bb66f93cd3169",
   "hydro/subfv_hllc_ref.py": "3a36fcf8237814af17b7ca3ef4d93fce6605193fbd21d246d43643aa4813271e",
@@ -59,6 +61,6 @@
   "hydro/subgrid.py": "38374ab641d89cb67d20bea3ba612cf1663f137d3eabd1668be29ca0a68be5f8",
   "hydro/subli_backend.py": "71e952718540c2ecee255d2632f8a8e31ebff4c14d8242a9d430e08affa1d272",
   "hydro/subli_ref.py": "d3a71e4eacec2dcfc88154bf255426d189822f9468f5394ddc5210bff9868103",
-  "hydro/version.py": "c95b61a7275beb575bea419d8573dea87a1bf980962c1fb8b32848acf16ebe76"
+  "hydro/version.py": "6afb25451f0123f05279120f0792b4ec346174d13a5f7cdf79af59c27bac0e77"
  }
 }

@@ -1,0 +1,52 @@
+name: GPU flood engine (OpenCL)
+
+# Boann's OpenCL backend (DamSafety_Core/boann/hydro/opencl_backend.py: the .metal kernels
+# translated to OpenCL C, for GPUs that are not Apple's: Intel Arc, AMD, NVIDIA) on PoCL, a CPU
+# implementation of OpenCL, so it runs on a plain Ubuntu runner with no GPU. It checks the
+# translation compiles and runs, each solver against the CPU build with the Metal GPU's
+# tolerances, repeat runs bit for bit and the dry-tile skip on == off. A real GPU (Nick's Arc PC)
+# is checked by hand with the same test file. Not a merge gate.
+#
+# When it runs: on a pull request that changes the engine or this file, and by hand.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "DamSafety_Core/boann/**"
+      - "DamSafety_Runner/tests/test_boann_opencl.py"
+      - ".github/workflows/opencl-engine.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencl-engine-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pocl:
+    name: OpenCL (PoCL, CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: PoCL (OpenCL on the CPU) and numpy
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pocl-opencl-icd ocl-icd-libopencl1 clinfo g++
+          python -m pip install "numpy<2.3"
+          clinfo -l
+      - name: Devices Boann sees
+        run: python DamSafety_Core/boann/hydro/boann.py check
+      - name: OpenCL backend tests
+        run: python -m nd_breach_runner.tests.test_boann_opencl
+      - name: Speed (small valley, OpenCL on PoCL, for a look only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/s"
+          python DamSafety_Core/boann/hydro/boann.py run "$(python -c "import sys; sys.path.insert(0, '.'); from DamSafety_Core.boann.hydro.cases import valley_deck; print(valley_deck('$RUNNER_TEMP/s', ny=300, nx=500, dx=10.0, sim_s=3600.0))")" --backend opencl
