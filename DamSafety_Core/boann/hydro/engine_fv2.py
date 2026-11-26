@@ -10,7 +10,9 @@ from .engine_fv import Deck, Engine, EngineError, Cancelled  # noqa: F401
 from .engine_fv import run_par as _run_par_fv
 
 NAME = "Boann, shock-capturing 2nd order (MUSCL + SSP-RK2, on the GPU via Metal)"
-VERSION = "0.3.0"     # 0.3.0 (Runner 3.93.0): a face against NoData is a reflecting wall; 0.2.0 (Runner 3.66.0): face velocities reconstructed, not discharges
+VERSION = "0.3.1"     # 0.3.1: FV2's GPU dry-tile skip (no result moves). 0.3.0 (Runner 3.93.0): a face
+                      # against NoData is a reflecting wall; 0.2.0 (Runner 3.66.0): face velocities
+                      # reconstructed, not discharges
 
 
 def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):

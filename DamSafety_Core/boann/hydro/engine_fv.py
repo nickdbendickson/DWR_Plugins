@@ -21,13 +21,20 @@ from . import engine as mfe
 from .engine import Deck, _f, _setf
 
 NAME = "Boann, shock-capturing (HLLC finite volume, on the GPU via Metal)"
-VERSION = "0.3.0"     # 0.3.0 (Runner 3.98.0): FV1 adds rain on the grid (new input; FV2/DG2 refuse
-                      # it still). 0.2.0 (Runner 3.93.0): a face against NoData is a reflecting wall
+VERSION = "0.3.1"     # 0.3.1: FV1's GPU dry-tile skip (no result moves). 0.3.0 (Runner 3.98.0): FV1 adds
+                      # rain on the grid (new input; FV2/DG2 refuse it still). 0.2.0 (Runner 3.93.0):
+                      # a face against NoData is a reflecting wall
 G = bl.G
 DRY_M = bl.DRY_M
 NODATA = bl.NODATA
 BATCH_STEPS = 64
 WINDOW_MARGIN = BATCH_STEPS + 4
+# FV1: R = 1, 1-tile ring, chunk 8 (17 > 8). FV2 and DG2: two stages and a slope stencil,
+# R = 2, stencil 2; a chunk of 4 with the 1-tile ring covers 10 cells and an off cell is 17 away.
+# A 2-tile ring with a chunk of 8 runs more cells on a thin flood, so the shorter chunk is used.
+SKIP_CHUNK_FV = 8
+SKIP_CHUNK_FV2 = 4
+SKIP_CHUNK_DG2 = 4
 
 EngineError = bl.EngineError
 Cancelled = bl.Cancelled
@@ -150,7 +157,10 @@ class Engine:
         st[S_WMAX] = wm
         _setf(st, S_MINDT, 1e30)
         st[S_RMIN] = st[S_CMIN] = 0xFFFFFFFF
-        self.b.run_batch(p, nsteps)
+        chunk = (SKIP_CHUNK_FV if self.scheme == "fv" else
+                 SKIP_CHUNK_FV2 if self.scheme == "fv2" else
+                 SKIP_CHUNK_DG2 if self.scheme == "dg2" else 0)
+        self.b.run_batch(p, nsteps, chunk)
         out = {"t_local": _f(st, S_T), "dt": _f(st, S_LASTDT), "steps": int(st[S_STEPS]),
                "min_dt": _f(st, S_MINDT), "vin": _f(st, S_VIN), "vout": _f(st, S_VOUT),
                "clip": int(st[S_CLIP]) * MF_FIX, "qin": _f(st, S_QIN),
@@ -354,7 +364,8 @@ def _run(d, bk, progress, cancel, say, limiter=False):
              "steps": steps, "batches": batches, "sim_time_s": t,
              "wall_s": round(wall, 2), "cells": nx * ny, "injected_m3": vin, "outflow_m3": vout,
              "final_volume_m3": vol, "mass_error_m3": vol - (vol0 + vin - vout),
-             "clipped_m3": clip, "rain_m3": vrain}
+             "clipped_m3": clip, "rain_m3": vrain,
+             "cell_steps": getattr(bk, "cells_run", None)}
     # where the time went (backends.Profile); timing only, no result depends on it
     stats["profile"] = bk.profile() if hasattr(bk, "profile") else None
     if br is not None:
