@@ -120,6 +120,7 @@ struct Params {
     float theta;          // unused
     uint rain;            // 1: series n_series is a rainfall rate (m/s), added to every valid cell
                           // each step (FV1 only; matches the ACC engine). Was pad4.
+    uint n_wl;            // water-level (HFIX / HVAR) edge faces, s_cell / s_series [n_src ..)
 };
 
 // Buffer layout for the FV scheme (its own order, 0..25; Params at 26). tseed and ton are the
@@ -216,6 +217,45 @@ inline F3 mf_hllc(float hL, float hnL, float htL, float hR, float hnR, float htR
     return f;
 }
 
+// -- water-level (stage) boundary, Boann 6.8.0 ----------------------------------------------
+// As kernels.metal: water-level face j (0 <= j < n_wl) is s_cell[n_src + j] = its edge position
+// (W: row, E: ny + row, N: 2 ny + column, S: 2 ny + nx + column) and s_series[n_src + j] = its
+// level series (relative to the bed reference). k_begin writes each face's level into
+// src[cells + position] at the step start; a position that is not a water-level face holds
+// MF_WL_NONE. A deck without water levels has n_wl = 0, src has no slots past the cells, and none
+// of this runs.
+#define MF_WL_NONE (-1.0e30f)
+#define MF_WL_CUT (-1.0e29f)        // a slot above this holds a level
+#define S_QBIN 19      // uint, atomic: inflow through the water-level edges this step (MF_FIX m3/s)
+
+// the edge cell of edge position pos
+inline uint mf_wl_cell(uint pos, constant Params& p) {
+    if (pos < p.ny) {
+        return pos * p.nx;                                   // W
+    }
+    pos -= p.ny;
+    if (pos < p.ny) {
+        return pos * p.nx + p.nx - 1u;                       // E
+    }
+    pos -= p.ny;
+    if (pos < p.nx) {
+        return pos;                                          // N
+    }
+    return (p.ny - 1u) * p.nx + (pos - p.nx);                // S
+}
+
+// the flux through a water-level edge face: LISFLOOD-FP 8.3's HFIX / HVAR ghost cell (fv1.cpp
+// set_boundary_values), depth hg = max(0, level - bed of the edge cell) over that same bed, with
+// the edge cell's velocity carried over (LISFLOOD-FP carries the discharge over; carrying the
+// velocity keeps a shallow ghost's speed bounded, and the two agree once the ghost and the cell
+// hold the same depth). The HLLC flux between it and the edge cell lets water in when the level is
+// above the cell's surface and out when below. At rest (level = surface, no velocity) both states
+// are equal and the flux is the still-water pressure a wall gives: a lake at rest stays at rest.
+// minus: the ghost is on the - side (W / N edges).
+inline F3 mf_wl_hllc(float hg, float hi, float ni, float ti, bool minus, float g) {
+    return minus ? mf_hllc(hg, ni, ti, hi, ni, ti, g) : mf_hllc(hi, ni, ti, hg, ni, ti, g);
+}
+
 inline float mf_series(uint k, float tm, device const uint* ser_off,
                        device const float* ser_t, device const float* ser_q,
                        device uint* cursor) {
@@ -292,6 +332,17 @@ kernel void k_begin_fv(MF_ARGS_FV) {
         return;
     }
     float wm = as_type<float>(st[S_WMAX]);
+    // water levels at the step start (Boann 6.8.0); a ghost's wave speed counts in the CFL
+    for (uint j = 0; j < p.n_wl; ++j) {
+        uint k = p.n_src + j;
+        float lev = mf_series(s_series[k], p.t0 + t, ser_off, ser_t, ser_q, cursor);
+        src[mf_cells(p) + s_cell[k]] = lev;
+        uint e = mf_wl_cell(s_cell[k], p);
+        float hg = fmax(0.0f, lev - z[e]);
+        float ue = mf_vel(hu[e], h[e]);
+        float ve = mf_vel(hv[e], h[e]);
+        wm = fmax(wm, sqrt(ue * ue + ve * ve) + sqrt(p.g * hg));
+    }
     float cfl = fmin(p.alpha, MF_CFL_CAP);
     float dt = p.dt0;
     if (wm > 1.0e-6f) {
@@ -303,6 +354,7 @@ kernel void k_begin_fv(MF_ARGS_FV) {
     sf[S_DT] = dt;
     st[S_WNEXT] = 0u;
     st[S_QOUT] = 0u;
+    st[S_QBIN] = 0u;
     float tm = p.t0 + t;
     for (uint i = 0; i < p.n_src; ++i) {
         src[s_cell[i]] = 0.0f;
@@ -356,6 +408,7 @@ kernel void k_faces_fv(MF_ARGS_FV) {
     float g = p.g;
     float dry = p.dry;
     float outflow = 0.0f;
+    float wlin = 0.0f;               // water in through a water-level edge (Boann 6.8.0)
     // an off face writes nothing: it is far from water, so the flux it would write is 0, which
     // is what the buffers already hold (see MF_TILE). The reduction below still sees 0.
     bool xon = mf_face_x(st, ton, gid.x, gid.y, p);
@@ -388,7 +441,16 @@ kernel void k_faces_fv(MF_ARGS_FV) {
             }
         } else if (c == 0u) {         // left domain edge, cell i is the + side
             uint i = r * nx;
-            if (ok[i] != 0 && h[i] > MF_HVEL) {
+            float lev = p.n_wl != 0u ? src[mf_cells(p) + r] : MF_WL_NONE;
+            if (lev > MF_WL_CUT) {      // water-level edge face (Boann 6.8.0)
+                if (ok[i] != 0) {
+                    float hi = h[i];
+                    fl = mf_wl_hllc(fmax(0.0f, lev - z[i]), hi, mf_vel(hu[i], hi), mf_vel(hv[i], hi),
+                                    true, g);
+                    wlin += fmax(fl.h, 0.0f);
+                    outflow += fmax(-fl.h, 0.0f);
+                }
+            } else if (ok[i] != 0 && h[i] > MF_HVEL) {
                 float ui = mf_vel(hu[i], h[i]);
                 float vi = mf_vel(hv[i], h[i]);
                 if ((p.free_mask & MF_W) != 0u) {
@@ -406,7 +468,16 @@ kernel void k_faces_fv(MF_ARGS_FV) {
             }
         } else {                      // c == nx, right domain edge, cell i is the - side
             uint i = r * nx + nx - 1u;
-            if (ok[i] != 0 && h[i] > MF_HVEL) {
+            float lev = p.n_wl != 0u ? src[mf_cells(p) + ny + r] : MF_WL_NONE;
+            if (lev > MF_WL_CUT) {      // water-level edge face (Boann 6.8.0)
+                if (ok[i] != 0) {
+                    float hi = h[i];
+                    fl = mf_wl_hllc(fmax(0.0f, lev - z[i]), hi, mf_vel(hu[i], hi), mf_vel(hv[i], hi),
+                                    false, g);
+                    wlin += fmax(-fl.h, 0.0f);
+                    outflow += fmax(fl.h, 0.0f);
+                }
+            } else if (ok[i] != 0 && h[i] > MF_HVEL) {
                 float ui = mf_vel(hu[i], h[i]);
                 float vi = mf_vel(hv[i], h[i]);
                 if ((p.free_mask & MF_E) != 0u) {
@@ -456,7 +527,16 @@ kernel void k_faces_fv(MF_ARGS_FV) {
             }
         } else if (r == 0u) {         // north domain edge, cell i is the + (south) side
             uint i = c;
-            if (ok[i] != 0 && h[i] > MF_HVEL) {
+            float lev = p.n_wl != 0u ? src[mf_cells(p) + 2u * ny + c] : MF_WL_NONE;
+            if (lev > MF_WL_CUT) {      // water-level edge face (Boann 6.8.0)
+                if (ok[i] != 0) {
+                    float hi = h[i];
+                    fl = mf_wl_hllc(fmax(0.0f, lev - z[i]), hi, mf_vel(hv[i], hi), mf_vel(hu[i], hi),
+                                    true, g);
+                    wlin += fmax(fl.h, 0.0f);
+                    outflow += fmax(-fl.h, 0.0f);
+                }
+            } else if (ok[i] != 0 && h[i] > MF_HVEL) {
                 float ni = mf_vel(hv[i], h[i]);
                 float ti = mf_vel(hu[i], h[i]);
                 if ((p.free_mask & MF_N) != 0u) {
@@ -474,7 +554,16 @@ kernel void k_faces_fv(MF_ARGS_FV) {
             }
         } else {                      // r == ny, south domain edge, cell i is the - side
             uint i = (ny - 1u) * nx + c;
-            if (ok[i] != 0 && h[i] > MF_HVEL) {
+            float lev = p.n_wl != 0u ? src[mf_cells(p) + 2u * ny + nx + c] : MF_WL_NONE;
+            if (lev > MF_WL_CUT) {      // water-level edge face (Boann 6.8.0)
+                if (ok[i] != 0) {
+                    float hi = h[i];
+                    fl = mf_wl_hllc(fmax(0.0f, lev - z[i]), hi, mf_vel(hv[i], hi), mf_vel(hu[i], hi),
+                                    false, g);
+                    wlin += fmax(-fl.h, 0.0f);
+                    outflow += fmax(fl.h, 0.0f);
+                }
+            } else if (ok[i] != 0 && h[i] > MF_HVEL) {
                 float ni = mf_vel(hv[i], h[i]);
                 float ti = mf_vel(hu[i], h[i]);
                 if ((p.free_mask & MF_S) != 0u) {
@@ -500,6 +589,13 @@ kernel void k_faces_fv(MF_ARGS_FV) {
     if (simd_is_first() && tot != 0.0f) {
         atomic_fetch_add_explicit((device atomic_uint*)(st + S_QOUT),
                                   uint(tot * p.dx / MF_FIX + 0.5f), memory_order_relaxed);
+    }
+    if (p.n_wl != 0u) {
+        float tin = simd_sum(wlin);
+        if (simd_is_first() && tin != 0.0f) {
+            atomic_fetch_add_explicit((device atomic_uint*)(st + S_QBIN),
+                                      uint(tin * p.dx / MF_FIX + 0.5f), memory_order_relaxed);
+        }
     }
 }
 
@@ -649,6 +745,11 @@ kernel void k_end_fv(MF_ARGS_FV) {
     sf[S_MINDT] = fmin(sf[S_MINDT], dt);
     sf[S_LASTDT] = dt;
     sf[S_VOUT] += float(st[S_QOUT]) * MF_FIX * dt;
+    if (st[S_QBIN] != 0u) {         // water-level inflow: booked as inflow (Qin, injected volume)
+        float qb = float(st[S_QBIN]) * MF_FIX;
+        sf[S_QIN] += qb;
+        sf[S_VIN] += qb * dt;
+    }
     st[S_WMAX] = st[S_WNEXT];
 }
 
@@ -687,6 +788,17 @@ kernel void k_tseed_fv(MF_ARGS_FV) {
         for (uint k = 0; k < p.n_src; ++k) {
             uint sr = s_cell[k] / nx;
             uint sc = s_cell[k] % nx;
+            if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
+                atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
+                                                                * ntx + (sc - p.c0) / MF_TILE),
+                                          1u, memory_order_relaxed);
+            }
+        }
+        // a water-level edge cell is a seed like a source: water can come in there at any step
+        for (uint j = 0; j < p.n_wl; ++j) {
+            uint e = mf_wl_cell(s_cell[p.n_src + j], p);
+            uint sr = e / nx;
+            uint sc = e % nx;
             if (sr >= p.r0 && sr < p.r0 + p.wr && sc >= p.c0 && sc < p.c0 + p.wc) {
                 atomic_fetch_max_explicit((device atomic_uint*)(tseed + ((sr - p.r0) / MF_TILE)
                                                                 * ntx + (sc - p.c0) / MF_TILE),

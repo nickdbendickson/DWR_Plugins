@@ -57,8 +57,9 @@ static void mf_dispatch_rows(void** b, const Params& p, uint nrows, const uint* 
 
 // Dry-cell skip (Runner 3.61.0), as LISFLOOD-FP skips its dry cells. The cells of the window
 // that can hold water in the next k steps: the seeds are the wet cells, the cells beside a face
-// whose discharge or recorded velocity is not zero, and the source cells. A face carries flow
-// only when a cell beside it is wet, so water moves at most one cell per step: a cell more than
+// whose discharge or recorded velocity is not zero, the source cells and the water-level edge
+// cells. A face carries flow only when a cell beside it is wet (or it is a water-level face,
+// whose cell is a seed), so water moves at most one cell per step: a cell more than
 // k cells from every seed, with all its neighbours, stays dry for k steps, every face between
 // such cells keeps exactly 0 (what the full window computes there), and the next seeds all lie
 // inside the cells run. So each row's range [lo, hi) is rewritten from the seeds found inside
@@ -100,8 +101,10 @@ static void mf_rows(void** b, const Params& p, int k, std::vector<uint>& lo,
         smin[y] = a;
         smax[y] = z;
     }
-    for (uint i = 0; i < p.n_src; ++i) {
-        uint r = s_cell[i] / nx, c = s_cell[i] % nx;
+    // the source cells, then the water-level edge cells (Boann 6.8.0), are seeds
+    for (uint i = 0; i < p.n_src + p.n_wl; ++i) {
+        uint e = i < p.n_src ? s_cell[i] : mf_wl_cell(s_cell[i], p);
+        uint r = e / nx, c = e % nx;
         if (r < p.r0 || r >= p.r0 + wr || c < p.c0 || c >= p.c0 + p.wc) continue;
         uint y = r - p.r0, x = c - p.c0;
         if (smin[y] == NONE) {

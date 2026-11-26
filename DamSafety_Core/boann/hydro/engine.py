@@ -25,7 +25,8 @@ from . import deckio as bl
 from . import backends as be
 
 NAME = "DamSafety GPU flood engine (local inertial on Metal, LISFLOOD-FP compatible)"
-VERSION = "0.2.0"
+VERSION = "0.3.0"     # 0.3.0 (Boann 6.8.0): water-level (HFIX / HVAR) edge faces, LISFLOOD-FP 8.3's
+                      # acceleration boundary; a deck without one runs as before
 G = bl.G
 ALPHA = bl.ALPHA
 DRY_M = bl.DRY_M
@@ -121,6 +122,11 @@ class Deck:
             self.series.append((name, np.asarray(ts, float), np.asarray(vals, float) * dx))
             for r, c in cells:
                 self.src_cells.append((r, c, k))
+        # water-level (stage) boundaries, HFIX / HVAR edge lines (Boann 6.8.0). None in a deck
+        # without them: wl_faces stays empty and nothing below changes.
+        levels = (bl._load("boundary (.bci) file", bl.read_bci_levels, path("bcifile"))
+                  if "bcifile" in par else [])
+        self.wl_series, self.wl_faces = _level_faces(self, levels, bdy)
         self.gauges = bl._load("gauge file", bl.read_gauges, path("gaugefile")) \
             if "gaugefile" in par else []
         # LISFLOOD-FP's "rainfall" keyword: one rate (m/s) over every valid cell. Only the ACC
@@ -156,6 +162,152 @@ class Deck:
         os.makedirs(res, exist_ok=True)
         self.root = os.path.join(res, str(par.get("resroot", "run")))
         self.breach = TerrainBreach.read(self, path("breachfile")) if "breachfile" in par else None
+
+
+#   Water-level (stage) boundary, LISFLOOD-FP's HFIX / HVAR edge lines (Boann 6.8.0)
+#
+# A .bci line "W <y1> <y2> HFIX <level>" or "W <y1> <y2> HVAR <series>" (likewise N / S / E, with
+# x for N / S) holds the edge cells it covers at a water-surface elevation: a ghost cell outside
+# the edge face stands at that level over the edge cell's own bed, and the scheme's own face flux
+# lets water in or out. HFIX is one level, HVAR a .bdy series of levels (value time, as an inflow
+# hydrograph, but elevations in the DEM's datum and not multiplied by the cell size).
+#
+# The cells a line covers are LISFLOOD-FP 8.3's (input.cpp LoadBCs: its boundary index from the
+# coordinate range, truncated, the end exclusive), and the last line that covers a cell wins. A
+# FREE line keeps today's meaning (its whole edge is free, Params.free_mask) and also takes back
+# the cells it covers from an earlier water-level line. A water-level cell on a FREE edge is a
+# water-level cell.
+#
+# The kernels find a face's level by its edge position (W rows 0..ny-1, E ny.., N 2 ny.., S
+# 2 ny + nx..): the start of every step writes the level of each water-level face into the
+# src buffer past its cells (src[cells + pos]), and a face whose slot holds MF_WL_NONE is not a
+# water-level face. A deck without water-level lines allocates none of that and runs as before.
+
+WL_NONE = -1.0e30          # kernels' MF_WL_NONE: an edge position with no water level
+
+
+def wl_pos(side, r, c, ny, nx):
+    """Edge position of the face of edge cell (r, c) on side N / S / E / W."""
+    return {"W": r, "E": ny + r, "N": 2 * ny + c, "S": 2 * ny + nx + c}[side]
+
+
+def _lf_bc_cells(side, a, b, d):
+    """The edge cells (row, col) that LISFLOOD-FP 8.3 attaches a .bci edge line to: its boundary
+    index range from the clamped coordinates (input.cpp LoadBCs), mapped to cells as
+    boundary.cpp BCs maps them."""
+    nx, ny, dx = d.nx, d.ny, d.dx
+    blx, bly = d.xll, d.yll
+    tly = bly + ny * dx
+    brx = blx + nx * dx
+
+    def clamp(v, lo, hi):
+        return min(max(v, lo), hi)
+    if side in ("N", "S"):
+        s, f = clamp(a, blx, brx), clamp(b, blx, brx)
+        if side == "N":
+            i1, i2 = int((s - blx) / dx), int((f - blx) / dx)
+        else:
+            i1 = int(2 * nx + ny - (s - blx) / dx)
+            i2 = int(2 * nx + ny - (f - blx) / dx)
+    else:
+        s, f = clamp(a, bly, tly), clamp(b, bly, tly)
+        if side == "E":
+            i1, i2 = int(nx + (tly - s) / dx), int(nx + (tly - f) / dx)
+        else:
+            i1 = int(2 * nx + 2 * ny - (tly - s) / dx)
+            i2 = int(2 * nx + 2 * ny - (tly - f) / dx)
+    if i1 > i2:
+        i1, i2 = i2, i1
+    nbc = 2 * nx + 2 * ny
+    out = []
+    for i in range(i1, i2):                  # LISFLOOD-FP: BCi2-- , so the end is exclusive
+        if side == "N" and 0 <= i < nx:
+            out.append((0, i))
+        elif side == "E" and nx <= i < nx + ny:
+            out.append((i - nx, nx - 1))
+        elif side == "S" and nx + ny <= i < 2 * nx + ny:
+            out.append((ny - 1, 2 * nx + ny - 1 - i))
+        elif side == "W" and 2 * nx + ny <= i < nbc:
+            out.append((nbc - 1 - i, 0))
+    return out
+
+
+def _level_faces(d, lines, bdy):
+    """(series [(name, t_s, level m datum)], faces [(pos, row, col, series index)]) from the
+    .bci lines read_bci_levels returns. Both empty when the deck has no HFIX / HVAR line."""
+    if not any(kind in ("HFIX", "HVAR") for _, _, _, kind, _ in lines):
+        return [], []
+    cell = {}                                 # (side, r, c) -> (kind, payload), last line wins
+    for side, a, b, kind, payload in lines:
+        if side == "P":
+            if kind in ("HFIX", "HVAR"):
+                raise EngineError(
+                    "the .bci file holds a water level at a point (P {:g} {:g} {}), which Boann "
+                    "does not support; put the water level on an edge line (N, S, E or W) "
+                    "instead".format(a, b, kind))
+            continue
+        for r, c in _lf_bc_cells(side, a, b, d):
+            cell[(side, r, c)] = (kind, payload)
+    series, faces, index = [], [], {}
+    for (side, r, c), (kind, payload) in sorted(
+            cell.items(), key=lambda kv: wl_pos(kv[0][0], kv[0][1], kv[0][2], d.ny, d.nx)):
+        if kind == "FREE":
+            continue
+        if kind == "HFIX":
+            key = ("HFIX", float(payload))
+            if key not in index:
+                index[key] = len(series)
+                series.append(("HFIX {:g}".format(payload), np.array([0.0]),
+                               np.array([float(payload)])))
+        else:
+            key = ("HVAR", payload)
+            if key not in index:
+                if payload not in bdy:
+                    raise EngineError("the .bdy file has no series '{}' (an HVAR water level in "
+                                      "the .bci file)".format(payload))
+                ts, vals = bdy[payload]
+                index[key] = len(series)
+                series.append((payload, np.asarray(ts, float), np.asarray(vals, float)))
+        faces.append((wl_pos(side, r, c, d.ny, d.nx), r, c, index[key]))
+    return series, faces
+
+
+def wl_faces(d):
+    """The deck's water-level faces ([] for a deck without them, or a deck object of an older
+    shape that has no wl_faces)."""
+    return getattr(d, "wl_faces", None) or []
+
+
+def wl_setup(eng, d, a, base):
+    """Fill the water-level buffers of an engine whose series buffers already hold `base`
+    series: each level series goes in after them shifted to the engine's bed reference (zref),
+    each face into s_cell / s_series after the point sources, and every edge slot of src starts
+    at WL_NONE. Returns the faces' (rows, cols) for the window. A no-op without water levels."""
+    if not wl_faces(d):
+        return (np.zeros(0, int), np.zeros(0, int))
+    cells = d.ny * d.nx
+    a["src"][cells:] = WL_NONE
+    n_src = len(d.src_cells)
+    for j, (pos, r, c, k) in enumerate(d.wl_faces):
+        a["s_cell"][n_src + j] = pos
+        a["s_series"][n_src + j] = base + k
+    return (np.array([f[1] for f in d.wl_faces], int), np.array([f[2] for f in d.wl_faces], int))
+
+
+def wl_series(d, zref):
+    """The water-level series as the series buffers hold them: levels relative to zref."""
+    if not wl_faces(d):
+        return []
+    return [(name, ts, np.asarray(v, float) - zref) for name, ts, v in d.wl_series]
+
+
+def refuse_levels(deck, engine):
+    """The sub-grid engines have no water-level boundary yet: stop rather than run the edge as a
+    wall and silently drop the boundary."""
+    if wl_faces(deck):
+        raise EngineError(
+            "the .bci file holds a water-level boundary (HFIX or HVAR), which Boann's {} engine "
+            "does not support yet. Use Boann ACC, FV1, FV2 or DG2, or LISFLOOD-FP.".format(engine))
 
 
 def refuse_rain(deck, engine):
@@ -429,17 +581,21 @@ class Engine:
         self.d = d = deck
         self.b = backend
         ny, nx = d.ny, d.nx
-        # rainfall rides as one more series after the inflow series (index n_series)
-        series = list(d.series) + ([("rain",) + tuple(d.rain)] if d.rain is not None else [])
-        n_values = sum(len(s[1]) for s in series)
-        layout = be.buffer_layout(ny, nx, len(d.src_cells), len(series), n_values)
-        a = self.a = backend.allocate(layout)
         # bed relative to the lowest valid cell: float32 then resolves depths to ~1e-5 m.
         # A breach notch can go below that lowest cell; the reference includes the final notch
         # so the lowered bed stays at or above it. No breach file: today's reference.
         self.zref = float(d.z[d.valid].min()) if d.valid.any() else 0.0
         if d.breach is not None:
             self.zref = min(self.zref, d.breach.lowest_final())
+        # rainfall rides as one more series after the inflow series (index n_series), and the
+        # water-level series (relative to zref) after that
+        series = list(d.series) + ([("rain",) + tuple(d.rain)] if d.rain is not None else [])
+        wl_base = len(series)
+        series += wl_series(d, self.zref)
+        n_values = sum(len(s[1]) for s in series)
+        layout = be.buffer_layout(ny, nx, len(d.src_cells), len(series), n_values,
+                                  n_wl=len(wl_faces(d)))
+        a = self.a = backend.allocate(layout)
         a["z"][:] = np.where(d.valid, d.z - self.zref, 0.0).ravel()
         a["n2"][:] = (d.n ** 2).ravel()
         a["h"][:] = d.h0.ravel()
@@ -458,6 +614,7 @@ class Engine:
         for i, (r, c, k) in enumerate(d.src_cells):
             a["s_cell"][i] = r * nx + c
             a["s_series"][i] = k
+        self.wl_rc = wl_setup(self, d, a, wl_base)
         st = a["st"]
         st[S_HMAX] = np.float32(a["h"].max()).view(np.uint32)
         self.src_rc = (np.array([s[0] for s in d.src_cells], int),
@@ -467,6 +624,7 @@ class Engine:
         p.nx, p.ny = nx, ny
         p.free_mask = sum(_FREE_BITS[e] for e in d.free)
         p.n_src, p.n_series = len(d.src_cells), len(d.series)
+        p.n_wl = len(wl_faces(d))
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
         p.inflow_lf_order = int(d.inflow_lf_order)
@@ -489,6 +647,10 @@ class Engine:
         if brc is not None and len(brc[0]):
             rmin, rmax = min(rmin, int(brc[0].min())), max(rmax, int(brc[0].max()))
             cmin, cmax = min(cmin, int(brc[1].min())), max(cmax, int(brc[1].max()))
+        wrc = getattr(self, "wl_rc", None)
+        if wrc is not None and len(wrc[0]):
+            rmin, rmax = min(rmin, int(wrc[0].min())), max(rmax, int(wrc[0].max()))
+            cmin, cmax = min(cmin, int(wrc[1].min())), max(cmax, int(wrc[1].max()))
         if rmin > rmax:
             return (0, 1, 0, 1)
         m = WINDOW_MARGIN

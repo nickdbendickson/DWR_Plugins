@@ -85,6 +85,8 @@ struct Params {
     float t_end;
     float theta;
     float pad4;
+    uint n_wl;            // water-level boundary faces (Boann 6.8.0): the engine refuses a deck
+                          // with them, so 0 here; the word keeps Params the size backends.Params is
 };
 
 // 0..29 data buffers, Params at 30 (31 slots, the Metal argument-table cap). The channel/floodplain

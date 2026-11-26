@@ -227,6 +227,32 @@ def read_bci(path):
     return pts, free
 
 
+def read_bci_levels(path):
+    """The water-level (stage) lines of a .bci file, which read_bci leaves out (Boann 6.8.0):
+    [(side, a, b, kind, payload)] in file order, side in N/S/E/W, (a, b) the coordinate range the
+    line covers (x for N/S, y for E/W, as LISFLOOD-FP 8.3's LoadBCs reads it), kind FREE / HFIX /
+    HVAR, and payload the level (HFIX, m in the DEM's datum), the series name (HVAR) or None
+    (FREE). FREE lines are listed too, so a later FREE line can take a cell back from an earlier
+    stage line (LISFLOOD-FP: the last line that covers a cell wins). A point line
+    ("P x y HFIX" / "P x y HVAR") is returned as side "P" with (x, y) in (a, b)."""
+    out = []
+    with open(path) as f:
+        for line in f:
+            p = line.split()
+            if not p:
+                continue
+            k = p[0].upper()
+            if k in ("N", "S", "E", "W", "P") and len(p) >= 4:
+                kind = p[3].upper()
+                if kind == "FREE":
+                    out.append((k, float(p[1]), float(p[2]), kind, None))
+                elif kind == "HFIX" and len(p) >= 5:
+                    out.append((k, float(p[1]), float(p[2]), kind, float(p[4])))
+                elif kind == "HVAR" and len(p) >= 5:
+                    out.append((k, float(p[1]), float(p[2]), kind, p[4]))
+    return out
+
+
 def read_gauges(path):
     with open(path) as f:
         n = int(f.readline().split()[0])
