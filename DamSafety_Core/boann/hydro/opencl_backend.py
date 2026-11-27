@@ -10,10 +10,24 @@ IEEE division and square root, no fused multiply-add).
 Each "SIMD group" is one work-item (see ocl_shim.h), so the answers follow the CPU build to
 float round-off: the same tolerance the Metal backend is held to (test_boann_opencl.py).
 
-Unlike Apple silicon, a discrete GPU has its own memory. The host's numpy arrays stay the
-engine's view of the grids: run_batch writes every array to the GPU before the batch and reads
-every one back after it, so an engine reads and writes them between batches exactly as it does
-with the other backends.
+The host's numpy arrays stay the engine's view of the grids, so an engine reads and writes them
+between batches exactly as it does with the other backends. How they reach the GPU:
+
+- zero-copy (a GPU that shares the computer's memory: Intel Arc/Iris integrated graphics, AMD
+  APUs, a CPU OpenCL such as PoCL; CL_DEVICE_HOST_UNIFIED_MEMORY). Each grid is one block of
+  page-aligned host memory the buffer is made over (CL_MEM_USE_HOST_PTR), mapped while the host
+  holds it and unmapped for the batch, as Metal's shared storage on Apple silicon: one copy of
+  each grid, nothing copied.
+- copies on demand (a discrete GPU with its own memory). After a batch only the state words
+  (st) and the tile flags come back. Every other grid a kernel writes is read back the first
+  time the engine looks it up (backend.arrays[name] / .get(name)) and not before; before the
+  next batch only the grids the engine looked up since are written to the GPU (all of them
+  the first time). An engine reads its grids through that lookup each time (the mass row, a
+  snapshot, the gauge, the breach notch, the results), so it sees the numbers the GPU holds.
+
+DAMSAFETY_MF_CL_ZEROCOPY=0 / 1 turns zero-copy off / insists on it (default: when the device
+shares host memory). DAMSAFETY_MF_CL_SYNC=full reads every grid back after every batch (the
+copies-on-demand path, as before; for checking). Neither changes a result.
 
 DAMSAFETY_MF_CL_DEVICE=N picks the N-th OpenCL device (as `boann.py devices` lists them);
 by default the first GPU, else the first device of any kind."""
@@ -85,8 +99,17 @@ CL_DEVICE_TYPE = 0x1000
 CL_DEVICE_GLOBAL_MEM_SIZE = 0x101F
 CL_DEVICE_MAX_COMPUTE_UNITS = 0x1002
 CL_PROGRAM_BUILD_LOG = 0x1183
+CL_DEVICE_HOST_UNIFIED_MEMORY = 0x1035
 CL_MEM_READ_WRITE = 1 << 0
+CL_MEM_USE_HOST_PTR = 1 << 3
+CL_MAP_READ = 1 << 0
+CL_MAP_WRITE = 1 << 1
 CL_TRUE = 1
+CL_FALSE = 0
+# zero-copy wants the host block page-aligned and its size a whole number of cache lines
+# (Intel's rule; it does no harm elsewhere)
+ZC_ALIGN = 4096
+ZC_SIZE_ALIGN = 64
 CL_QUEUE_PROFILING_ENABLE = 1 << 1
 
 _c = ctypes
@@ -127,6 +150,9 @@ def _load():
         "clCreateBuffer": (_vp, [_vp, _c.c_uint64, _sz, _vp, _c.POINTER(_c.c_int)]),
         "clEnqueueWriteBuffer": (_c.c_int, [_vp, _vp, _u32, _sz, _sz, _vp, _u32, _vp, _vp]),
         "clEnqueueReadBuffer": (_c.c_int, [_vp, _vp, _u32, _sz, _sz, _vp, _u32, _vp, _vp]),
+        "clEnqueueMapBuffer": (_vp, [_vp, _vp, _u32, _c.c_uint64, _sz, _sz, _u32, _vp, _vp,
+                                     _c.POINTER(_c.c_int)]),
+        "clEnqueueUnmapMemObject": (_c.c_int, [_vp, _vp, _vp, _u32, _vp, _vp]),
         "clEnqueueNDRangeKernel": (_c.c_int, [_vp, _vp, _u32, _c.POINTER(_sz), _c.POINTER(_sz),
                                               _c.POINTER(_sz), _u32, _vp, _vp]),
         "clFinish": (_c.c_int, [_vp]),
@@ -231,6 +257,42 @@ def _subgroups_wanted(cl, dev):
     return ""
 
 
+def _zero_copy_wanted(cl, dev):
+    """True when the grids should be zero-copy buffers over host memory: the device shares the
+    host's memory (CL_DEVICE_HOST_UNIFIED_MEMORY: integrated graphics, a CPU OpenCL), or
+    DAMSAFETY_MF_CL_ZEROCOPY=1. DAMSAFETY_MF_CL_ZEROCOPY=0 turns it off."""
+    want = os.environ.get("DAMSAFETY_MF_CL_ZEROCOPY", "auto").strip().lower()
+    if want in ("0", "no", "off", "false"):
+        return False
+    if want in ("1", "yes", "on", "true"):
+        return True
+    raw = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_HOST_UNIFIED_MEMORY).raw
+    return len(raw) >= 4 and _c.c_uint32.from_buffer_copy(raw[:4]).value != 0
+
+
+def _sync_full():
+    return os.environ.get("DAMSAFETY_MF_CL_SYNC", "").strip().lower() == "full"
+
+
+class HostArrays(dict):
+    """The grids by name, as the engine sees them (OpenCLBackend.arrays). With copies on demand,
+    looking a grid up (a[name], a.get(name)) first reads it back from the GPU when the GPU has
+    written it since, and marks it to be written to the GPU before the next batch."""
+
+    def __init__(self, backend, arrays):
+        super().__init__(arrays)
+        self._bk = backend
+
+    def __getitem__(self, name):
+        self._bk._host_wants(name)
+        return dict.__getitem__(self, name)
+
+    def get(self, name, default=None):
+        if name not in self:
+            return default
+        return self[name]
+
+
 # -- the backend ------------------------------------------------------------------------------
 
 class OpenCLBackend:
@@ -292,7 +354,15 @@ class OpenCLBackend:
         self.cells_run = 0
         self.copied_bytes = 0
         self.threads = 1
-        self._shadow = {}
+        self.zero_copy = _zero_copy_wanted(cl, dev)
+        self._zc_insist = os.environ.get("DAMSAFETY_MF_CL_ZEROCOPY", "").strip().lower() in (
+            "1", "yes", "on", "true")
+        self._host = {}             # name -> the numpy array (the backend's own view)
+        self._blocks = []           # zero-copy: (host block, its address, its size) per grid
+        self._log = log
+        self._mapped = False        # zero-copy: the host holds the buffers (mapped)
+        self._stale = set()         # copies: grids the GPU wrote that the host has not read back
+        self._touched = set()       # copies: grids the host looked up since the last upload
         self.prof = be.Profile(self)
         if self.subgroups:
             self.device += ", subgroups"
@@ -302,13 +372,47 @@ class OpenCLBackend:
     def profile(self):
         return self.prof.report()
 
-    def allocate(self, layout):
+    def _release_buffers(self):
         cl = self.cl
+        if self._mapped:
+            self._unmap_all()
+            _check(cl.clFinish(self.queue), "clFinish")
         for b in self.buffers:
             cl.clReleaseMemObject(b)
         self.buffers = []
-        self.arrays = {}
+        self._blocks = []
+
+    def allocate(self, layout):
+        self._release_buffers()
+        self._names = [n for n, _d, _c2 in layout]
+        self._layout = list(layout)
+        if self.zero_copy:
+            try:
+                self._allocate_zero_copy(layout)
+            except be.BackendError as e:
+                if self._zc_insist:
+                    raise
+                self._release_buffers()
+                self.zero_copy = False
+                self._log_mode("zero-copy not used ({}); copies on demand instead".format(e))
+                self._allocate_copies(layout)
+        else:
+            self._allocate_copies(layout)
+        cl = self.cl
+        for kh in self.kernels.values():
+            for i, b in enumerate(self.buffers):
+                _check(cl.clSetKernelArg(kh, i, _c.sizeof(_vp), _c.byref(b)), "clSetKernelArg")
+        return self.arrays
+
+    def _log_mode(self, msg):
+        if self._log:
+            self._log("OpenCL: " + msg)
+
+    def _allocate_copies(self, layout):
+        """A device buffer per grid and a host numpy array beside it (copies on demand)."""
+        cl = self.cl
         err = _c.c_int(0)
+        self._host = {}
         for name, dtype, count in layout:
             a = np.zeros(max(int(count), 1), dtype=dtype)
             buf = cl.clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, a.nbytes, None, _c.byref(err))
@@ -316,41 +420,119 @@ class OpenCLBackend:
                 raise be.BackendError("the GPU could not allocate {} ({:,} bytes, error {})".format(
                     name, a.nbytes, err.value))
             self.buffers.append(_vp(buf))
-            self.arrays[name] = a
-        self._names = [n for n, _d, _c2 in layout]
-        self._shadow = {}           # each array as the GPU last held it (after a read-back)
-        for kh in self.kernels.values():
-            for i, b in enumerate(self.buffers):
-                _check(cl.clSetKernelArg(kh, i, _c.sizeof(_vp), _c.byref(b)), "clSetKernelArg")
-        return self.arrays
+            self._host[name] = a
+        idx = {n: k for k, n in enumerate(self._names)}
+        self._writable = {n for n in self._names if idx[n] not in self.read_only}
+        # read back after every batch: the state words the engine reads each batch and the tile
+        # flags _cells_marked counts (both small)
+        self._always = {n for n in ("st", "ton") if n in self._host}
+        self._stale = set()
+        self._touched = set(self._names)        # the first batch writes every grid
+        self.arrays = HostArrays(self, self._host)
 
-    def _copy(self, to_gpu):
-        """to_gpu: write the arrays the host changed since the last read-back (all of them the
-        first time); else read back every array a kernel may write. Between batches the host's
-        arrays and the GPU's buffers then hold the same numbers."""
+    def _allocate_zero_copy(self, layout):
+        """Each grid one page-aligned host block, the buffer made over it (CL_MEM_USE_HOST_PTR);
+        mapped now, so the host holds it until the first batch."""
+        cl = self.cl
+        err = _c.c_int(0)
+        self._host = {}
+        self._blocks = []
+        for name, dtype, count in layout:
+            n = max(int(count), 1)
+            nbytes = n * np.dtype(dtype).itemsize
+            size = -(-nbytes // ZC_SIZE_ALIGN) * ZC_SIZE_ALIGN
+            raw = np.zeros(size + ZC_ALIGN, dtype=np.uint8)
+            off = (-raw.ctypes.data) % ZC_ALIGN
+            block = raw[off:off + size]
+            ptr = block.ctypes.data
+            buf = cl.clCreateBuffer(self.ctx, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, size,
+                                    _vp(ptr), _c.byref(err))
+            if err.value != CL_SUCCESS or not buf:
+                raise be.BackendError("the GPU could not make {} over host memory ({:,} bytes, "
+                                      "error {})".format(name, size, err.value))
+            self.buffers.append(_vp(buf))
+            self._blocks.append((raw, ptr, size))
+            self._host[name] = block[:nbytes].view(dtype)
+        self._map_all(check=True)
+        self.arrays = self._host
+        if ", zero-copy" not in self.device:
+            self.device += ", zero-copy"
+
+    def _map_all(self, check=False):
+        cl = self.cl
+        err = _c.c_int(0)
+        last = len(self.buffers) - 1
+        for k, (b, (_raw, ptr, size)) in enumerate(zip(self.buffers, self._blocks)):
+            got = cl.clEnqueueMapBuffer(self.queue, b, CL_TRUE if k == last else CL_FALSE,
+                                        CL_MAP_READ | CL_MAP_WRITE, 0, size, 0, None, None,
+                                        _c.byref(err))
+            _check(err.value, "map " + self._names[k])
+            if (got or 0) != ptr:
+                # a USE_HOST_PTR buffer maps at its host block (OpenCL 1.2, 5.4.2); a driver that
+                # answers elsewhere is copying, and the engine's arrays would not be its data
+                if check:
+                    cl.clEnqueueUnmapMemObject(self.queue, b, _vp(got), 0, None, None)
+                    cl.clFinish(self.queue)
+                    raise be.BackendError("the driver mapped {} away from its host memory".format(
+                        self._names[k]))
+                raise be.BackendError("OpenCL map of {} moved (zero-copy broken)".format(
+                    self._names[k]))
+        self._mapped = True
+
+    def _unmap_all(self):
+        cl = self.cl
+        for k, (b, (_raw, ptr, _size)) in enumerate(zip(self.buffers, self._blocks)):
+            _check(cl.clEnqueueUnmapMemObject(self.queue, b, _vp(ptr), 0, None, None),
+                   "unmap " + self._names[k])
+        self._mapped = False
+
+    def _host_wants(self, name):
+        """Copies on demand: the engine looks grid `name` up. Read it back if the GPU wrote it
+        since the host last held it; it goes to the GPU before the next batch."""
+        if self.zero_copy:
+            return
+        if name in self._stale:
+            k = self._names.index(name)
+            a = self._host[name]
+            _check(self.cl.clEnqueueReadBuffer(self.queue, self.buffers[k], CL_TRUE, 0, a.nbytes,
+                                               a.ctypes.data, 0, None, None), "copy " + name)
+            self.copied_bytes += a.nbytes
+            self._stale.discard(name)
+        self._touched.add(name)
+
+    def _upload(self):
+        """Copies: write the grids the host looked up since the last batch, and the state words."""
         cl = self.cl
         n = 0
-        for k, (name, b) in enumerate(zip(self._names, self.buffers)):
-            a = self.arrays[name]
-            if to_gpu:
-                sh = self._shadow.get(name)
-                if sh is not None and np.array_equal(a, sh):
-                    continue
-                _check(cl.clEnqueueWriteBuffer(self.queue, b, 0, 0, a.nbytes, a.ctypes.data, 0,
-                                               None, None), "copy " + name)
-            else:
-                if k in self.read_only and name in self._shadow:
-                    continue
-                _check(cl.clEnqueueReadBuffer(self.queue, b, CL_TRUE, 0, a.nbytes, a.ctypes.data,
-                                              0, None, None), "copy " + name)
+        for k, name in enumerate(self._names):
+            if name not in self._touched and name not in self._always:
+                continue
+            a = self._host[name]
+            _check(cl.clEnqueueWriteBuffer(self.queue, self.buffers[k], CL_FALSE, 0, a.nbytes,
+                                           a.ctypes.data, 0, None, None), "copy " + name)
             n += a.nbytes
-        if not to_gpu:
-            for name in self._names:
-                sh = self._shadow.get(name)
-                if sh is None:
-                    self._shadow[name] = self.arrays[name].copy()
-                else:
-                    np.copyto(sh, self.arrays[name])
+        self._touched = set()
+        self.copied_bytes += n
+
+    def _download(self):
+        """Copies: read back the state words and tile flags; every other grid a kernel writes is
+        now newer on the GPU (read back when the engine looks it up). DAMSAFETY_MF_CL_SYNC=full
+        reads them all back now."""
+        cl = self.cl
+        full = _sync_full()
+        n = 0
+        stale = set()
+        for k, name in enumerate(self._names):
+            if name not in self._writable:
+                continue
+            if name in self._always or full:
+                a = self._host[name]
+                _check(cl.clEnqueueReadBuffer(self.queue, self.buffers[k], CL_FALSE, 0, a.nbytes,
+                                              a.ctypes.data, 0, None, None), "copy " + name)
+                n += a.nbytes
+            else:
+                stale.add(name)
+        self._stale = stale
         self.copied_bytes += n
 
     def run_batch(self, params, nsteps, chunk=0):
@@ -358,11 +540,14 @@ class OpenCLBackend:
         prof = self.prof
         nsteps = int(nsteps)
         tiles = be._tiles_on(self.spec, params, chunk)
-        st = self.arrays.get("st")
+        st = self._host.get("st")
         if st is not None and self.spec.tile_plan is not None:
             st[be.S_TILES] = 1 if tiles else 0
         t0 = time.perf_counter()
-        self._copy(True)
+        if self.zero_copy:
+            self._unmap_all()
+        else:
+            self._upload()
         nb = len(self.buffers)
         for kh in self.kernels.values():
             _check(cl.clSetKernelArg(kh, nb, _c.sizeof(params), _c.byref(params)),
@@ -379,7 +564,10 @@ class OpenCLBackend:
                 _check(cl.clEnqueueNDRangeKernel(self.queue, self.kernels[name], 2, None, gsz,
                                                  None, 0, None, None), "run " + name)
         t1 = time.perf_counter()
-        self._copy(False)
+        if self.zero_copy:
+            self._map_all()
+        else:
+            self._download()
         _check(cl.clFinish(self.queue), "clFinish")
         t2 = time.perf_counter()
         prof.encode_s += t1 - t0
@@ -391,7 +579,7 @@ class OpenCLBackend:
 
     def _cells_marked(self, params, tiles):
         wr, wc = int(getattr(params, "wr", 0)), int(getattr(params, "wc", 0))
-        ton = self.arrays.get("ton")
+        ton = self._host.get("ton")
         if not tiles or ton is None:
             return wr * wc
         ntx, nty = -(-wc // be.TILE), -(-wr // be.TILE)
@@ -402,9 +590,8 @@ class OpenCLBackend:
 
     def close(self):
         cl = self.cl
-        for b in self.buffers:
-            cl.clReleaseMemObject(b)
-        self.buffers = []
+        if self.queue:
+            self._release_buffers()     # the host keeps its arrays (zero-copy: the host blocks)
         for kh in self.kernels.values():
             cl.clReleaseKernel(kh)
         self.kernels = {}
