@@ -1228,8 +1228,9 @@ class MetalBackend:
 
 
 def make_backend(which="auto", log=None, spec=FLOOD_SPEC):
-    """'metal', 'cpu' or 'auto' (Metal when this Mac has it, else the CPU build). The
-    DAMSAFETY_MF_BACKEND environment variable overrides 'auto'."""
+    """'metal', 'cpu', 'opencl' or 'auto' (Metal when this Mac has it, else the CPU build; auto
+    never picks OpenCL, which is asked for by name). The DAMSAFETY_MF_BACKEND environment
+    variable overrides 'auto'."""
     which = (which or "auto").lower()
     if which == "auto":
         which = os.environ.get("DAMSAFETY_MF_BACKEND", "auto").lower()
@@ -1237,6 +1238,9 @@ def make_backend(which="auto", log=None, spec=FLOOD_SPEC):
         return MetalBackend(spec, log)
     if which == "cpu":
         return CpuBackend(spec, log)
+    if which == "opencl":
+        from .opencl_backend import OpenCLBackend      # a GPU that is not Apple's (Arc, AMD, NVIDIA)
+        return OpenCLBackend(spec, log)
     if sys.platform == "darwin":
         try:
             return MetalBackend(spec, log)

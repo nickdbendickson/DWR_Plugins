@@ -262,8 +262,9 @@ def _parser():
                    help="acc (default), sgc, fv, fv2, dg2, subfv or subli; the Runner's words "
                         "(gpu, gpu-fv, gpu-fv2, gpu-dg2, gpu-sgc, gpu-subfv, gpu-subli) work too")
     r.add_argument("--backend", "-b", default=os.environ.get("DAMSAFETY_MF_BACKEND") or "auto",
-                   choices=("auto", "metal", "cpu"),
-                   help="auto (Apple GPU when there is one, else the CPU build), metal or cpu")
+                   choices=("auto", "metal", "cpu", "opencl"),
+                   help="auto (Apple GPU when there is one, else the CPU build), metal, cpu, or opencl "
+                        "(a GPU that is not Apple's: Intel Arc, AMD, NVIDIA)")
     r.add_argument("--no-limiter", action="store_true",
                    help="dg2 only: the raw, unlimited scheme (same as 'nolimitslopes' in the .par)")
     r.add_argument("--progress", "-v", action="store_true", help="print the simulated time")
@@ -305,6 +306,18 @@ def main(argv=None):
         from . import available
         ok, why = available()
         print(("ready: " if ok else "cannot run here: ") + why)
+        # the OpenCL devices --backend opencl can use (DAMSAFETY_MF_CL_DEVICE counts in this order)
+        from . import opencl_backend as ob
+        try:
+            ds = ob.devices()
+        except Exception as e:  # noqa: BLE001 - an absent or broken runtime is only reported
+            ds = None
+            print("OpenCL: none ({})".format(e))
+        if ds == []:
+            print("OpenCL: no device")
+        for i, d in enumerate(ds or []):
+            print("OpenCL device {}: {} ({}, {}, {:.1f} GB, {} compute units{})".format(
+                i, d[2], d[0], d[3], d[5] / 2.0 ** 30, d[6], ", GPU" if d[4] else ""))
         return 0 if ok else 1
     from .deckio import EngineError, Cancelled
     from .backends import BackendError

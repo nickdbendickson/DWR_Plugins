@@ -468,7 +468,7 @@ def _main(argv):
     import argparse
     ap = argparse.ArgumentParser(prog="metalflood.engine_subli")
     ap.add_argument("par")
-    ap.add_argument("-backend", default="auto", choices=["auto", "metal", "cpu"])
+    ap.add_argument("-backend", default="auto", choices=["auto", "metal", "cpu", "opencl"])
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args(argv)
     stats = run_par(a.par, backend=a.backend, log=(print if a.v else None))

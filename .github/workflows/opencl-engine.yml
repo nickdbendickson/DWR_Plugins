@@ -1,0 +1,82 @@
+name: GPU flood engine (OpenCL)
+
+# Boann's OpenCL backend (DamSafety_Core/boann/hydro/opencl_backend.py: the .metal kernels
+# translated to OpenCL C, for GPUs that are not Apple's: Intel Arc, AMD, NVIDIA) on PoCL, a CPU
+# implementation of OpenCL, so it runs on a plain Ubuntu runner with no GPU. It checks the
+# translation compiles and runs, each solver against the CPU build with the Metal GPU's
+# tolerances, repeat runs bit for bit and the dry-tile skip on == off. A real GPU (Nick's Arc PC)
+# is checked by hand with the same test file. Not a merge gate.
+#
+# When it runs: on a pull request that changes the engine or this file, and by hand.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "DamSafety_Core/boann/**"
+      - "DamSafety_Runner/tests/test_boann_opencl.py"
+      - ".github/workflows/opencl-engine.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencl-engine-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pocl:
+    name: OpenCL (PoCL, CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: PoCL (OpenCL on the CPU) and numpy
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pocl-opencl-icd ocl-icd-libopencl1 clinfo g++
+          python -m pip install "numpy<2.3" scipy
+          clinfo -l
+      - name: Devices Boann sees
+        run: python DamSafety_Core/boann/hydro/boann.py check
+      # PoCL's LLVM aborts ("Instruction Combining did not reach a fixpoint") optimising the DG2
+      # kernels, a PoCL / LLVM bug; unoptimised they build. No fast-math either way, so the
+      # arithmetic is the same IEEE float32 (ACC, SGC, FV1 and FV2 matched the CPU build exactly
+      # optimised too). A real GPU driver builds them optimised.
+      - name: OpenCL backend tests
+        env:
+          DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
+        run: python -m nd_breach_runner.tests.test_boann_opencl
+      - name: The check a GPU computer runs (small valley; PoCL is a CPU, so the times mean nothing)
+        env:
+          DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
+        run: python tools/boann_opencl_check.py --size small --skip-tests
+
+  windows-libs:
+    # Boann's CPU libraries for Windows from this branch's sources, cross-built as release.yml
+    # does: a Windows computer has no C++ compiler, and tools/boann_opencl_check.py compares the
+    # GPU with the CPU build. Unzip into DamSafety_Core/boann/hydro/prebuilt/.
+    name: Windows CPU libraries (for the GPU check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Cross-compile with MinGW-w64 (posix threads, OpenMP, -static)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q g++-mingw-w64-x86-64-posix
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out boann --platform windows-x64 \
+            --cxx x86_64-w64-mingw32-g++-posix --require-openmp --extra=-static
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boann-windows-x64
+          path: boann/
+          if-no-files-found: error
