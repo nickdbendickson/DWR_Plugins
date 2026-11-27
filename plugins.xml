@@ -1,0 +1,183 @@
+<?xml version='1.0' encoding='utf-8'?>
+<plugins>
+  <pyqgis_plugin name="DamSafety Core" version="1.11.0">
+    <description>Shared library for the DamSafety suite: the damsuite package and the shared window files that DamSafety Hazard, Runner, Screening, Data, Setup, PMP and Hazard Lite import. Install it first; it adds nothing to the menus but one About entry.</description>
+    <about>Holds the one copy of the code the DamSafety plugins share: damsuite (dam records, the REG_05.2026 Fig. 5.1 / 5.2 curve table, the suite settings file, the offline data pack reader and builder, the pre-solve gate, version checks between the plugins) and the suite's window files and layer styles. Each DamSafety plugin's damsuite/ is a two-line shim onto this plugin, so a fix made here reaches every plugin at once and no two plugins can disagree. Every other DamSafety plugin lists this one in plugin_dependencies: QGIS offers to install it when one of them is installed.</about>
+    <version>1.11.0</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage />
+    <author_name>N.D. Bendickson</author_name>
+    <tracker />
+    <repository />
+    <tags>dam,dam safety,north dakota,library</tags>
+    <experimental>False</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Core_1.11.0.zip</file_name>
+    <icon>DamSafety_Core/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Core_1.11.0.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Data" version="1.11.2">
+    <description>Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.</description>
+    <about>Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.</about>
+    <version>1.11.2</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>Nick Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags>north dakota,nsi,structures,building footprints,offline,update</tags>
+    <experimental>False</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Data_1.11.2.zip</file_name>
+    <icon>DamSafety_Data/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Data_1.11.2.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Finder" version="0.7.5">
+    <description>Finds dams, dry dams, road fills, ponds, dugouts and road / rail stream crossings in LiDAR, hydrography and aerial imagery that are not on the DWR, NID or bridge / culvert lists.</description>
+    <about>Nine Processing tools (Processing Toolbox &gt; DamSafety Finder &gt; Find structures). Fills across streams and draws: walks the 3DHP / NHD flowlines and every draw traced from the DEM itself over a bare-earth DEM and reports every fill that blocks the valley (spill level, height, head, storage, pool), as a dam, dry embankment or road fill. Ponds and dugouts: the Screening tool 16 pond engine over a water-body layer. Crossings: every road / rail x stream crossing, the places a culvert or bridge must be. Open water: pond outlines from 4-band or colour-infrared aerial imagery (NDWI; several years keep the persistent water) or straight from a classified LiDAR point cloud (ASPRS class 9), marked when no water-body layer has them. Build the water mosaic: turn a folder of classified LiDAR tiles into the statewide class-9 water-count / mean-elevation rasters the open-water tool reads. Also: where each pool spills, dug pits and raised ridges (levees, dikes) anywhere in the DEM, the drainage area and expected pipe size at each crossing, dams / dikes / culverts from OpenStreetMap, a score learned from the fills already on a dam list (bagged boosted trees by default), evidence the DEM cannot give (water year after year in the imagery, NWI codes, LiDAR return drop-out, buildings and roads down the flow path), and review batches whose marks give precision and recall with honest 95 % intervals. Every candidate is checked against the known-structure layers you give (DWR dams, dugouts, Unknown Structures, NID, NBI, NDDOT, USGS / SARP crossings): listed, unsure or new. The not-listed dams and ponds are also written as DWR-style dam records (status Candidate) that DamSafety Screening tool 1 reads. Screening aid: check every candidate against an aerial image; the Department makes the determination.</about>
+    <version>0.7.5</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>N.D. Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags>dam,dam safety,lidar,culvert,pond,processing</tags>
+    <experimental>True</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Finder_0.7.5.zip</file_name>
+    <icon>DamSafety_Finder/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Finder_0.7.5.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Hazard Lite" version="0.2.2">
+    <description>hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters.</description>
+    <about>One Processing tool (Processing Toolbox &gt; DamSafety Hazard Lite). Reads the ND Dam Suite offline pack: 911 address points on their FEMA outline, NG9-1-1 roads with NDDOT traffic counts, NARN rail with FRA crossings. Screening aid; the engineer of record classifies the dam.</about>
+    <version>0.2.2</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>N.D. Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags />
+    <experimental>True</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_HazardLite_0.2.2.zip</file_name>
+    <icon>DamSafety_HazardLite/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_HazardLite_0.2.2.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Hazard" version="2.25.10">
+    <description>Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)</description>
+    <about>Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.</about>
+    <version>2.25.10</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>N.D. Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags>dam,hazard,flood,inundation,acer,usbr,consolidation,nsi,fema,dss-wise,consequences,loss of life,processing</tags>
+    <experimental>False</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Hazard_2.25.10.zip</file_name>
+    <icon>DamSafety_Hazard/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Hazard_2.25.10.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety PMP (prototype)" version="0.7.3">
+    <description>INTERNAL PROTOTYPE port of the North Dakota statewide PMP Evaluation Tool (AWA, 2021) main PMP script to QGIS Processing. Not validated against ArcGIS.</description>
+    <about>Computes gridded and basin-average PMP, temporal distributions and hyetograph CSVs from the ND PMP study geodatabases (requires GDAL &gt;= 3.7). Also NOAA Atlas 14 tools (0.6.0): precipitation-frequency estimates at a point or over a basin, Atlas 14 GIS grids, and 100- / 500- / 1000-year design storms as hyetograph CSVs for the inflow hydrograph tool (NOAA's public data; the Atlas 14 core is shared with DamIT PMP). For internal use only; not for publication or redistribution without written permission from the ND State Water Commission and AWA (the study report is for the exclusive use of the SWC). Data not included: download pmp_evaluation_tool.zip from the ND DWR PMP study page.</about>
+    <version>0.7.3</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>internal prototype (port of Applied Weather Associates ND_PMP_Tool.py)</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags>pmp,precipitation,hydrology,north dakota,dam safety,streamstats,noaa atlas 14,precipitation frequency</tags>
+    <experimental>True</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_PMP_0.7.3.zip</file_name>
+    <icon>DamSafety_PMP/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_PMP_0.7.3.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Runner" version="3.103.0">
+    <description>Popup window and Processing tools for dam breach flood modelling with LISFLOOD-FP and ANUGA per the North Dakota Dam Safety Standards: sunny-day and PMF flood scenarios with incremental results, sensitivity, cascades, nested grids, probabilistic outputs, outlet works, consequences, animation, a submittal report, a run manifest and ND Section 5.2 hazard classification with the ACER TM 11 charts.</description>
+    <about>Builds the breach hydrograph (ND REG_05.2026 Section 5.1.1: Froehlich 2008/1995, MacDonald, Von Thun &amp; Gillette, TR-60 or your own), optionally routes a PMF inflow with and without the breach, runs LISFLOOD-FP on a local DEM and extends the domain until nothing downstream matters, and can re-run the flood with ANUGA. Writes depth, velocity, arrival and WSE GeoTIFFs plus baseline, incremental, vector and EAP-map products. Includes sensitivity, cascade, nested-grid and Monte Carlo tools, rainfall-to-PMF, life-safety and damage estimates, animation, a Word submittal report, HEC-RAS import/export, a verification suite, a self-test for this QGIS, LiDAR/NLCD data tools and a hand-off to the ND hazard classification. Runs offline. LISFLOOD-FP (patched build) and ANUGA (own conda environment) are installed separately; see README.md.</about>
+    <version>3.103.0</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>Nick Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags>dam,breach,flood,inundation,LISFLOOD-FP,ANUGA,North Dakota,dam safety,processing</tags>
+    <experimental>True</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Runner_3.103.0.zip</file_name>
+    <icon>DamSafety_Runner/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Runner_3.103.0.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Screening" version="0.65.0">
+    <description>Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.</description>
+    <about>Screening-level tool. Output is for prioritization only; official hazard classification is determined by the ND Department of Water Resources.</about>
+    <version>0.65.0</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>Nick Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags />
+    <experimental>True</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Screening_0.65.0.zip</file_name>
+    <icon>DamSafety_Screening/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Screening_0.65.0.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+  <pyqgis_plugin name="DamSafety Setup" version="1.2.0">
+    <description>Start here for the DamSafety plugins: choose the suite data folder, then continue in DamSafety Runner's dam wizard.</description>
+    <about>Checks the suite data folder (the offline pack or a folder of layer files), fills empty plugin slots from it and hands the folder and its scan to DamSafety Runner's dam wizard, which picks the dam, the DEM and the run. Also the suite setup / status window and the status dock.</about>
+    <version>1.2.0</version>
+    <qgis_minimum_version>3.28</qgis_minimum_version>
+    <qgis_maximum_version>4.99</qgis_maximum_version>
+    <homepage>https://github.com/nickdbendickson/DWR_Plugins</homepage>
+    <author_name>N.D. Bendickson</author_name>
+    <tracker>https://github.com/nickdbendickson/DWR_Plugins/issues</tracker>
+    <repository>https://github.com/nickdbendickson/DWR_Plugins</repository>
+    <tags />
+    <experimental>False</experimental>
+    <deprecated>False</deprecated>
+    <supports_qt6>True</supports_qt6>
+    <file_name>DamSafety_Setup_1.2.0.zip</file_name>
+    <icon>DamSafety_Setup/damit.svg</icon>
+    <download_url>https://github.com/nickdbendickson/DWR_Plugins/releases/download/v2026.11.27.3/DamSafety_Setup_1.2.0.zip</download_url>
+    <update_date>2026-11-27</update_date>
+    <create_date>2026-11-27</create_date>
+  </pyqgis_plugin>
+</plugins>
