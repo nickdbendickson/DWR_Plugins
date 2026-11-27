@@ -1056,7 +1056,9 @@ def dwr_lines_read_from_a_folder_with_uri_characters():
     gave no lines and no NID table (the SQLite URI was not encoded)."""
     root = tempfile.mkdtemp(prefix="ndbr_dl_")
     try:
-        for name in ("Dam Projects #2", "100%25", "q?x"):
+        # a '?' cannot be in a Windows file name (WinError 123), so there only '#' and '%'
+        names = ("Dam Projects #2", "100%25") + (() if os.name == "nt" else ("q?x",))
+        for name in names:
             pack = _pack(os.path.join(root, name))
             idx = DL.LineIndex(os.path.join(pack, "dwr", "lines_2026.gpkg"))
             assert idx.count == 4 and not idx.error and idx.has("2645"), (name, idx.error)

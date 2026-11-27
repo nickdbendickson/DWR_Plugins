@@ -2809,8 +2809,13 @@ def _fill_evidence(rows, images=None, image_cell=1.0, ndwi_threshold=0.15, nwi=N
                     except Exception as e:                  # a gap in the service, a dead tile
                         log("{} {}: no image ({})".format(r.get("find_id"), yr, e))
                         seen.setdefault(yr, None)
+                        b = None
+                    if b is None:
+                        # a tile cut short: asked for again. Outside the except block (Finder
+                        # 0.7.5): the exception's traceback holds the frames that opened the tile,
+                        # and on Windows a file still open cannot be removed.
                         if is_service(im["src"]) and k in got and not isinstance(got[k], Exception) \
-                                and _forget_broken_tiles(got[k]):   # a tile cut short: asked for again
+                                and _forget_broken_tiles(got[k]):
                             log("{} {}: an image tile on disk could not be read (asked for again on the "
                                 "next run)".format(r.get("find_id"), yr))
                         continue
