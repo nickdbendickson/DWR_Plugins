@@ -53,6 +53,7 @@ def main():
         from nd_breach_runner.tests.registry import Skip
         for fn in (t.boann_opencl_translates_every_kernel_file,
                    t.boann_opencl_solvers_match_cpu_build,
+                   t.boann_opencl_subfv_matches_cpu_build,
                    t.boann_opencl_repeats_bit_for_bit,
                    t.boann_opencl_tile_skip_is_inert):
             try:
