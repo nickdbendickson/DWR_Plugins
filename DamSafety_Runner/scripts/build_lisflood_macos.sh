@@ -28,6 +28,30 @@ cd "$SRC"
 # Build without NetCDF output (not needed; rasters are written as ASCII grids).
 sed 's/set(_NETCDF 1)/set(_NETCDF 0)/' config.default.cmake > nd-breach.cmake
 
+# The source's unconditional "if (APPLE)" block builds the Metal (GPU) FV1 back end whenever
+# Apple's Metal compiler works, and that back end needs its compiled kernels beside the
+# executable at run time. This script builds the plain CPU / OpenMP executable (the one the
+# release ships), so the block goes behind NDBREACH_ENABLE_METAL, off unless asked for
+# (tools/mac/lisflood/build_lisflood.sh does the same and probes the Metal compiler first).
+# CMakeLists.txt has CRLF line ends, so the edit touches the start of the line only.
+if grep -q '^if (APPLE)' CMakeLists.txt; then
+  sed 's/^if (APPLE)/if (APPLE AND NDBREACH_ENABLE_METAL)/' CMakeLists.txt > CMakeLists.txt.nd
+  mv CMakeLists.txt.nd CMakeLists.txt
+fi
+# With NetCDF off, metal_fv1_simulate.mm does not compile ("use of undeclared identifier
+# 'total_rain_mass'": rain/rain.tpp declares it inside "#if _NETCDF == 1" and uses it after the
+# "#endif"). The CPU and CUDA code include rain_stub.tpp in that case; make the Metal solver do
+# the same, so a build with -DNDBREACH_ENABLE_METAL=ON compiles too.
+MM=metal/fv1/metal_fv1_simulate.mm
+if [ -f "$MM" ] && [ -f rain/rain_stub.tpp ] && ! grep -q 'rain_stub.tpp' "$MM"; then
+  awk '{ l = $0; sub(/\r$/, "", l)
+         if (l == "#include \"../../rain/rain.tpp\"") {
+           print "#if _NETCDF == 1"; print l; print "#else"
+           print "#include \"../../rain/rain_stub.tpp\""; print "#endif"
+         } else print }' "$MM" > "$MM.nd"
+  mv "$MM.nd" "$MM"
+fi
+
 cmake -S . -B build-nd -D_CONFIG=nd-breach.cmake -DCMAKE_BUILD_TYPE=Release \
   -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I$OMP/include" -DOpenMP_C_LIB_NAMES=omp \
   -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I$OMP/include" -DOpenMP_CXX_LIB_NAMES=omp \
