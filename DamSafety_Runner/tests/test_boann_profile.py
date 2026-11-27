@@ -30,7 +30,7 @@ from nd_breach_runner.core.metalflood.cases import (
     compact_deck, diagonal_valley_deck, valley_deck)
 from nd_breach_runner.tests.registry import Skip, test
 
-RESULTS = ("max", "maxVc", "inittm", "maxtm", "mxe", "mass")
+RESULTS = ("max", "maxVc", "maxDV", "inittm", "maxtm", "mxe", "mass")
 SOLVERS = ("acc", "sgc", "fv", "fv2", "dg2", "subfv", "subli")
 SPECS = {"acc": mfb.FLOOD_SPEC, "sgc": mfb.SGC_SPEC, "fv": mfb.FV_SPEC, "fv2": mfb.FV2_SPEC,
          "dg2": mfb.DG2_SPEC, "subfv": sfb.SUBFV_SPEC,
@@ -166,10 +166,11 @@ def boann_profile_changes_no_result_on_the_cpu_build():
             assert pn["batches"] == on["batches"], (solver, pn)
             assert pn["steps_dispatched"] >= on["steps"], (solver, pn)
             assert pn["window_cell_steps"] > 0, (solver, pn)
-            # the cell updates the kernels really ran: the window's, less what the ACC
-            # solver's dry-cell skip (Runner 3.76.0) left out
+            # the cell updates the kernels really ran: the window's, less what the dry-cell skip
+            # of the ACC solver (Runner 3.76.0) and the sub-grid local inertial (3.92.0) left out
             assert 0.0 < pn["host"]["run_share_of_window"] <= 1.0, (solver, pn)
-            assert pn["host"]["cell_updates_run"] == on["cell_steps"] if solver == "acc" \
+            skips = solver in ("acc", "subli")
+            assert pn["host"]["cell_updates_run"] == on["cell_steps"] if skips \
                 else pn["host"]["run_share_of_window"] == 1.0, (solver, pn)
             wet = pn["wet"]
             assert wet["looks"] >= 1, (solver, wet)

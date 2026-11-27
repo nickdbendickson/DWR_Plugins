@@ -147,20 +147,73 @@ def boann_rain_runs_off_a_slope_and_balances():
 
 
 @test
+def boann_rain_fv1_fills_a_closed_box_and_matches_acc():
+    """FV1 (HLLC finite volume) adds rain like ACC: 36 mm/hr for 1 h on a flat closed box gives
+    36 mm on every valid cell, none on a NoData cell, the balance closes, and on this flat rain-only
+    deck FV1 and ACC agree to the bit - no fluxes, so the only term is the shared rain source."""
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_fv
+    d = tempfile.mkdtemp()
+    da = tempfile.mkdtemp()
+    try:
+        z = np.full((12, 15), 50.0)
+        z[3, 4] = np.nan
+        rain = ((36.0, 0.0), (36.0, 0.9999), (0.0, 1.0), (0.0, 1.5))
+        st = engine_fv.run_par(_deck(d, z, rain=rain, sim=int(1.5 * 3600)), backend="cpu")
+        h = _res(d, "max")
+        valid = np.isfinite(z)
+        want = 0.036
+        assert np.allclose(h[valid], want, atol=2e-5), (h[valid].min(), h[valid].max())
+        assert h[~valid].max() == -9999.0
+        assert abs(st["rain_m3"] - want * valid.sum() * 100.0) < 1e-3 * want * valid.sum() * 100.0
+        assert st["outflow_m3"] == 0.0 and st["clipped_m3"] == 0.0
+        assert abs(st["mass_error_m3"]) < 1e-4 * st["rain_m3"], st
+        mfe.run_par(_deck(da, z, rain=rain, sim=int(1.5 * 3600)), backend="cpu")   # ACC reference
+        ha = _res(da, "max")
+        assert np.abs(h[valid] - ha[valid]).max() < 1e-6, np.abs(h[valid] - ha[valid]).max()
+    finally:
+        shutil.rmtree(d, True)
+        shutil.rmtree(da, True)
+
+
+@test
+def boann_rain_fv1_runs_off_a_slope_and_balances():
+    """FV1 rain on a sloping plane with an open edge: the rain volume is right, most of it runs off
+    through the FREE edge, and the water balance closes to round-off."""
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_fv
+    d = tempfile.mkdtemp()
+    try:
+        st = engine_fv.run_par(_deck(d, _slope(), free="E"), backend="cpu")
+        rain = (0.036 + 0.5 * 0.01 * 0.036) * 40 * 60 * 100.0
+        assert abs(st["rain_m3"] - rain) < 1e-3 * rain, (st["rain_m3"], rain)
+        assert st["outflow_m3"] > 0.5 * rain, st                 # most of it has run off
+        assert st["final_volume_m3"] > 0.0
+        # the rain source conserves to round-off (see the closed-box test, which matches ACC to the
+        # bit); the small residual here is FV's transmissive FREE-edge outflow accounting, looser
+        # than ACC's and present without rain too, so the bound is per the water throughput.
+        assert abs(st["mass_error_m3"]) < 1e-3 * (rain + st["outflow_m3"]), st
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
 def boann_rain_other_engines_refuse_it():
-    """The FV / FV2 / DG2 / SGC / sub-grid FV / sub-grid local-inertial engines do not add rain yet:
-    they stop with a message rather than run a deck without its rain."""
+    """FV1 adds rain now; the FV2 / DG2 / SGC / sub-grid FV / sub-grid local-inertial engines do not
+    yet: they stop with a message rather than run a deck without its rain."""
     from nd_breach_runner.core.metalflood import engine_fv, engine_sgc, engine_subfv, engine_subli
     d = tempfile.mkdtemp()
     try:
         par = _deck(d, _slope(12, 16), free="E")
-        for run in (engine_fv.run_par, engine_sgc.run_par, engine_subfv.run_par,
-                    engine_subli.run_par):
+        refusers = [lambda p, **k: engine_fv.run_par(p, order=2, **k),    # FV2
+                    lambda p, **k: engine_fv.run_par(p, order=3, **k),    # DG2
+                    engine_sgc.run_par, engine_subfv.run_par, engine_subli.run_par]
+        for run in refusers:
             try:
                 run(par, backend="cpu")
-                raise AssertionError("{} ran a deck with rainfall".format(run.__module__))
+                raise AssertionError("an engine ran a deck with rainfall")
             except mfe.EngineError as e:
-                assert "rainfall" in str(e) and "ACC" in str(e), str(e)
+                assert "rainfall" in str(e), str(e)
     finally:
         shutil.rmtree(d, True)
 
@@ -176,6 +229,25 @@ def boann_rain_gpu_matches_cpu_build():
     try:
         sa = mfe.run_par(_deck(os.path.join(d, "a"), _slope(), free="E"), backend="cpu")
         sb = mfe.run_par(_deck(os.path.join(d, "b"), _slope(), free="E"), backend="metal")
+        assert sb["backend"] == "metal"
+        assert abs(sa["rain_m3"] - sb["rain_m3"]) < 1e-4 * sa["rain_m3"]
+        assert np.abs(_res(os.path.join(d, "a"), "max") - _res(os.path.join(d, "b"), "max")).max() < 0.002
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def boann_rain_fv1_gpu_matches_cpu_build():
+    """FV1 rain on the Metal GPU matches its CPU build. Runs only on a Mac with a Metal GPU."""
+    ok, why = mfb.metal_available()
+    if not ok:
+        raise Skip("no Metal GPU here ({})".format(why))
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_fv
+    d = tempfile.mkdtemp()
+    try:
+        sa = engine_fv.run_par(_deck(os.path.join(d, "a"), _slope(), free="E"), backend="cpu")
+        sb = engine_fv.run_par(_deck(os.path.join(d, "b"), _slope(), free="E"), backend="metal")
         assert sb["backend"] == "metal"
         assert abs(sa["rain_m3"] - sb["rain_m3"]) < 1e-4 * sa["rain_m3"]
         assert np.abs(_res(os.path.join(d, "a"), "max") - _res(os.path.join(d, "b"), "max")).max() < 0.002
@@ -212,8 +284,11 @@ def boann_rain_matches_lisflood_fp():
 
 if __name__ == "__main__":
     for fn in (boann_rain_reads_lisflood_rain_files, boann_rain_fills_a_closed_box_to_rate_times_time,
-               boann_rain_runs_off_a_slope_and_balances, boann_rain_other_engines_refuse_it,
-               boann_rain_gpu_matches_cpu_build, boann_rain_matches_lisflood_fp):
+               boann_rain_runs_off_a_slope_and_balances,
+               boann_rain_fv1_fills_a_closed_box_and_matches_acc,
+               boann_rain_fv1_runs_off_a_slope_and_balances, boann_rain_other_engines_refuse_it,
+               boann_rain_gpu_matches_cpu_build, boann_rain_fv1_gpu_matches_cpu_build,
+               boann_rain_matches_lisflood_fp):
         try:
             fn()
             print("ok  ", fn.__name__)

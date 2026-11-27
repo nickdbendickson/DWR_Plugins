@@ -239,6 +239,11 @@ MODEL_KEYS = {
     # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
     # (Devi & Kuiry 2024 Eq. 7-8). Off unless set; it reads deep on reaches that cross the grid.
     "subgrid_upwind": ("user_subgrid_upwind", ("bool",)),
+    # 3.88.0: the flood solver's Courant number and the ACC scheme's theta (the run tool's CFL and
+    # THETA). Left out = each engine's own (CFL 0.7 and theta 1 for ACC). A smaller CFL is a
+    # smaller time step: the cure for a run whose peak water surface checkerboards.
+    "cfl": ("user_cfl", ("num", 0.05, 1.0)),
+    "theta": ("user_theta", ("num", 0.05, 1.0)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),
@@ -248,6 +253,12 @@ MODEL_KEYS = {
     "sgc_curve": ("sgc_curve", ("nums",)),
     # 3.35.0: closed depressions start this share full (core/pothole_fill.py; 0 = dry)
     "pothole_start_fill": ("pothole_start_fill", ("num", 0.0, 1.0)),
+    # peak depth x velocity raster (Boann .maxDV -> "D x V (Max).tif", ft2/s). Off: no raster,
+    # and the checkpoint key is unchanged because the flood is the same.
+    "write_peak_dv": ("write_peak_dv", ("bool",)),
+    # the dam and a full reservoir on the grid, a notch lowered into the bed. Off: the
+    # hydrograph is injected and the checkpoint key is unchanged.
+    "breach_in_terrain": ("breach_in_terrain", ("bool",)),
     # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
     # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
     "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
@@ -509,7 +520,14 @@ TEMPLATE = {
                  "qa_basemap: auto | imagery | hillshade (under the QA maps: the aerial photo, "
                  "else the hillshade; default auto); qa_basemap_labels: street / town labels. "
                  "reservoir_carve: off | auto | on (carve the reservoir bottom from the storage "
-                 "curve where the LiDAR shows a water surface; default off). max_wall_s / "
+                 "curve where the LiDAR shows a water surface; default off). write_peak_dv: "
+                 "write 'D x V (Max).tif' (ft2/s) from Boann's peak depth x velocity (total "
+                 "water depth times speed at one moment, not depth above the arrival depth, "
+                 "and not shifted by the breach-initiation time); default "
+                 "off, and only a Boann run has the grid. breach_in_terrain: build the dam and "
+                 "a full reservoir into the grid and lower a notch into the bed (sunny-day, "
+                 "Boann ACC / FV1 / FV2 / DG2, a routed weir opening); default off, and off "
+                 "leaves every result unchanged. max_wall_s / "
                  "max_total_wall_s: wall-clock limit of one LISFLOOD-FP run / budget of the "
                  "whole domain-growth loop, in seconds (0 = automatic: 6 x the run-time "
                  "estimate when lisflood_rate - the cell-seconds per second `estimate` "
@@ -519,6 +537,7 @@ TEMPLATE = {
         "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth",
         "qa_basemap": "auto", "qa_basemap_labels": True, "reservoir_carve": "off",
+        "write_peak_dv": False, "breach_in_terrain": False,
         "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,
@@ -1128,7 +1147,9 @@ def find_models(cfg, opts, need_lisflood=True, need_anuga=None):
     # executable path falls through to the file resolution below.
     resolved = lfmod.resolve_exe(raw) if raw else ""
     if raw and lfmod.is_auto_word(raw):         # 3.44.0: "auto" / "recommended"
-        resolved, _why = lfmod.choose_auto(nd_data.detect_lisflood())
+        # 3.91.0: on a model cell of 3 m or finer auto runs Boann sub-grid local inertial
+        resolved, _why = lfmod.choose_auto(nd_data.detect_lisflood(),
+                                           cfg.get("model", "cell_size_m", 10.0))
         print(_why, file=sys.stderr)
         if not resolved:
             raise CliError(_why)
@@ -1511,7 +1532,7 @@ def _describe_result(res, writer):
     say()
     say("Results: " + res.folder)
     labels = {"depth": "Depth (Max)", "velocity": "Velocity (Max)", "arrival": "Arrival Time",
-              "wse": "WSE (Max)"}
+              "wse": "WSE (Max)", "dv": "D x V (Max)"}
     actual = getattr(writer, "actual", lambda p: p)
     for k, p in res.final.items():
         say("  {:15s} {}".format(labels.get(k, k), actual(p)))

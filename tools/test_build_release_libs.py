@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""build_release.boann_libraries: the Runner zip carries every Boann / BoannGrid CPU library; the
-Screening zip only the flood engines it has (no sub-grid FV / local inertial, no BoannGrid fill
-or flow). Stand-in library files, no compiler needed.
+"""build_release.boann_libraries: since DamSafety Core 1.7.0 (Boann 6.6.1) the Core zip carries
+every Boann / BoannGrid CPU library under boann/hydro/prebuilt/, and no other plugin zip carries
+any. Stand-in library files, no compiler needed.
 
     python3 tools/test_build_release_libs.py"""
 import os
@@ -15,7 +15,6 @@ sys.path.insert(0, HERE)
 import build_release as br  # noqa: E402
 
 ALL = ("mf", "fv", "fv2", "dg2", "sgc", "subfv", "subli", "mt", "mf4", "mf8")
-SCREENING = ("mf", "fv", "fv2", "dg2", "sgc")
 
 
 class BoannLibraries(unittest.TestCase):
@@ -34,14 +33,15 @@ class BoannLibraries(unittest.TestCase):
     def _specs(self, plugin):
         got = br.boann_libraries(self.d, plugin)
         for k in got:
-            self.assertTrue(k.startswith(plugin + "/core/metalflood/prebuilt/"), k)
+            self.assertTrue(k.startswith(plugin + "/boann/hydro/prebuilt/"), k)
         return sorted({k.rsplit("/", 1)[1].split("_cpu_")[0] for k in got})
 
-    def test_runner_gets_every_library(self):
-        self.assertEqual(self._specs("DamSafety_Runner"), sorted(ALL))
+    def test_core_gets_every_library(self):
+        self.assertEqual(self._specs("DamSafety_Core"), sorted(ALL))
 
-    def test_screening_gets_only_its_flood_engines(self):
-        self.assertEqual(self._specs("DamSafety_Screening"), sorted(SCREENING))
+    def test_no_other_plugin_gets_any(self):
+        for plugin in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard"):
+            self.assertEqual(self._specs(plugin), [])
 
 
 if __name__ == "__main__":

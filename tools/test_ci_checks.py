@@ -407,6 +407,56 @@ def test_metadata_format():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_one_boann_copy_gate():
+    problems = []                                 # the real tree: one copy, shims, FILES.json current
+    C.check_one_boann(problems, ref="HEAD")
+    assert problems == [], problems
+    import boann_files
+    root = tempfile.mkdtemp(prefix="boann_")
+    try:
+        _w(root, "DamSafety_Core/boann/__init__.py", "")
+        _w(root, "DamSafety_Core/boann/hydro/version.py", 'BOANN_VERSION = "6.3.1"\n')
+        _w(root, "DamSafety_Core/boann/hydro/engine.py", "X = 1\n")
+        _w(root, "DamSafety_Core/boann/hydro/kernels.metal", "// k\n")
+        _w(root, "DamSafety_Core/boann/grid/fill.py", "Y = 1\n")
+        boann_files.write(os.path.join(root, "DamSafety_Core", "boann"))
+        for rel, core in C.BOANN_SHIMS.items():
+            _w(root, rel + "/__init__.py", '"""shim"""\nfrom DamSafety_Core import alias as _alias\n'
+               "_alias.install(__name__, {!r})\n".format(core))
+        assert C.boann_shim_problems(root) == []
+        problems = []
+        C.check_one_boann(problems, root, ref="NO-SUCH-REF")
+        assert problems == [], problems
+        # a file left in a shim folder, a shim aimed at the wrong package, a stray engine copy
+        # and an edit without the manifest are each caught
+        _w(root, "DamSafety_Screening/core/metalflood/engine.py", "X = 2\n")
+        _w(root, "DamSafety_Runner/core/metalterrain/__init__.py",
+           "from DamSafety_Core import alias as _alias\n_alias.install(__name__, 'DamSafety_Core.boann.hydro')\n")
+        _w(root, "DamSafety_Finder/core/flood/engine.py", "X = 3\n")
+        _w(root, "DamSafety_Finder/core/flood/kernels.metal", "// k\n")
+        _w(root, "DamSafety_Core/boann/grid/fill.py", "Y = 2\n")
+        problems = []
+        C.check_one_boann(problems, root, ref="NO-SUCH-REF")
+        text = "\n".join(problems)
+        for want in ("DamSafety_Screening/core/metalflood/ holds engine.py - a copy of Boann",
+                     "DamSafety_Runner/core/metalterrain/__init__.py is not the alias shim",
+                     "DamSafety_Finder/core/flood holds a copy of Boann's engine",
+                     "boann FILES.json", "stale"):
+            assert want in text, (want, problems)
+        # version rule: a changed file needs a changed BOANN_VERSION
+        base = {"boann_version": "6.3.1", "files": {"hydro/engine.py": "a"}}
+        assert boann_files.version_problems(base, {"boann_version": "6.3.1",
+                                                   "files": {"hydro/engine.py": "a"}}) == []
+        assert boann_files.version_problems(base, {"boann_version": "6.3.1",
+                                                   "files": {"hydro/engine.py": "b"}})
+        assert boann_files.version_problems(base, {"boann_version": "6.3.1",
+                                                   "files": {"hydro/engine.py": "a", "hydro/new.py": "c"}})
+        assert boann_files.version_problems(base, {"boann_version": "6.3.2",
+                                                   "files": {"hydro/engine.py": "b"}}) == []
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     fails = 0
     for name, fn in sorted(globals().items()):

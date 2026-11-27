@@ -209,6 +209,9 @@ class FindEmbankments(_Base):
         self._num("POOL_MAX_AC", "... ponds draining at most (acres; 0 = no limit; YOUR value)", 50.0, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
             "DIKES", "Also find dikes that hold water beside a stream (dams built along a channel)", True))
+        self._num("LEVEE_FT", "Re-label a dam-shaped fill this close to a NAMED river as a river levee / "
+                  "dike, kept but not sent to screening (feet; 0 = off; needs a stream layer with GNIS names)",
+                  200.0, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
             "DUGOUTS", "Also look for dug pits (dugouts) anywhere in the DEM", True))
         self.addParameter(QgsProcessingParameterBoolean(
@@ -247,6 +250,7 @@ class FindEmbankments(_Base):
                 drainage_ac=self.parameterAsDouble(params, "DRAIN_AC", context),
                 dugouts=self.parameterAsBool(params, "DUGOUTS", context),
                 dikes=self.parameterAsBool(params, "DIKES", context),
+                levee_river_m=self.parameterAsDouble(params, "LEVEE_FT", context) * FT,
                 pool_lines=self.parameterAsBool(params, "POOLS", context) and bool(
                     self.parameterAsDouble(params, "DRAIN_AC", context)),
                 pool_max_drain_ac=self.parameterAsDouble(params, "POOL_MAX_AC", context) or None,
@@ -486,8 +490,6 @@ class FindWater(_Base):
 
     def processAlgorithm(self, params, context, feedback):
         from . import finder
-        import glob
-        import os
         self._feedback = feedback
         bbox = _bbox(self, params, context)
         out = self.parameterAsFileOutput(params, "OUT", context)
@@ -814,7 +816,7 @@ class AddEvidence(_Base):
         out = self.parameterAsFileOutput(params, "OUT", context)
         opt = lambda n: _src(self, params, n, context, required=False) or None  # noqa: E731
         try:
-            res = finder.run_evidence(
+            finder.run_evidence(
                 _src(self, params, "FILLS", context), out,
                 images=self.parameterAsString(params, "IMAGES", context) or None,
                 ndwi_threshold=self.parameterAsDouble(params, "NDWI", context),

@@ -32,6 +32,10 @@ RULES = (
     ("address_points", ("address_points",), (), (), ()),
     ("structures_usa", ("structures_usa", "usa_structures"), (), (), ()),
     ("county_roads", ("county_roads",), (), (), ()),
+    # damsuite 1.18.11 (Core 1.6.1, Screening 0.58.0): the traffic counts tools 6 and 8 give roads without one
+    # (the pack's roads/HPMS_ND_<year>.gpkg and NDDOT_traffic_counts.gpkg, per-dam pack_* clips too)
+    ("hpms", ("hpms_nd", "hpms"), ("aadt",), (), ()),
+    ("traffic_counts", ("nddot_traffic_counts", "traffic_counts"), ("aadt",), (), ()),
     ("rail_crossings", ("rail_crossings", "grade_crossings"), (), (), ()),
     ("bridges", ("bridges_nbi", "bridges"), (), (), ()),
     ("skilled_nursing", ("skilled_nursing",), (), (), ()),
@@ -45,6 +49,8 @@ MORE = {
     "lifelines": ("skilled_nursing", "basic_care", "assisted_living"),
     "structures": ("address_points", "structures_usa"),
     "bridges": ("bridges",),
+    # damsuite 1.18.11: the AADT sources of the road join (Screening AADT_LAYERS, the Runner's too)
+    "aadt": ("hpms", "traffic_counts", "county_roads"),
 }
 
 
