@@ -79,7 +79,7 @@ def _run(par, skip):
 def _files(folder):
     res = os.path.join(folder, "results")
     out = {}
-    for ext in ("max", "maxVc", "inittm", "maxtm", "mxe", "mass"):
+    for ext in ("max", "maxVc", "maxDV", "inittm", "maxtm", "mxe", "mass"):
         with open(os.path.join(res, "run." + ext), "rb") as f:
             out[ext] = f.read()
     return out

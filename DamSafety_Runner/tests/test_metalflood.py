@@ -152,7 +152,7 @@ def metalflood_params_layout_matches_kernels():
     _need_cpu_build()
     import ctypes
     lib = ctypes.CDLL(mfb.build_cpu_library())
-    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 96
+    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 100  # 6.8.0 added n_wl
     names = [n for n, _, _ in mfb.buffer_layout(3, 4, 1, 1, 2)]
     with open(mfb.KERNEL_SOURCE, encoding="utf-8") as f:
         src = f.read()
@@ -1113,7 +1113,7 @@ def boann_shock_engines_rerun_at_a_cfl_they_honour():
         assert lf.stable_cfl(e) == lf.STABLE_CFL_SHOCK, e
     for e in (lf.GPU_EXE, lf.GPU_SGC_EXE, "/usr/local/bin/lisflood", ""):
         assert lf.stable_cfl(e) == lf.STABLE_CFL, e
-    here = os.path.join(os.path.dirname(os.path.abspath(lf.__file__)), "metalflood")
+    here = lf.BOANN_DIR                    # DamSafety_Core/boann/hydro (Runner 3.101.1: one copy, in the Core)
     for k in ("kernels_fv.metal", "kernels_fv2.metal", "kernels_dg2.metal", "kernels_subfv.metal"):
         with open(os.path.join(here, k), encoding="utf-8") as f:
             m = re.search(r"#define MF_(?:DG2_CFL|CFL_CAP) ([0-9.]+)f", f.read())
@@ -1228,7 +1228,7 @@ def metalflood_sgc_params_layout_matches_kernels():
     _need_cpu_build()
     import ctypes
     lib = ctypes.CDLL(mfb.build_cpu_library(mfb.SGC_SPEC))
-    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 96
+    assert lib.mf_params_size() == ctypes.sizeof(mfb.Params) == 100  # 6.8.0 added n_wl
     names = [n for n, _, _ in mfb.sgc_buffer_layout(3, 4, 1, 1, 2)]
     assert len(names) == 30, len(names)
     assert names[:3] == ["z", "n2", "h"] and names[-3:] == ["w", "Dd", "nc2"]
@@ -1670,6 +1670,51 @@ def metalflood_dg2_is_insensitive_to_fma_rounding():
         mfb.CPU_FLAGS = saved
         shutil.rmtree(d, True)
 
+
+
+def _nodata_lake_deck(folder):
+    """A 1 m lake at rest on a flat 20 x 20 grid (10 m cells) with a NoData column and a NoData
+    block inside it: every NoData face is a wall the water rests against."""
+    os.makedirs(folder, exist_ok=True)
+    z = np.zeros((20, 20))
+    z[:, 10] = bl.NODATA
+    z[5:8, 3:6] = bl.NODATA
+    h = np.where(z == bl.NODATA, 0.0, 1.0)
+    bl._write_asc(os.path.join(folder, "dem.asc"), z, 0.0, 0.0, 10.0)
+    bl._write_asc(os.path.join(folder, "start.asc"), h, 0.0, 0.0, 10.0)
+    p = os.path.join(folder, "run.par")
+    with open(p, "w") as f:
+        f.write("DEMfile dem.asc\nstartfile start.asc\nfpfric 0.03\nsim_time 600\n"
+                "initial_tstep 1\nsaveint 1000\nmassint 60\n")
+    return p
+
+
+@test
+def metalflood_shock_solvers_hold_a_lake_against_nodata():
+    """Runner 3.93.0: the shock-capturing solvers (FV1, FV2, DG2) gave a face between a wet cell
+    and a NoData cell no flux at all - no wall pressure - while the cell's other faces and the
+    bed source still pushed. Water resting against NoData was driven into it forever: a 1 m lake
+    beside a NoData strip reached 5 m/s and 0.5-3.4 m depths in 10 minutes, and EA benchmark
+    test 5 at 10 m (NoData around the valley) ran at 0.008 s steps with water at 500 m/s and an 11%
+    volume gain. A NoData face is now a reflecting wall, as the domain edge already was (and as
+    ACC and LISFLOOD-FP treat it): the lake stays at rest."""
+    _need_cpu_build()
+    from nd_breach_runner.core.metalflood import engine_dg2 as dge
+    d = _tmp()
+    try:
+        runs = (("fv1", lambda p: fve.run_par(p, backend="cpu", order=1)),
+                ("fv2", lambda p: fve.run_par(p, backend="cpu", order=2)),
+                ("dg2", lambda p: dge.run_par(p, backend="cpu")))
+        for name, run in runs:
+            sub = os.path.join(d, name)
+            run(_nodata_lake_deck(sub))
+            h = _res(sub, "max")
+            v = _res(sub, "maxVc")
+            wet = h != bl.NODATA
+            assert np.abs(h[wet] - 1.0).max() < 2e-3, (name, h[wet].min(), h[wet].max())
+            assert v[wet].max() < 1e-3, (name, v[wet].max())
+    finally:
+        shutil.rmtree(d, True)
 
 if __name__ == "__main__":
     # Repo audit 2026-11-23: every test this module registers, in file order. The hand-kept list

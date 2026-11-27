@@ -26,7 +26,10 @@ concurrency:
 jobs:
   fast-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # the Runner fast suite has grown (several GPU-tile byte-identity checks run on the CPU build);
+    # it is 11-16 min on main already, so 20 left no room for a slow/contended runner. 30 gives
+    # headroom without turning the fast lane into a long one.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -52,7 +55,7 @@ jobs:
         run: python3 tools/test_blas_selfcheck.py
       - name: LISFLOOD-FP start check self-test (the release's Windows gate, stand-in programs)
         run: python3 tools/test_lisflood_smoke.py
-      - name: Release zips carry the right Boann / BoannGrid libraries (Screening has no BoannGrid)
+      - name: Release zips carry Boann / BoannGrid libraries in DamSafety Core only
         run: python3 tools/test_build_release_libs.py
       - name: The helper that makes QGIS importable on a Windows runner (self-test)
         run: python3 -W error tools/test_ci_qgis_env.py

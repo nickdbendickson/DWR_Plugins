@@ -93,7 +93,7 @@ class Committed(unittest.TestCase):
 
     def test_the_runner_carries_the_fitted_curve(self):
         c = self.res["curve_nd"]
-        src = open(os.path.join(REPO, "DamSafety_Runner", "core", "metalterrain", "prism.py"),
+        src = open(os.path.join(REPO, "DamSafety_Core", "boann", "grid", "prism.py"),
                    encoding="utf-8").read()
         self.assertIn('ND_USGS_2026 = {{"a_w": {a_w}, "b_w": {b_w}, "a_d": {a_d}, "b_d": {b_d}}}'
                       .format(**c), src)

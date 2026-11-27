@@ -8,6 +8,12 @@ deterministic, so they can gate every PR cheaply:
                         DamSafety_Core.ui, and the Core's damsuite/FILES.json is current
                         (tools/damsuite_files.py); every plugin but the Core names
                         plugin_dependencies=DamSafety Core
+     one Boann copy    — DamSafety Core 1.7.0: Boann (flood engine + BoannGrid) lives once, in
+                        DamSafety_Core/boann/; the Runner's core/metalflood + core/metalterrain
+                        and Screening's core/metalflood hold only the two-line alias shim; the
+                        hash manifest DamSafety_Core/boann/FILES.json (every .py, .metal, .cpp,
+                        .h) is current (tools/boann_files.py); against the base branch, a change
+                        to any Boann file needs a BOANN_VERSION change too
   2. version sanity   — each plugin metadata.txt has a well-formed version=
      version book      — DamSafety_Core/damsuite/versions.py RELEASE equals each plugin's
                         metadata.txt version; Hazard's constants.PLUGIN_VERSION and README.txt
@@ -80,6 +86,12 @@ DS_SHIM_TEXT = "import sys\nfrom DamSafety_Core.damsuite import {name} as _m\nsy
 # the damsuite/__init__.py shim: a docstring, then exactly these two statements and nothing else
 DAMSUITE_SHIM_CODE = ("from DamSafety_Core import alias as _alias", "_alias.install(__name__)")
 
+# Core 1.7.0 / Boann 6.6.1: {plugin folder that used to hold a Boann copy: core package it aliases}
+BOANN_SHIMS = {"DamSafety_Runner/core/metalflood": "DamSafety_Core.boann.hydro",
+               "DamSafety_Runner/core/metalterrain": "DamSafety_Core.boann.grid",
+               "DamSafety_Screening/core/metalflood": "DamSafety_Core.boann.hydro"}
+BOANN_PACKAGE = CORE + "/boann"
+
 # plugin-root files copied verbatim into more than one plugin (not shared via damsuite): they must
 # stay byte-identical so the two tools apply the same rule. {filename: (plugins that carry it)}.
 IDENTICAL_ACROSS_PLUGINS = {
@@ -93,6 +105,9 @@ IDENTICAL_ACROSS_PLUGINS = {
     # Runner 3.10.89 / Screening 0.17.50: one rule for the elevation unit a DEM records (the
     # Runner's 'Detect from the raster' and what Download DEM tags)
     "core/dem_zunit.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    # Screening 0.58.0: one AADT join for roads without a count (HPMS, NDDOT count stations, ND
+    # county roads), so tools 6 / 8 and the Runner's ND classification give a road the same count
+    "core/aadt_join.py": ("DamSafety_Runner", "DamSafety_Screening"),
     # audit R-H1: the Suite status dock's Linux LISFLOOD-FP build applies the same patch
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),
@@ -234,6 +249,76 @@ def ui_shim_problems(root=None):
                     out.append("{}/{} is not the three-line shim onto the Core's module (edit "
                                "DamSafety_Core/{}/{} instead)".format(plugin, name, sub, name))
     return out
+
+
+def boann_shim_problems(root=None):
+    """Core 1.7.0 'one Boann copy': each former Boann folder in a plugin holds exactly __init__.py
+    (plus a __pycache__), which only installs the alias onto DamSafety_Core.boann.<hydro|grid>; no
+    other plugin folder carries a Boann engine (an engine.py next to a kernels.metal)."""
+    root = root or ROOT
+    out = []
+    for rel in sorted(BOANN_SHIMS):
+        plugin = rel.split("/", 1)[0]
+        if not os.path.isdir(os.path.join(root, plugin)):
+            continue
+        folder = os.path.join(root, *rel.split("/"))
+        if not os.path.isdir(folder):
+            out.append("{}/ missing (the shim onto {})".format(rel, BOANN_SHIMS[rel]))
+            continue
+        extra = sorted(n for n in os.listdir(folder) if n not in ("__init__.py", "__pycache__"))
+        if extra:
+            out.append("{}/ holds {} - a copy of Boann; only the __init__.py shim may be there (the "
+                       "code lives in {}/)".format(rel, ", ".join(extra[:6]) +
+                                                  (" ..." if len(extra) > 6 else ""), BOANN_PACKAGE))
+        init = os.path.join(folder, "__init__.py")
+        want = ["from DamSafety_Core import alias as _alias",
+                "_alias.install(__name__, {!r})".format(BOANN_SHIMS[rel])]
+        if not os.path.isfile(init):
+            out.append("{}/__init__.py missing".format(rel))
+        elif _shim_statements(_read(init)) != want:
+            out.append("{}/__init__.py is not the alias shim (expected exactly: {})".format(
+                rel, "; ".join(want)))
+    core = os.path.join(root, *BOANN_PACKAGE.split("/"))
+    for d, subdirs, names in os.walk(root):
+        subdirs[:] = [x for x in subdirs if not x.startswith(".") and x not in
+                      ("__pycache__", "node_modules")]
+        if "kernels.metal" in names and "engine.py" in names and \
+                os.path.abspath(d) != os.path.abspath(os.path.join(core, "hydro")):
+            out.append("{} holds a copy of Boann's engine (it lives once, in {}/hydro)".format(
+                os.path.relpath(d, root).replace(os.sep, "/"), BOANN_PACKAGE))
+    return out
+
+
+def check_one_boann(problems, root=None, ref=None):
+    """Core 1.7.0: one copy of Boann. Shims only in the plugins; DamSafety_Core/boann/FILES.json
+    current; against the base, changed Boann files come with a changed BOANN_VERSION."""
+    root = root or ROOT
+    for p in boann_shim_problems(root):
+        _fail(problems, "one Boann copy: " + p)
+    pkg = os.path.join(root, *BOANN_PACKAGE.split("/"))
+    if not os.path.isdir(pkg):
+        _fail(problems, "one Boann copy: {}/ missing".format(BOANN_PACKAGE))
+        return
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import boann_files
+    for p in boann_files.check(pkg):
+        _fail(problems, "boann FILES.json: " + p)
+    ref = ref or base_ref(root)
+    if not ref:
+        print("  base branch not available; skipping the BOANN_VERSION comparison")
+        return
+    import json
+    old = _git_show(root, ref, BOANN_PACKAGE + "/FILES.json")
+    if old is None:
+        print("  no {}/FILES.json on {} (Boann moved into the Core in this change)".format(
+            BOANN_PACKAGE, ref))
+        return
+    try:
+        base_m = json.loads(old)
+    except ValueError:
+        return
+    for p in boann_files.version_problems(base_m, boann_files.manifest(pkg)):
+        _fail(problems, "one Boann copy: " + p)
 
 
 def check_no_vendored_copy(problems, root=None):
@@ -847,6 +932,7 @@ def check_metadata_format(problems, root=None):
 def main():
     problems = []
     for name, fn in (("no vendored copy (DamSafety Core)", check_no_vendored_copy),
+                     ("one Boann copy (DamSafety Core)", check_one_boann),
                      ("versions", check_versions),
                      ("version bookkeeping", check_version_bookkeeping),
                      ("versions and changelogs vs main", check_against_base),

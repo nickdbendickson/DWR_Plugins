@@ -89,7 +89,10 @@ class _Kernel:
         return self
 
     def grid(self, name):
-        return self.a[name].reshape(self.shape).astype(np.float64)
+        a = self.a[name]
+        if name == "vmax":
+            a = a[:int(self.shape[0]) * int(self.shape[1])]
+        return a.reshape(self.shape).astype(np.float64)
 
     def eta(self):
         return self.t.zbed + self.grid("d")

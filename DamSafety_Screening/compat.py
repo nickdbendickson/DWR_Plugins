@@ -89,6 +89,14 @@ def set_advanced(param):
     return param
 
 
+# QgsProcessingFeatureSource.getFeatures(request, flags): skip the context's invalid-geometry check (the
+# toolbox default runs a GEOS validity test on every feature returned); None where unknown
+SRC_SKIP_GEOMETRY_CHECKS = _first(lambda: Qgis.ProcessingFeatureSourceFlag.SkipGeometryValidityChecks,
+                                  lambda: _core("QgsProcessingFeatureSource").Flag.FlagSkipGeometryValidityChecks,
+                                  lambda: _core("QgsProcessingFeatureSource").FlagSkipGeometryValidityChecks,
+                                  default=None)
+
+
 # --- geometry ------------------------------------------------------------------------------
 GEOM_POINT = _first(lambda: Qgis.GeometryType.Point,
                     lambda: QgsWkbTypes.GeometryType.PointGeometry,

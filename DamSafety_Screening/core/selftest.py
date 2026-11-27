@@ -184,7 +184,9 @@ def steps(work, layers, dem_folder, engine=2, cell_m=20.0, sim_h=1.0, exe=""):
                        "ROADS": layers["roads"], "ROAD_AADT": "AADT_2023", "ROAD_CLASS": "ROUTE",
                        "RAIL": layers["rail"], "STREAMS": layers["streams"], "DAMLINES": layers["damlines"],
                        "N": 0.04, "MARGIN_FT": 0.5, "MFRAC": 0.3, "VF": 2.0, "BIG": 0, "AUDIT": 0,
-                       "SEED": 1, "OUTDIR": j("6_triage_envelopes"), "OUT": T},
+                       "SEED": 1, "OUTDIR": j("6_triage_envelopes"), "OUT": T,
+                       # 0.52.0 corridor: without waterbodies a would-be clear goes to 2D (fail safe)
+                       **({} if layers.get("waterbodies") is None else {"WATERBODIES": layers["waterbodies"]})},
          lambda res: check_layer(res, "OUT")),
         ("7", "runbreachsim",
          lambda prev: {"DAMS": out_of(prev, "6"), "BPTS": out_of(prev, "4", "OUTP"), "DEMDIR": j("2_terrain"),

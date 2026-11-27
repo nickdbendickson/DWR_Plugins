@@ -122,6 +122,24 @@ d3 = wf.defaults("3", W, S)
 assert d3["WB"] == PKG + "|layername=waterbodies" and d3["DEMDIR"].endswith("2_terrain")
 assert wf.defaults("3", W, {"waterbodies": "mine"})["WB"] == "mine"
 assert "no NHD waterbodies layer" not in state(wf.statuses(W, S), "3")[3]
+# 0.52.0: tool 6's downstream corridor gets the waterbodies, the DWR dams (cascade rule) and the
+# local DEM folder for its closed-basin proof when there is one (else the cached clips)
+d6 = wf.defaults("6", W, {"dwr": "dwr_layer"})
+assert d6["WATERBODIES"] == PKG + "|layername=waterbodies" and d6["CORR_DAMS"] == "dwr_layer"
+assert d6["CORR_TERRAIN"] == 0 and "CORR_LOCAL" not in d6
+d6 = wf.defaults("6", W, {"local_dem": "/lidar", "waterbodies": "wb_layer"})
+assert d6["CORR_TERRAIN"] == 2 and d6["CORR_LOCAL"] == "/lidar" and d6["WATERBODIES"] == "wb_layer"
+assert "CORR_DAMS" not in d6 and "CORR_DAMS_CLS" not in d6
+assert d6["RAIL_PAX"] == "passenger" and d6["RAIL_TRAINS"] == "trains_day"     # the package's, as step 8
+# the DWR layer's class / id fields as step 1 reads them: its aliases ('hazard' is one; tool 6 dropped such
+# a layer and could clear a dam below a High one), a saved field map first
+dwr_h = _gpkg.write(os.path.join(work, "dwr_hazard.gpkg"), {"dwr_dams": (
+    "POINT", [("structure_id", "INTEGER"), ("hazard", "TEXT")], [])})
+d6 = wf.defaults("6", W, {"dwr": dwr_h})
+assert d6["CORR_DAMS"] == dwr_h and d6["CORR_DAMS_CLS"] == "hazard" and d6["CORR_DAMS_ID"] == "structure_id"
+assert d6["CORR_DAMS_CLS"] == wf.defaults("1", W, {"dwr": dwr_h})["DWR_HZ"]
+d6 = wf.defaults("6", W, {"dwr": dwr_h, "field_map": {"DWR_HZ": "my_haz", "DWR_ID": "my_id"}})
+assert d6["CORR_DAMS_CLS"] == "my_haz" and d6["CORR_DAMS_ID"] == "my_id"
 d8 = wf.defaults("8", W, {"crit": 1, "chart_file": "/c.json"})
 assert d8["SIM"].endswith("7_simulations.gpkg") and d8["BLD"] == PKG + "|layername=structures"
 assert d8["OCC"] == "occ_cls" and d8["PRIM"] == "prim_occ" and d8["RAIL_PAX"] == "passenger"
@@ -472,6 +490,48 @@ for k in ("11", "12", "13", "14", "15"):
 assert state(wf.statuses(W, S), "11")[2] == "optional"                 # 7 is done in W
 # the new steps are not chained
 assert "11" not in wf.chain_plan(W, settings_all, ("0", "6", "9")) and wf.chain_next(W, settings_all, ("11",), ())[0] != "11"
+
+# 0.52.0: a triage made before the rating guard and the corridor is out of date whatever its inputs say (by
+# its manifest's tool version, else by the missing tri_corr field): the chain runs it again, and tool 7 reads
+# tool 5's dams meanwhile, not its envelope-only clears (DWR-2636 and DWR-10551 were skipped)
+WS = os.path.join(work, "w_moved")
+for rel in ("1_dams.gpkg", "3_dams_storage.gpkg", "4_breach_points.gpkg", "5_dams_breach.gpkg",
+            os.path.join("2_terrain", "dam_DWR-1.tif"), os.path.join("3_stage_storage", "curve_DWR-1.csv")):
+    touch(WS, rel)
+t6p = _gpkg.write(os.path.join(WS, "6_triage.gpkg"), {"6_triage": (
+    "POINT", [("dam_id", "TEXT"), ("tri_result", "TEXT")], [])})
+for rel in os.listdir(WS):                                         # 1 - 5 run before 6
+    t = time.time() - (100 if rel.startswith("6") else 500)
+    os.utime(os.path.join(WS, rel), (t, t))
+rows = wf.statuses(WS, {})
+assert [state(rows, k)[2] for k in ("1", "2", "3", "4", "5")] == ["done"] * 5
+assert state(rows, "6")[2] == "stale", state(rows, "6")
+assert state(rows, "6")[3].startswith("made by a Screening release, before the rating guard"), state(rows, "6")
+assert wf.chain_next(WS, {}, ("6",), ()) == ("6", "") and "6" in wf.chain_plan(WS, {}, ("6",))
+assert wf.defaults("7", WS, {})["DAMS"].endswith("5_dams_breach.gpkg")
+assert wf.defaults("12", WS, {})["DAMS"].endswith("5_dams_breach.gpkg")
+json.dump({"tool": "ND Dam Breach Screening 0.47.0", "inputs": {}},
+          open(t6p + ".manifest.json", "w", encoding="utf-8"))
+assert state(wf.statuses(WS, {}), "6")[3].startswith("made by Screening 0.47.0, before"), wf.statuses(WS, {})
+# 0.58.0: the traffic counts for roads without AADT move tool 6's results again (the corridor counts a local
+# road matched to over 2,000 as High-capable): a 0.52.0 - 0.57.0 triage is out of date too
+json.dump({"tool": "ND Dam Breach Screening 0.52.0", "inputs": {}},
+          open(t6p + ".manifest.json", "w", encoding="utf-8"))
+assert state(wf.statuses(WS, {}), "6")[2] == "stale", wf.statuses(WS, {})
+assert state(wf.statuses(WS, {}), "6")[3].startswith("made by Screening 0.52.0, before"), wf.statuses(WS, {})
+assert "traffic counts for roads without AADT of 0.58.0" in state(wf.statuses(WS, {}), "6")[3]
+assert wf.defaults("7", WS, {})["DAMS"].endswith("5_dams_breach.gpkg")
+json.dump({"tool": "ND Dam Breach Screening 0.58.0", "inputs": {}},
+          open(t6p + ".manifest.json", "w", encoding="utf-8"))
+assert state(wf.statuses(WS, {}), "6")[2] == "done" and wf.defaults("7", WS, {})["DAMS"] == t6p
+os.remove(t6p + ".manifest.json")
+_gpkg.write(t6p, {"6_triage": ("POINT", [("dam_id", "TEXT"), ("tri_result", "TEXT"), ("tri_corr", "TEXT")], [])})
+os.utime(t6p, (time.time() - 100, time.time() - 100))
+assert state(wf.statuses(WS, {}), "6")[2] == "stale"            # 0.52.0's fields, not 0.58.0's tri_aadt
+_gpkg.write(t6p, {"6_triage": ("POINT", [("dam_id", "TEXT"), ("tri_result", "TEXT"), ("tri_corr", "TEXT"),
+                                          ("tri_aadt", "TEXT")], [])})
+os.utime(t6p, (time.time() - 100, time.time() - 100))
+assert state(wf.statuses(WS, {}), "6")[2] == "done" and wf.chain_next(WS, {}, ("6",), ())[0] == "7"
 
 # manifests: a step with a manifest is out of date when an INPUT's content changed, not its date
 from nd_dam_screening.core import manifest as mf  # noqa: E402
