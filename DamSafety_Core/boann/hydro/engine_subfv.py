@@ -165,7 +165,8 @@ class Engine:
 
 
 def run_par(par_path, progress=None, cancel=None, log=None, backend="auto"):
-    """Run a .par deck with the sub-grid finite-volume scheme. backend: 'auto', 'metal' or 'cpu'."""
+    """Run a .par deck with the sub-grid finite-volume scheme. backend: 'auto', 'metal', 'cpu' or
+    'opencl'."""
     def say(msg):
         if log:
             log(msg)
