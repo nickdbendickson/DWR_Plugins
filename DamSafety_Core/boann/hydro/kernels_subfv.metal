@@ -165,13 +165,13 @@ inline float mf_cell_area(device const float* sc, uint m, float asub, float eta)
 // face reconstruction at level eta over a sub-bed profile zf[0..r-1]: wet area A, top width W,
 // first moment I1 = sum wsub * 0.5 * h^2.
 inline void mf_face_recon(device const float* zf, uint r, float wsub, float eta,
-                          thread float& A, thread float& W, thread float& I1) {
+                          thread float* A, thread float* W, thread float* I1) {
     float a = 0.0f, w = 0.0f, i1 = 0.0f;
     for (uint k = 0; k < r; ++k) {
         float h = eta - zf[k];
         if (h > 0.0f) { a += h; w += 1.0f; i1 += 0.5f * h * h; }
     }
-    A = wsub * a; W = wsub * w; I1 = wsub * i1;
+    *A = wsub * a; *W = wsub * w; *I1 = wsub * i1;
 }
 
 struct F3 { float A, Fn, Ft, smax; };   // whole-face fluxes: mass, normal mom, tang mom, |wave|
@@ -306,8 +306,8 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             uint rr = l + 1u;
             if (ok[l] != 0 && ok[rr] != 0) {
                 float AL, WL, I1L, AR, WR, I1R;
-                mf_face_recon(zf, R, wsub, eta[l], AL, WL, I1L);
-                mf_face_recon(zf, R, wsub, eta[rr], AR, WR, I1R);
+                mf_face_recon(zf, R, wsub, eta[l], &AL, &WL, &I1L);
+                mf_face_recon(zf, R, wsub, eta[rr], &AR, &WR, &I1R);
                 float uL = mf_vel(Px[l], V[l], vfloor), vL = mf_vel(Py[l], V[l], vfloor);
                 float uR = mf_vel(Px[rr], V[rr], vfloor), vR = mf_vel(Py[rr], V[rr], vfloor);
                 f = mf_hllc_sub(AL, WL, I1L, uL, vL, AR, WR, I1R, uR, vR, g);
@@ -315,7 +315,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
         } else if (fcol == 0u) {      // west edge, cell is the + side
             uint i = row * nx;
             if (ok[i] != 0) {
-                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
+                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], &A, &W, &I1);
                 float u = mf_vel(Px[i], V[i], vfloor), v = mf_vel(Py[i], V[i], vfloor);
                 if (fm & MF_W) {
                     float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i + 1u], A, W, nc2[i], dx) : 0.0f;
@@ -328,7 +328,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
         } else {                      // east edge, cell is the - side
             uint i = row * nx + nx - 1u;
             if (ok[i] != 0) {
-                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
+                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], &A, &W, &I1);
                 float u = mf_vel(Px[i], V[i], vfloor), v = mf_vel(Py[i], V[i], vfloor);
                 if (fm & MF_E) {
                     float und = (nx > 1u) ? mf_subfv_und(eta[i], eta[i - 1u], A, W, nc2[i], dx) : 0.0f;
@@ -355,8 +355,8 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
             uint d = u + nx;
             if (ok[u] != 0 && ok[d] != 0) {
                 float AU, WU, I1U, AD, WD, I1D;
-                mf_face_recon(zf, R, wsub, eta[u], AU, WU, I1U);
-                mf_face_recon(zf, R, wsub, eta[d], AD, WD, I1D);
+                mf_face_recon(zf, R, wsub, eta[u], &AU, &WU, &I1U);
+                mf_face_recon(zf, R, wsub, eta[d], &AD, &WD, &I1D);
                 // normal is +y (v-component rides normal), tangential is +x (u)
                 float nU = mf_vel(Py[u], V[u], vfloor), tU = mf_vel(Px[u], V[u], vfloor);
                 float nD = mf_vel(Py[d], V[d], vfloor), tD = mf_vel(Px[d], V[d], vfloor);
@@ -365,7 +365,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
         } else if (frow == 0u) {      // north edge, cell is the + (south) side
             uint i = c;
             if (ok[i] != 0) {
-                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
+                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], &A, &W, &I1);
                 float nv = mf_vel(Py[i], V[i], vfloor), tu = mf_vel(Px[i], V[i], vfloor);
                 if (fm & MF_N) {
                     float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i + nx], A, W, nc2[i], dx) : 0.0f;
@@ -378,7 +378,7 @@ kernel void k_faces_subfv(MF_ARGS_SUBFV) {
         } else {                      // south edge, cell is the - side
             uint i = (ny - 1u) * nx + c;
             if (ok[i] != 0) {
-                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], A, W, I1);
+                float A, W, I1; mf_face_recon(zf, R, wsub, eta[i], &A, &W, &I1);
                 float nv = mf_vel(Py[i], V[i], vfloor), tu = mf_vel(Px[i], V[i], vfloor);
                 if (fm & MF_S) {
                     float und = (ny > 1u) ? mf_subfv_und(eta[i], eta[i - nx], A, W, nc2[i], dx) : 0.0f;
@@ -443,10 +443,10 @@ kernel void k_cont_subfv(MF_ARGS_SUBFV) {
     device const float* zfyD = zfy + ((size_t)(row + 1) * nx + c) * R;
     device const float* zfyU = zfy + ((size_t)row * nx + c) * R;
     float A_, W_, I1xR, I1xL, I1yD, I1yU;
-    mf_face_recon(zfxR, R, wsub, etaI, A_, W_, I1xR);
-    mf_face_recon(zfxL, R, wsub, etaI, A_, W_, I1xL);
-    mf_face_recon(zfyD, R, wsub, etaI, A_, W_, I1yD);
-    mf_face_recon(zfyU, R, wsub, etaI, A_, W_, I1yU);
+    mf_face_recon(zfxR, R, wsub, etaI, &A_, &W_, &I1xR);
+    mf_face_recon(zfxL, R, wsub, etaI, &A_, &W_, &I1xL);
+    mf_face_recon(zfyD, R, wsub, etaI, &A_, &W_, &I1yD);
+    mf_face_recon(zfyU, R, wsub, etaI, &A_, &W_, &I1yU);
     float bedx = g * (I1xR - I1xL);
     float bedy = g * (I1yD - I1yU);
 
