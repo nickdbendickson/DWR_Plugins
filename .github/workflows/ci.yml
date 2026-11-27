@@ -72,6 +72,8 @@ jobs:
         run: python3 -W error tools/validation/nd_hydraulic_geometry/test_fit.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
+      - name: Review package manifest is hashed in blocks with a size cap (security audit run-2, QGIS-free)
+        run: python3 DamSafety_Hazard/tests/test_markreviewed_manifest_cap.py
       - name: Shared defaults file (Core 1.2.0, QGIS-free)
         run: python3 DamSafety_Core/tests/test_shared_defaults.py
       - name: File-digest cache follows the user's cache folder (Core 1.5.3, QGIS-free)
