@@ -95,10 +95,13 @@ def per_run_parameters_stay_out_of_the_settings_grid():
     cat = RT.full_catalog(prov.ALGORITHMS, pl.PLUGIN_KEY, pl.settings_group, pl.TAB_ORDER)
     keys = {(s.tool, s.key) for s in cat}
     for gone in (("rundam", "DAM_ID"), ("rundam", "DAM_NAME"), ("products", "DAM_ID"),
-                 ("submittal", "TITLE"), ("submittal", "ENGINEER"), ("validationrecord", "APPROVAL")):
+                 ("submittal", "TITLE"), ("submittal", "ENGINEER"), ("validationrecord", "APPROVAL"),
+                 # security audit run-2: a program path is never a workbook setting
+                 ("rundam", "LISFLOOD_EXE"), ("rundam", "ANUGA_PYTHON")):
         assert gone not in keys, gone
-    for kept in (("rundam", "INCR_FT"), ("rundam", "LISFLOOD_EXE"), ("rundam", "CONTOURS_HR")):
+    for kept in (("rundam", "INCR_FT"), ("rundam", "CONTOURS_HR")):
         assert kept in keys, kept
+    assert "LISFLOOD_EXE" in RT.PROGRAM_KEYS and "ANUGA_PYTHON" in RT.PROGRAM_KEYS
     assert "DAM_ID" in RT.PER_RUN_KEYS and "REVIEWER" in RT.PER_RUN_KEYS
     # the tool dialogs still have them: the skip is the grid's, not the tool's
     for c in prov.ALGORITHMS:
