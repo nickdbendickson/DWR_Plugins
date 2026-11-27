@@ -320,10 +320,13 @@ CPU_FLAGS = ("-O3", "-std=c++14", "-fno-strict-aliasing", "-ffp-contract=off")
 
 
 def _source_hash(spec):
+    """16 hex characters naming these exact kernel sources and CPU_FLAGS. Line ends do not count
+    (Boann 6.8.1): Git for Windows checks the sources out with CRLF, and the prebuilt libraries,
+    built from LF files on Linux, must still match there. An LF file hashes as before."""
     h = hashlib.sha256()
     for p in (spec.kernel_source, spec.shim, spec.cpu_source):
         with open(p, "rb") as f:
-            h.update(f.read())
+            h.update(f.read().replace(b"\r\n", b"\n"))
     h.update(" ".join(CPU_FLAGS).encode())
     return h.hexdigest()[:16]
 
@@ -675,6 +678,12 @@ def cpu_build_command(spec, cxx, out, openmp=True, extra=(), omp_flags=None):
         cflags, link = omp_flags or (["-fopenmp"], [])
         cmd += list(cflags)
     return cmd + inc + ["-x", "c++", spec.cpu_source] + list(extra) + list(link) + ["-o", out]
+
+
+def cpu_available(spec=FLOOD_SPEC):
+    """True when the CPU build of spec can be had here without a Metal GPU: a prebuilt library
+    shipped for this computer, or a C++ compiler to build one (Boann 6.8.1)."""
+    return bool(prebuilt_available(spec) or find_compiler())
 
 
 def prebuilt_available(spec=FLOOD_SPEC):

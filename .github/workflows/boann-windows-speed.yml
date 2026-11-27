@@ -1,0 +1,106 @@
+name: Boann speed on Windows
+
+# How fast Boann's CPU build runs on a Windows computer next to LISFLOOD-FP 8.3, the same deck,
+# the same cores. Builds both for Windows exactly as release.yml does (cross-compiled with
+# MinGW-w64 on Ubuntu: Boann's CPU libraries with OpenMP, lisflood.exe static), then runs the
+# speed test (DamSafety_Core/boann/hydro/bench.py) on a windows-latest runner: the ACC solver
+# against LISFLOOD-FP on the small and medium valleys and the medium diagonal valley, and FV1
+# on the medium valley. The table is printed in the log and the JSON kept as an artifact.
+#
+# Timing only: it changes nothing and gates nothing. A GitHub Windows runner is a 4-core
+# virtual machine, so read the ratio between the engines, not the seconds.
+#
+# When it runs: by hand (Actions > Boann speed on Windows > Run workflow), or on a pull request
+# that changes this file.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/boann-windows-speed.yml"
+
+permissions:
+  contents: read
+
+env:
+  LISFLOOD_ZIP_URL: https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+  LISFLOOD_ZIP_SHA256: f9ea2753482da1e730ba34645a2b9b773d05d0a401a3524f79825b76ec7a4e8d
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Tools (MinGW-w64, cmake)
+        run: sudo apt-get update -q && sudo apt-get install -y -q cmake g++-mingw-w64-x86-64-posix
+      - name: LISFLOOD-FP 8.3 for Windows (as release.yml)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
+          echo "$LISFLOOD_ZIP_SHA256  lisflood.zip" | sha256sum -c -
+          unzip -q lisflood.zip
+          cd "$GITHUB_WORKSPACE"
+          bash DamSafety_Runner/scripts/build_lisflood_windows_cross.sh \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$RUNNER_TEMP/out"
+          mkdir -p win/lisflood && cp "$RUNNER_TEMP/out/lisflood.exe" win/lisflood/lisflood.exe
+      - name: Boann CPU libraries for Windows (as release.yml)
+        run: |
+          python -m pip install -q numpy
+          python tools/build_boann_cpu.py --out win/boann --platform windows-x64 \
+            --cxx x86_64-w64-mingw32-g++-posix --require-openmp --extra=-static
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-engines
+          path: win/
+          if-no-files-found: error
+
+  speed:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep the line ends of the repository
+        # Git for Windows checks text files out with CR LF; the prebuilt libraries' names carry a
+        # hash of the kernel sources' bytes (backends._source_hash), so with CR LF none would match
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-engines
+          path: win
+      - name: Put the prebuilt libraries where a release zip does
+        run: |
+          python -m pip install -q numpy
+          mkdir -p DamSafety_Core/boann/hydro/prebuilt
+          cp -r win/boann/windows-x64 DamSafety_Core/boann/hydro/prebuilt/
+          ls DamSafety_Core/boann/hydro/prebuilt/windows-x64
+          mkdir -p out/small out/medium out/diagonal out/medium-1core out/fv1   # bench.py does not make --out
+          python -c "import os; print('cores:', os.cpu_count())"
+          powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List"
+      - name: ACC vs LISFLOOD-FP, small valley
+        run: python tools/boann_bench_prebuilt.py --size small --lisflood win/lisflood/lisflood.exe --out out/small
+      - name: ACC vs LISFLOOD-FP, medium valley
+        run: python tools/boann_bench_prebuilt.py --size medium --lisflood win/lisflood/lisflood.exe --out out/medium
+      - name: ACC vs LISFLOOD-FP, medium diagonal valley (mostly dry window)
+        run: python tools/boann_bench_prebuilt.py --size medium --case diagonal --lisflood win/lisflood/lisflood.exe --out out/diagonal
+      - name: ACC, one core each (Boann vs LISFLOOD-FP), medium valley
+        env:
+          DAMSAFETY_MF_THREADS: "1"
+        run: python tools/boann_bench_prebuilt.py --size medium --threads 1 --lisflood win/lisflood/lisflood.exe --out out/medium-1core
+      - name: FV1, medium valley
+        run: python tools/boann_bench_prebuilt.py --size medium --solver fv --out out/fv1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: boann-windows-speed
+          path: out/

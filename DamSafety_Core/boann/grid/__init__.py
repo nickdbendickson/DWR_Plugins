@@ -10,7 +10,7 @@ GPU kernel of the Lumo/Terra Swift spike that reviewed as correct, reimplemented
 Python+Metal stack (not Swift) against core/terrain.priority_flood as the ground-truth oracle.
 """
 from .fill import fill_dem, SPEC, TParams, NODATA  # noqa: F401
-from ..hydro.backends import metal_available, find_compiler  # noqa: F401
+from ..hydro.backends import metal_available, find_compiler, prebuilt_available  # noqa: F401
 
 
 def available():
@@ -19,6 +19,8 @@ def available():
     ok, why = metal_available()
     if ok:
         return True, "Apple GPU ({})".format(why)
+    if prebuilt_available(SPEC):     # Boann 6.8.1: a Windows install ships it and has no compiler
+        return True, "CPU build of the fill kernel, shipped with the plugin (no Metal GPU: {})".format(why)
     if find_compiler():
         return True, "CPU build of the fill kernel, one core (no Metal GPU: {})".format(why)
-    return False, "no Metal GPU ({}) and no C++ compiler for the CPU build".format(why)
+    return False, "no Metal GPU ({}), no CPU build shipped for this computer and no C++ compiler".format(why)
