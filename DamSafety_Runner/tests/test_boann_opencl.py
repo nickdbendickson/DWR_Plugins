@@ -32,10 +32,14 @@ TRANSLATED = ("kernels.metal", "kernels_fv.metal", "kernels_fv2.metal", "kernels
 TOL = (("max", 0.01), ("maxVc", 0.1), ("inittm", 0.01))
 
 
-def _need_opencl():
+def _need_opencl_device():
     ok, why = ob.opencl_available()
     if not ok:
         raise Skip("no OpenCL device here ({})".format(why))
+
+
+def _need_opencl():
+    _need_opencl_device()
     _need_cpu_build()
 
 
@@ -48,6 +52,9 @@ def _run(solver, deck, backend):
         return mfe.run_par(deck, backend=backend)
     if solver == "sgc":
         return sgce.run_par(deck, backend=backend)
+    if solver == "subli":
+        from DamSafety_Core.boann.hydro import engine_subli
+        return engine_subli.run_par(deck, backend=backend)
     return fve.run_par(deck, backend=backend, order={"fv1": 1, "fv2": 2, "dg2": 3}[solver])
 
 
@@ -149,11 +156,104 @@ def boann_opencl_tile_skip_is_inert():
         shutil.rmtree(d, True)
 
 
+_COPY_MODES = (("zero_copy", {"DAMSAFETY_MF_CL_ZEROCOPY": "1", "DAMSAFETY_MF_CL_SYNC": None}),
+               ("on_demand", {"DAMSAFETY_MF_CL_ZEROCOPY": "0", "DAMSAFETY_MF_CL_SYNC": None}),
+               ("full_sync", {"DAMSAFETY_MF_CL_ZEROCOPY": "0", "DAMSAFETY_MF_CL_SYNC": "full"}))
+
+
+def _with_env(kv, fn):
+    was = {k: os.environ.get(k) for k in kv}
+    try:
+        for k, v in kv.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return fn()
+    finally:
+        for k, v in was.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _result_files(folder):
+    res = os.path.join(folder, "results")
+    out = {}
+    for name in sorted(os.listdir(res)):
+        with open(os.path.join(res, name), "rb") as f:
+            out[name] = f.read()
+    return out
+
+
+def _modes_agree(make_deck, run, what):
+    """Every result file (grids, .mass, gauge, snapshots) of the same deck, byte for byte, in the
+    three ways the grids reach the GPU. A zero-copy leg the device cannot do is left out."""
+    d = tempfile.mkdtemp(prefix="boann_ocl_modes_")
+    try:
+        files, used = {}, []
+        for tag, env in _COPY_MODES:
+            deck = make_deck(os.path.join(d, tag))
+            try:
+                st = _with_env(env, lambda: run(deck))
+            except Exception as e:          # noqa: BLE001 - only the zero-copy leg may decline
+                if tag == "zero_copy" and ("zero-copy" in str(e) or "host memory" in str(e)):
+                    print("  {}: zero-copy not possible here ({})".format(what, e))
+                    continue
+                raise
+            assert st["backend"] == "opencl", (what, tag, st.get("backend"))
+            files[tag] = _result_files(os.path.dirname(deck))
+            used.append(tag)
+        ref = files["full_sync"]
+        for tag in used:
+            assert sorted(files[tag]) == sorted(ref), (what, tag, sorted(files[tag]))
+            for name in ref:
+                assert files[tag][name] == ref[name], (what, tag, name)
+        return used
+    finally:
+        shutil.rmtree(d, True)
+
+
+@test
+def boann_opencl_copy_modes_agree():
+    """Zero-copy buffers (a GPU sharing host memory), copies on demand (only the state words read
+    back each batch; a grid read back when the engine looks it up) and the full read-back every
+    batch give every result file byte for byte: ACC, SGC, FV1, FV2, DG2 and sub-grid local
+    inertial on the test valley with a start depth, a gauge and snapshots (the engine reads h,
+    the fluxes and the maxima between batches)."""
+    _need_opencl_device()
+    for solver in ("acc", "sgc", "fv1", "fv2", "dg2", "subli"):
+        extra = ("subgrid 4",) if solver == "subli" else ()
+        used = _modes_agree(
+            lambda f, x=extra: valley_deck(f, saveint=1800.0, sim_s=2 * 3600.0, extra=x),
+            lambda deck, s=solver: _run(s, deck, "opencl"), solver)
+        print("  {:<5} copy modes identical: {}".format(solver, ", ".join(used)))
+
+
+@test
+def boann_opencl_copy_modes_agree_with_a_breach():
+    """The in-terrain breach reads the maxima at the notch and lowers z between batches: the same
+    result files, byte for byte, in every way the grids reach the GPU (ACC, FV1)."""
+    _need_opencl_device()
+    from nd_breach_runner.tests.test_boann_terrain_breach import _ridge_deck, _spec, _write_breach
+
+    def deck(folder):
+        _z, cells, pool = _ridge_deck(folder, sim_s=120.0)
+        return _write_breach(folder, _spec(cells, formation_s=60.0, update_s=10.0), pool=pool)
+
+    for solver in ("acc", "fv1"):
+        used = _modes_agree(deck, lambda par, s=solver: _run(s, par, "opencl"), solver + "+breach")
+        print("  {:<4} breach, copy modes identical: {}".format(solver, ", ".join(used)))
+
+
 if __name__ == "__main__":
     for fn in (boann_opencl_translates_every_kernel_file,
                boann_opencl_solvers_match_cpu_build,
                boann_opencl_repeats_bit_for_bit,
-               boann_opencl_tile_skip_is_inert):
+               boann_opencl_tile_skip_is_inert,
+               boann_opencl_copy_modes_agree,
+               boann_opencl_copy_modes_agree_with_a_breach):
         try:
             fn()
             print("ok  ", fn.__name__)
