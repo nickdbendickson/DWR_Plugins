@@ -12,11 +12,25 @@ every month) without anyone remembering:
     Windows   a scheduled task  "DamSafety hazard creep watch <id>" (schtasks)
 
 <id> is 8 characters made from the folder's path, so several folders can each have a
-schedule. What the scheduler starts is a small script in <folder>/_creep_watch/ ("_" = not a
-dam folder) that runs `qgis_process run ndhazard:creepwatch` and appends everything it prints
-to creep_watch_log.txt there. qgis_process opens the QGIS profile called 'default'; when the
-suite lives in another profile the script points it at a small configuration folder whose
-'default' is a link to that profile (as the Runner's batch workers do).
+schedule. What the scheduler starts is a small script in this user's own folder
+
+    macOS     ~/Library/Application Support/DamSafety/creepwatch/<id>/
+    Linux     $XDG_DATA_HOME (~/.local/share)/DamSafety/creepwatch/<id>/
+    Windows   %LOCALAPPDATA%/DamSafety/creepwatch/<id>/  (backslashes there)
+
+that runs `qgis_process run ndhazard:creepwatch` and appends everything it prints to
+<folder>/_creep_watch/creep_watch_log.txt ("_" = not a dam folder). qgis_process opens the QGIS
+profile called 'default'; when the suite lives in another profile the script points it at a
+small configuration folder (beside the script) whose 'default' is a link to that profile (as the
+Runner's batch workers do).
+
+Security audit run-2 (2026-11-24): Hazard 2.25.3 kept the script (and that profile link) in
+<folder>/_creep_watch/. The dams folder is often a shared drive (see the Runner's ckpt_sign: a
+folder that came from somewhere else is not trusted), so anyone who could write there could
+replace the script the scheduler runs as this user, or the link into this user's QGIS profile.
+Only the log is written in the folder now; a schedule made by 2.25.3 is moved on the next
+apply() and its old files there are deleted by apply() and remove(). On Windows the script's
+variables are written `set "NAME=VALUE"`, so a value cannot add a command.
 
     plan(...)      what would be written and run; writes nothing
     apply(p)       write the files and register the schedule
@@ -66,7 +80,26 @@ def job_id(parent):
 
 
 def work_folder(parent):
+    """<folder>/_creep_watch: the log of every run (and, before the audit run-2 fix, the script)."""
     return os.path.join(parent, WORK_FOLDER)
+
+
+def script_folder(jid, system=None, home=None):
+    """This user's own folder for the schedule's script and profile link (never the dams
+    folder). `home`: a named home folder (the tests) - every path is under it then."""
+    system = system or system_name()
+    if system == "windows":
+        base = os.path.join(home, "AppData", "Local") if home else (
+            os.environ.get("LOCALAPPDATA") or os.path.join(_home(None), "AppData", "Local"))
+    elif system == "macos":
+        base = os.path.join(_home(home), "Library", "Application Support")
+    else:
+        base = os.path.join(home, ".local", "share") if home else (
+            os.environ.get("XDG_DATA_HOME") or os.path.join(_home(None), ".local", "share"))
+    return os.path.join(base, "DamSafety", "creepwatch", jid)
+
+
+_LEGACY_WRAPPERS = ("run_creep_watch.sh", "run_creep_watch.cmd")
 
 
 def months(every, month):
@@ -158,7 +191,9 @@ def wrapper_text(system, exe, parent, workers=1, timeout_min=60, downloads=True,
     if system == "windows":
         lines = ["@echo off", "rem DamSafety hazard creep watch: started by the Task Scheduler.",
                  "rem Made by 'Schedule the hazard creep watch'; run that tool again to change it."]
-        lines += ["set {}={}".format(k, _cmd(v)[1:-1]) for k, v in sorted(extra.items())]
+        # set "NAME=VALUE": inside the quotes & | < > are text (audit run-2: `set NAME=VALUE`
+        # with an & in the value ran what followed it). _cmd refuses " and %.
+        lines += ['set "{}={}"'.format(k, _cmd(v)[1:-1]) for k, v in sorted(extra.items())]
         lines += ["echo ==== %DATE% %TIME% hazard creep watch >> {}".format(_cmd(log)),
                   "call {} {} >> {} 2>&1".format(_cmd(exe), " ".join(_cmd(a) for a in args),
                                                  _cmd(log)),
@@ -168,6 +203,8 @@ def wrapper_text(system, exe, parent, workers=1, timeout_min=60, downloads=True,
              "# Made by 'Schedule the hazard creep watch'; run that tool again to change it."]
     lines += ["export {}={}".format(k, _sh(v)) for k, v in sorted(extra.items())]
     lines += ["export QT_QPA_PLATFORM=offscreen", "LOG={}".format(_sh(log)),
+              # the log is in the (possibly shared) dams folder: never append through a link
+              '[ -L "$LOG" ] && { echo "creep watch: $LOG is a link; not run" >&2; exit 1; }',
               'echo "==== $(date) hazard creep watch" >> "$LOG"',
               '{} {} >> "$LOG" 2>&1'.format(_sh(exe), " ".join(_sh(a) for a in args)),
               'echo "==== ended with code $?" >> "$LOG"', ""]
@@ -246,8 +283,9 @@ def names(system, parent, home=None):
     "label", or "service" + "timer" + "unit", or "task"}."""
     jid = job_id(parent)
     work = work_folder(parent)
-    out = {"id": jid, "work": work, "log": os.path.join(work, LOG_NAME),
-           "wrapper": os.path.join(work, "run_creep_watch.cmd" if system == "windows"
+    own = script_folder(jid, system, home)
+    out = {"id": jid, "work": work, "scripts": own, "log": os.path.join(work, LOG_NAME),
+           "wrapper": os.path.join(own, "run_creep_watch.cmd" if system == "windows"
                                    else "run_creep_watch.sh")}
     if system == "macos":
         out["label"] = "{}.{}".format(LABEL, jid)
@@ -287,10 +325,11 @@ def plan(parent, exe, system=None, settings_dir="", every="year", month=1, day=1
     workers = max(1, min(MAX_WORKERS, workers))
     month_list = months(every, month)
     n = names(system, parent, home)
-    config, link, note = profile_config(settings_dir, n["work"])
+    config, link, note = profile_config(settings_dir, n["scripts"])
     files = {n["wrapper"]: wrapper_text(system, exe, parent, workers, timeout_min, downloads,
                                         config, env)}
     out = {"system": system, "id": n["id"], "wrapper": n["wrapper"], "log": n["log"],
+           "legacy": n["work"],
            "when": when_text(every, month_list, day, hour), "files": files, "link": link,
            "exec": [] if system == "windows" else [n["wrapper"]], "manual": "",
            "notes": [note] if note else [], "register": [], "unregister": []}
@@ -343,6 +382,46 @@ def _run(cmd, run, must=True):
     return text
 
 
+def _remove_legacy(work):
+    """Delete what Hazard 2.25.3 kept in <folder>/_creep_watch besides the log: the script,
+    the agent / unit files 'only write the script' left beside it, and the qgis_config link
+    into this user's profile (the link itself only - never what it points to). Returns the
+    paths removed."""
+    gone = []
+    if not work or not os.path.isdir(work):
+        return gone
+    for name in os.listdir(work):
+        path = os.path.join(work, name)
+        if name in _LEGACY_WRAPPERS or (
+                name.endswith((".plist", ".service", ".timer"))
+                and name.startswith((LABEL, UNIT))):
+            try:
+                if os.path.islink(path) or os.path.isfile(path):
+                    os.remove(path)
+                    gone.append(path)
+            except OSError:
+                pass
+    cfg = os.path.join(work, "qgis_config")
+    dflt = os.path.join(cfg, "profiles", "default")
+    try:
+        is_junction = getattr(os.path, "isjunction", lambda _p: False)(dflt)
+        if os.path.islink(dflt):
+            os.remove(dflt)
+            gone.append(dflt)
+        elif is_junction:
+            os.rmdir(dflt)                                  # removes the junction, not the profile
+            gone.append(dflt)
+    except OSError:
+        pass
+    for d in (os.path.join(cfg, "profiles"), cfg):
+        try:
+            if not os.path.islink(d):
+                os.rmdir(d)                                 # only when empty
+        except OSError:
+            pass
+    return gone
+
+
 def apply(p, register=True, run=subprocess.run, link=None):
     """Write the plan's files and (register) hand the schedule to the system. Returns the
     lines to show. With register False the files are written and the commands are returned
@@ -350,6 +429,8 @@ def apply(p, register=True, run=subprocess.run, link=None):
     out, held = [], []
     work = os.path.dirname(p["wrapper"])
     try:
+        os.makedirs(work, mode=0o700, exist_ok=True)       # this user's own folder
+        os.makedirs(os.path.dirname(p["log"]), exist_ok=True)
         for path, text in p["files"].items():
             dest = path
             if not register and path != p["wrapper"]:
@@ -374,6 +455,9 @@ def apply(p, register=True, run=subprocess.run, link=None):
                 (link or _link_folder)(dst, target)
     except (OSError, subprocess.SubprocessError) as e:
         raise ScheduleError("the schedule's files could not be written: {}".format(e))
+    if p.get("legacy") and _remove_legacy(p["legacy"]):
+        out.append("The old script in {} was deleted (the script is kept in your own folder "
+                   "now).".format(p["legacy"]))
     out.append("Script: {}".format(p["wrapper"]))
     out.append("Log of every run: {}".format(p["log"]))
     if p["manual"]:
@@ -418,7 +502,7 @@ def remove(parent, system=None, home=None, uid=None, run=subprocess.run):
     else:
         _run(["schtasks", "/Delete", "/F", "/TN", n["task"]], run, must=False)
     # and the copies 'only write the script' left beside the script
-    files += [os.path.join(n["work"], os.path.basename(f)) for f in files[1:]]
+    files += [os.path.join(n["scripts"], os.path.basename(f)) for f in files[1:]]
     gone = []
     for path in files:
         try:
@@ -426,6 +510,7 @@ def remove(parent, system=None, home=None, uid=None, run=subprocess.run):
             gone.append(path)
         except OSError:
             pass
+    gone += _remove_legacy(n["work"])                  # a schedule made by Hazard 2.25.3
     if system == "linux" and not crontab:
         _run(["systemctl", "--user", "daemon-reload"], run, must=False)
     if not gone:
