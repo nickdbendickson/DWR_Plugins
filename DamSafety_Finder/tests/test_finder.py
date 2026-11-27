@@ -149,6 +149,63 @@ class Runs(unittest.TestCase):
         self.assertEqual(hs.GetRasterBand(1).DataType, gdal.GDT_Byte)
         self.assertGreater(hs.GetRasterBand(1).ComputeRasterMinMax(False)[1], 0)
 
+    def test_read_named_lines_keeps_only_gnis_named_parts(self):
+        # a layer with a plain ditch (gnisid 0), a named river (gnisid 777) and a missing-id line
+        v = os.path.join(self.tmp, "named.gpkg")
+        src = write_layer(v, "streams", [
+            ("LINESTRING (0 0, 0 100)", {"gnisid": "0", "gnisidlabel": ""}),
+            ("LINESTRING (200 0, 200 100)", {"gnisid": "777", "gnisidlabel": "Test River"}),
+            ("LINESTRING (400 0, 400 100)", {"gnisid": "", "gnisidlabel": ""})],
+            epsg=5070, fields=("gnisid", "gnisidlabel"))
+        named = self.f.read_named_lines(src)
+        self.assertEqual(len(named), 1)
+        self.assertEqual(named[0][1], "Test River")
+        self.assertEqual(len(named[0][2]), 4)          # a precomputed envelope travels with each line
+        # no GNIS field at all -> the test does nothing rather than labelling everything
+        plain = write_layer(os.path.join(self.tmp, "plain.gpkg"), "s",
+                            [("LINESTRING (0 0, 0 100)", {})], epsg=5070)
+        self.assertEqual(self.f.read_named_lines(plain), [])
+
+    def test_nearest_named_river_prefilters_by_distance(self):
+        named = self.f.read_named_lines(write_layer(
+            os.path.join(self.tmp, "r.gpkg"), "s",
+            [("LINESTRING (1000 0, 1000 1000)", {"gnisid": "5", "gnisidlabel": "Far Creek"})],
+            epsg=5070, fields=("gnisid", "gnisidlabel")))
+        d, name = self.f._nearest_named_river(1010.0, 500.0, named, 60.0)      # 10 m away
+        self.assertAlmostEqual(d, 10.0, delta=0.5)
+        self.assertEqual(name, "Far Creek")
+        self.assertEqual(self.f._nearest_named_river(1200.0, 500.0, named, 60.0), (None, ""))
+
+    def test_a_fill_beside_a_named_river_is_a_river_levee(self):
+        dam = next(r for r in self.emb(hillshade=False)["rows"] if r["kind"] == self.f.em.K_DAM)
+        # the plain stream plus a NAMED river 15 m east of the dam fill (an unnamed ditch stays 0)
+        sx = gx(tc.XS)
+        v = os.path.join(self.tmp, "named_streams.gpkg")
+        streams2 = write_layer(v, "streams", [
+            ("LINESTRING ({} {}, {} {})".format(sx, gy(1.0), sx, gy(tc.N * tc.CELL - 1.0)),
+             {"gnisid": "0", "gnisidlabel": ""}),
+            ("LINESTRING ({} {}, {} {})".format(dam["x"] + 15.0, dam["y"] - 120.0,
+                                                dam["x"] + 15.0, dam["y"] + 120.0),
+             {"gnisid": "777", "gnisidlabel": "Test River"})],
+            epsg=5070, fields=("gnisid", "gnisidlabel"))
+        kw = dict(roads=self.roads, known=[(self.known, "DWR dams", None)], match_ft=200.0,
+                  hillshade=False, log=lambda *_: None)
+        res = self.f.run_embankments(self.dem, streams2, self.out, levee_river_m=30.0, **kw)
+        lev = [r for r in res["rows"] if r["kind"] == self.f.em.K_RIVER_LEVEE]
+        self.assertTrue(lev, "a dam beside the named river was not re-labelled")
+        self.assertTrue(all(r["river_name"] == "Test River" for r in lev))
+        self.assertTrue(all(r["river_ft"] is not None for r in lev))
+        self.assertFalse(any(r["kind"] == self.f.em.K_DAM for r in res["rows"]))
+        self.assertEqual(res["counts"]["river_levee"], len(lev))
+        ds = ogr.Open(self.out)
+        kinds = [f.GetField("kind") for f in ds.GetLayerByName("screening_dams")]
+        self.assertNotIn(self.f.em.K_RIVER_LEVEE, kinds)   # kept and reported, not a screening candidate
+        ds = None
+        # control: the test off keeps it a dam
+        res0 = self.f.run_embankments(self.dem, streams2, self.out, levee_river_m=0.0, **kw)
+        self.assertTrue(any(r["kind"] == self.f.em.K_DAM for r in res0["rows"]))
+        self.assertFalse(any(r["kind"] == self.f.em.K_RIVER_LEVEE for r in res0["rows"]))
+
     def test_tiles_give_the_same_answer(self):
         one = sorted((r["find_id"], r["kind"]) for r in self.emb()["rows"])
         many = sorted((r["find_id"], r["kind"]) for r in self.emb(tile_m=300.0, hillshade=False)["rows"])

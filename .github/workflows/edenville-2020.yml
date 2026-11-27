@@ -34,10 +34,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  midland-reach:
-    name: Midland reach (10 m roughness)
+  # The reach is built ONCE and handed to the five runs: five builds at once (four 3DEP workers
+  # each, 81 tiles) drew HTTP 504s from the 3DEP image server and failed a lane in its build step.
+  midland-build:
+    name: Midland reach build (3DEP 1 m terrain, NLCD)
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      GAUGE: USGS-04156000
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Build the reach (NHD river line, 3DEP 1 m terrain, NLCD)
+        run: python tools/validation/edenville_2020/midland_reach.py build --out "$RUNNER_TEMP/mid/$GAUGE"
+      - name: Keep the built reach (without the 3DEP tile cache)
+        uses: actions/upload-artifact@v7
+        with:
+          name: midland-terrain
+          if-no-files-found: error
+          retention-days: 3
+          path: |
+            ${{ runner.temp }}/mid/${{ env.GAUGE }}/reach.json
+            ${{ runner.temp }}/mid/${{ env.GAUGE }}/dem.asc
+            ${{ runner.temp }}/mid/${{ env.GAUGE }}/nlcd.npy
+
+  # One run per job, on its own runner. The five runs used to share one 4-core runner (four
+  # single-thread runs side by side, then NLCD): on the 3.2 M-cell reach every default ACC run
+  # gains water at 51,800 cfs (outflow/inflow 3.5-4.4) and, since the reach harness gained the
+  # Runner's stability cure (#413), is then re-run with theta 0.7 / CFL 0.5. Two full runs per lane
+  # on a shared runner (memory-bandwidth bound) plus NLCD behind them no longer fits the cap, so
+  # the job was cancelled every time. Here each run gets the whole runner and all four threads
+  # (LISFLOOD-FP's output does not depend on the thread count), the same way nd-gauges.yml runs.
+  midland-reach:
+    name: Midland reach (10 m roughness) ${{ matrix.run }}
+    needs: midland-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [n035, n040, n050, n060, nlcd]
     defaults:
       run:
         shell: bash -el {0}
@@ -69,21 +115,61 @@ jobs:
           unzip -q lisflood.zip
           bash "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/build_lisflood_linux.sh" \
             "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$HOME/lisflood-nd"
-      - name: Build the reach (NHD river line, 3DEP 1 m terrain, NLCD)
-        run: python tools/validation/edenville_2020/midland_reach.py build --out "$RUNNER_TEMP/mid/$GAUGE"
-      # four runs side by side (a runner has four cores), one thread each, then NLCD on all four
-      - name: Run n 0.035, 0.04, 0.05, 0.06 and NLCD
+      - name: Fetch the built reach
+        uses: actions/download-artifact@v4
+        with:
+          name: midland-terrain
+          path: ${{ runner.temp }}/mid/${{ env.GAUGE }}
+      - name: Run ${{ matrix.run }} (four threads)
         run: |
-          r="python tools/validation/edenville_2020/midland_reach.py run $RUNNER_TEMP/mid/$GAUGE --lisflood $HOME/lisflood-nd/lisflood --threads 1"
-          $r --n 0.035 > n035.log 2>&1 & $r --n 0.04 > n040.log 2>&1 & $r --n 0.05 > n050.log 2>&1 & $r --n 0.06 > n060.log 2>&1 &
-          wait
-          $r --nlcd --threads 4 > nlcd.log 2>&1 || true
-          for f in n035 n040 n050 n060 nlcd; do echo "::group::$f"; grep -v -i warn $f.log | tail -n 20; echo "::endgroup::"; done
-      - name: Score the reach against the observed 614.61 ft
+          base="python tools/validation/edenville_2020/midland_reach.py run $RUNNER_TEMP/mid/$GAUGE --lisflood $HOME/lisflood-nd/lisflood --threads 4"
+          case "${{ matrix.run }}" in
+            n035) $base --n 0.035 ;;
+            n040) $base --n 0.04 ;;
+            n050) $base --n 0.05 ;;
+            n060) $base --n 0.06 ;;
+            nlcd) $base --nlcd ;;
+            *) echo "unknown run ${{ matrix.run }}"; exit 1 ;;
+          esac
+      - name: Stage the result
         if: always()
         run: |
-          python tools/validation/edenville_2020/midland_reach.py score "$RUNNER_TEMP/mid" || true
-          cat "$RUNNER_TEMP/mid/Midland_Reach_Score.md" | tee -a "$GITHUB_STEP_SUMMARY" || true
+          d="$RUNNER_TEMP/mid/$GAUGE"
+          mkdir -p "stage/$GAUGE/runs"
+          [ -f "$d/reach.json" ] && cp "$d/reach.json" "stage/$GAUGE/"
+          for r in "$d"/runs/*/; do
+            [ -f "$r/result.json" ] || continue
+            mkdir -p "stage/$GAUGE/runs/$(basename "$r")"
+            cp "$r/result.json" "stage/$GAUGE/runs/$(basename "$r")/"
+          done
+      - name: Keep the result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: midland-reach-${{ matrix.run }}
+          if-no-files-found: warn
+          path: stage
+
+  midland-score:
+    name: Midland reach score
+    needs: midland-reach
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -q numpy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: midland-reach-*
+          path: mid
+          merge-multiple: true
+      - name: Score the reach against the observed 614.61 ft
+        run: |
+          python tools/validation/edenville_2020/midland_reach.py score mid
+          cat mid/Midland_Reach_Score.md >> "$GITHUB_STEP_SUMMARY"
       - name: Keep the reach results
         if: always()
         uses: actions/upload-artifact@v7
@@ -91,9 +177,9 @@ jobs:
           name: midland-reach
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/mid/Midland_Reach_Score.*
-            ${{ runner.temp }}/mid/${{ env.GAUGE }}/reach.json
-            ${{ runner.temp }}/mid/${{ env.GAUGE }}/runs/*/result.json
+            mid/Midland_Reach_Score.*
+            mid/*/reach.json
+            mid/*/runs/*/result.json
 
   cascade:
     name: Edenville-Sanford cascade (30 m)

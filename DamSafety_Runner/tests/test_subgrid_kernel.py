@@ -214,7 +214,7 @@ def subgrid_hllc_peak_velocity_is_a_speed_the_cell_held():
         wet = V > vfloor
         spd = np.where(wet, np.hypot(a["Px"], a["Py"]) / np.where(wet, V, 1.0), 0.0)
         held = np.maximum(held, spd)
-    vmax = a["vmax"].astype(np.float64)
+    vmax = a["vmax"][:ny * nx].astype(np.float64)
     over = vmax - held
     k = int(np.argmax(over))
     assert over[k] <= 1e-4 * max(held[k], 1.0), \

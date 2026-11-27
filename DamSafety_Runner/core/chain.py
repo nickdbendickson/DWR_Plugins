@@ -63,7 +63,7 @@ STOP_CHOICES = ("The end (Hazard classify)",) + tuple(
 STOP_STAGES = (None,) + STAGES[:-1]
 
 FINAL_RASTERS = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
-                 "arrival": "Arrival Time.tif", "dv": "D x V (Max).tif"}   # = workflow.FINAL_NAMES
+                 "arrival": "Arrival Time.tif", "dv": "D x V (Max).tif"}   # dv = workflow.PEAK_DV_NAME
 SUMMARY_NAME = "Chain_Batch_Summary.csv"
 MANIFEST_NAME = "chain_manifest.json"
 CHAIN_DIR = "_chain"

@@ -148,6 +148,133 @@ def stable_cfl(exe):
 STABILITY_RETRY_PCT = 1.0
 STABILITY_MARKER = "stable_settings.json"
 
+# 3.88.0: an ACC run can go unstable WITHOUT losing its mass balance, so the volume test above
+# never sees it. Lake Delhi 2010 at 10 m (4.6 M cells, Boann ACC, theta 1 / cfl 0.7): at the breach
+# peak the water level checkerboards in the deep pool, the deepest water reads 38 m against
+# 13.5 m, the run is 8.1 ft high at the 8 USGS high-water marks, and the volume error is 703 m3
+# of 1.1e8. A Courant number of 0.5 alone cures it (+0.34 ft at the marks; 0.35 gives the same
+# flood, so the step is converged); theta 0.7 alone does not, and theta 0.7 with cfl 0.5 damps the
+# flood and slows its front. The test: among the cells at least CHECKER_MIN_DEPTH_M deep whose
+# four neighbours are too, the share whose PEAK water level stands above, or below, ALL FOUR
+# neighbours by more than CHECKER_JUMP_M. A sound peak surface has no such cell (0.00 % on every
+# sound run tried, one stray cell at most: plain ACC, sub-grid runs at r = 2, 4 and 8); the
+# unstable ones have 0.08 to 2.7 % (18 to 2,300 cells). A run over CHECKER_RETRY_PCT is run again with CHECKER_CFL (workflow.run_dam) and theta
+# is left alone. CHECKER_MIN_ROUGH keeps a handful of cells (the mound on an inflow cell) from
+# counting, and CHECKER_MIN_CELLS a flood too small to judge.
+CHECKER_MIN_DEPTH_M = 0.3
+CHECKER_JUMP_M = 0.1
+CHECKER_RETRY_PCT = 0.05
+CHECKER_MIN_CELLS = 200
+CHECKER_MIN_ROUGH = 10
+CHECKER_CFL = STABLE_CFL
+DEFAULT_CFL = 0.7           # LISFLOOD-FP's own (and Boann ACC's) when the .par names none
+STABILITY_KIND_MASS = "mass_balance"
+STABILITY_KIND_CHECKER = "checkerboard"
+
+
+def checkerboard(wse, depth, min_depth=CHECKER_MIN_DEPTH_M, jump=CHECKER_JUMP_M):
+    """How checkerboarded a run's peak water surface is: (share %, cells judged, rough cells).
+    `wse` and `depth` are the peak water level and the peak depth (m, same shape; NaN = dry). A
+    cell is judged when it and its four neighbours are deeper than `min_depth`; it is rough when
+    its level is above all four neighbours, or below all four, by more than `jump`. The share is
+    None when fewer than CHECKER_MIN_CELLS cells can be judged."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return None, 0, 0
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        n = int(ok.sum())
+        if n < CHECKER_MIN_CELLS:
+            return None, n, 0
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        rough = int((ok & ((c - hi > jump) | (lo - c > jump))).sum())
+    return round(100.0 * rough / n, 3), n, rough
+
+
+def is_checkerboard(stats):
+    """True when a run's stats (read_results) say its peak water surface is checkerboarded."""
+    pct = (stats or {}).get("checkerboard_pct")
+    return (pct is not None and pct > CHECKER_RETRY_PCT
+            and int((stats or {}).get("checkerboard_rough_cells") or 0) >= CHECKER_MIN_ROUGH)
+
+
+# 3.101.0: one cell, or a few, can blow up while the rest of the peak surface stays sound, too few to
+# pass CHECKER_MIN_ROUGH. Absaraka (DWR-2801) at 30 m, Boann ACC on Runner 3.57.0: 17.33 ft and
+# 20 ft/s on one flat water-body cell in Casselton, where every other engine read 5.6 to 6.9 ft,
+# and it alone made that run's TM-11 High. A re-run is not worth it for a handful of cells (and
+# the mound on an inflow cell looks the same at CHECKER_JUMP_M), so such cells are REPORTED: a
+# spike is a judged cell (as checkerboard(): deeper than min_depth with four neighbours that are
+# too) whose peak water level stands more than SPIKE_JUMP_M above, or below, all four neighbours,
+# more than SPIKE_SOURCE_CELLS cells from every inflow cell. A sound peak surface has none: the
+# test decks and both Absaraka runs on main (2026-11-25) have 0.
+SPIKE_JUMP_M = 0.5
+SPIKE_SOURCE_CELLS = 3
+SPIKE_LIST_MAX = 5
+
+
+def spikes(wse, depth, sources=(), min_depth=CHECKER_MIN_DEPTH_M, jump=SPIKE_JUMP_M,
+           near=SPIKE_SOURCE_CELLS):
+    """Isolated spikes in a run's peak water surface: (count, [(row, col, jump_m), ...]), the list
+    largest first and at most SPIKE_LIST_MAX long; jump_m is how far the cell stands above all four
+    neighbours (> 0) or below them (< 0). `sources` are the (row, col) of the inflow cells; a cell
+    within `near` cells of one (rows and columns) is left out."""
+    w = np.asarray(wse)
+    d = np.asarray(depth)
+    if w.ndim != 2 or w.shape != d.shape or min(w.shape) < 3:
+        return 0, []
+    with np.errstate(invalid="ignore"):
+        deep = np.isfinite(w) & (d > min_depth)
+        ok = (deep[1:-1, 1:-1] & deep[:-2, 1:-1] & deep[2:, 1:-1]
+              & deep[1:-1, :-2] & deep[1:-1, 2:])
+        c = w[1:-1, 1:-1]
+        hi = np.maximum(np.maximum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.maximum(w[1:-1, :-2], w[1:-1, 2:]))
+        lo = np.minimum(np.minimum(w[:-2, 1:-1], w[2:, 1:-1]),
+                        np.minimum(w[1:-1, :-2], w[1:-1, 2:]))
+        up = np.where(ok, c - hi, 0.0)
+        down = np.where(ok, lo - c, 0.0)
+    keep = np.zeros(w.shape, dtype=bool)
+    keep[1:-1, 1:-1] = (up > jump) | (down > jump)
+    for r, cc in sources or ():
+        keep[max(0, r - near):r + near + 1, max(0, cc - near):cc + near + 1] = False
+    rows, cols = np.nonzero(keep)
+    if not len(rows):
+        return 0, []
+    sj = np.where(up[rows - 1, cols - 1] > jump, up[rows - 1, cols - 1],
+                  -down[rows - 1, cols - 1])
+    order = np.argsort(-np.abs(sj), kind="stable")[:SPIKE_LIST_MAX]
+    return int(len(rows)), [(int(rows[i]), int(cols[i]), float(sj[i])) for i in order]
+
+
+def bci_sources(path, dem):
+    """(row, col) of the point sources (P lines) of a .bci the Runner wrote, on `dem` (the .bci is
+    in local coordinates: lower-left corner at 0, 0)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 3 and p[0] == "P":
+                    x, y = float(p[1]), float(p[2])
+                    out.append((int(np.floor((dem.ny * dem.dx - y) / dem.dx)),
+                                int(np.floor(x / dem.dx))))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def checker_cfl(user_cfl=None):
+    """The Courant number of the re-run of a checkerboarded ACC run: CHECKER_CFL, or the user's own
+    when that is already smaller."""
+    return min(float(user_cfl), CHECKER_CFL) if user_cfl else CHECKER_CFL
+
 # Audit P2 (2026-11-07): the LISFLOOD-FP child had no wall-clock limit, so a solver that hung or
 # collapsed its time step held QGIS's run for ever. Every run now has one: the setting
 # (LISFLOOD_MAX_WALL_S / model.max_wall_s; 0 = automatic) as given, else WALL_ESTIMATE_FACTOR x
@@ -220,23 +347,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
 BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
+
+
+def _boann_dir():
+    """Boann's engine folder. Runner 3.101.1 (DamSafety Core 1.7.0): Boann lives once, in DamSafety
+    Core (DamSafety_Core/boann/hydro); core/metalflood here is only the shim onto it. Found by
+    import spec (the Core's own package folder), else the sibling plugin folder."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("DamSafety_Core.boann.hydro")
+        if spec is not None and spec.submodule_search_locations:
+            return os.path.abspath(list(spec.submodule_search_locations)[0])
+    except (ImportError, ValueError):
+        pass
+    return os.path.join(os.path.dirname(os.path.dirname(HERE)), "DamSafety_Core", "boann", "hydro")
+
+
+BOANN_DIR = _boann_dir()
+# Before Runner 3.101.1 the engine "executables" were <Runner>/core/metalflood/engine*.py; a saved
+# setting or an older manifest may still hold that path: resolve_exe maps it to the same file here.
 # 3.22.0: Boann, the GPU flood engine (core/metalflood): LISFLOOD-FP 8.3's ACC scheme as GPU kernels, run on the
 # Apple GPU through Metal, or on other computers through the CPU build of the same kernels (every
 # core; shipped prebuilt, else compiled once). Like the built-in engine it is chosen only by name, never as a
 # fallback, and its "executable" is its engine.py so the existence checks and the manifest work.
-GPU_EXE = os.path.join(HERE, "metalflood", "engine.py")
+GPU_EXE = os.path.join(BOANN_DIR, "engine.py")
 GPU_WORDS = ("gpu", "metal", "gpu engine", "metalflood")
 # 3.23.0: Boann's shock-capturing solver (core/metalflood/engine_fv): a well-balanced,
 # positivity-preserving HLLC finite-volume solver of the full 2-D shallow-water equations, run on
 # the same Metal/CPU kernel machinery. It resolves hydraulic jumps and dam-break fronts the ACC
 # scheme diffuses; like the others it is chosen only by name, never as a fallback.
-GPU_FV_EXE = os.path.join(HERE, "metalflood", "engine_fv.py")
+GPU_FV_EXE = os.path.join(BOANN_DIR, "engine_fv.py")
 GPU_FV_WORDS = ("gpu-fv", "metal-fv", "shock", "hllc", "gpu shock", "shock-capturing")
 # 3.33.0: Boann's 2nd-order shock-capturing solver (core/metalflood/engine_fv2): the same HLLC
 # finite-volume scheme run with MUSCL slope-limited reconstruction (2nd order in space) and SSP-RK2
 # (2nd order in time), so it holds a dam-break bore and a hydraulic jump even sharper than FV1.
 # Chosen only by name, never as a fallback.
-GPU_FV2_EXE = os.path.join(HERE, "metalflood", "engine_fv2.py")
+GPU_FV2_EXE = os.path.join(BOANN_DIR, "engine_fv2.py")
 GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2", "shock 2nd order",
                  "second order")
 # 3.34.0: Boann's 2nd-order discontinuous-Galerkin solver (core/metalflood/engine_dg2): the
@@ -244,7 +390,7 @@ GPU_FV2_WORDS = ("gpu-fv2", "metal-fv2", "fv2", "muscl", "shock2", "gpu shock 2"
 # per-cell planar expansion (element average + x/y slopes) through the Galerkin weak form rather than
 # reconstructing the slopes from the neighbours. Its local slope limiter ("limitslopes") is on by
 # default for float32 rest stability; 'nolimitslopes' in the .par runs it unlimited. By name only.
-GPU_DG2_EXE = os.path.join(HERE, "metalflood", "engine_dg2.py")
+GPU_DG2_EXE = os.path.join(BOANN_DIR, "engine_dg2.py")
 GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
                  "discontinuous galerkin")
 # 3.36.0: Boann's sub-grid-channel solver (core/metalflood/engine_sgc): the ACC local-inertial
@@ -252,7 +398,7 @@ GPU_DG2_WORDS = ("gpu-dg2", "metal-dg2", "dg2", "rkdg2", "galerkin", "gpu dg2",
 # than the cell and below the DEM conveys and stores a flood the grid cannot resolve, from the same
 # SGCwidth/SGCbank/SGCbed rasters LISFLOOD-FP reads (or built from the DEM). ACC-family, not
 # shock-capturing. Chosen only by name, never as a fallback.
-GPU_SGC_EXE = os.path.join(HERE, "metalflood", "engine_sgc.py")
+GPU_SGC_EXE = os.path.join(BOANN_DIR, "engine_sgc.py")
 GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid channels",
                  "sub-grid channels")
 # 3.42.0: Boann's sub-grid finite-volume solver (core/metalflood/engine_subfv): the HLLC
@@ -260,7 +406,7 @@ GPU_SGC_WORDS = ("gpu-sgc", "metal-sgc", "sgc", "boann-sgc", "gpu sgc", "subgrid
 # sub-cells as stage tables (Devi & Kuiry 2024), so a coarse run conveys and stores the channel a
 # flat coarse cell loses and still writes a fine-resolution inundation map. The deck DEM is the fine
 # grid; a 'subgrid <r>' keyword sets the coarsening factor. Shock-capturing family. By name only.
-GPU_SUBFV_EXE = os.path.join(HERE, "metalflood", "engine_subfv.py")
+GPU_SUBFV_EXE = os.path.join(BOANN_DIR, "engine_subfv.py")
 GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid fv", "gpu subfv",
                    "subgrid finite volume")
 # 3.79.0: Boann's sub-grid LOCAL-INERTIAL solver (core/metalflood/engine_subli): the ACC scheme run
@@ -268,7 +414,7 @@ GPU_SUBFV_WORDS = ("gpu-subfv", "metal-subfv", "subfv", "subgrid-fv", "sub-grid 
 # Devi & Kuiry (2024) with exact stage curves and the face's compound Manning conveyance. The deck
 # DEM is the fine grid; 'subgrid <r>' sets the coarsening factor (as for sub-grid FV) and 'upwind'
 # turns the paper's flux weighting on (off by default). ACC family, not shock-capturing. By name only.
-GPU_SUBLI_EXE = os.path.join(HERE, "metalflood", "engine_subli.py")
+GPU_SUBLI_EXE = os.path.join(BOANN_DIR, "engine_subli.py")
 GPU_SUBLI_WORDS = ("gpu-subli", "metal-subli", "subli", "subgrid-li", "sub-grid li", "gpu subli",
                    "subgrid local inertial", "sub-grid local inertial")
 
@@ -278,15 +424,39 @@ GPU_SUBLI_WORDS = ("gpu-subli", "metal-subli", "subli", "subgrid-li", "sub-grid 
 # other computer runs LISFLOOD-FP when one is installed, else Boann ACC on its CPU build. The run
 # report names the engine that ran, so the choice is always on the record.
 AUTO_WORDS = ("auto", "recommended", "recommended (auto)", "automatic")
+# 3.91.0 (Nick 2026-11-24, on the DWR-2801 2 m LiDAR test): where "Recommended (auto)" would run
+# Boann ACC and the model cell is this fine or finer, it runs Boann's sub-grid local inertial at its
+# default r = 4 instead (solver cells 4 x the model cell, depths still written at the model cell).
+# DWR-2801 at 2 m (88 M cells, 24 h, M2 Pro): against the plain 2 m run (121 min) sub-grid r4 was
+# within 0.08 ft in the median cell, 0.23 ft at the 90th percentile, CSI 0.93, in 7.8 min, where
+# plain ACC on 8 m cells was 0.24 / 0.83 ft, CSI 0.75, in 1.2 min. Coarser cells keep plain ACC
+# (the gain needs ground detail the solver cell cannot see). LISFLOOD-FP is never swapped out.
+AUTO_SUBLI_MAX_CELL_M = 3.0
 
 
 def is_auto_word(v):
     return str(v or "").strip().lower() in AUTO_WORDS
 
 
-def choose_auto(lisflood_exe=""):
+def auto_fine_cell(cell_m):
+    """True when a model cell of cell_m metres is fine enough for "Recommended (auto)" to run
+    Boann's sub-grid local inertial instead of Boann ACC (3.91.0; AUTO_SUBLI_MAX_CELL_M)."""
+    try:
+        c = float(cell_m)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 < c <= AUTO_SUBLI_MAX_CELL_M + 1e-9
+
+
+def choose_auto(lisflood_exe="", cell_m=None):
     """(engine exe, one line why) for "Recommended (auto)"; exe is "" when nothing can run.
-    lisflood_exe is the LISFLOOD-FP the caller found (setting or auto-detect), if any."""
+    lisflood_exe is the LISFLOOD-FP the caller found (setting or auto-detect), if any. cell_m is
+    the model cell (m); 3.91.0: where Boann ACC would run on a cell of AUTO_SUBLI_MAX_CELL_M or
+    finer, Boann's sub-grid local inertial (r = 4) runs instead. None = not known (plain ACC)."""
+    fine = auto_fine_cell(cell_m)
+    subli_why = (" Model cell {:g} m: Boann sub-grid local inertial (r = 4), solver cells {:g} m "
+                 "that keep the {:g} m ground".format(float(cell_m or 0), 4 * float(cell_m or 0),
+                                                       float(cell_m or 0)) if fine else "")
     try:
         from .metalflood import backends as mfb
         gpu, why = mfb.metal_available()
@@ -294,12 +464,19 @@ def choose_auto(lisflood_exe=""):
     except Exception as e:  # pragma: no cover - backend import trouble: LISFLOOD-FP only
         gpu, why, cpu = False, str(e), False
     if gpu:
+        if fine:
+            return GPU_SUBLI_EXE, ("Recommended (auto): Boann on this Mac's GPU." + subli_why +
+                                   " (as close to the fine run as plain ACC on the fine cells, "
+                                   "many times faster)")
         return GPU_EXE, ("Recommended (auto): Boann ACC on this Mac's GPU, the same scheme as "
                          "LISFLOOD-FP 8.3 and many times faster here")
     if lisflood_exe and os.path.isfile(str(lisflood_exe)):
         return str(lisflood_exe), ("Recommended (auto): LISFLOOD-FP (installed here; no Apple "
                                    "GPU: {})".format(why))
     if cpu:
+        if fine:
+            return GPU_SUBLI_EXE, ("Recommended (auto): Boann on the CPU (no LISFLOOD-FP found and "
+                                   "no Apple GPU: {}).".format(why) + subli_why)
         return GPU_EXE, ("Recommended (auto): Boann ACC on the CPU (no LISFLOOD-FP found and no "
                          "Apple GPU: {})".format(why))
     return "", ("Recommended (auto) found no flood engine: no Apple GPU, no LISFLOOD-FP and no "
@@ -443,12 +620,30 @@ def gpu_backend_note():
         return "unknown ({})".format(e)
 
 
+def _legacy_boann(v):
+    """The engine file in DamSafety_Core/boann/hydro for a pre-3.97.1 path
+    <anything>/core/metalflood/engine*.py (a saved setting, a re-run of an older manifest), else
+    None. Only Boann's own engine file names are mapped."""
+    if not v:
+        return None
+    norm = v.replace("\\", "/")
+    base = norm.rsplit("/", 1)[-1]
+    if not norm.endswith("core/metalflood/" + base):
+        return None
+    new = os.path.join(BOANN_DIR, base)
+    return new if new in (GPU_EXE, GPU_FV_EXE, GPU_FV2_EXE, GPU_DG2_EXE, GPU_SGC_EXE,
+                          GPU_SUBFV_EXE, GPU_SUBLI_EXE) else None
+
+
 def resolve_exe(exe):
     """The flood engine for a setting or parameter value. The word "builtin" (any BUILTIN_WORDS
     spelling) selects the built-in engine; anything else is returned verbatim. An empty value
     stays empty on purpose: the caller's guard then raises, so the built-in is never used unless
     the user asked for it."""
     v = (str(exe).strip() if exe else "")
+    legacy = _legacy_boann(v)
+    if legacy:
+        return legacy
     if v.lower() in BUILTIN_WORDS:
         return BUILTIN_EXE
     if v.lower() in GPU_DG2_WORDS:
@@ -563,7 +758,7 @@ class LisfloodSettings:
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
                  cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None,
-                 subgrid_upwind=False):
+                 subgrid_upwind=False, terrain_breach=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -617,6 +812,9 @@ class LisfloodSettings:
         # more point sources: [{"name", "xy", "t_s", "q_cms", optional "line"}], e.g. ambient
         # river flow entering the domain
         self.extra_sources = extra_sources or []
+        # notch lowered into the bed (dict or None). None: the breach hydrograph is injected
+        # as before. Set only when the run asked for a breach inside the terrain.
+        self.terrain_breach = terrain_breach
         # Accept a LISFLOOD-FP build WITHOUT the arrival-depth patch (it ignores inittm_depth).
         # Off by default so _run() refuses such a build; on, the run proceeds with a loud warning
         # and `unpatched_used` is set, because arrival times then mark the first wetting (~1 mm)
@@ -637,12 +835,14 @@ class Envelopes:
     """Maximum depth (m), maximum speed (m/s), arrival (hr), max WSE (m) on the
     model grid, plus run statistics."""
 
-    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None):
+    def __init__(self, depth, velocity, arrival_hr, wse, stats=None, notes=None, gauges=None,
+                 dv=None):
         self.gauges = gauges or {}       # name -> (t_s, q_cms)
         self.depth = depth
         self.velocity = velocity
         self.arrival_hr = arrival_hr
         self.wse = wse
+        self.dv = dv                     # peak depth x speed at one moment (m2/s), or None
         self.stats = stats or {}
         self.notes = notes or []
 
@@ -792,7 +992,8 @@ def raise_crest(dem, crest_xy, inflow_xy, top_m, length_m=200.0, width_m=12.0,
 
 def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflow_line=None):
     os.makedirs(workdir, exist_ok=True)
-    cells = inflow_cells(dem_real, inflow_xy, inflow_line)
+    tb = getattr(st, "terrain_breach", None)
+    cells = inflow_cells(dem_real, inflow_xy, inflow_line) if tb is None else []
     dem = local_grid(dem_real)
     dem.write_asc(os.path.join(workdir, name + ".dem.asc"))
     xmin, ymin, xmax, ymax = dem.bounds
@@ -823,11 +1024,14 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                 px, py = dem.xy(rr, cc)
                 f.write("P {:.3f} {:.3f} QVAR {}\n".format(px, py, sname))
     with open(os.path.join(workdir, name + ".bdy"), "w", encoding="utf-8") as f:
-        f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
-        f.write("breach\n")
-        f.write("{} seconds\n".format(len(t)))
-        for tv, qv in zip(t, q):
-            f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        if tb is None:
+            f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
+            f.write("breach\n")
+            f.write("{} seconds\n".format(len(t)))
+            for tv, qv in zip(t, q):
+                f.write("{:.6f} {:.4f}\n".format(qv / (dem.dx * n), tv))
+        else:
+            f.write("notch in the bed: no breach point source\n")
         for sname, sc, ts_, qs_ in extra:
             f.write("{}\n".format(sname))
             f.write("{} seconds\n".format(len(ts_)))
@@ -912,6 +1116,9 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
                     *_gauge_line(gx, gy, g["direction"], g["width_m"], dem.nx, dem.ny, dem.dx)))
         lines.append("gaugefile {}.gauge".format(name))
     lines += list(st.extra_par)
+    if tb is not None:
+        from .terrain_breach import write_deck
+        lines.append(write_deck(workdir, name, dem, tb))
     par = os.path.join(workdir, name + ".par")
     with open(par, "w", encoding="utf-8") as f:
         f.write("# written by ND Dam Breach Runner\n")
@@ -1324,7 +1531,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     f32 = RESULT_DTYPE
     hmax = load(".max")
     vmax = load(".maxVc", required=False)
+    dv = load(".maxDV", required=False)          # Boann only; missing is None, never an error
     vmax_written = vmax is not None
+    dv_written = dv is not None
     arr = load(".inittm", required=False)
     wse = load(".mxe", required=False)
     notes = []
@@ -1345,6 +1554,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         notes.append("The flood model wrote no maximum velocity (.maxVc).")
         vmax = np.full(hmax.shape, np.nan, dtype=f32)
     vmax = np.where(np.isfinite(vmax) & (hmax64 >= st.velocity_min_depth_m), vmax, f32(0.0))
+    if dv is not None:
+        dv = np.where(np.isfinite(dv) & (hmax64 >= st.velocity_min_depth_m), dv, f32(0.0))
     if arr is None:
         arr = np.full(hmax.shape, np.nan, dtype=f32)
     arr = np.where(np.isfinite(arr) & (arr >= 0) & wet, arr, f32(np.nan))
@@ -1352,9 +1563,20 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         # the DEM is float64: the sum is taken there and rounded once into float32
         wse = np.where(hmax > 0, dem.data + hmax64, np.nan).astype(f32)
     wse = np.where(hmax > 0, wse, f32(np.nan))
+    # 3.88.0: how checkerboarded the peak surface is (not with sub-grid channels: their depth is
+    # measured from the bank and the level above was rebuilt from it)
+    chk_pct, chk_n, chk_rough = (None, 0, 0) if sgc is not None else checkerboard(wse, hmax)
+    # 3.101.0: isolated spikes the checkerboard share is too small to see (spikes())
+    n_spk, spk = (0, []) if sgc is not None else spikes(
+        wse, hmax, bci_sources(os.path.join(workdir, name + ".bci"), dem))
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
-    injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
+    tb = getattr(st, "terrain_breach", None)
+    if tb is not None:
+        # the reservoir is already on the grid; the routed hydrograph was not injected
+        injected = float(tb.get("pool_volume_m3") or 0.0)
+    else:
+        injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
     injected += sum(source_volume(src, last_t) for src in st.extra_sources)
     stats = {
         "cells": int(dem.data.size), "cell_size_m": dem.dx,
@@ -1366,8 +1588,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "peak_inflow_cfs": round(qin_max / CFS, 0),
         # 3.13.2 (DWR-4031 toe10m): peak_inflow_cfs is the largest Qin at the .mass output
         # samples (every massint s), which can miss a short breach peak (1,570 against
-        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow
-        "peak_inflow_input_cfs": _hydrograph_peak_cfs(hydrograph),
+        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow.
+        # A notch in the bed injects nothing: the routed peak is reported separately.
+        "peak_inflow_input_cfs": (None if tb is not None else _hydrograph_peak_cfs(hydrograph)),
         "massint_s": float(st.massint_s),
         "max_volume_error_pct": round(100.0 * abs(verr) / injected, 3) if injected else None,
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
@@ -1375,10 +1598,27 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": vmax_written,
+        "dv_written": dv_written,
         "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
+        "checkerboard_pct": chk_pct, "checkerboard_cells": chk_n,
+        "checkerboard_rough_cells": chk_rough,
+        # 3.101.0: [x, y, jump ft] of the largest spikes, on the DEM's coordinates
+        "spike_cells": n_spk,
+        "spikes": [[round(dem.xy(r, c)[0], 1), round(dem.xy(r, c)[1], 1), round(j / FT, 2)]
+                   for r, c, j in spk],
     }
+    if tb is not None:
+        from .terrain_breach import read_pool
+        pool = read_pool(os.path.join(res, name + ".pool"))
+        routed = tb.get("_routed_peak_cfs")
+        stats["routed_peak_cfs_not_injected"] = None if not routed else round(float(routed), 0)
+        stats["terrain_breach_pool_acft"] = round(float(tb.get("pool_volume_m3") or 0.0) / ACFT, 2)
+        if pool is not None:
+            stats["terrain_breach_peak_cfs"] = round(pool["peak_outflow_cms"] / CFS, 0)
+            stats["terrain_breach_time_to_empty_hr"] = (
+                None if pool["time_to_empty_s"] is None else round(pool["time_to_empty_s"] / 3600.0, 3))
     if st.initial_depth is not None:
         init_d = st.initial_depth.data
         stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),
@@ -1437,7 +1677,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                          stats["max_volume_error_pct"]))
     return Envelopes(dem.like(hmax, nodata=np.nan, dtype=f32), dem.like(vmax, nodata=np.nan, dtype=f32),
                      dem.like(arr, nodata=np.nan, dtype=f32), dem.like(wse, nodata=np.nan, dtype=f32),
-                     stats, notes, read_gauges(workdir, st, name))
+                     stats, notes, read_gauges(workdir, st, name),
+                     dem.like(dv, nodata=np.nan, dtype=f32) if dv is not None else None)
 
 
 def source_volume(src, t_end):

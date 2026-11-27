@@ -1,0 +1,21 @@
+{
+ "title": "Lake at rest beside NoData: a ponded surface against NoData cells must stay still",
+ "deck": "deck/base.par",
+ "solvers": [
+  "fv1",
+  "fv2",
+  "dg2"
+ ],
+ "reference": {
+  "kind": "startfile",
+  "file": "deck/start.asc"
+ },
+ "wet_threshold_m": 0.01,
+ "tol": {
+  "rmse_m": 0.002,
+  "maxabs_m": 0.01,
+  "max_speed_ms": 0.01
+ },
+ "max_volume_error_frac": 0.0001,
+ "note": "Direct guard for the 2026-11-24 NoData wall bug (PR #516, Boann 6.0.0): before the fix the shock solvers drove water into NoData without limit (reached several m/s and metres of depth in 10 minutes). The shock-solver face against a NoData cell must be a reflecting wall."
+}

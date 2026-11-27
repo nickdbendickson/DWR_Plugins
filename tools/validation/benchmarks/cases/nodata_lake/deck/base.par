@@ -1,0 +1,8 @@
+DEMfile dem.asc
+startfile start.asc
+fpfric 0.03
+sim_time 600
+initial_tstep 1
+saveint 600
+massint 60
+elevoff

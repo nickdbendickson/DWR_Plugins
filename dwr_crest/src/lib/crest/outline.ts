@@ -1018,7 +1018,7 @@ export function traceRings(mask: Uint8Array, W: number, H: number): Ring[] {
       if (!at(i, j - 1)) out[j * VW + i + 1] |= 4; // top: TR -> TL (west)
       if (!at(i - 1, j)) out[j * VW + i] |= 8; // left: TL -> BL (south)
     }
-  return linkRings(out, W, H);
+  return linkRings(out, W);
 }
 
 /**
@@ -1043,11 +1043,11 @@ export function traceBandRings(band: Int8Array, nBands: number, W: number, H: nu
       if (i === 0 || band[row + i - 1] !== b) out[j * VW + i] |= 8; // left: TL -> BL (south)
     }
   }
-  return outs.map((out) => (out ? linkRings(out, W, H) : []));
+  return outs.map((out) => (out ? linkRings(out, W) : []));
 }
 
 /** Link a vertex edge bitmap (traceRings' encoding) into rings; consumes the bitmap. */
-function linkRings(out: Uint8Array, W: number, H: number): Ring[] {
+function linkRings(out: Uint8Array, W: number): Ring[] {
   const VW = W + 1;
   const DI = [1, 0, -1, 0];
   const DJ = [0, -1, 0, 1];

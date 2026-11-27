@@ -238,6 +238,8 @@ def screening_result(attrs, by):
         res["triage_reason"] = _txt(attrs.get("tri_reason"))
     if _txt(attrs.get("tri_audit")) == "yes":
         res["triage_audit"] = "yes (sent to the 2D model anyway)"
+    if _txt(attrs.get("hz_aadt_review")):        # 0.58.0: the class rests on matched traffic counts
+        res["aadt_review"] = _txt(attrs.get("hz_aadt_review"))
     return res
 
 

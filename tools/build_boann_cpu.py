@@ -14,7 +14,7 @@ build <spec>_cpu_<source hash><ext>, with exactly the command backends.cpu_build
 Runner at run time, so the names match what backends.build_cpu_library looks for. A library built
 from other sources never matches (the hash is in the name), so a stale one is simply ignored.
 Used by .github/workflows/release.yml; tools/build_release.py --boann-cpu puts the files in the
-zips. Pure stdlib apart from the Runner's own metalflood package (numpy)."""
+zips. Pure stdlib apart from Boann itself (DamSafety_Core/boann, numpy)."""
 import argparse
 import os
 import subprocess
@@ -22,18 +22,13 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "DamSafety_Runner", "core"))
-
-from metalflood import backends as be          # noqa: E402
-from metalflood import subfv_backend as sfb    # noqa: E402
-from metalflood import subli_backend as slb    # noqa: E402
-
-# BoannGrid's fill and flow use relative imports (from ..metalflood), so load them as the
-# plugin package. Their Spec objects are still plain source paths; the build below does not
-# care which copy of the Spec class built them.
+# Boann lives once, in DamSafety Core (DamSafety_Core/boann: hydro = the flood engine, grid = BoannGrid)
 sys.path.insert(0, REPO)
-from nd_breach_runner.core.metalterrain import fill as mt_fill    # noqa: E402
-from nd_breach_runner.core.metalterrain import flow as mt_flow    # noqa: E402
+from DamSafety_Core.boann.hydro import backends as be          # noqa: E402
+from DamSafety_Core.boann.hydro import subfv_backend as sfb    # noqa: E402
+from DamSafety_Core.boann.hydro import subli_backend as slb    # noqa: E402
+from DamSafety_Core.boann.grid import fill as mt_fill          # noqa: E402
+from DamSafety_Core.boann.grid import flow as mt_flow          # noqa: E402
 
 SPECS = (be.FLOOD_SPEC, be.FV_SPEC, be.FV2_SPEC, be.DG2_SPEC, be.SGC_SPEC, sfb.SUBFV_SPEC,
          slb.SUBLI_SPEC, mt_fill.SPEC, mt_flow.SPEC, mt_flow.SPEC8)

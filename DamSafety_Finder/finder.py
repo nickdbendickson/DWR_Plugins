@@ -42,7 +42,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.7.2"
+VERSION = "0.7.4"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -132,6 +132,79 @@ def read_lines(src, bbox=None):
             out.append(pts)
     ds = None
     return out
+
+
+def read_named_lines(src, bbox=None):
+    """Named flowlines of a stream layer as [(ogr.Geometry LineString in EPSG:5070, name, env)], one
+    per part (env = (minx, maxx, miny, maxy), precomputed for the nearest-river prefilter), keeping
+    only the parts whose feature carries a NAMED river/creek: a GNIS id that is set and not zero
+    (3DHP `gnisid` / `gnisidlabel`). An unnamed ditch, draw or headwater channel (gnisid 0 or
+    missing) is left out, because a stock-pond dam sits across one of those, while a levee or channel
+    dike runs beside a mapped, named river. bbox (xmin, ymin, xmax, ymax in EPSG:5070) keeps the
+    lines whose box meets it. Returns [] when the layer has no GNIS field at all (so the levee test
+    simply does nothing rather than mislabelling every fill)."""
+    if not src:
+        return []
+    ds, lyr = open_layer(src)
+    dfn = lyr.GetLayerDefn()
+    low = {dfn.GetFieldDefn(i).GetName().lower(): dfn.GetFieldDefn(i).GetName()
+           for i in range(dfn.GetFieldCount())}
+    idf = next((low[k] for k in ("gnisid", "gnis_id", "gnisidlabel") if k in low), None)
+    if idf is None:
+        ds = None
+        return []
+    namef = next((low[k] for k in ("gnisidlabel", "gnis_name", "gnisname", "gnis_id_label",
+                                   "name", "gnis_label") if k in low), None)
+    ct = _transform(lyr, _srs(WORK_EPSG))
+    out = []
+    for f in lyr:
+        gv = f.GetField(idf)
+        if gv in (None, ""):
+            continue
+        try:
+            if int(float(gv)) == 0:                  # 0 = unnamed flowline (ditch, draw, headwater)
+                continue
+        except (TypeError, ValueError):
+            pass                                     # a non-numeric GNIS id is still a named feature
+        g = f.GetGeometryRef()
+        if g is None:
+            continue
+        name = ""
+        if namef is not None:
+            nv = f.GetField(namef)
+            name = "" if nv in (None, "") else str(nv)
+        g = g.Clone()
+        g.Transform(ct)
+        for p in _parts(g):
+            if ogr.GT_Flatten(p.GetGeometryType()) != ogr.wkbLineString:
+                continue
+            if p.GetPointCount() < 2:
+                continue
+            env = p.GetEnvelope()                     # (minx, maxx, miny, maxy)
+            if bbox is not None:
+                if env[1] < bbox[0] or env[0] > bbox[2] or env[3] < bbox[1] or env[2] > bbox[3]:
+                    continue
+            out.append((p.Clone(), name, env))
+    ds = None
+    return out
+
+
+def _nearest_named_river(x, y, named, max_m):
+    """(distance_m, name) to the nearest named-river line within max_m of (x, y) in EPSG:5070, or
+    (None, "") when none is within max_m. Pre-filters by each line's precomputed envelope so only the
+    handful of rivers near the point are measured exactly."""
+    if not named:
+        return None, ""
+    pt = ogr.Geometry(ogr.wkbPoint)
+    pt.AddPoint_2D(x, y)
+    best, bname = None, ""
+    for g, name, env in named:                        # env = (minx, maxx, miny, maxy)
+        if x < env[0] - max_m or x > env[1] + max_m or y < env[2] - max_m or y > env[3] + max_m:
+            continue
+        d = pt.Distance(g)
+        if d <= max_m and (best is None or d < best):
+            best, bname = d, name
+    return best, bname
 
 
 def _id_of(f, id_field):
@@ -702,6 +775,9 @@ EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("is_new",
               ("slope_pct", "float"), ("fill_road", "str"), ("pool_lat", "float"), ("pool_lon", "float"),
               # Finder 0.7 (step 13): crest to the nearest missing terrain (blank: none within the search)
               ("edge_ft", "float"),
+              # Finder 0.7 (step 14): crest to the nearest NAMED river/creek, and its name (blank: none
+              # within levee_river_m) - a dam-shaped fill this close is re-labelled river levee / dike
+              ("river_ft", "float"), ("river_name", "str"),
               ("confidence", "str"), ("notes", "str"), ("lat", "float"), ("lon", "float")]
 SPILL_FIELDS = [("find_id", "str"), ("kind", "str"), ("spill_ft", "float"), ("width_ft", "float"),
                 ("dist_ft", "float"), ("lat", "float"), ("lon", "float")]
@@ -724,7 +800,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                     ridges=False, dugouts=False, dikes=True, dike_near_m=200.0,
                     ridge_params=None, model=None, contrib=True, log=print,
                     progress=None, cancelled=None, pool_lines=None, pool_reach_m=50.0,
-                    pool_max_drain_ac=50.0, pool_margin_m=300.0, pool_opts=None):
+                    pool_max_drain_ac=50.0, pool_margin_m=300.0, pool_opts=None,
+                    levee_river_m=60.96):
     """Fills across the stream lines in the DEM, checked against the known structures, and (with
     `hillshade`) a multi-direction hillshade of the area beside the GeoPackage for the review.
     drainage_ac > 0: also walk every draw of the DEM draining that many acres (core/terrain.py,
@@ -762,6 +839,15 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
     whose pool reaches the missing cells has the kind em.K_EDGE: it is written, but it is not
     scored, not handed to Screening and not picked for a review batch (the ground past the end
     of the DEM file counts as missing too).
+    THE RIVER-LEVEE TEST (levee_river_m, default 60.96 m = 200 ft): a dam-shaped fill whose crest is
+    within levee_river_m of a NAMED river or creek (a 3DHP flowline with a GNIS id, read by
+    read_named_lines) is re-labelled em.K_RIVER_LEVEE - a levee or channel dike that runs beside the
+    river, not a stock-pond dam across a draw. river_m / river_name record the distance and the
+    river's name on every fill (blank when no named river is within levee_river_m). A K_RIVER_LEVEE
+    fill is still written and scored, so the run FINDS the levees, but like a road fill it is not
+    handed to Screening as a dam to protect. Set levee_river_m=0 to turn the test off. This is a
+    DEM-and-GNIS test only: it needs a stream layer that carries GNIS ids (ND 3DHP does); without
+    one the test does nothing.
     Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
     p = params or em.FinderParams()
     rp = ridge_params or rd.RidgeParams()
@@ -799,9 +885,13 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         raise RuntimeError("no stream lines in the area (or turn on the DEM drainage lines)")
     ext = bbox or (layer_extent(lines) if lines else _image_box(dem))
     road_lines = read_lines(roads, None) + read_lines(rails, None) if (roads or rails) else []
+    named = []
+    if levee_river_m and streams:
+        m = levee_river_m
+        named = read_named_lines(streams, (ext[0] - m, ext[1] - m, ext[2] + m, ext[3] + m))
     kn = read_known(known)
-    log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(
-        len(lines), len(road_lines), len(kn)))
+    log("{} stream line(s), {} named river/creek line(s), {} road / rail line(s), {} known structure(s)".format(
+        len(lines), len(named), len(road_lines), len(kn)))
     tiles = _squares_on(dem, lattice_squares(ext, tile_m))
     found, ridge_rows, dug_rows, t0 = [], [], [], time.time()
     for ti, core_box in enumerate(tiles):
@@ -911,7 +1001,14 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         st = ls.check(e.x, e.y, kn, match_ft * FT, unsure_factor)
         lon, lat = _lonlat(e.x, e.y, ll)
         plon, plat = _lonlat(e.pool_xy[0], e.pool_xy[1], ll) if e.pool_xy else (None, None)
-        rows.append({"x": e.x, "y": e.y, "find_id": find_id("FIND", e.x, e.y), "kind": e.kind,
+        kind, notes = e.kind, list(e.notes)
+        river_m, river_name = (_nearest_named_river(e.x, e.y, named, levee_river_m)
+                               if (named and levee_river_m) else (None, ""))
+        if kind == em.K_DAM and river_m is not None:   # dam-shaped fill beside a NAMED river = levee
+            kind = em.K_RIVER_LEVEE
+            notes.append("within {:.0f} ft of {}: river levee / dike, not a stock-pond dam".format(
+                river_m / FT, river_name or "a named river"))
+        rows.append({"x": e.x, "y": e.y, "find_id": find_id("FIND", e.x, e.y), "kind": kind,
                      "status": st["status"], "known_id": st["known_id"], "known_layer": st["known_src"],
                      "known_state": st.get("known_state", ""),
                      "known_ft": None if st["known_m"] is None else round(st["known_m"] / FT, 0),
@@ -938,8 +1035,10 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      "fill_road": "yes" if e.fill_road else "no", "edge_ft": _rnd(e.edge_m / FT, 0),
                      "pool_lat": None if plat is None else round(plat, 6),
                      "pool_lon": None if plon is None else round(plon, 6),
+                     "river_ft": None if river_m is None else round(river_m / FT, 0),
+                     "river_name": river_name,
                      "confidence": e.confidence,
-                     "notes": "; ".join(e.notes), "lat": round(lat, 6), "lon": round(lon, 6)})
+                     "notes": "; ".join(notes), "lat": round(lat, 6), "lon": round(lon, 6)})
     if model:
         from .core import score as sc
         m = sc.load(model) if isinstance(model, str) else model
@@ -989,11 +1088,15 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
               "pool_outlet": sum(1 for r in rows if r["line_source"] == LINE_POOL),
               "rescued": sum(1 for r in rows if r["rescued"] == "yes"),
               "squares": len(tiles), "dropped_between_squares": n_seam,
-              "data_edge": sum(1 for r in rows if r["kind"] == em.K_EDGE)}
+              "data_edge": sum(1 for r in rows if r["kind"] == em.K_EDGE),
+              "river_levee": sum(1 for r in rows if r["kind"] == em.K_RIVER_LEVEE)}
     log(_summary(rows, "fill(s) across streams"))
     if counts["data_edge"]:
         log("{} of them at the edge of the terrain data (missing terrain acts as a wall there): kept, "
             "not candidates".format(counts["data_edge"]))
+    if counts["river_levee"]:
+        log("{} of them within {:.0f} ft of a named river: re-labelled river levee / dike, kept and "
+            "reported, not handed to Screening".format(counts["river_levee"], levee_river_m / FT))
     hs = None
     if hillshade and not cancelled():
         w = p.window_m if bbox is None else 0.0             # the stream box plus the search window

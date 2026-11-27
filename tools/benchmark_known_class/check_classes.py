@@ -129,8 +129,8 @@ def damit_receptors(fx):
     for r in fx["roads"]:
         rc = r.get("road_class") or ""
         name = r.get("name") or ""
-        cls = "interstate" if hz.is_interstate(rc, name) else ("us_state_highway" if hz.is_us_state(rc, name)
-                                                              else "")
+        cls = "interstate" if r.get("isys") or hz.is_interstate(rc, name) else (
+            "us_state_highway" if hz.is_us_state(rc, name) else "")    # isys: tool 8's interstate system (0.58.0)
         out.append({"id": "r:" + str(r["id"]), "receptor_type": "road", "wet": True,
                     "depth_ground_ft": r["depth_m"] / M_PER_FT, "road_class": cls,
                     "aadt": nh.aadt_value(r.get("aadt")), "sole_access": bool(r.get("sole_access"))})

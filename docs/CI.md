@@ -173,6 +173,16 @@ plugin's archived section); an entry that is in neither still fails. To trim aga
 oldest entries out of `changelog=` and paste them, unchanged and newest first, at the top of the
 plugin's archived section's code block (`tools/test_ci_checks.py` has the cases).
 
+## Boann speed on Windows
+
+`.github/workflows/boann-windows-speed.yml` times Boann's CPU build against LISFLOOD-FP 8.3 on a
+`windows-latest` runner. It cross-builds both exactly as `release.yml` does (MinGW-w64 on Ubuntu:
+Boann's OpenMP libraries and a static `lisflood.exe`), then runs `DamSafety_Core/boann/hydro/bench.py`
+on the small and medium valleys, the medium diagonal valley, one core each, and FV1. The table is
+in the log; the JSON is the `boann-windows-speed` artifact. It runs by hand (*Actions → Boann speed
+on Windows → Run workflow*) or on a pull request that changes the workflow. Timing only, never a
+gate; the runner is a 4-core virtual machine, so compare the engines, not the seconds.
+
 ## Windows and macOS
 
 `ci.yml` runs every job on Ubuntu. `.github/workflows/os-tests.yml` runs the suites of the

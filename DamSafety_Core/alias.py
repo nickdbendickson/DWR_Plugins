@@ -40,6 +40,16 @@ class _AliasLoader(importlib.abc.Loader):
     def exec_module(self, module):
         pass                                       # already executed as the core module
 
+    def get_code(self, fullname):
+        """The core module's code, so `python -m <alias>.<module>` runs it (runpy asks the loader
+        for the code, then runs it as __main__). Core 1.7.0: Boann's paste-kit commands such as
+        `python -m nd_breach_runner.core.metalflood.bench` keep working after the move."""
+        core = importlib.import_module(self.core_name)
+        return core.__spec__.loader.get_code(self.core_name)
+
+    def is_package(self, fullname):
+        return hasattr(importlib.import_module(self.core_name), "__path__")
+
 
 class _AliasFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -52,6 +62,7 @@ class _AliasFinder(importlib.abc.MetaPathFinder):
                     return None                    # not a core module: the normal error follows
                 spec = importlib.machinery.ModuleSpec(
                     fullname, _AliasLoader(core_name),
+                    origin=getattr(getattr(mod, "__spec__", None), "origin", None),
                     is_package=hasattr(mod, "__path__"))
                 return spec
         return None
