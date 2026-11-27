@@ -903,7 +903,12 @@ class NDBreachRunnerDialog(QDialog):
             return
         try:
             from qgis.core import QgsProject
-            QgsProject.instance().writeEntry(SCOPE, ENTRY, json.dumps(self.settings()))
+            s = self.settings()
+            # security audit run-2: the settings workbook is a per-computer choice (QgsSettings,
+            # damsuite.settings.SETTINGS_KEY), never saved in the project - a shared .qgz could
+            # otherwise name a workbook that sets the tools' defaults on this computer.
+            s.pop("settings_file", None)
+            QgsProject.instance().writeEntry(SCOPE, ENTRY, json.dumps(s))
         except Exception:                                        # noqa
             pass
 
@@ -916,6 +921,7 @@ class NDBreachRunnerDialog(QDialog):
             if ok and text:
                 loaded = json.loads(text)
                 if isinstance(loaded, dict):
+                    loaded.pop("settings_file", None)   # never from the project (see _save_state)
                     s.update(loaded)
         except Exception:                                        # noqa
             pass

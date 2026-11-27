@@ -124,15 +124,27 @@ PER_RUN_KEYS = frozenset((
 ))
 
 
+# Security audit run-2 (2026-11-24): parameters that name a PROGRAM the suite starts (the
+# solver, its Python, whitebox_tools) are per-computer choices, like suite_config's
+# EXECUTABLE_KEYS. A settings workbook is a file people pass around - a project's saved window
+# state can even name one - so a workbook row must never become the default of these: opening
+# a shared project + workbook would otherwise make the next run start a program the workbook's
+# author chose. They are always left out of the catalog (the grid does not show them and
+# apply_file_defaults never sets them), whatever `skip_keys` a caller passes. The provider
+# settings / the tool dialog still set them.
+PROGRAM_KEYS = frozenset(("LISFLOOD_EXE", "ANUGA_PYTHON", "EXE", "WBT_EXE"))
+
+
 def catalog_of(alg, plugin, group_of, tool=None, skip_keys=PER_RUN_KEYS):
     """Catalog entries of one tool instance (its CURRENT defaults are the entries' defaults, so
     call it on a fresh, un-overlaid instance for the starting values). Parameters named in
-    `skip_keys` (per-run values, PER_RUN_KEYS) are left out."""
+    `skip_keys` (per-run values, PER_RUN_KEYS) and the program paths (PROGRAM_KEYS, always)
+    are left out."""
     tool = tool or tool_name(alg)
     fam, _order = group_of(tool)
     return DS.catalog_from_definitions(plugin, tool, param_defs(alg), group=fam,
                                        tool_title=_get(alg, "displayName", tool) or tool,
-                                       skip=skip_keys)
+                                       skip=frozenset(skip_keys or ()) | PROGRAM_KEYS)
 
 
 def set_default(alg, name, value):
