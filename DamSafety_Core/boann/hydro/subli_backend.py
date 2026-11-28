@@ -39,7 +39,7 @@ class SubLIParams(ctypes.Structure):
         "fric2d", "clip_end", "inflow_lf_order", "r", "m", "weighting", "friction")] + [
             (n, ctypes.c_float) for n in (
                 "dx", "dt0", "alpha", "g", "dry", "maxhflow", "arr_depth", "t0", "t_end",
-                "wsub")]
+                "wsub")] + [("src_cfl", ctypes.c_uint32)]
 
 
 def subli_buffer_layout(ny, nx, n_src, n_series, n_values, r):

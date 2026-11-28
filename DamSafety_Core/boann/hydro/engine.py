@@ -149,6 +149,10 @@ class Deck:
         # breach-cell depth. Only the inflow cell and its near field (within ~300 m) differ between
         # the two; the rest of the domain agrees to ~0.2 mm.
         self.inflow_lf_order = "physicalinflow" not in par
+        # Boann 6.13.0: "sourcecfl" holds the step also to the speed at which each point source
+        # pushes water out of its cell (kernels.metal mf_src_dt). Off by default: the step is
+        # LISFLOOD-FP 8.3's. The ACC and sub-grid local-inertial engines read it; the others ignore it.
+        self.source_cfl = "sourcecfl" in par
         # DG2 only: the local slope limiter (LISFLOOD-FP's "limitslopes" family). On by default -
         # Boann's float32 DG2 needs it to hold a lake at rest (the unlimited scheme slowly amplifies
         # slope round-off at a standing water body). "nolimitslopes" in the .par runs the raw,
@@ -627,6 +631,7 @@ class Engine:
         p.n_wl = len(wl_faces(d))
         p.dx, p.dt0, p.alpha, p.g = d.dx, d.dt0, d.cfl, G
         p.theta, p.fric2d = d.theta, int(d.fric2d)
+        p.src_cfl = int(d.source_cfl)
         p.inflow_lf_order = int(d.inflow_lf_order)
         p.rain = int(d.rain is not None)
         self.rain_area = float(d.valid.sum()) * d.dx * d.dx

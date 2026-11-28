@@ -128,6 +128,7 @@ struct Params {
     float theta;          // unused
     float pad4;
     uint n_wl;            // water-level (HFIX / HVAR) edge faces, s_cell / s_series [n_src ..)
+    uint src_cfl;         // unused (the ACC engine's inflow-aware step; keeps the layout)
 };
 
 // Buffer layout for the FV2 scheme (its own order, 0..29; Params at 30, the last Metal slot).

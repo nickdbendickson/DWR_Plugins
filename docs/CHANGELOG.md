@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Core 1.13.0 / Boann 6.13.0 / Runner 3.104.0: opt-in inflow-aware time step for Boann ACC and sub-grid local inertial (`sourcecfl`, CLI `model.source_cfl`; off by default, no existing result changes).** LISFLOOD-FP 8.3's step looks only at the deepest water, so a large breach inflow on fine cells overshot its cells and checkerboarded the valley at CFL 0.7 (Lake Delhi 10 m). With the option the step is also held to cfl dx / (q / h_s + sqrt(g h_s)) at each source cell; CFL 0.7 then gives the converged (CFL 0.35) flood to 1 mm in fewer steps than CFL 0.5.
 - **Core 1.11.0 / Boann 6.11.0: the OpenCL backend stops copying the whole model state back every batch (no existing result changes).**
   - **What.** The old OpenCL path read every grid back from the GPU after each 64-step batch and kept three copies of each grid in memory (GPU buffer, host array, change-detection shadow). Now:
     - **An integrated GPU** (one that shares the computer's RAM: Intel Arc/Iris, AMD APUs, a CPU OpenCL such as PoCL; `CL_DEVICE_HOST_UNIFIED_MEMORY`) holds each grid **zero-copy** over a page-aligned host block (`CL_MEM_USE_HOST_PTR`), mapped while the host holds it and unmapped for the batch — exactly as the Metal backend uses Apple's shared storage. One copy of each grid, nothing copied across the bus. It verifies the driver really maps the buffer in place and otherwise falls back to the copy path with a log line.

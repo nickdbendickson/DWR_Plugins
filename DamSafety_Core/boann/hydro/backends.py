@@ -89,11 +89,14 @@ class Params(ctypes.Structure):
         "nx", "ny", "r0", "c0", "wr", "wc", "free_mask", "n_src", "n_series",
         "fric2d", "clip_end", "inflow_lf_order")] + [(n, ctypes.c_float) for n in (
             "dx", "dt0", "alpha", "g", "dry", "maxhflow", "velmin", "arr_depth", "t0", "t_end",
-            "theta")] + [("rain", ctypes.c_uint32), ("n_wl", ctypes.c_uint32)]
+            "theta")] + [("rain", ctypes.c_uint32), ("n_wl", ctypes.c_uint32),
+                         ("src_cfl", ctypes.c_uint32)]
     # "rain" is kernels.metal's rainfall switch (ACC and FV1; FV2 / DG2 / SGC declare that word
     # as an unused float pad4, left 0 = 0.0f). "n_wl" (Boann 6.8.0) counts the water-level (HFIX /
     # HVAR) boundary faces, listed in s_cell / s_series after the n_src point sources; 0 in every
-    # deck without one (SGC declares the word and never reads it).
+    # deck without one (SGC declares the word and never reads it). "src_cfl" (Boann 6.13.0) turns
+    # on the ACC engine's inflow-aware time step ("sourcecfl" in the .par); FV1 / FV2 / DG2 / SGC
+    # declare it to keep the layout and never read it.
 
 
 def _wl_counts(ny, nx, n_src, n_wl):

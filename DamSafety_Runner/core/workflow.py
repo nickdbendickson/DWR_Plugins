@@ -383,6 +383,9 @@ class RunSettings:
         # 3.79.0: Boann sub-grid local inertial (gpu-subli) only: the paper's upwind flux weighting
         # (off by default). The CLI sets it from model.subgrid_upwind.
         self.user_subgrid_upwind = False
+        # 3.104.0: Boann's inflow-aware time step ("sourcecfl"; ACC and sub-grid local inertial
+        # only), off by default. The CLI sets it from model.source_cfl.
+        self.user_source_cfl = False
         # 3.35.0: closed depressions (potholes) of the model DEM start this share (0-1) full,
         # each to the one flat level that holds that share of its volume (core/pothole_fill.py,
         # 4-connected like the engines' faces). 0 = dry, the default (no change); 1 = full to the
@@ -692,6 +695,9 @@ def key_settings(st):
     # 3.79.0: likewise the sub-grid local-inertial flux weighting, off unless asked for
     if not getattr(st, "user_subgrid_upwind", False):
         d.pop("user_subgrid_upwind", None)
+    # 3.104.0: likewise the inflow-aware time step, off unless asked for
+    if not getattr(st, "user_source_cfl", False):
+        d.pop("user_source_cfl", None)
     # 3.35.0: dry potholes (the default) stay out of the key, so earlier checkpoints resume
     if not getattr(st, "pothole_start_fill", 0.0):
         d.pop("pothole_start_fill", None)
@@ -3156,6 +3162,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             kw["subgrid_r"] = int(st.user_subgrid_r)
         if getattr(st, "user_subgrid_upwind", False):
             kw["subgrid_upwind"] = True
+        # 3.104.0: the inflow-aware step is not a stability fallback knob: it rides every pass
+        if getattr(st, "user_source_cfl", False):
+            kw["source_cfl"] = True
         if stability["on"] and stability["kind"] == lfmod.STABILITY_KIND_CHECKER and \
                 getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
             # 3.88.0: a checkerboarded run is cured by the smaller time step alone; theta stays

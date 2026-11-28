@@ -15,6 +15,7 @@ on:
     paths:
       - "DamSafety_Core/boann/**"
       - "DamSafety_Runner/tests/test_boann_opencl.py"
+      - "DamSafety_Runner/tests/test_boann_source_cfl.py"
       - ".github/workflows/opencl-engine.yml"
 
 permissions:
@@ -52,6 +53,10 @@ jobs:
         env:
           DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
         run: python -m nd_breach_runner.tests.test_boann_opencl
+      - name: Inflow-aware time step (sourcecfl; OpenCL == CPU build)
+        env:
+          DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"
+        run: python -m nd_breach_runner.tests.test_boann_source_cfl
       - name: The check a GPU computer runs (small valley; PoCL is a CPU, so the times mean nothing)
         env:
           DAMSAFETY_MF_CL_OPTIONS: "-cl-opt-disable"

@@ -123,6 +123,7 @@ struct Params {
     float t0;             // model time at the batch start (s)
     float t_end;          // batch end, relative to t0 (s)
     float wsub;           // dx / r: the length of a face sub-segment
+    uint src_cfl;         // 1: inflow-aware time step ("sourcecfl"; Boann 6.13.0), as kernels.metal
 };
 
 inline uint mf_cells(constant Params& p) { return p.nx * p.ny; }
@@ -308,6 +309,28 @@ inline bool mf_on(device const uint* st, device const uint* ton, uint gx, uint g
     return ton[ty * ntx + tx] != 0u;
 }
 
+
+// The inflow-aware time step ("sourcecfl" in the .par, Params.src_cfl; Boann 6.13.0; the same bound as kernels.metal, with
+// the coarse cell width dx and the depth above its lowest sub-cell d). A point
+// source of Q (m3/s) into a cell of width dx pushes water out of that cell at about q / h_s on top
+// of the wave speed sqrt(g h_s), with q = Q / dx (m2/s) and h_s the cell's depth, taken at least
+// at critical depth (q^2 / g)^(1/3) (an empty cell fills to it within a step or two). So the step
+// is also held to cfl dx / (q / h_s + sqrt(g h_s)) at every source cell. The plain CFL, from the
+// deepest water only, does not see this: on Lake Delhi at 10 m (9 breach cells, ~443 m3/s each at
+// the peak) it let the breach cells overshoot and checkerboard 3.5 km of valley at CFL 0.7, while
+// with this bound CFL 0.7 gives the CFL 0.35 flood to 1 mm in fewer steps than CFL 0.5. It binds
+// while a source pours in faster than the deepest water's wave speed (a breach, a filling cell);
+// it moves the source cell and its near field, and turns nothing on without "sourcecfl".
+inline float mf_src_dt(float dt, float qs, float hs, float dx, float alpha, float g) {
+    float q = fabs(qs) / dx;
+    if (!(q > 0.0f)) {
+        return dt;
+    }
+    float hc = pow(q * q / g, 1.0f / 3.0f);
+    float h = fmax(hs, hc);
+    return fmin(dt, alpha * dx / (q / h + sqrt(g * h)));
+}
+
 // -- kernels ---------------------------------------------------------------------------------------
 
 // one thread: the step's dt (CFL from the deepest water) and the source rates at the start of the
@@ -340,6 +363,16 @@ kernel void k_begin_subli(MF_ARGS_SUBLI) {
         float q = mf_series(s_series[i], tm, ser_off, ser_t, ser_q, cursor);
         src[s_cell[i]] += q;
         qin += q;
+    }
+    if (p.src_cfl != 0u) {          // the inflow-aware step (mf_src_dt); the step's dt is only cut
+        float dts = dt;
+        for (uint i = 0; i < p.n_src; ++i) {
+            dts = mf_src_dt(dts, src[s_cell[i]], d[s_cell[i]], p.dx, p.alpha, p.g);
+        }
+        if (dts < dt) {
+            dt = dts;
+            sf[S_DT] = dt;
+        }
     }
     sf[S_QIN] = qin;
     sf[S_VIN] += qin * dt;

@@ -121,6 +121,7 @@ struct Params {
     uint rain;            // 1: series n_series is a rainfall rate (m/s), added to every valid cell
                           // each step (FV1 only; matches the ACC engine). Was pad4.
     uint n_wl;            // water-level (HFIX / HVAR) edge faces, s_cell / s_series [n_src ..)
+    uint src_cfl;         // unused (the ACC engine's inflow-aware step; keeps the layout)
 };
 
 // Buffer layout for the FV scheme (its own order, 0..25; Params at 26). tseed and ton are the

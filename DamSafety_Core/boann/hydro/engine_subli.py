@@ -21,7 +21,7 @@ Deck keywords it reads beyond the plain engine's:
   upwind          the paper's UPWIND flux weighting with its adaptive theta (its Eq. 7 and 8), which
                   is OFF by default: the step is then the plain engine's default (Bates et al. 2010)
   noupwind        the weighting off, whatever DEFAULT_WEIGHTING says
-  cfl, 1Dfriction, physicalinflow, initial_tstep, inittm_depth: as the plain engine.
+  cfl, 1Dfriction, physicalinflow, sourcecfl, initial_tstep, inittm_depth: as the plain engine.
 'theta' is read and ignored: the plain engine's fixed-theta centred weighting is not offered here
 (the Runner's rerun of a run that lost its balance therefore changes only cfl for this engine).
 
@@ -186,6 +186,7 @@ class Engine:
         p.weighting = lb.WEIGHTING[d.weighting]
         p.friction = lb.F_COMPOUND
         p.fric2d, p.inflow_lf_order = int(d.fric2d), int(d.inflow_lf_order)
+        p.src_cfl = int(getattr(d, "source_cfl", False))
         p.dx, p.dt0, p.alpha, p.g = dxc, d.dt0, d.cfl, G
         p.dry, p.maxhflow, p.arr_depth = DRY_M, MAX_HFLOW, d.arr_depth
         p.wsub = dxf

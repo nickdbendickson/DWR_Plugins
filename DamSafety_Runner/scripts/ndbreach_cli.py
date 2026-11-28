@@ -244,6 +244,10 @@ MODEL_KEYS = {
     # smaller time step: the cure for a run whose peak water surface checkerboards.
     "cfl": ("user_cfl", ("num", 0.05, 1.0)),
     "theta": ("user_theta", ("num", 0.05, 1.0)),
+    # 3.104.0: Boann's inflow-aware time step (Boann 6.13.0; "sourcecfl" in the .par): the step is
+    # also held to how fast each breach inflow cell pushes water out. Boann ACC (gpu) and sub-grid
+    # local inertial (gpu-subli) only; off by default (the step is LISFLOOD-FP 8.3's).
+    "source_cfl": ("user_source_cfl", ("bool",)),
     # 3.26.0: LISFLOOD-FP sub-grid river channels (core/sgc.py; ACC only, off by default)
     "lisflood_sgc": ("lisflood_sgc", ("bool",)),
     "sgc_min_area_km2": ("sgc_min_area_km2", ("num", 0.01, None)),

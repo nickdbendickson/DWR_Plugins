@@ -758,7 +758,7 @@ class LisfloodSettings:
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
                  cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None, sgc=None, subgrid_r=None,
-                 subgrid_upwind=False, terrain_breach=None):
+                 subgrid_upwind=False, terrain_breach=None, source_cfl=False):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -789,6 +789,10 @@ class LisfloodSettings:
         # 3.79.0: the sub-grid local-inertial engine's upwind flux weighting (Devi & Kuiry 2024
         # Eq. 7-8), off by default; written to the .par as 'upwind' for that engine only.
         self.subgrid_upwind = bool(subgrid_upwind)
+        # 3.104.0: Boann's inflow-aware time step (Boann 6.13.0): the step is also held to the
+        # speed at which each point source pushes water out of its cell. Written to the .par as
+        # 'sourcecfl' for Boann's ACC and sub-grid local-inertial engines only; off by default.
+        self.source_cfl = bool(source_cfl)
         # v3.11.0: domain edges written as closed walls ("N", "S", "E", "W") instead of free
         # outflow. The near-dam FV1 run closes the edges that face the reservoir: with FV1 a
         # free edge across ponded water brings water INTO the model (see core/refine.py).
@@ -1073,6 +1077,9 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         lines.append("subgrid {}".format(int(sub_r)))
     if getattr(st, "subgrid_upwind", False) and is_gpu_subli(st.exe):
         lines.append("upwind")
+    if getattr(st, "source_cfl", False) and getattr(st, "solver", SOLVER_ACC) == SOLVER_ACC and \
+            (is_gpu(st.exe) or is_gpu_subli(st.exe)):
+        lines.append("sourcecfl")
     if st.manning_grid is not None:
         st.manning_grid.write_asc(os.path.join(workdir, name + ".n.asc"), fmt="%.4f")
         lines.append("manningfile {}.n.asc".format(name))

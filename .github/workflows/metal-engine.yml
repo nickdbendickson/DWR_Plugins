@@ -14,6 +14,7 @@ on:
       - "DamSafety_Core/boann/**"
       - "DamSafety_Runner/tests/test_metalflood.py"
       - "DamSafety_Runner/tests/test_boann_rain.py"
+      - "DamSafety_Runner/tests/test_boann_source_cfl.py"
       - "DamSafety_Runner/tests/test_boann_profile.py"
       - "DamSafety_Runner/tests/test_subgrid_kernel.py"
       - "DamSafety_Runner/tests/test_subli.py"
@@ -60,6 +61,8 @@ jobs:
         run: python -m nd_breach_runner.tests.test_metalflood
       - name: Rain on the grid (ACC and FV1, Metal GPU == CPU build)
         run: python -m nd_breach_runner.tests.test_boann_rain
+      - name: Inflow-aware time step (sourcecfl; Metal GPU == CPU build)
+        run: python -m nd_breach_runner.tests.test_boann_source_cfl
       - name: Dry-cell skip and the Mac OpenMP CPU build
         run: python -m nd_breach_runner.tests.test_boann_dry_skip
       - name: GPU dry-tile skip (GPU on == off bit for bit, GPU against the CPU build)

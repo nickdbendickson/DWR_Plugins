@@ -201,6 +201,38 @@ The kernels run only on the wet part of the grid plus a margin wider than one ba
 for output times, the wet box and progress. A window as big as the grid gives the same numbers
 bit for bit (test).
 
+## The inflow-aware time step (`sourcecfl`, Runner 3.104.0, Boann 6.13.0)
+
+Opt-in, for ACC and the sub-grid local-inertial engine: `sourcecfl` in the `.par` (the Runner's
+CLI `model.source_cfl`, written only for those two Boann engines). LISFLOOD-FP 8.3's step,
+`cfl dx / sqrt(g h_max)`, looks only at the deepest water. A large point source pushes water out of
+its cell faster than that, and at fine cells a breach inflow overshoots its cells and checkerboards
+the valley downstream while the mass balance stays closed (so the Runner's mass check cannot see
+it). With `sourcecfl` the step is also held, at every source cell, to
+
+    dt <= cfl dx / (q / h_s + sqrt(g h_s)),   q = Q / dx,   h_s = max(depth, (q^2 / g)^(1/3))
+
+(`mf_src_dt` in `kernels.metal` and `kernels_subli.metal`, in the one-thread `k_begin`; the
+sub-grid engine uses the coarse cell width and the depth above the cell's lowest sub-cell). It
+cuts the step only while a source pours in faster than the deepest water's wave speed and moves
+only the source cells and their near field. Off, nothing changes.
+
+Lake Delhi 2010 at 10 m (Runner deck, n 0.05, 4.59 M cells, 9 breach cells, a 5 h window around
+the 140,900 cfs peak; CPU build, 2026-11-28; reference CFL 0.5, which CFL 0.35 matches):
+
+| Run | Steps | Deepest | Checkerboard cells (#504 rule) | Depth gap p99 |
+|---|---|---|---|---|
+| CFL 0.7 (LISFLOOD-FP default) | 37,125 | 38.31 m | 2,312 | 15.5 m |
+| CFL 0.5 | 34,112 | 13.55 m | 0 | 0 |
+| CFL 0.7 + `sourcecfl` | 28,567 | 13.55 m | 0 | 0.001 m |
+
+Before the breach (26,000 cfs through the same cells) CFL 0.7 put 14.9 m in the breach cells
+against 6.2 m converged; with `sourcecfl`, 6.2 m in 21,482 steps. Adaptive theta (Sridharan et al.
+2020), a Froude cap and a step from `|u| + sqrt(g h)` were tried on the same window and did not
+match the converged flood. On a shallow plain fed by one large source cell the bound can take
+about twice the steps of plain CFL 0.7 (`tests/test_boann_source_cfl.py`: 500 m3/s into one 10 m
+cell; the source cell 2.2 m against 1.93 m converged and 5.0 m plain, every other cell to the mm).
+
 ## Checks (cloud, CPU build of the kernels, 2026-11-18)
 
 | Case | vs LISFLOOD-FP 8.3 (same deck) | Built-in numpy engine, same deck |
