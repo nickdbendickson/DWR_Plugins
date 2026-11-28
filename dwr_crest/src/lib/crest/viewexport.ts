@@ -39,7 +39,7 @@ export function viewFileName(meta: Pick<ViewMeta, "kind" | "dam">, ext: "pdf" | 
 /** Local date and time, e.g. 2026-10-30 10:27 CDT. */
 export function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
-  let zone = "";
+  let zone: string;
   try {
     zone = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(d).find((x) => x.type === "timeZoneName")?.value ?? "";
   } catch {
@@ -239,8 +239,8 @@ export async function captureView(el: HTMLElement): Promise<Capture> {
   hidden.forEach((h) => (h.style.display = "none"));
   const restoreSvg = resolveSvgVars(el);
   let canvas: HTMLCanvasElement;
-  let cuts: number[] = [];
-  let minor: number[] = [];
+  let cuts: number[];
+  let minor: number[];
   try {
     const rect = el.getBoundingClientRect();
     const pixelRatio = Math.max(1, Math.min(2, 14000 / Math.max(1, rect.height), 8000 / Math.max(1, rect.width)));
@@ -258,7 +258,7 @@ export async function captureView(el: HTMLElement): Promise<Capture> {
         (!node.hasAttribute(NO_EXPORT_ATTR) && !SKIP_CLASSES.some((c) => node.classList.contains(c))),
     });
   } catch (e) {
-    throw new Error(`the view could not be drawn into a picture (${(e as Error)?.message ?? String(e)})`);
+    throw new Error(`the view could not be drawn into a picture (${(e as Error)?.message ?? String(e)})`, { cause: e });
   } finally {
     hidden.forEach((h, i) => (h.style.display = before[i]));
     restoreSvg();

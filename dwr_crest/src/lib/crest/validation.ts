@@ -148,7 +148,7 @@ export function rasterizeCandidate(cand: Candidate, ref: RefLayer): CandRaster {
       const x = g.x0 + (c + 0.5) * g.dx;
       const i = r * g.width + c;
       const [lon, lat] = ref.proj.inv(x, y);
-      let j: number | null = null;
+      let j: number | null;
       let src: { depth: Float32Array; velocity?: Float32Array | null; arrival?: Float32Array | null };
       if (cand.kind === "lonlat") {
         const cc = Math.floor(((lon - cand.bbox[0]) / (cand.bbox[2] - cand.bbox[0])) * cand.width);

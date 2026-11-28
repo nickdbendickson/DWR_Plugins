@@ -342,7 +342,7 @@ export function analyze(dam: DamRecord): Analysis {
   const localCrest = isLocalElev(dam.crestFt);
   let offsetFt: number | null = null;
   let crestNavd = finite(dam.crestFt, 1000);
-  let rule = "Stated elevations used as NAVD88.";
+  let rule: string;
 
   if (localCrest) {
     // A local (0–300 ft) crest only ties to NAVD88 through an entered DEM crest. Guard that it is actually present and
