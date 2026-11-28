@@ -149,7 +149,10 @@ def boann_opencl_subfv_matches_cpu_build():
         sb = sfe.run_par(b, backend="opencl")
         assert sb["backend"] == "opencl", sb.get("backend")
         w = _compare(os.path.join(d, "cpu"), os.path.join(d, "ocl"), sa, sb, "subfv")
-        assert abs(sb["mass_error_m3"]) < 1e-4 * max(sb["injected_m3"], 1.0), sb
+        # the deck has no inflow, so the limit scales with the water stored (float32 round-off
+        # on 5,760 m3 is a few 1e-4 m3 on a real GPU and in the CPU build alike)
+        assert abs(sb["mass_error_m3"]) < max(1e-4 * sb["injected_m3"],
+                                              1e-6 * sb["final_volume_m3"], 1e-4), sb
         print("  subfv OpenCL vs CPU: steps {} vs {}, worst {}".format(
             sb["steps"], sa["steps"], w))
     finally:

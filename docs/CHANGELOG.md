@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Core 1.12.0 / Boann 6.12.0: the OpenCL backend uses subgroups and 16x8 work-groups on an Intel GPU (no existing result changes).**
+  - **Why.** Boann picks its subgroup build (each sum over threads reduced inside a subgroup first, instead of one integer atomic per wet cell) when the device compiles OpenCL C 2.0 or newer. It read `CL_DEVICE_OPENCL_C_VERSION`, which Intel's driver leaves at "OpenCL C 1.2" on an OpenCL 3.0 device; the versions the device really compiles are in `CL_DEVICE_OPENCL_C_ALL_VERSIONS`. So an Arc 140T, which compiles OpenCL C 3.0 and has subgroups, always got the one-work-item build.
+  - **What.** `_subgroups_wanted` reads the full version list (and, for OpenCL C 3.0, the `__opencl_c_subgroups` feature). A 2-D dispatch on an Intel GPU gets 16x8 work-groups by default; `DAMSAFETY_MF_CL_WG=WxH` sets another shape and `0` leaves it to the driver. Other vendors keep the driver's choice. The device line in the log says `subgroups` and `work-groups 16x8` when they are on.
+  - **Measured (Arc 140T, idle, medium test valley, 1.12 M cells, median of 2).** ACC 11.9 s (Boann 6.9.0) -> 5.7 s (6.11.0 copy fix) -> 5.1 s (this); FV1 39.7 s -> 20.0 s -> 18.5 s. Peak memory 593 -> 428 MB (ACC), 607 -> 434 MB (FV1), from 6.11.0. The max-depth grid and the step count are the same bit for bit across the old backend, the copy fix, subgroups and every work-group shape tried (16x8, 32x4, 64x2, 16x16, the driver's).
+  - **Test.** The sub-grid FV OpenCL-vs-CPU test's mass limit now scales with the water stored: its deck has no inflow, so the old limit was a fixed 1e-4 m3, below float32 round-off on 5,760 m3 (the Arc gave 2.3e-4 m3, the CPU build 5.5e-4 m3).
+  - **Why nothing else moves.** `auto` never picks OpenCL; no kernel, engine or `.cpp` file changed.
+
 - **Core 1.11.0 / Boann 6.11.0: the OpenCL backend stops copying the whole model state back every batch (no existing result changes).**
   - **What.** The old OpenCL path read every grid back from the GPU after each 64-step batch and kept three copies of each grid in memory (GPU buffer, host array, change-detection shadow). Now:
     - **An integrated GPU** (one that shares the computer's RAM: Intel Arc/Iris, AMD APUs, a CPU OpenCL such as PoCL; `CL_DEVICE_HOST_UNIFIED_MEMORY`) holds each grid **zero-copy** over a page-aligned host block (`CL_MEM_USE_HOST_PTR`), mapped while the host holds it and unmapped for the batch — exactly as the Metal backend uses Apple's shared storage. One copy of each grid, nothing copied across the bus. It verifies the driver really maps the buffer in place and otherwise falls back to the copy path with a log line.

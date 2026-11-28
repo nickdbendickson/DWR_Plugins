@@ -95,7 +95,11 @@ CL_DEVICE_NAME = 0x102B
 CL_DEVICE_VERSION = 0x102F
 CL_DEVICE_EXTENSIONS = 0x1030
 CL_DEVICE_OPENCL_C_VERSION = 0x103D
+CL_DEVICE_OPENCL_C_ALL_VERSIONS = 0x1066
+CL_DEVICE_OPENCL_C_FEATURES = 0x106F
+CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT = 0x1069
 CL_DEVICE_TYPE = 0x1000
+CL_DEVICE_VENDOR_ID = 0x1001
 CL_DEVICE_GLOBAL_MEM_SIZE = 0x101F
 CL_DEVICE_MAX_COMPUTE_UNITS = 0x1002
 CL_PROGRAM_BUILD_LOG = 0x1183
@@ -236,25 +240,92 @@ def _pick(ds):
     return (gpus or ds)[0]
 
 
+def _c_versions(cl, dev):
+    """The OpenCL C versions the device compiles, as (major, minor) pairs. An OpenCL 3.0 device
+    lists them in CL_DEVICE_OPENCL_C_ALL_VERSIONS: CL_DEVICE_OPENCL_C_VERSION stays "OpenCL C
+    1.2" on such a device (Intel's driver does that), which hid OpenCL C 3.0 from Boann."""
+    cver = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_OPENCL_C_VERSION).value.decode(
+        errors="replace")
+    m = re.search(r"OpenCL C (\d+)\.(\d+)", cver)
+    out = {(int(m.group(1)), int(m.group(2)))} if m else {(1, 2)}
+    dver = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_VERSION).value.decode(errors="replace")
+    if dver.startswith("OpenCL 3"):
+        raw = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_OPENCL_C_ALL_VERSIONS).raw
+        for i in range(0, len(raw) // 68 * 68, 68):           # cl_name_version: uint + char[64]
+            v = _c.c_uint32.from_buffer_copy(raw[i:i + 4]).value
+            if v:
+                out.add((v >> 22, (v >> 12) & 0x3FF))
+    return out
+
+
+def _c_features(cl, dev):
+    """The OpenCL C 3.0 optional features the device has (CL_DEVICE_OPENCL_C_FEATURES)."""
+    raw = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_OPENCL_C_FEATURES).raw
+    return {raw[i + 4:i + 68].split(bytes(1))[0].decode(errors="replace")
+            for i in range(0, len(raw) // 68 * 68, 68)}
+
+
 def _subgroups_wanted(cl, dev):
     """The -cl-std the subgroup build uses ("CL2.0" / "CL3.0"), or "" for the one-work-item
-    build: the device's OpenCL C is 2.0 or newer and it has cl_khr_subgroups or
-    cl_intel_subgroups. DAMSAFETY_MF_CL_SUBGROUPS=0 / 1 turns it off / insists on it."""
+    build: the device compiles OpenCL C 2.0 or newer and has subgroups (cl_khr_subgroups or
+    cl_intel_subgroups; OpenCL C 3.0 also needs the __opencl_c_subgroups feature).
+    DAMSAFETY_MF_CL_SUBGROUPS=0 / 1 turns it off / insists on it."""
     want = os.environ.get("DAMSAFETY_MF_CL_SUBGROUPS", "auto").strip().lower()
     if want in ("0", "no", "off", "false"):
         return ""
     ext = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_EXTENSIONS).value.decode(errors="replace")
-    cver = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_OPENCL_C_VERSION).value.decode(
-        errors="replace")
-    m = re.search(r"OpenCL C (\d+)\.(\d+)", cver)
-    major = int(m.group(1)) if m else 1
     has = "cl_khr_subgroups" in ext.split() or "cl_intel_subgroups" in ext.split()
-    if major >= 2 and has:
-        return "CL3.0" if major >= 3 else "CL2.0"
+    vers = _c_versions(cl, dev)
+    if has and (3, 0) in vers and "__opencl_c_subgroups" in _c_features(cl, dev):
+        return "CL3.0"
+    if has and any(v[0] == 2 for v in vers):
+        return "CL2.0"
     if want in ("1", "yes", "on", "true"):
         raise be.BackendError("DAMSAFETY_MF_CL_SUBGROUPS=1 but this device has no subgroups "
-                              "({}; {})".format(cver.strip(), "no subgroup extension"))
+                              "(OpenCL C {}; {})".format(
+                                  ", ".join("{}.{}".format(*v) for v in sorted(vers)),
+                                  "subgroup extension" if has else "no subgroup extension"))
     return ""
+
+
+# the 2-D work-group shape an Intel GPU gets by default: the fastest of 16x8, 32x4, 64x2, 16x16
+# and the driver's own choice for ACC and FV1 on an Arc 140T (medium test valley, Boann 6.11.0;
+# every shape gives the same grids bit for bit)
+INTEL_WG = (16, 8)
+INTEL_VENDOR_ID = 0x8086
+
+
+def _work_group_wanted(cl, dev, cstd):
+    """(width, height) of the work-groups a 2-D dispatch gets, or None to let the driver pick.
+    DAMSAFETY_MF_CL_WG=WxH (such as 32x4) sets it, 0 / off leaves it to the driver; by default an
+    Intel GPU gets INTEL_WG and any other device the driver's choice. Only for an OpenCL C 2.0+
+    build on a device with non-uniform work-groups: the grids' sizes are whatever the window is,
+    and an OpenCL C 1.2 dispatch must be a whole number of work-groups."""
+    v = os.environ.get("DAMSAFETY_MF_CL_WG", "auto").strip().lower()
+    if v in ("0", "off", "none"):
+        return None
+    if v in ("", "auto"):
+        vendor = _c.c_uint32.from_buffer_copy(
+            _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_VENDOR_ID).raw[:4]).value
+        typ = _c.c_uint64.from_buffer_copy(
+            _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_TYPE).raw[:8]).value
+        if vendor != INTEL_VENDOR_ID or not typ & CL_DEVICE_TYPE_GPU:
+            return None
+        w, h = INTEL_WG
+    else:
+        try:
+            w, h = (int(x) for x in v.split("x"))
+        except ValueError:
+            w = h = 0
+        if w < 1 or h < 1:
+            raise be.BackendError("DAMSAFETY_MF_CL_WG must be WIDTHxHEIGHT, such as 32x4 (got "
+                                  "{!r})".format(v))
+    if not cstd:
+        return None
+    raw = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT).raw
+    if len(raw) < 4 or not _c.c_uint32.from_buffer_copy(raw[:4]).value:
+        return None
+    return w, h
 
 
 def _zero_copy_wanted(cl, dev):
@@ -366,6 +437,9 @@ class OpenCLBackend:
         self.prof = be.Profile(self)
         if self.subgroups:
             self.device += ", subgroups"
+        self.local = _work_group_wanted(cl, dev, self.subgroups)
+        if self.local:
+            self.device += ", work-groups {}x{}".format(*self.local)
         if log:
             log("OpenCL GPU: {}".format(self.device))
 
@@ -555,14 +629,19 @@ class OpenCLBackend:
         plan = self.spec.plan(params)
         tplan = self.spec.tile_plan(params) if tiles else []
         gsz = (_sz * 2)()
+        lsz = None
+        if self.local:
+            lsz = (_sz * 2)(*self.local)
         for s in range(nsteps):
             steps = (tplan if tiles and s % int(chunk) == 0 else []) + plan
             for name, (w, h, _d) in steps:
                 if int(w) <= 0 or int(h) <= 0:
                     continue
                 gsz[0], gsz[1] = int(w), int(h)
+                # a one-thread dispatch keeps no work-group size (it has one work-item)
+                loc = lsz if lsz is not None and (gsz[0] > 1 or gsz[1] > 1) else None
                 _check(cl.clEnqueueNDRangeKernel(self.queue, self.kernels[name], 2, None, gsz,
-                                                 None, 0, None, None), "run " + name)
+                                                 loc, 0, None, None), "run " + name)
         t1 = time.perf_counter()
         if self.zero_copy:
             self._map_all()
