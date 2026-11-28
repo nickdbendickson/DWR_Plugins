@@ -54,7 +54,7 @@
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
     "lightningcss": "^1.28.0",
-    "lucide-react": "^0.510.0",
+    "lucide-react": "^1.79.0",
     "nitro": "3.0.260610-beta",
     "proj4": "^2.22.0",
     "react": "^19.2.0",
