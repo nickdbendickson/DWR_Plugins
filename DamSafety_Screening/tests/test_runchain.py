@@ -11,7 +11,6 @@ import nd_dam_screening as pkg  # noqa: E402
 from nd_dam_screening.core import workflow as wf  # noqa: E402
 from nd_dam_screening.algorithms import run_chain as rc  # noqa: E402
 from nd_dam_screening.damsuite import dam_record as dr  # noqa: E402
-import _gpkg  # noqa: E402
 
 plug = pkg.classFactory(None); plug.initGui()
 algs = {a.name(): a for a in plug.provider.algs}
