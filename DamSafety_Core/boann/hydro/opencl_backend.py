@@ -99,6 +99,7 @@ CL_DEVICE_OPENCL_C_ALL_VERSIONS = 0x1066
 CL_DEVICE_OPENCL_C_FEATURES = 0x106F
 CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT = 0x1069
 CL_DEVICE_TYPE = 0x1000
+CL_DEVICE_VENDOR_ID = 0x1001
 CL_DEVICE_GLOBAL_MEM_SIZE = 0x101F
 CL_DEVICE_MAX_COMPUTE_UNITS = 0x1002
 CL_PROGRAM_BUILD_LOG = 0x1183
@@ -287,21 +288,38 @@ def _subgroups_wanted(cl, dev):
     return ""
 
 
+# the 2-D work-group shape an Intel GPU gets by default: the fastest of 16x8, 32x4, 64x2, 16x16
+# and the driver's own choice for ACC and FV1 on an Arc 140T (medium test valley, Boann 6.11.0;
+# every shape gives the same grids bit for bit)
+INTEL_WG = (16, 8)
+INTEL_VENDOR_ID = 0x8086
+
+
 def _work_group_wanted(cl, dev, cstd):
     """(width, height) of the work-groups a 2-D dispatch gets, or None to let the driver pick.
-    DAMSAFETY_MF_CL_WG=WxH (such as 32x4) sets it; 0 / auto leaves it to the driver. Only for an
-    OpenCL C 2.0+ build on a device with non-uniform work-groups: the grids' sizes are whatever
-    the window is, and an OpenCL C 1.2 dispatch must be a whole number of work-groups."""
+    DAMSAFETY_MF_CL_WG=WxH (such as 32x4) sets it, 0 / off leaves it to the driver; by default an
+    Intel GPU gets INTEL_WG and any other device the driver's choice. Only for an OpenCL C 2.0+
+    build on a device with non-uniform work-groups: the grids' sizes are whatever the window is,
+    and an OpenCL C 1.2 dispatch must be a whole number of work-groups."""
     v = os.environ.get("DAMSAFETY_MF_CL_WG", "auto").strip().lower()
-    if v in ("", "0", "auto", "off", "none"):
+    if v in ("0", "off", "none"):
         return None
-    try:
-        w, h = (int(x) for x in v.split("x"))
-    except ValueError:
-        w = h = 0
-    if w < 1 or h < 1:
-        raise be.BackendError("DAMSAFETY_MF_CL_WG must be WIDTHxHEIGHT, such as 32x4 (got {!r})"
-                              .format(v))
+    if v in ("", "auto"):
+        vendor = _c.c_uint32.from_buffer_copy(
+            _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_VENDOR_ID).raw[:4]).value
+        typ = _c.c_uint64.from_buffer_copy(
+            _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_TYPE).raw[:8]).value
+        if vendor != INTEL_VENDOR_ID or not typ & CL_DEVICE_TYPE_GPU:
+            return None
+        w, h = INTEL_WG
+    else:
+        try:
+            w, h = (int(x) for x in v.split("x"))
+        except ValueError:
+            w = h = 0
+        if w < 1 or h < 1:
+            raise be.BackendError("DAMSAFETY_MF_CL_WG must be WIDTHxHEIGHT, such as 32x4 (got "
+                                  "{!r})".format(v))
     if not cstd:
         return None
     raw = _info(cl, cl.clGetDeviceInfo, dev, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT).raw
