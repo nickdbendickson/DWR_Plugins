@@ -15,7 +15,6 @@ from qgis.core import (QgsProcessingContext, QgsProcessingFeedback, QgsGeometry,
                        make_layer)
 from qgis import processing  # noqa: E402
 import nd_dam_screening as pkg  # noqa: E402
-from nd_dam_screening.core import selftest as st  # noqa: E402
 
 plug = pkg.classFactory(None); plug.initGui()
 algs = {a.name(): a for a in plug.provider.algs}
