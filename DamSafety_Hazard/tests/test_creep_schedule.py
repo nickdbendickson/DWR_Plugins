@@ -282,7 +282,8 @@ amp = S.plan(parent, "q.exe", system="windows", home=home, env={"ND_HAZARD_PACK"
 bat = amp["files"][amp["wrapper"]]
 check('set "ND_HAZARD_PACK=C:\\packs\\a&calc.exe"\r\n' in bat and "\r\nset ND_HAZARD_PACK=" not in bat,
       "Windows: set \"NAME=VALUE\" keeps an & in a value as text")
-for system in ("macos", "linux", "windows"):
+# a launchd plist or systemd unit holds a POSIX path: on Windows only the Windows plan is made
+for system in (("macos", "linux", "windows") if POSIX else ("windows",)):
     pl_ = S.plan(parent, exe if system != "windows" else "q.exe", system=system, home=home, have_systemd=True,
                  settings_dir=os.path.join(cfg, "profiles", "damsafety"))
     inside = [f for f in pl_["files"] if f.startswith(parent + os.sep)]

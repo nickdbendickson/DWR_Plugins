@@ -147,7 +147,10 @@ def suite_installer_lisflood_beats_path():
             fh.write("#!/bin/sh\n")
         os.chmod(p, 0o755)
         return p
-    inst, wrapper, env = mk("suite", "bin", "lisflood"), mk("pathbin", "lisflood"), mk("env", "lisflood")
+    # Windows: shutil.which finds a program by its PATHEXT extension, so the stand-ins are .exe
+    exe = "lisflood.exe" if os.name == "nt" else "lisflood"
+    inst, wrapper, env = mk("suite", "bin", exe), mk("pathbin", exe), mk("env", exe)
+    nc = os.path.normcase
     # repo audit 2026-11-23: HOME too - the default ~/dam-suite/bin is searched after
     # DAMSUITE_PREFIX, so a real suite install on the test box (Nick's Mac) came before PATH
     keys = ("DAMSUITE_PREFIX", "PATH", "NDBREACH_LISFLOOD", "HOME", "USERPROFILE")
@@ -158,16 +161,16 @@ def suite_installer_lisflood_beats_path():
         os.environ["DAMSUITE_PREFIX"] = os.path.join(d, "suite")
         os.environ["PATH"] = os.path.join(d, "pathbin") + os.pathsep + (old["PATH"] or "")
         os.environ.pop("NDBREACH_LISFLOOD", None)
-        assert shutil.which("lisflood") == wrapper
-        c = nd_data.lisflood_candidates()
-        assert c[0] == inst and c.index(inst) < c.index(wrapper), c
+        assert nc(shutil.which("lisflood")) == nc(wrapper)
+        c = [nc(x) for x in nd_data.lisflood_candidates()]
+        assert c[0] == nc(inst) and c.index(nc(inst)) < c.index(nc(wrapper)), c
         assert nd_data.detect_lisflood() == inst
         os.environ["NDBREACH_LISFLOOD"] = env
-        c = nd_data.lisflood_candidates()
-        assert c[:2] == [env, inst], c
+        c = [nc(x) for x in nd_data.lisflood_candidates()]
+        assert c[:2] == [nc(env), nc(inst)], c
         os.environ.pop("NDBREACH_LISFLOOD")
         os.remove(inst)                                   # no installer build: PATH
-        assert nd_data.lisflood_candidates()[0] == wrapper
+        assert nc(nd_data.lisflood_candidates()[0]) == nc(wrapper)
     finally:
         for k, v in old.items():
             if v is None:
