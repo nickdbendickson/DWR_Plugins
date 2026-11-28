@@ -56,7 +56,7 @@ export function parseJsonl(text, log = console.warn) {
         log(`batch.jsonl: the last line (${i + 1}) is cut short (${e instanceof Error ? e.message : String(e)}); dropped, that structure runs again.`);
         continue;
       }
-      throw new Error(`batch.jsonl line ${i + 1} is not JSON (${e instanceof Error ? e.message : String(e)}). The file was edited or corrupted; fix or remove that line and start again.`);
+      throw new Error(`batch.jsonl line ${i + 1} is not JSON (${e instanceof Error ? e.message : String(e)}). The file was edited or corrupted; fix or remove that line and start again.`, { cause: e });
     }
   }
   return rows;

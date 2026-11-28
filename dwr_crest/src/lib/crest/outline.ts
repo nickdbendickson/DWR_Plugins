@@ -917,7 +917,7 @@ async function fetch3depOne(req: DemRequest, fetchFn: Fetch, retryMs: number[]):
   } catch (e) {
     const m = (e as Error).message || String(e);
     if (/^The 3DEP/.test(m)) throw e;
-    throw new Error(`Could not reach the 3DEP terrain service (${m}). ${OUTLINE_OFFLINE}`);
+    throw new Error(`Could not reach the 3DEP terrain service (${m}). ${OUTLINE_OFFLINE}`, { cause: e });
   } finally {
     if (timer) clearTimeout(timer);
   }

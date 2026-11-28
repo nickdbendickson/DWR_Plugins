@@ -14,7 +14,6 @@ PARENT = os.path.dirname(PLUGIN)
 sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
 sys.path.insert(0, PARENT)
 sys.path.insert(0, HERE)
-import qgis  # noqa: E402
 from qgis import processing  # noqa: E402
 from qgis.core import QgsProject  # noqa: E402
 from qgis.PyQt.QtWidgets import EVENTS, QFileDialog, QMessageBox  # noqa: E402

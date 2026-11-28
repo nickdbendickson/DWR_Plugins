@@ -705,6 +705,15 @@ def _loads(path, log=None):
         return False
 
 
+# Boann 6.9.1: on Windows the compiler found on PATH is MinGW-w64's g++ (Git for Windows,
+# Strawberry Perl, MSYS2, conda m2w64). Its -fopenmp build needs libgomp-1.dll, libstdc++-6.dll
+# and libwinpthread-1.dll from the compiler's own folder, and Python 3.8+ does not look for a
+# library's dependencies on PATH, so ctypes could not open it ("Could not find module ... or one of
+# its dependencies"). -static links them in, as the release's prebuilt Windows libraries are built
+# (tools/build_boann_cpu.py --extra=-static). The kernels and their results are the same.
+_WINDOWS_LINK = ("-static",) if os.name == "nt" else ()
+
+
 def _openmp_wanted():
     return os.environ.get("DAMSAFETY_MF_OPENMP", "1").strip().lower() not in ("0", "no", "false", "off")
 
@@ -724,7 +733,14 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
     for omp in kinds:
         out = os.path.join(_cache_dir(), cpu_library_name(spec, ext, omp))
         if os.path.isfile(out):
-            return out
+            if _loads(out, log):
+                return out
+            # Boann 6.9.1: a build that does not open (an earlier Windows build that needs the
+            # compiler's runtime DLLs) is built again, not handed to ctypes to fail on every run
+            try:
+                os.remove(out)
+            except OSError:
+                continue
         # this compiler has no OpenMP: do not retry each run, unless the ways to ask for it have
         # changed since (a libomp installed later)
         failed = out + ".failed"
@@ -743,16 +759,17 @@ def build_cpu_library(spec=FLOOD_SPEC, log=None):
         for v in variants:
             fd, tmp = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(out))
             os.close(fd)
-            cmd = cpu_build_command(spec, cxx, tmp, openmp=omp, omp_flags=v)
+            cmd = cpu_build_command(spec, cxx, tmp, openmp=omp, omp_flags=v, extra=_WINDOWS_LINK)
             if log:
                 log("Building the engine's CPU kernels: " + " ".join(cmd))
             r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                universal_newlines=True)
-            if r.returncode == 0:
+            if r.returncode == 0 and _loads(tmp, log):
                 os.replace(tmp, out)
                 return out
             os.remove(tmp)
-            err = r.stdout[-3000:]
+            err = r.stdout[-3000:] if r.returncode else (
+                "the library built but does not open here: " + " ".join(cmd))
         if omp:
             try:
                 with open(failed, "w") as f:

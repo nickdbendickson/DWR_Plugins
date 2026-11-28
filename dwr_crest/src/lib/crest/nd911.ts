@@ -247,7 +247,7 @@ export async function fetchNd911(
       body = (await res.json()) as typeof body;
     } catch (e) {
       const msg = (e as Error).name === "AbortError" ? "the ND GIS Hub service did not answer in 30 s" : (e as Error).message;
-      throw new Error(`911 address point lookup failed: ${msg}. ${ND911_OFFLINE}`);
+      throw new Error(`911 address point lookup failed: ${msg}. ${ND911_OFFLINE}`, { cause: e });
     } finally {
       if (timer) clearTimeout(timer);
     }
