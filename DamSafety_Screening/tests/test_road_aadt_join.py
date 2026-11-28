@@ -100,7 +100,7 @@ def test_join_core():
             ([(50000, 0), (50400, 0)], 60.0, 2023, "")])
         hp = _lines_file(os.path.join(roads_dir, "HPMS_ND_2024.gpkg"), "HPMS_ND_2024", [
             ([(0, 1003), (400, 1003)], 5784.0, 2024, "US 85")], year_field="DATA_YEAR")
-        st = _stations_file(os.path.join(roads_dir, "NDDOT_traffic_counts.gpkg"), [((100, 1505), 4108.0, 2023)])
+        _stations_file(os.path.join(roads_dir, "NDDOT_traffic_counts.gpkg"), [((100, 1505), 4108.0, 2023)])
         # sources: the files next to the roads layer (its own file left out), each once, ROADS_MORE added
         src = RA.sources("", ng + "|layername=ND_roads_NG911", cty + "|layername=ND_county_roads")
         assert [os.path.basename(p) for p in src] == ["HPMS_ND_2024.gpkg", "NDDOT_traffic_counts.gpkg",

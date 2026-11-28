@@ -910,7 +910,9 @@ def metadata_read_errors(text):
 
 def check_metadata_format(problems, root=None):
     root = root or ROOT
-    for plugin in PLUGINS:
+    # the Core too: its changelog once held a bare %LOCALAPPDATA%, which QGIS cannot read and which
+    # stopped the v2026.11.27.2 release at plugins.xml (tools/make_plugins_xml.py reads it the same way)
+    for plugin in PLUGINS + (CORE,):
         meta = os.path.join(root, plugin, "metadata.txt")
         if not os.path.isfile(meta):
             continue

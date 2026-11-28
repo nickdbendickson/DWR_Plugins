@@ -16,8 +16,6 @@ from qgis.core import (QgsGeometry, QgsPointXY, QgsProcessingContext, QgsProcess
 from qgis import processing  # noqa: E402
 from osgeo import gdal  # noqa: E402
 import nd_dam_screening as pkg  # noqa: E402
-from nd_dam_screening.core import breach_hydro as bh  # noqa: E402
-from nd_dam_screening.plugin import NDDamScreeningPlugin  # noqa: E402
 
 D, S, I = "double", "string", "int"
 work = tempfile.mkdtemp(prefix="qgt_")
