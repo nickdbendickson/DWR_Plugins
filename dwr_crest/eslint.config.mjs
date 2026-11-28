@@ -32,6 +32,11 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Plugin 7 flags two patterns this desk already uses (set state in a mount
+      // effect, read a map ref during render). They were not errors on plugin 5.
+      // Warn, so the upgrade does not change the desk and the findings stay visible.
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/refs": "warn",
       "react-refresh/only-export-components": [
         "warn",
         { allowConstantExport: true },

@@ -226,7 +226,7 @@ export async function fetchPlss(strip: FloodStrip, fetchFn: Fetch = fetch as unk
       body = (await res.json()) as typeof body;
     } catch (e) {
       const msg = (e as Error).name === "AbortError" ? "the BLM PLSS service did not answer in 30 s" : (e as Error).message;
-      throw new Error(`PLSS lookup failed: ${msg}. ${PLSS_OFFLINE}`);
+      throw new Error(`PLSS lookup failed: ${msg}. ${PLSS_OFFLINE}`, { cause: e });
     } finally {
       if (timer) clearTimeout(timer);
     }
